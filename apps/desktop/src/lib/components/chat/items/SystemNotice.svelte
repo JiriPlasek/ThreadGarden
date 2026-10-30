@@ -4,11 +4,16 @@
   import InfoIcon from '@lucide/svelte/icons/info';
   import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
 
-  /** A system message (info / warning / error); long text is clamped until expanded. */
+  /**
+   * A system message (info / warning / error); long text is clamped until
+   * expanded. An item with `detail` (Ruling R27: a notification or hand-back
+   * the CLI injected as a user turn) shows its short label, the full text on demand.
+   */
   let { item }: { item: Extract<ChatItem, { kind: 'system' }> } = $props();
 
   const LONG = 600;
   let expanded = $state(false);
+  let detailOpen = $state(false);
   const long = $derived(item.text.length > LONG);
   const shown = $derived(long && !expanded ? `${item.text.slice(0, LONG)}…` : item.text);
   const tone = $derived(
@@ -40,6 +45,20 @@
         aria-expanded={expanded}
         onclick={() => (expanded = !expanded)}>{expanded ? 'Show less' : 'Show all'}</button
       >
+    {/if}
+    {#if item.detail !== undefined}
+      <button
+        type="button"
+        class="mt-0.5 underline-offset-2 hover:underline"
+        aria-expanded={detailOpen}
+        onclick={() => (detailOpen = !detailOpen)}
+        >{detailOpen ? 'Hide details' : 'Show details'}</button
+      >
+      {#if detailOpen}
+        <div class="mt-1 max-h-80 overflow-y-auto border-t pt-1 break-words whitespace-pre-wrap">
+          {item.detail}
+        </div>
+      {/if}
     {/if}
   </div>
 </div>

@@ -351,7 +351,10 @@ export class Normalizer {
    *   → the user's `/x args`;
    * - `<bash-input>` (a `!` shell command) → `! command`;
    * - local command and `!` shell output (`<local-command-stdout>`,
-   *   `<bash-stderr>`, …) → a system line, or nothing when empty.
+   *   `<bash-stderr>`, …) → a system line, or nothing when empty;
+   * - envelopes the CLI injects as user turns (Ruling R27: background-task
+   *   notifications, subagent hand-backs, … — see `INJECTED`) → a collapsed
+   *   system item with a short label; the local-command caveat → nothing.
    * Anything else returns undefined and renders as a normal user message.
    */
   private cliUserMessage(m: Rec, id: string, text: string | undefined): PushResult | undefined {
@@ -361,6 +364,11 @@ export class Normalizer {
       return shown ? NONE : this.one({ kind: 'compactBoundary', id });
     }
     if (text === undefined) return undefined;
+    const injected = parseInjected(text);
+    if (injected === null) return NONE;
+    if (injected !== undefined) {
+      return this.one({ kind: 'system', id, level: 'info', ...injected });
+    }
     const command = parseCommand(text);
     if (command !== undefined) return this.one(this.userItem(m, id, command, []));
     const shell = /^\s*<bash-input>([\s\S]*)<\/bash-input>\s*$/.exec(text);
@@ -504,6 +512,60 @@ const parseCommand = (text: string): string | undefined => {
   const args = tag(text, 'command-args')?.trim() ?? '';
   const command = name.startsWith('/') ? name : `/${name}`;
   return args ? `${command} ${args}` : command;
+};
+
+const ENTITIES: Record<string, string> = {
+  amp: '&',
+  lt: '<',
+  gt: '>',
+  quot: '"',
+  apos: "'",
+  '#39': "'",
+};
+/** The XML entities some CLI versions write inside envelope fields. */
+const decodeEntities = (s: string): string =>
+  s.replace(/&(amp|lt|gt|quot|apos|#39);/g, (_, e: string) => ENTITIES[e] ?? '');
+
+/**
+ * Ruling R27: user-role entries the CLI injects rather than the user typing
+ * them, recognised by a closed list of envelope tags (names as in SDK 0.3.314).
+ * Each maps its inner text to the short label of a collapsed system item;
+ * `null` means "not shown" (the terminal hides it too).
+ */
+const INJECTED: Record<string, ((inner: string) => string) | null> = {
+  'task-notification': (inner) => {
+    const summary = decodeEntities(tag(inner, 'summary') ?? '').trim();
+    if (summary) return summary;
+    const status = tag(inner, 'status')?.trim();
+    return status ? `Background task ${status}` : 'Background task notification';
+  },
+  'agent-message': () => 'Report from a subagent',
+  'teammate-message': () => 'Message from a teammate',
+  'cross-session-message': () => 'Message from another session',
+  'coordinator-relay': () => 'Message relayed by the coordinator',
+  'local-command-caveat': null,
+};
+const INJECTED_LABEL_MAX = 200;
+const ENVELOPE = /^\s*<([a-z][a-z-]*)(?:\s[^>]*)?>([\s\S]*)<\/\1>\s*$/;
+
+/**
+ * A message that is exactly one injected envelope → its label and full text
+ * (`detail`: the whole notification, or a hand-back's inner text); `null` for
+ * one that is not shown; undefined for anything else (shown as typed).
+ */
+const parseInjected = (text: string): { text: string; detail: string } | null | undefined => {
+  const m = ENVELOPE.exec(text);
+  const name = m?.[1];
+  if (!m || name === undefined || !(name in INJECTED)) return undefined;
+  const label = INJECTED[name];
+  if (label === null || label === undefined) return null;
+  const inner = (m[2] ?? '').trim();
+  const short = label(inner).replace(/\s+/g, ' ');
+  return {
+    text: short.length > INJECTED_LABEL_MAX ? `${short.slice(0, INJECTED_LABEL_MAX)}…` : short,
+    // A notification's fields are all worth seeing; a hand-back is just its text.
+    detail: name === 'task-notification' ? text.trim() : inner,
+  };
 };
 
 const OUTPUT_BLOCK = /<(local-command|bash)-(stdout|stderr)>([\s\S]*?)<\/\1-\2>/g;

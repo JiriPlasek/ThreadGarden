@@ -72,8 +72,9 @@ const itemChars = (i: ChatItem): number => {
   switch (i.kind) {
     case 'user':
     case 'thinking':
-    case 'system':
       return 100 + i.text.length;
+    case 'system':
+      return 100 + i.text.length + (i.detail?.length ?? 0);
     case 'assistantText':
       return 100 + i.markdown.length;
     case 'toolCall':
