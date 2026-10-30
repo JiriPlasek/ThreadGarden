@@ -15,7 +15,7 @@ pahub works with Claude Code; it is not affiliated with or endorsed by Anthropic
 - **Needs you** and **Running** across all projects, a bottom strip with every running agent, a tray badge and desktop notifications. Permission prompts, questions and plan approvals are answered inline.
 - **Composer** with `@` file mentions (fuzzy, respecting `.gitignore`), slash commands from the running Claude Code, pasted or dropped images, queued messages while Claude works, and drafts that survive restarts.
 - **Resume, fork and end** any chat. Idle chats release their process after 15 minutes (configurable) and resume transparently on the next message.
-- **External sessions** from `claude agents --json`, with copyable `claude --resume` / `claude attach` commands. pahub refuses to resume a session that is still running in another process.
+- **External sessions** from `claude agents --json`, with copyable `claude --resume` / `claude attach` commands. Background sessions that Claude Code's own background service runs (`claude --bg`) can be stopped from pahub (it runs `claude stop <id>` after a confirmation); sessions open in a terminal are stopped there. pahub refuses to resume a session that is still running in another process.
 - **Ctrl/Cmd+K quick switcher** over titles, projects and full text, plus commands such as "New chat in…" and "Stop all work".
 - Windows, macOS and Linux; light and dark themes.
 

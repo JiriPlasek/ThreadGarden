@@ -338,6 +338,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     registerFileHandlers(router, { index: new FileIndex() });
     registerExternalHandlers(router, {
       ...(poller ? { poller } : {}),
+      ...(run ? { run } : {}),
       located: whenLocated,
       externalUsable,
       lastModifiedOf: (id) => db?.getSession(id)?.lastModified,

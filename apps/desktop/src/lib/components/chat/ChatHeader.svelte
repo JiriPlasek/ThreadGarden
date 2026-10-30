@@ -1,5 +1,6 @@
 <script lang="ts">
   import CheckIcon from '@lucide/svelte/icons/check';
+  import CircleStopIcon from '@lucide/svelte/icons/circle-stop';
   import PowerIcon from '@lucide/svelte/icons/power';
   import TerminalIcon from '@lucide/svelte/icons/terminal';
   import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
@@ -13,8 +14,10 @@
 
   /**
    * Title row plus the chat's controls (spec §6.4): model, effort and permission
-   * mode pickers (live chats only), context usage, cost, auth, Claude Code
-   * version, End session and Copy resume command.
+   * mode pickers (chats pahub runs only), context usage, cost, auth, Claude
+   * Code version, End session and Copy resume command. A chat running outside
+   * pahub gets Stop when Claude Code's background service runs it, and a
+   * "stop it there" note when it is open in a terminal.
    */
   let { chat }: { chat: ChatState } = $props();
 
@@ -31,7 +34,11 @@
   const sessionId = $derived(chat.sessionId);
   const header = $derived(chat.header);
   const summary = $derived(chat.summary);
-  const live = $derived(chat.live);
+  /** pahub's own process runs this chat: header controls and End session apply. */
+  const live = $derived(chat.ownedLive);
+  const external = $derived(chat.live ? (summary?.external ?? null) : null);
+  /** Run by Claude Code's background service: `claude stop <id>` can stop it. */
+  const background = $derived(external?.kind === 'background' && !!external.shortId);
   const project = $derived(
     summary
       ? (places.projects.find((p) => p.projectId === summary.projectId)?.displayName ??
@@ -121,6 +128,11 @@
     });
   };
 
+  let confirmStop = $state(false);
+  const stopNow = async (): Promise<void> => {
+    await chats.stopExternal(sessionId);
+  };
+
   const selectClass =
     'bg-background hover:bg-muted h-6 max-w-40 truncate rounded border px-1 text-xs disabled:cursor-not-allowed disabled:opacity-60';
 </script>
@@ -138,16 +150,31 @@
       <IconButton label="Copy resume command" onclick={copyResume}>
         {#if copied}<CheckIcon />{:else}<TerminalIcon />{/if}
       </IconButton>
-      <IconButton label="End session" onclick={end} disabled={!live}>
-        <PowerIcon />
-      </IconButton>
+      {#if external && background}
+        <IconButton label="Stop background session" onclick={() => (confirmStop = true)}>
+          <CircleStopIcon />
+        </IconButton>
+      {:else}
+        <IconButton label="End session" onclick={end} disabled={!live}>
+          <PowerIcon />
+        </IconButton>
+      {/if}
     </div>
   </div>
 
   <div
     class="text-muted-foreground flex h-8 items-center gap-2 overflow-hidden px-4 text-xs"
-    title={live ? undefined : 'Settings apply to running chats; send a message to resume this one'}
+    title={live
+      ? undefined
+      : external
+        ? 'This chat is running outside pahub'
+        : 'Settings apply to running chats; send a message to resume this one'}
   >
+    {#if external && !background}
+      <span class="text-foreground/80 shrink-0">Running in a terminal — stop it there</span>
+    {:else if external}
+      <span class="text-foreground/80 shrink-0">Running in Claude Code's background service</span>
+    {/if}
     <select
       aria-label="Model"
       class={selectClass}
@@ -244,4 +271,13 @@
   confirmLabel="End anyway"
   destructive
   onConfirm={endNow}
+/>
+
+<ConfirmDialog
+  bind:open={confirmStop}
+  title="Stop this background session?"
+  description="Claude Code's background service runs this chat. Stopping ends its current work (claude stop); the chat stays in your history and can be resumed."
+  confirmLabel="Stop session"
+  destructive
+  onConfirm={stopNow}
 />

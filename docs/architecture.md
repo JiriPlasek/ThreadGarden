@@ -443,6 +443,7 @@ startup failures, which credential a session picks).
 
 Decisions made during the build that change behaviour described in the design:
 
+- **Stopping background sessions.** The design kept sessions run by other processes hand-off only. pahub now also stops a background session that Claude Code's background service runs, via the documented `claude stop <id>` (`external.stop`), after a confirmation; only ids shaped like `claude agents` short ids are passed. Sessions open in a terminal are still never stopped from pahub, and the chat header's End session and pickers apply only to chats pahub itself runs.
 - **No bypass mode** (§6.4 listed it). The SDK requires an explicit
   dangerous opt-in for `bypassPermissions`; pahub offers default,
   acceptEdits, plan and auto only, and drops "always allow" suggestions that

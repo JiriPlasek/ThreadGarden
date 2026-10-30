@@ -322,6 +322,12 @@ export class ChatsState {
     await this.api.request('chat.end', { sessionId });
   };
 
+  /** Stops a background session that Claude Code's own background service runs (`claude stop <id>`). */
+  stopExternal = async (sessionId: string): Promise<void> => {
+    if (!this.api) throw new Error('Not connected to the pahub service');
+    await this.api.request('external.stop', { sessionId });
+  };
+
   /** Forks the chat up to (and including) a user message; resolves to the new chat's id. */
   fork = async (sessionId: string, upToItemId: string): Promise<string> => {
     if (!this.api) throw new Error('Not connected to the pahub service');

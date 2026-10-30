@@ -150,6 +150,7 @@ export const methods = {
     ),
   ),
   'chat.resumeCommand': def(sessionIdOnly, z.object({ command: z.string() })),
+  'external.stop': def(sessionIdOnly, z.object({})),
   'files.suggest': def(
     z.object({ cwd: z.string(), query: z.string(), limit: z.number() }),
     z.array(z.object({ path: z.string(), kind: z.enum(['file', 'dir']) })),

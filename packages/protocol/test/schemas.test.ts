@@ -95,6 +95,7 @@ describe('protocol schemas', () => {
       'chat.commands',
       'chat.models',
       'chat.resumeCommand',
+      'external.stop',
       'files.suggest',
       'meta.update',
       'drafts.get',
