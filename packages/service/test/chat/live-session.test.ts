@@ -605,6 +605,41 @@ describe('LiveSession', () => {
     expect(s.status).toBe('working');
   });
 
+  it('v1.2 C1: firstReplyText reads the first reply, buffered parts included, publishing nothing', async () => {
+    const { adapter, timers, events, opts } = setup();
+    const s = LiveSession.create('/p', { text: 'go' }, opts);
+    const fake = adapter.lastSession();
+    expect(s.firstReplyText()).toBe('');
+    timers.advance(100);
+    fake.emit(streamEvent('m', { type: 'message_start', message: { id: 'api1' } }));
+    fake.emit(
+      streamEvent('b', {
+        type: 'content_block_start',
+        index: 0,
+        content_block: { type: 'text', text: '' },
+      }),
+    );
+    await settle();
+    for (const text of ['Let me ', 'look.']) {
+      fake.emit(
+        streamEvent(`d-${text}`, {
+          type: 'content_block_delta',
+          index: 0,
+          delta: { type: 'text_delta', text },
+        }),
+      );
+    }
+    await settle();
+    const emitted = events.length;
+    // The deltas wait in the coalescing buffer; reading them publishes nothing.
+    expect(s.firstReplyText()).toBe('Let me look.');
+    expect(events.length).toBe(emitted);
+    fake.emit(assistantText('a2', 'A second reply'));
+    await settle();
+    timers.advance(100);
+    expect(s.firstReplyText()).toBe('Let me look.');
+  });
+
   it('flushes coalesced items before a status change so order is preserved', async () => {
     const { adapter, events, opts } = setup();
     LiveSession.create('/p', { text: 'go' }, opts);

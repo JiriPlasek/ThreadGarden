@@ -82,6 +82,16 @@ const steps: string[] = [
   CREATE INDEX IF NOT EXISTS chat_buckets_hold ON chat_buckets (hold_until) WHERE bucket = 'onHold';
   CREATE INDEX IF NOT EXISTS chat_buckets_back ON chat_buckets (back_at) WHERE back_at IS NOT NULL;
   `,
+  // v1.2 C1 chat titles: pahub's own names for chats it runs, apart from the
+  // user's custom title (`meta.custom_title`). `auto_title` is the provisional
+  // title from the first message, `generated_title` the small model's.
+  `
+  CREATE TABLE IF NOT EXISTS chat_titles (
+    session_id TEXT PRIMARY KEY,
+    auto_title TEXT,
+    generated_title TEXT
+  );
+  `,
 ];
 
 /** Runs the steps not run yet; `upTo` stops early (tests build older schemas with it). */

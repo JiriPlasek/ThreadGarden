@@ -1,8 +1,9 @@
 /**
  * Router handlers for one chat (§4.3–§4.5, §6.4): open / page / replay,
  * create / send / resume, controls, permission answers, fork, stopping a
- * task (v1.1 §2), the command and model lists, and the seen state behind
- * "Your turn" (v1.1 `chat.markSeen`) and "Back from hold" (v1.2).
+ * task (v1.1 §2), the command and model lists, the seen state behind
+ * "Your turn" (v1.1 `chat.markSeen`) and "Back from hold" (v1.2), and the
+ * names of the chats pahub starts (v1.2 C1, `chat/titles.ts`).
  *
  * Validation that the protocol schema leaves open happens here: permission
  * modes are limited to what pahub offers (Ruling R11: never
@@ -17,6 +18,7 @@ import type { ChatHeaderInfo, ChatItem, ChatTask, EventMsg, ImageRef } from '@pa
 import type { LiveSession, UserInput } from '../../chat/live-session.js';
 import { Normalizer } from '../../chat/normalize.js';
 import type { SessionHost } from '../../chat/session-host.js';
+import type { ChatTitles } from '../../chat/titles.js';
 import type { ResumeCheck } from '../../external/resume-safety.js';
 import type { Catalog } from '../../history/catalog.js';
 import type { Db } from '../../history/db.js';
@@ -68,6 +70,9 @@ export type ChatHandlerDeps = {
   historyCacheChars?: number;
   /** Clock for the seen time of `chat.markSeen` (v1.1); default `Date.now`. */
   now?: () => number;
+  // ── v1.2 C1: chat titles ──
+  /** Names the chats pahub starts (provisional title, then a generated one). */
+  titles?: ChatTitles;
 };
 
 /** Rough memory weight of an item: its text plus a fixed overhead. */
@@ -187,6 +192,24 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): voi
     if (db.unarchive([sessionId]).length === 0) return;
     catalog.bucketChanged([sessionId], 'active');
     changed([sessionId]);
+  };
+
+  /**
+   * v1.2 C1: names a chat pahub starts (`untitledOnly`: one it continues,
+   * only while it has no title at all). True when its title changed. A
+   * failure is reported and never fails the request.
+   */
+  const nameChat = (sessionId: string, cwd: string, text: string, untitledOnly: boolean) => {
+    const titles = deps.titles;
+    if (!titles) return false;
+    try {
+      return untitledOnly
+        ? titles.startedIfUntitled(sessionId, cwd, text)
+        : titles.started(sessionId, cwd, text);
+    } catch (err) {
+      deps.onError(err, `title of ${sessionId}`);
+      return false;
+    }
   };
 
   /** A Claude Code process may be started: `claude` is found and the auth policy is met. */
@@ -334,6 +357,7 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): voi
     };
     await requireRunnable();
     const s = host.create(p.cwd, toInput(p), choices);
+    nameChat(s.sessionId, p.cwd, p.text, false); // shown with the change below
     markSeen(s.sessionId); // a new chat has nothing unseen; kept for symmetry with chat.send
     changed([s.sessionId]);
     return { sessionId: s.sessionId };
@@ -360,6 +384,7 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): voi
     const sent = s.send(input);
     markSeen(p.sessionId); // replying means the last turn was seen
     unarchive(p.sessionId); // nothing gets lost in the archive
+    if (nameChat(p.sessionId, s.cwd, p.text, true)) changed([p.sessionId]);
     return sent;
   });
 

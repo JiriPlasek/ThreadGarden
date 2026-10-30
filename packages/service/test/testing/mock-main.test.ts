@@ -69,6 +69,11 @@ describe('mock service', () => {
       tail: 10,
     });
     expect(header.header.auth?.kind).toBe('subscription');
+    // v1.2 C1: named from its first message at once, then by the fake small model.
+    const titleOf = async (id: string) =>
+      (await c.call<{ items: { title: string }[] }>('sessions.summaries', { sessionIds: [id] }))
+        .items[0]?.title;
+    await eventually(async () => (await titleOf(plain.sessionId)) === 'Mock: hi', 5_000);
 
     // "perm" → Bash permission request → allowed → tool call runs.
     const perm = await c.call<{ sessionId: string }>('chat.create', {

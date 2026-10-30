@@ -13,6 +13,10 @@
  * - "server" starts a background shell task ("npm run dev") that keeps
  *   running until it is stopped with `chat.stopTask` (or the chat ends).
  *
+ * A new chat is named after its first turn (v1.2 C1): the fake small model
+ * answers about half a second later with "Mock: " and the first words of the
+ * first message.
+ *
  * Everything lives in temporary directories (pahub data dir and a fixture
  * `CLAUDE_CONFIG_DIR`), removed on exit. The mock's fake Claude Code writes a
  * placeholder transcript per chat into that fixture, like the real CLI, so the
@@ -28,6 +32,7 @@ import { pathToFileURL } from 'node:url';
 import { readDiscovery } from '../discovery.js';
 import { startService, type ServiceHandle } from '../main.js';
 import type {
+  OneShotOptions,
   PermissionResult,
   PermissionUpdate,
   SDKMessage,
@@ -442,6 +447,15 @@ class ScriptedAdapter extends FakeAdapter {
     const s = new ScriptedSession(o, this);
     this.started.push(s);
     return s;
+  }
+
+  /** The fake small model (v1.2 C1 titles): "Mock: " and the message's first four words. */
+  override async oneShot(o: OneShotOptions): Promise<string> {
+    this.oneShots.push(o);
+    await new Promise((r) => setTimeout(r, 500));
+    const message = /<first_message>\n([\s\S]*?)\n<\/first_message>/.exec(o.prompt)?.[1] ?? '';
+    const words = message.split(/\s+/).filter(Boolean).slice(0, 4).join(' ');
+    return `Mock: ${words || 'new chat'}`;
   }
 
   /**

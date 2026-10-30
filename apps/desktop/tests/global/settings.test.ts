@@ -132,6 +132,20 @@ describe('settings dialog', () => {
     expect(env.app.settings.value.notifyOnFinish).toBe(false);
   });
 
+  it('v1.2: "Name new chats automatically" is on by default and can be turned off', async () => {
+    const env = await withSettings();
+    const dialog = await openDialog(env);
+    const toggle = within(dialog).getByLabelText(
+      /name new chats automatically \(uses a small model\)/i,
+    ) as HTMLInputElement;
+    expect(toggle.checked).toBe(true);
+    await userEvent.click(toggle);
+    await userEvent.click(within(dialog).getByRole('button', { name: /^save$/i }));
+    await waitFor(() => expect(env.server.calls('settings.set')).toHaveLength(1));
+    expect(env.server.calls('settings.set')[0]!.params).toEqual({ autoTitles: false });
+    expect(env.app.settings.value.autoTitles).toBe(false);
+  });
+
   it('shows system info: Claude Code, external sessions and indexing', async () => {
     const env = await withSettings();
     env.server.handlers['system.status'] = () => ({

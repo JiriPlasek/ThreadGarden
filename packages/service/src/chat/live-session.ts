@@ -386,6 +386,22 @@ export class LiveSession {
     return [...this.pending.values()].map((p) => p.item);
   }
 
+  /**
+   * v1.2 C1: the text of the first assistant reply this session holds (its
+   * latest version, published or not), '' if none. Read-only: unlike
+   * `snapshot` it publishes nothing.
+   */
+  firstReplyText(): string {
+    for (const items of [this.items, this.buffered]) {
+      for (const item of items.values()) {
+        if (item.kind !== 'assistantText') continue;
+        const latest = this.buffered.get(item.id) ?? item;
+        return latest.kind === 'assistantText' ? latest.markdown : '';
+      }
+    }
+    return '';
+  }
+
   /** Resolves when the message pump has stopped (process gone). */
   whenEnded(): Promise<void> {
     return this.ended;

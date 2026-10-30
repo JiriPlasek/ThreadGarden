@@ -183,3 +183,55 @@ describe('Db', () => {
     db.close();
   });
 });
+
+// ── v1.2 C1: chat titles ──
+
+describe('v1.2 chat titles', () => {
+  it('stores provisional and generated titles apart from the custom title', () => {
+    const db = openDb(':memory:');
+    expect(tables(db)).toContain('chat_titles');
+    expect(db.metaOf('x')).toMatchObject({
+      customTitle: null,
+      autoTitle: null,
+      generatedTitle: null,
+    });
+    db.setAutoTitle('x', 'Provisional');
+    db.setGeneratedTitle('x', 'Generated');
+    db.setCustomTitle('x', 'Custom');
+    expect(db.metaOf('x')).toMatchObject({
+      customTitle: 'Custom',
+      autoTitle: 'Provisional',
+      generatedTitle: 'Generated',
+    });
+    // Each write leaves the other fields alone.
+    db.setAutoTitle('x', 'Provisional 2');
+    expect(db.metaOf('x')).toMatchObject({
+      autoTitle: 'Provisional 2',
+      generatedTitle: 'Generated',
+    });
+    db.close();
+  });
+
+  it('session rows carry the pahub titles (indexed or not yet)', () => {
+    const db = openDb(':memory:');
+    db.setAutoTitle('s1', 'Provisional');
+    db.upsertSession(info('s1', { summary: 'first', firstPrompt: 'first' }), 'p');
+    expect(db.getSession('s1')).toMatchObject({ autoTitle: 'Provisional', generatedTitle: null });
+    db.setGeneratedTitle('s1', 'Generated');
+    expect(db.listSessions({}, 10, undefined).items[0]).toMatchObject({
+      autoTitle: 'Provisional',
+      generatedTitle: 'Generated',
+    });
+    db.close();
+  });
+
+  it('upgrading a v1.2 B1 database keeps everything and adds the titles table', () => {
+    const raw = new DatabaseSync(':memory:');
+    migrate(raw, 5);
+    raw.prepare("INSERT INTO meta (session_id, custom_title) VALUES ('s', 'Kept')").run();
+    migrate(raw);
+    const db = new Db(raw);
+    expect(db.metaOf('s')).toMatchObject({ customTitle: 'Kept', autoTitle: null });
+    db.close();
+  });
+});
