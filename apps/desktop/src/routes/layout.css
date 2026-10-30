@@ -127,3 +127,88 @@
     @apply font-sans;
   }
 }
+
+/* Chat markdown (rendered by src/lib/markdown.ts): dense, readable, theme-aware. */
+@layer components {
+  .md {
+    @apply leading-relaxed break-words;
+  }
+  .md > :first-child {
+    @apply mt-0;
+  }
+  .md > :last-child {
+    @apply mb-0;
+  }
+  .md :where(p, ul, ol, blockquote, table, .code-block, hr) {
+    @apply my-2;
+  }
+  .md :where(h1, h2, h3, h4, h5, h6) {
+    @apply mt-4 mb-1.5 font-semibold;
+  }
+  .md h1 {
+    @apply text-lg;
+  }
+  .md h2 {
+    @apply text-base;
+  }
+  .md :where(h3, h4, h5, h6) {
+    @apply text-sm;
+  }
+  .md ul {
+    @apply list-disc pl-5;
+  }
+  .md ol {
+    @apply list-decimal pl-5;
+  }
+  .md li {
+    @apply my-0.5;
+  }
+  .md li > :where(ul, ol) {
+    @apply my-0.5;
+  }
+  .md a {
+    @apply text-blue-700 underline underline-offset-2 dark:text-blue-400;
+  }
+  .md blockquote {
+    @apply text-muted-foreground border-l-2 pl-3;
+  }
+  .md hr {
+    @apply border-border;
+  }
+  .md img {
+    @apply max-w-full rounded;
+  }
+  .md :not(pre) > code {
+    @apply bg-muted rounded px-1 py-px font-mono text-[0.85em];
+  }
+  .md table {
+    @apply block w-max max-w-full overflow-x-auto border-collapse text-xs;
+  }
+  .md :where(th, td) {
+    @apply border px-2 py-1 text-left align-top;
+  }
+  .md th {
+    @apply bg-muted/60 font-semibold;
+  }
+  .md .code-block {
+    @apply bg-muted/50 overflow-hidden rounded-md border;
+  }
+  .md .code-head {
+    @apply text-muted-foreground flex items-center justify-between border-b px-2 py-0.5 font-mono text-[11px];
+  }
+  .md .code-copy {
+    @apply hover:text-foreground rounded px-1;
+  }
+  .md .code-block pre {
+    @apply m-0 overflow-x-auto bg-transparent p-2 font-mono text-xs leading-snug;
+  }
+  .md .code-block pre.shiki {
+    background-color: transparent !important;
+  }
+  .md .shiki span {
+    color: var(--shiki-light);
+  }
+  .dark .md .shiki span {
+    color: var(--shiki-dark);
+  }
+}

@@ -77,6 +77,16 @@ export const copyText = async (s: string): Promise<void> => {
   }
 };
 
+/**
+ * Opens an http(s)/mailto link outside pahub. No opener plugin is wired into the
+ * shell yet, so this asks the webview for a new browsing context without an
+ * opener in both the desktop app and a browser.
+ */
+export const openExternal = (url: string): void => {
+  if (!/^(https?:|mailto:)/i.test(url)) return;
+  window.open(url, '_blank', 'noopener,noreferrer');
+};
+
 /** Asks the user for a folder; null when cancelled (always null in a browser). */
 export const pickFolder = async (): Promise<string | null> => {
   if (!isTauri) return null;

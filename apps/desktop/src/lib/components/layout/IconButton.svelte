@@ -10,12 +10,14 @@
     children,
     class: className,
     side = 'bottom',
+    disabled = false,
   }: {
     label: string;
     onclick: () => void;
     children: Snippet;
     class?: string;
     side?: 'top' | 'bottom' | 'left' | 'right';
+    disabled?: boolean;
   } = $props();
 </script>
 
@@ -29,6 +31,7 @@
           size="icon-xs"
           class="text-muted-foreground hover:text-foreground {className ?? ''}"
           aria-label={label}
+          {disabled}
           {onclick}
         >
           {@render children()}

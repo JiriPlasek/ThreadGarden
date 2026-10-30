@@ -5,6 +5,7 @@ import type {
   ChatStatus,
   ChatStatusEvent,
   ChatSummary,
+  Result,
 } from '@pahub/protocol';
 import { SvelteMap } from 'svelte/reactivity';
 import { RequestError } from '../service/client';
@@ -14,6 +15,20 @@ export const OPEN_TAIL = 200;
 export const OLDER_PAGE = 200;
 
 type ChatEvent = ChatItemsEvent | ChatStatusEvent;
+export type ModelInfo = Result<'chat.models'>[number];
+
+/** Statuses with a Claude process behind them: header controls apply live. */
+export const LIVE_STATUSES: readonly ChatStatus[] = ['needsYou', 'working', 'idle'];
+
+/**
+ * What the message list remembers about a chat across tab switches (plain data,
+ * not reactive): measured row heights and where the user was scrolled.
+ */
+export type ListMemory = {
+  heights: Map<string, number>;
+  stick: boolean;
+  anchor: { key: string; delta: number } | null;
+};
 type Schedule = (cb: () => void) => void;
 
 /** Upserts `incoming` into `items` by id: known ids are replaced in place, new ids are appended. */
@@ -47,6 +62,15 @@ export class ChatState {
   resyncing = false;
   loadingOlder = $state(false);
   error = $state<string | null>(null);
+  /** `chat.models` for this chat; null until loaded. */
+  models = $state.raw<ModelInfo[] | null>(null);
+  /** Message list geometry, kept while the chat is resident. */
+  view: ListMemory = { heights: new Map(), stick: true, anchor: null };
+
+  /** True while a Claude process runs this chat (header pickers apply live). */
+  get live(): boolean {
+    return LIVE_STATUSES.includes(this.status);
+  }
 
   /** Permission requests the user still has to answer. */
   pendingRequests = $derived(
@@ -147,6 +171,55 @@ export class ChatsState {
     } finally {
       chat.loadingOlder = false;
     }
+  };
+
+  /** Loads the models a chat can switch to (once per chat; retried after a failure). */
+  loadModels = async (sessionId: string): Promise<void> => {
+    const chat = this.byId.get(sessionId);
+    if (!this.api || !chat) return;
+    const models = await this.api.request('chat.models', { sessionId });
+    if (this.byId.get(sessionId) === chat) chat.models = models;
+  };
+
+  /** Changes a header setting of a live chat; the header shows the new value once applied. */
+  private setHeader = async (
+    method: 'chat.setModel' | 'chat.setEffort' | 'chat.setPermissionMode',
+    field: 'model' | 'effort' | 'permissionMode',
+    sessionId: string,
+    value: string,
+  ): Promise<void> => {
+    if (!this.api) throw new Error('Not connected to the pahub service');
+    await this.api.request(method, { sessionId, value });
+    const chat = this.byId.get(sessionId);
+    if (chat) chat.header = { ...chat.header, [field]: value };
+  };
+
+  setModel = (sessionId: string, value: string): Promise<void> =>
+    this.setHeader('chat.setModel', 'model', sessionId, value);
+
+  setEffort = (sessionId: string, value: string): Promise<void> =>
+    this.setHeader('chat.setEffort', 'effort', sessionId, value);
+
+  setPermissionMode = (sessionId: string, value: string): Promise<void> =>
+    this.setHeader('chat.setPermissionMode', 'permissionMode', sessionId, value);
+
+  /** Ends the chat's Claude process (the chat stays open as history). */
+  end = async (sessionId: string): Promise<void> => {
+    if (!this.api) throw new Error('Not connected to the pahub service');
+    await this.api.request('chat.end', { sessionId });
+  };
+
+  /** Forks the chat up to (and including) a user message; resolves to the new chat's id. */
+  fork = async (sessionId: string, upToItemId: string): Promise<string> => {
+    if (!this.api) throw new Error('Not connected to the pahub service');
+    const r = await this.api.request('chat.fork', { sessionId, upToItemId });
+    return r.sessionId;
+  };
+
+  /** The terminal command that continues this chat (`claude --resume <id>` or `claude attach`). */
+  resumeCommand = async (sessionId: string): Promise<string> => {
+    if (!this.api) throw new Error('Not connected to the pahub service');
+    return (await this.api.request('chat.resumeCommand', { sessionId })).command;
   };
 
   /** After a reconnect: catch every resident chat up from its last seq; `GAP` falls back to a fresh open. */
