@@ -5,3 +5,6 @@ coverage
 pnpm-lock.yaml
 .superpowers
 docs
+build
+.svelte-kit
+apps/desktop/src-tauri/gen

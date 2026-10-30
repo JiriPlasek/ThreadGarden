@@ -9,6 +9,8 @@ export default tseslint.config(
       '**/target/**',
       '**/coverage/**',
       '**/.svelte-kit/**',
+      '**/build/**',
+      '**/src-tauri/gen/**',
       '.superpowers/**',
     ],
   },
