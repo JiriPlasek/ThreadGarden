@@ -3,9 +3,11 @@
  * stable protocol `ChatItem`s. Pure logic, no I/O.
  *
  * Forward compatibility is the point of this module: input is read leniently
- * (every field is checked at runtime, never trusted from the SDK typings) and
- * anything not recognised becomes a `kind: 'unknown'` item carrying the raw
- * JSON — never dropped, never a throw.
+ * (every field is checked at runtime, never trusted from the SDK typings).
+ * Message types declared in SDK 0.3.314 are either rendered, mapped to a
+ * `system` line, or deliberately non-visual (see `system-items.ts`); anything
+ * outside that set, and any malformed shape, becomes a `kind: 'unknown'` item
+ * carrying the raw JSON — never dropped, never a throw.
  *
  * Item ids
  * - A message that yields one item uses the SDK message `uuid`; a message with
@@ -21,14 +23,26 @@
  *   Anthropic API message id from `message_start` plus the block index. The CLI
  *   delivers one assistant message per completed block, so the normalizer
  *   counts blocks already finalised per API message id to recover the index.
- *   History (no partials) uses the plain uuid rule; fork is offered on user
- *   items, whose ids never depend on streaming.
+ *   History (no partials) uses the plain uuid rule.
+ * - `resolveItemId(sdkUuid)` maps an SDK message uuid (or `<uuid>:<index>`) to
+ *   the id of the item that renders it: the streamed item's id for a finalised
+ *   streamed block, otherwise the id built from the uuid itself.
+ * - A streamed block that never gets its final message (API retry, interrupt)
+ *   is closed — re-emitted with `streaming: false` — on the next
+ *   `message_start` of the same stream, on `result`, and on `conversation_reset`.
  *
  * `replace: false` — every item is new (append). `replace: true` — at least one
- * item supersedes an earlier item with the same id; consumers upsert by id.
+ * item supersedes an earlier item with the same id. Consumers must always
+ * upsert by id (one push can mix new and replacing items).
  */
 import type { ChatItem, ChatStatus, ImageRef } from '@pahub/protocol';
 import type { SDKMessage, SessionMessage } from '../sdk/adapter.js';
+import {
+  NON_VISUAL_SYSTEM_SUBTYPES,
+  NON_VISUAL_TYPES,
+  conversationResetText,
+  systemLine,
+} from './system-items.js';
 
 export type PushResult = { items: ChatItem[]; replace: boolean };
 
@@ -43,9 +57,6 @@ const str = (v: unknown): string | undefined => (typeof v === 'string' ? v : und
 const num = (v: unknown): number | undefined =>
   typeof v === 'number' && Number.isFinite(v) ? v : undefined;
 
-/** System subtypes that carry state for other consumers (status, header, slash menu), not chat content. */
-const CONSUMED_SYSTEM_SUBTYPES = new Set(['init', 'session_state_changed', 'commands_changed']);
-
 const NONE: PushResult = { items: [], replace: false };
 
 export type NormalizerOptions = { now?: () => number };
@@ -59,27 +70,52 @@ export class Normalizer {
   private readonly todoToolUseIds = new Set<string>();
   /** Current API message id of each stream, keyed by parent tool use ('' = main thread). */
   private readonly streamMessageId = new Map<string, string>();
-  /** Streaming text items by `<API message id>:<block index>`. */
-  private readonly streaming = new Map<string, Item<'assistantText'>>();
+  /** Open streaming text items by `<API message id>:<block index>`, with their stream key. */
+  private readonly streaming = new Map<string, { item: Item<'assistantText'>; stream: string }>();
   /** Blocks finalised so far per API message id (= index of the next block). */
   private readonly blockCursor = new Map<string, number>();
+  /** SDK uuid (or `<uuid>:<index>`) → id of the item rendering it, where they differ. */
+  private readonly aliases = new Map<string, string>();
+  /** Every item id emitted so far. */
+  private readonly known = new Set<string>();
 
   constructor(opts: NormalizerOptions = {}) {
     this.now = opts.now ?? Date.now;
   }
 
   push(m: SDKMessage | SessionMessage): PushResult {
+    let r: PushResult;
     try {
-      return this.dispatch(m as unknown);
+      r = this.dispatch(m as unknown);
     } catch {
       // Defensive net: a shape we did not anticipate must not take the session down.
-      return this.unknown(m, isRec(m) ? (str(m.type) ?? 'unknown') : 'invalid');
+      r = this.unknown(m, isRec(m) ? (str(m.type) ?? 'unknown') : 'invalid');
     }
+    this.remember(m, r.items);
+    return r;
+  }
+
+  /**
+   * The item id rendering SDK message `sdkUuid` (or a `<uuid>:<index>` block):
+   * the streamed item's id for a finalised streamed block, the first item of a
+   * multi-block message, else the uuid itself; `undefined` if never seen.
+   */
+  resolveItemId(sdkUuid: string): string | undefined {
+    return this.aliases.get(sdkUuid) ?? (this.known.has(sdkUuid) ? sdkUuid : undefined);
+  }
+
+  private remember(m: unknown, items: ChatItem[]): void {
+    for (const item of items) this.known.add(item.id);
+    const uuid = isRec(m) ? str(m.uuid) : undefined;
+    if (!uuid || items.length === 0 || this.known.has(uuid) || this.aliases.has(uuid)) return;
+    const target = items.find((i) => i.id.startsWith(`${uuid}:`)) ?? items[0];
+    if (target) this.aliases.set(uuid, target.id);
   }
 
   private dispatch(m: unknown): PushResult {
     if (!isRec(m)) return this.unknown(m, `invalid:${m === null ? 'null' : typeof m}`);
     const type = str(m.type);
+    if (type && NON_VISUAL_TYPES.has(type)) return NONE;
     switch (type) {
       case 'stream_event':
         return this.onStream(m);
@@ -88,12 +124,46 @@ export class Normalizer {
       case 'user':
         return this.onUser(m);
       case 'result':
-        return this.one(this.result(m));
+        return this.withClosed(this.closeStreams(), this.result(m));
       case 'system':
         return this.onSystem(m);
+      case 'conversation_reset': {
+        const closed = this.closeStreams();
+        this.resetConversation();
+        return this.withClosed(closed, {
+          kind: 'system',
+          id: str(m.uuid) ?? this.localId(),
+          level: 'info',
+          text: conversationResetText(m),
+        });
+      }
       default:
         return this.unknown(m, type ?? 'unknown');
     }
+  }
+
+  /** Closes open streaming items (all, or those of one stream) and returns them finalised. */
+  private closeStreams(stream?: string): ChatItem[] {
+    const closed: ChatItem[] = [];
+    for (const [key, entry] of this.streaming) {
+      if (stream !== undefined && entry.stream !== stream) continue;
+      this.streaming.delete(key);
+      closed.push({ ...entry.item, streaming: false });
+    }
+    return closed;
+  }
+
+  private withClosed(closed: ChatItem[], item: ChatItem): PushResult {
+    return { items: [...closed, item], replace: closed.length > 0 };
+  }
+
+  /** `/clear` and friends: earlier tool calls and streams can no longer be continued. */
+  private resetConversation(): void {
+    this.toolCalls.clear();
+    this.todoToolUseIds.clear();
+    this.streamMessageId.clear();
+    this.streaming.clear();
+    this.blockCursor.clear();
   }
 
   // ── stream_event partials ───────────────────────────────────────────────
@@ -106,9 +176,13 @@ export class Normalizer {
     const index = num(event.index);
     switch (event.type) {
       case 'message_start': {
+        // Blocks of this stream's previous API message that never got a final
+        // message (API retry, interrupt) are closed so none stays "streaming".
+        const closed = this.closeStreams(streamKey);
         const id = isRec(event.message) ? str(event.message.id) : undefined;
         if (id) this.streamMessageId.set(streamKey, id);
-        return NONE;
+        else this.streamMessageId.delete(streamKey);
+        return { items: closed, replace: closed.length > 0 };
       }
       case 'content_block_start': {
         const block = event.content_block;
@@ -122,16 +196,16 @@ export class Normalizer {
           streaming: true,
           ...this.parentOf(m),
         };
-        this.streaming.set(`${messageId}:${index}`, item);
+        this.streaming.set(`${messageId}:${index}`, { item, stream: streamKey });
         return { items: [item], replace: false };
       }
       case 'content_block_delta': {
         const delta = event.delta;
         const key = `${messageId}:${index}`;
-        const item = this.streaming.get(key);
-        if (!item || !isRec(delta) || delta.type !== 'text_delta') return NONE;
-        const next = { ...item, markdown: item.markdown + (str(delta.text) ?? '') };
-        this.streaming.set(key, next);
+        const entry = this.streaming.get(key);
+        if (!entry || !isRec(delta) || delta.type !== 'text_delta') return NONE;
+        const next = { ...entry.item, markdown: entry.item.markdown + (str(delta.text) ?? '') };
+        this.streaming.set(key, { item: next, stream: streamKey });
         return { items: [next], replace: true };
       }
       default:
@@ -158,10 +232,11 @@ export class Normalizer {
       const id = content.length === 1 ? base : `${base}:${i}`;
       if (isRec(block) && block.type === 'text' && typeof block.text === 'string') {
         const key = `${apiId}:${cursor + i}`;
-        const streamed = apiId ? this.streaming.get(key) : undefined;
+        const streamed = apiId ? this.streaming.get(key)?.item : undefined;
         if (streamed) {
           this.streaming.delete(key);
           replace = true;
+          if (id !== streamed.id) this.aliases.set(id, streamed.id);
           items.push({ ...streamed, markdown: block.text, streaming: false });
         } else {
           items.push({
@@ -283,32 +358,15 @@ export class Normalizer {
 
   private onSystem(m: Rec): PushResult {
     const subtype = str(m.subtype);
-    const id = str(m.uuid) ?? this.localId();
-    if (subtype && CONSUMED_SYSTEM_SUBTYPES.has(subtype)) return NONE;
-    switch (subtype) {
-      case 'compact_boundary':
-        return this.one({ kind: 'compactBoundary', id });
-      case 'api_retry': {
-        const status = num(m.error_status);
-        const delay = num(m.retry_delay_ms) ?? 0;
-        const text =
-          `API error${status === undefined ? '' : ` (${status})`}, ` +
-          `retrying in ${Math.round(delay / 1000)} s ` +
-          `(attempt ${num(m.attempt) ?? '?'} of ${num(m.max_retries) ?? '?'})`;
-        return this.one({ kind: 'system', id, level: 'warning', text });
-      }
-      case 'informational':
-        return this.one({
-          kind: 'system',
-          id,
-          level: m.level === 'warning' ? 'warning' : 'info',
-          text: str(m.content) ?? '',
-        });
-      case 'notification':
-        return this.one({ kind: 'system', id, level: 'info', text: str(m.text) ?? '' });
-      default:
-        return this.unknown(m, subtype ? `system:${subtype}` : 'system');
+    if (!subtype) return this.unknown(m, 'system'); // e.g. a history SessionMessage system entry
+    if (NON_VISUAL_SYSTEM_SUBTYPES.has(subtype)) return NONE;
+    if (subtype === 'compact_boundary') {
+      return this.one({ kind: 'compactBoundary', id: str(m.uuid) ?? this.localId() });
     }
+    const line = systemLine(subtype, m);
+    if (line === undefined) return this.unknown(m, `system:${subtype}`);
+    if (line === null) return NONE;
+    return this.one({ kind: 'system', id: str(m.uuid) ?? this.localId(), ...line });
   }
 
   private result(m: Rec): Item<'result'> {

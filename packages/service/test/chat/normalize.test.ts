@@ -279,9 +279,14 @@ describe('Normalizer', () => {
       items: [{ kind: 'unknown', id: 'x1', sdkType: 'holo_future', raw: future }],
       replace: false,
     });
-    const hook = sdk({ type: 'system', subtype: 'hook_started', uuid: 'x2', session_id: 's' });
-    expect(n.push(hook).items).toEqual([
-      { kind: 'unknown', id: 'x2', sdkType: 'system:hook_started', raw: hook },
+    const sys = sdk({ type: 'system', subtype: 'hologram_sync', uuid: 'x2', session_id: 's' });
+    expect(n.push(sys).items).toEqual([
+      { kind: 'unknown', id: 'x2', sdkType: 'system:hologram_sync', raw: sys },
+    ]);
+    // A known type with a malformed shape is unknown too.
+    const noSubtype = sdk({ type: 'system', uuid: 'x3', session_id: 's' });
+    expect(n.push(noSubtype).items).toEqual([
+      { kind: 'unknown', id: 'x3', sdkType: 'system', raw: noSubtype },
     ]);
     // No uuid: still an item, with a unique local id.
     const a = n.push(sdk({ type: 'mystery' })).items[0];
@@ -392,20 +397,229 @@ describe('Normalizer', () => {
     ).toEqual([{ kind: 'system', id: 'n1', level: 'info', text: 'Heads up' }]);
   });
 
-  it('consumes status-only messages without items', () => {
+  it('produces no items for every non-visual SDK 0.3.314 message type', () => {
     const n = new Normalizer();
-    for (const m of [
-      { type: 'system', subtype: 'init', uuid: 'i', session_id: 's', model: 'm' },
+    const topLevel = [
+      'tool_progress',
+      'rate_limit_event',
+      'tool_use_summary',
+      'prompt_suggestion',
+      'auth_status',
+    ];
+    const systemSubtypes = [
+      'init',
+      'session_state_changed',
+      'commands_changed',
+      'status',
+      'thinking_tokens',
+      'hook_started',
+      'hook_progress',
+      'task_started',
+      'task_updated',
+      'task_progress',
+      'background_tasks_changed',
+      'control_request_progress',
+      'files_persisted',
+      'memory_recall',
+      'worker_shutting_down',
+      'plugin_install',
+      'elicitation_complete',
+    ];
+    const samples = [
+      ...topLevel.map((type, i) => ({ type, uuid: `t${i}`, session_id: 's' })),
+      ...systemSubtypes.map((subtype, i) => ({
+        type: 'system',
+        subtype,
+        uuid: `s${i}`,
+        session_id: 's',
+      })),
+      // Content-bearing types whose instance has nothing user-visible.
       {
         type: 'system',
-        subtype: 'session_state_changed',
-        state: 'running',
-        uuid: 'j',
+        subtype: 'hook_response',
+        hook_name: 'fmt',
+        hook_event: 'PostToolUse',
+        output: '',
+        stdout: '',
+        stderr: '',
+        outcome: 'success',
+        uuid: 'h1',
         session_id: 's',
       },
-    ]) {
-      expect(n.push(sdk(m))).toEqual({ items: [], replace: false });
+      {
+        type: 'system',
+        subtype: 'task_notification',
+        status: 'completed',
+        summary: 'watcher',
+        skip_transcript: true,
+        uuid: 'tn',
+        session_id: 's',
+      },
+    ];
+    for (const m of samples) {
+      expect(n.push(sdk(m)), JSON.stringify(m)).toEqual({ items: [], replace: false });
     }
+  });
+
+  it('maps content-bearing system messages to readable system items', () => {
+    const n = new Normalizer();
+    const sys = (subtype: string, fields: Record<string, unknown>, uuid = subtype) =>
+      n.push(sdk({ type: 'system', subtype, uuid, session_id: 's', ...fields })).items;
+    expect(sys('local_command_output', { content: 'Total cost: $0.12' })).toEqual([
+      { kind: 'system', id: 'local_command_output', level: 'info', text: 'Total cost: $0.12' },
+    ]);
+    expect(
+      sys('permission_denied', {
+        tool_name: 'Bash',
+        tool_use_id: 't',
+        message: 'Denied by rule',
+        decision_reason: 'deny rule Bash(rm:*)',
+      }),
+    ).toEqual([
+      {
+        kind: 'system',
+        id: 'permission_denied',
+        level: 'warning',
+        text: 'Permission denied: Bash — Denied by rule (deny rule Bash(rm:*))',
+      },
+    ]);
+    expect(sys('task_notification', { status: 'failed', summary: 'Tests broke' }, 'tn1')).toEqual([
+      { kind: 'system', id: 'tn1', level: 'error', text: 'Task failed: Tests broke' },
+    ]);
+    expect(sys('task_notification', { status: 'completed', summary: 'Indexed' }, 'tn2')).toEqual([
+      { kind: 'system', id: 'tn2', level: 'info', text: 'Task completed: Indexed' },
+    ]);
+    expect(sys('task_notification', { status: 'stopped', summary: '' }, 'tn3')).toEqual([
+      { kind: 'system', id: 'tn3', level: 'warning', text: 'Task stopped' },
+    ]);
+    expect(
+      sys(
+        'hook_response',
+        { hook_name: 'lint', output: '', stderr: 'eslint exploded', outcome: 'error' },
+        'hr1',
+      ),
+    ).toEqual([
+      { kind: 'system', id: 'hr1', level: 'warning', text: 'Hook lint failed: eslint exploded' },
+    ]);
+    expect(
+      sys('hook_response', { hook_name: 'greet', output: 'Hello', outcome: 'success' }, 'hr2'),
+    ).toEqual([{ kind: 'system', id: 'hr2', level: 'info', text: 'Hook greet: Hello' }]);
+    expect(sys('model_refusal_fallback', { content: 'Retried on Sonnet' }, 'mf')).toEqual([
+      { kind: 'system', id: 'mf', level: 'warning', text: 'Retried on Sonnet' },
+    ]);
+    expect(sys('model_refusal_no_fallback', { content: 'Refused' }, 'mn')).toEqual([
+      { kind: 'system', id: 'mn', level: 'error', text: 'Refused' },
+    ]);
+    expect(sys('mirror_error', { error: 'disk full' }, 'me')).toEqual([
+      { kind: 'system', id: 'me', level: 'warning', text: 'Transcript mirror error: disk full' },
+    ]);
+  });
+
+  it('maps conversation_reset to a system item and resets tool and stream state', () => {
+    const n = new Normalizer();
+    n.push(assistant('a1', [{ type: 'tool_use', id: 'toolu_1', name: 'Bash', input: {} }]));
+    n.push(streamEvent('e1', { type: 'message_start', message: { id: 'msg_1' } }));
+    n.push(
+      streamEvent('e2', {
+        type: 'content_block_start',
+        index: 0,
+        content_block: { type: 'text', text: 'par' },
+      }),
+    );
+    const reset = sdk({
+      type: 'conversation_reset',
+      uuid: 'cr',
+      session_id: 's',
+      trigger: 'clear',
+    });
+    expect(n.push(reset)).toEqual({
+      items: [
+        { kind: 'assistantText', id: 'e2', markdown: 'par', streaming: false },
+        { kind: 'system', id: 'cr', level: 'info', text: 'Conversation cleared' },
+      ],
+      replace: true,
+    });
+    // The old tool call is forgotten: a late result for it is an orphan.
+    expect(
+      n.push(user('u1', [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'x' }])).items,
+    ).toEqual([expect.objectContaining({ kind: 'unknown', sdkType: 'block:tool_result' })]);
+  });
+
+  it('closes a stream without a final message on the next message_start (API retry)', () => {
+    const n = new Normalizer();
+    const items = run(n, [
+      streamEvent('e1', { type: 'message_start', message: { id: 'msg_1' } }),
+      streamEvent('e2', {
+        type: 'content_block_start',
+        index: 0,
+        content_block: { type: 'text', text: '' },
+      }),
+      streamEvent('e3', {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'text_delta', text: 'Hel' },
+      }),
+      // Retry: a new API message starts; msg_1 never got its final assistant message.
+      streamEvent('e4', { type: 'message_start', message: { id: 'msg_2' } }),
+      streamEvent('e5', {
+        type: 'content_block_start',
+        index: 0,
+        content_block: { type: 'text', text: '' },
+      }),
+      streamEvent('e6', {
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'text_delta', text: 'Hello' },
+      }),
+      assistant('a1', [{ type: 'text', text: 'Hello' }], { msgId: 'msg_2' }),
+    ]);
+    expect(items).toEqual([
+      { kind: 'assistantText', id: 'e2', markdown: 'Hel', streaming: false },
+      { kind: 'assistantText', id: 'e5', markdown: 'Hello', streaming: false },
+    ]);
+  });
+
+  it('result closes open streams', () => {
+    const n = new Normalizer();
+    n.push(streamEvent('e1', { type: 'message_start', message: { id: 'msg_1' } }));
+    n.push(
+      streamEvent('e2', {
+        type: 'content_block_start',
+        index: 0,
+        content_block: { type: 'text', text: 'cut' },
+      }),
+    );
+    const result = sdk({ type: 'result', subtype: 'error_during_execution', uuid: 'r1' });
+    expect(n.push(result)).toEqual({
+      items: [
+        { kind: 'assistantText', id: 'e2', markdown: 'cut', streaming: false },
+        { kind: 'result', id: 'r1', isError: true },
+      ],
+      replace: true,
+    });
+  });
+
+  it('resolveItemId maps SDK uuids to the item ids rendering them', () => {
+    const n = new Normalizer();
+    run(n, [
+      streamEvent('e1', { type: 'message_start', message: { id: 'msg_1' } }),
+      streamEvent('e2', {
+        type: 'content_block_start',
+        index: 0,
+        content_block: { type: 'text', text: '' },
+      }),
+      assistant('a1', [{ type: 'text', text: 'Hi' }], { msgId: 'msg_1' }),
+      assistant('a2', [{ type: 'text', text: 'plain' }]),
+      assistant('a3', [
+        { type: 'thinking', thinking: 't', signature: 's' },
+        { type: 'text', text: 'x' },
+      ]),
+    ]);
+    expect(n.resolveItemId('a1')).toBe('e2');
+    expect(n.resolveItemId('a2')).toBe('a2');
+    expect(n.resolveItemId('a3')).toBe('a3:0');
+    expect(n.resolveItemId('a3:1')).toBe('a3:1');
+    expect(n.resolveItemId('never')).toBeUndefined();
   });
 
   it('maps user prompts with text and images to one user item', () => {
