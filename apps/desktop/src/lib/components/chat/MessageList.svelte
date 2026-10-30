@@ -81,6 +81,15 @@
     rows.forEach((r, i) => r.itemIds.forEach((id) => m.set(id, i)));
     return m;
   });
+  /** Like `rowOfItem`, plus the subagent items nested inside a row (built on demand). */
+  const rowShowing = (itemId: string): number | undefined => {
+    const top = rowOfItem.get(itemId);
+    if (top !== undefined) return top;
+    const i = rows.findIndex(
+      (r) => r.kind === 'item' && r.children?.some((c) => c.id === itemId) === true,
+    );
+    return i < 0 ? undefined : i;
+  };
 
   const estimate = (row: Row): number => {
     if (row.kind !== 'item') return 28;
@@ -176,6 +185,29 @@
     remember();
   };
 
+  /** The row key briefly highlighted after `scrollToItem`. */
+  let flashed = $state<string | null>(null);
+  let flashTimer: ReturnType<typeof setTimeout> | undefined;
+
+  /**
+   * Scrolls so the row showing `itemId` (or the subagent call it is nested
+   * under) is at the top, and stops following new output. Returns false, and
+   * leaves the view alone, when the item is not among the loaded items.
+   */
+  export const scrollToItem = (itemId: string): boolean => {
+    const row = rowShowing(itemId);
+    if (row === undefined) return false;
+    mem.stick = false;
+    stuck = false;
+    setScroll(offsets[row] ?? 0);
+    remember();
+    maybeLoadOlder();
+    flashed = rows[row]!.key;
+    clearTimeout(flashTimer);
+    flashTimer = setTimeout(() => (flashed = null), 1200);
+    return true;
+  };
+
   // ---- measuring ----
 
   const setHeight = (key: string, h: number): boolean => {
@@ -233,6 +265,7 @@
   };
 
   onDestroy(() => {
+    clearTimeout(flashTimer);
     observer?.disconnect();
     if (frame && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(frame);
   });
@@ -276,7 +309,8 @@
           <div
             data-row={row.key}
             data-top={offsets[range[0] + i]}
-            class="mx-auto max-w-4xl px-4 py-1"
+            data-flash={row.key === flashed || undefined}
+            class="mx-auto max-w-4xl rounded-md px-4 py-1 transition-colors duration-700 data-flash:bg-amber-500/10"
             {@attach observe}
           >
             {#if row.kind === 'item'}

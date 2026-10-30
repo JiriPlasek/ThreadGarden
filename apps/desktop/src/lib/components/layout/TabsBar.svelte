@@ -6,6 +6,7 @@
   import { shortcut } from '#lib/shortcuts.js';
   import { rawStatus, tabId } from './chat-info';
   import IconButton from './IconButton.svelte';
+  import RunningBadge from './RunningBadge.svelte';
   import StatusIcon from './StatusIcon.svelte';
 
   /**
@@ -34,6 +35,8 @@
       title: summary?.title ?? 'Loading…',
       status: chat?.loaded ? chat.status : (peek?.status ?? listedSummary?.status ?? 'history'),
       raw: rawStatus(summary),
+      // Tasks are known for loaded chats only; closed or unseen tabs are never asked.
+      running: chat?.running ?? 0,
     };
   };
 
@@ -135,6 +138,9 @@
         >
           <StatusIcon status={t.status} raw={t.raw} />
           <span class="truncate">{t.title}</span>
+          {#if t.running > 0}
+            <RunningBadge count={t.running} />
+          {/if}
         </button>
         <IconButton
           label="Close {t.title}"

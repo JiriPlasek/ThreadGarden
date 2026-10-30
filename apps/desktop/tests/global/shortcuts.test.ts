@@ -87,6 +87,12 @@ describe('shortcut list', () => {
     expect(iface).toEqual(expect.arrayContaining(['Ctrl+=', 'Ctrl++', 'Ctrl+-', 'Ctrl+0']));
   });
 
+  it('includes the Activity panel toggle', () => {
+    const s = SHORTCUTS.find((x) => x.id === 'activity-toggle');
+    expect(s?.combos.map((c) => formatShortcut(c, 'other'))).toEqual(['Ctrl+.']);
+    expect(s?.combos.map((c) => formatShortcut(c, 'mac'))).toEqual(['⌘.']);
+  });
+
   it('README lists every shortcut description', () => {
     // Tests run in apps/desktop; the README is the repository's.
     const readme = readFileSync(resolve(process.cwd(), '../../README.md'), 'utf8');

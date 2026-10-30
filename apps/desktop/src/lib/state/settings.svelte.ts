@@ -12,6 +12,8 @@ import { quietly, type Api } from './api';
 
 export const COLUMNS_KEY = 'columns';
 export const COLLAPSED_KEY = 'columns.collapsed';
+/** `uiState` key of the Activity panel's visibility (spec v1.1 §2). */
+export const ACTIVITY_KEY = 'activity.open';
 /** Column widths are written this long after the last change (dragging fires many). */
 export const COLUMNS_SAVE_DELAY_MS = 300;
 export type ColumnWidths = Record<string, number>;
@@ -35,6 +37,12 @@ export class SettingsState {
    * Starts from the copy this webview remembers, so the first paint has it.
    */
   scale = $state(readCachedScale());
+
+  /**
+   * Whether the chat view shows the Activity panel (for chats that have had
+   * tasks; others show it only on request). Remembered in `uiState`.
+   */
+  activityOpen = $state(true);
 
   /** An API key is stored (spec §5.5); the key itself never leaves the credential store and the service. */
   hasApiKey = $state(false);
@@ -128,6 +136,24 @@ export class SettingsState {
     } catch {
       // The local copy (or 100 %) is fine.
     }
+  };
+
+  /** Loads the remembered Activity panel visibility (open when there is none). */
+  restoreActivity = async (): Promise<void> => {
+    if (!this.api) return;
+    try {
+      const { value } = await this.api.request('uiState.get', { key: ACTIVITY_KEY });
+      if (typeof value === 'boolean') this.activityOpen = value;
+    } catch {
+      // Open is fine.
+    }
+  };
+
+  /** Shows or hides the Activity panel and remembers it. */
+  setActivityOpen = (open: boolean): void => {
+    if (open === this.activityOpen) return;
+    this.activityOpen = open;
+    if (this.api) quietly(this.api.request('uiState.set', { key: ACTIVITY_KEY, value: open }));
   };
 
   /** Sets the interface size (clamped to 80 %–150 %), applies it and persists it. */

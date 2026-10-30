@@ -11,6 +11,7 @@
   import { RequestError } from '#lib/service/client.js';
   import type { ResumeCheck } from '#lib/state/chats.svelte.js';
   import { useApp } from '#lib/state/context.js';
+  import ActivityPanel from './ActivityPanel.svelte';
   import ChatHeader from './ChatHeader.svelte';
   import type { RequestActions } from './context';
   import MessageList from './MessageList.svelte';
@@ -25,10 +26,14 @@
    * chat, focus moves to its card — unless the user is typing (the composer
    * has text, or another text field is focused) or focus is elsewhere in the
    * window (e.g. the chat list). The "waiting for you" bar always offers a jump.
+   *
+   * The Activity panel (spec v1.1 §2) sits on the right. It shows when the
+   * remembered setting says so and the chat has had tasks; for other chats
+   * only on request (the header's Activity button or Ctrl/Cmd+.).
    */
   let { sessionId }: { sessionId: string } = $props();
 
-  const { chats, tabs, interaction } = useApp();
+  const { chats, tabs, interaction, settings } = useApp();
   /** A chat just created from the new-chat dialog starts with its composer focused. */
   const focusComposer = untrack(() => interaction.takeComposerFocus(sessionId));
   const chat = $derived(chats.get(sessionId));
@@ -239,6 +244,39 @@
   );
   let dismissedSetup = $state<string | null>(null);
 
+  // ── Activity panel ──────────────────────────────────────────────────────
+
+  const activityShown = $derived(
+    chat?.loaded === true && settings.activityOpen && (chat.hadTasks || chat.activityRequested),
+  );
+
+  const toggleActivity = (): void => {
+    const c = chats.get(sessionId);
+    if (!c) return;
+    if (activityShown) {
+      settings.setActivityOpen(false);
+      c.activityRequested = false;
+    } else {
+      settings.setActivityOpen(true);
+      if (!c.hadTasks) c.activityRequested = true;
+    }
+  };
+
+  const onWindowKey = (e: KeyboardEvent): void => {
+    if (!(e.ctrlKey || e.metaKey) || e.altKey || e.defaultPrevented) return;
+    if (e.key !== '.' && e.code !== 'Period') return;
+    // A modal dialog owns the keyboard while it is open.
+    if (document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+    e.preventDefault();
+    toggleActivity();
+  };
+
+  /** Shows the tool call that started an agent, when it is among the loaded items. */
+  const showAgent = (toolUseId: string): void => {
+    const item = chat?.items.find((i) => i.kind === 'toolCall' && i.toolUseId === toolUseId);
+    if (item) list?.scrollToItem(item.id);
+  };
+
   // ── /model, /effort, /permissions (ruling R25) ──────────────────────────
 
   const CONTROL_LABELS = {
@@ -269,123 +307,137 @@
   };
 </script>
 
+<svelte:window onkeydown={onWindowKey} />
+
 <!-- Esc anywhere in the chat stops a working turn; the controls inside handle their own keys. -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="flex min-h-0 flex-1 flex-col" bind:this={root} {onkeydown}>
   {#if chat}
-    <ChatHeader {chat} />
+    <ChatHeader {chat} activityOpen={activityShown} onToggleActivity={toggleActivity} />
   {/if}
   {#if forkError}
     <div class="bg-destructive/10 text-destructive shrink-0 px-4 py-1 text-xs" role="alert">
       {forkError}
     </div>
   {/if}
-  {#if chat?.error && !chat.loaded}
-    <div class="flex min-h-0 flex-1 items-center justify-center p-6">
-      <p class="text-destructive text-sm" role="alert">Could not open this chat: {chat.error}</p>
-    </div>
-  {:else if !chat?.loaded}
-    <div class="flex min-h-0 flex-1 items-center justify-center p-6">
-      <p class="text-muted-foreground text-sm" role="status">Loading…</p>
-    </div>
-  {:else}
-    {#if chat.error}
-      <div class="bg-destructive/10 text-destructive shrink-0 px-4 py-1 text-xs" role="alert">
-        {chat.error}
-      </div>
-    {/if}
-    {#if chat.items.length === 0}
-      <div class="text-muted-foreground flex min-h-0 flex-1 items-center justify-center text-sm">
-        No messages yet.
-      </div>
-    {:else}
-      <MessageList
-        bind:this={list}
-        items={chat.items}
-        hasMore={chat.hasMore}
-        loadingOlder={chat.loadingOlder}
-        onLoadOlder={() => void chats.loadOlder(sessionId)}
-        onFork={fork}
-        {requests}
-        memory={chat.view}
-      />
-    {/if}
+  <div class="flex min-h-0 flex-1">
+    <div class="flex min-h-0 min-w-0 flex-1 flex-col">
+      {#if chat?.error && !chat.loaded}
+        <div class="flex min-h-0 flex-1 items-center justify-center p-6">
+          <p class="text-destructive text-sm" role="alert">
+            Could not open this chat: {chat.error}
+          </p>
+        </div>
+      {:else if !chat?.loaded}
+        <div class="flex min-h-0 flex-1 items-center justify-center p-6">
+          <p class="text-muted-foreground text-sm" role="status">Loading…</p>
+        </div>
+      {:else}
+        {#if chat.error}
+          <div class="bg-destructive/10 text-destructive shrink-0 px-4 py-1 text-xs" role="alert">
+            {chat.error}
+          </div>
+        {/if}
+        {#if chat.items.length === 0}
+          <div
+            class="text-muted-foreground flex min-h-0 flex-1 items-center justify-center text-sm"
+          >
+            No messages yet.
+          </div>
+        {:else}
+          <MessageList
+            bind:this={list}
+            items={chat.items}
+            hasMore={chat.hasMore}
+            loadingOlder={chat.loadingOlder}
+            onLoadOlder={() => void chats.loadOlder(sessionId)}
+            onFork={fork}
+            {requests}
+            memory={chat.view}
+          />
+        {/if}
 
-    <div class="mx-auto w-full max-w-4xl shrink-0 space-y-1.5 px-4 pt-1 pb-3">
-      {#if setupItem && setupItem.kind === 'system' && setupItem.id !== dismissedSetup}
-        <SetupScreen
-          kind="update"
-          problem={setupItem.text}
-          compact
-          onDismiss={() => (dismissedSetup = setupItem.id)}
-        />
-      {/if}
-      {#if pending.length > 0}
-        <div
-          class="flex items-center gap-2 rounded-md bg-amber-500/10 px-3 py-1 text-xs text-amber-900 dark:text-amber-200"
-        >
-          <HandIcon class="size-4 shrink-0" aria-hidden="true" />
-          <span class="flex-1"
-            >Claude is waiting for you{pending.length > 1
-              ? ` (${pending.length} requests)`
-              : ''}</span
-          >
-          <button
-            type="button"
-            class="font-medium underline-offset-2 hover:underline"
-            onclick={showRequest}>Show</button
-          >
+        <div class="mx-auto w-full max-w-4xl shrink-0 space-y-1.5 px-4 pt-1 pb-3">
+          {#if setupItem && setupItem.kind === 'system' && setupItem.id !== dismissedSetup}
+            <SetupScreen
+              kind="update"
+              problem={setupItem.text}
+              compact
+              onDismiss={() => (dismissedSetup = setupItem.id)}
+            />
+          {/if}
+          {#if pending.length > 0}
+            <div
+              class="flex items-center gap-2 rounded-md bg-amber-500/10 px-3 py-1 text-xs text-amber-900 dark:text-amber-200"
+            >
+              <HandIcon class="size-4 shrink-0" aria-hidden="true" />
+              <span class="flex-1"
+                >Claude is waiting for you{pending.length > 1
+                  ? ` (${pending.length} requests)`
+                  : ''}</span
+              >
+              <button
+                type="button"
+                class="font-medium underline-offset-2 hover:underline"
+                onclick={showRequest}>Show</button
+              >
+            </div>
+          {/if}
+          {#if blocked}
+            <div
+              class="border-destructive/40 bg-destructive/5 rounded-md border px-3 py-2 text-xs"
+              role="alert"
+            >
+              <div class="flex items-start gap-2">
+                <p class="text-destructive min-w-0 flex-1">
+                  <span class="font-medium">This chat can't be continued here.</span>
+                  {blocked.reason}
+                </p>
+                <button
+                  type="button"
+                  class="text-muted-foreground hover:text-foreground shrink-0"
+                  aria-label="Dismiss"
+                  onclick={() => (blocked = null)}
+                  ><XIcon class="size-4" aria-hidden="true" /></button
+                >
+              </div>
+              <div class="mt-1.5 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  class="bg-background hover:bg-muted inline-flex h-6 items-center gap-1 rounded border px-2"
+                  onclick={() => void copyResume()}
+                >
+                  {#if blocked.copied}<CheckIcon class="size-3.5" aria-hidden="true" />{/if}
+                  Copy resume command
+                </button>
+                {#if blocked.command}
+                  <code class="bg-muted rounded px-1.5 py-0.5 font-mono">{blocked.command}</code>
+                {/if}
+              </div>
+            </div>
+          {/if}
+          {#if sendError}
+            <p class="text-destructive text-xs" role="alert">{sendError}</p>
+          {/if}
+          <Composer
+            bind:textarea={composerBox}
+            draftKey={sessionId}
+            cwd={chat.summary?.cwd ?? ''}
+            commandScope={{ sessionId }}
+            {working}
+            queued={chat.queuedMessages}
+            onSubmit={submit}
+            onInterrupt={interrupt}
+            {onControl}
+            autofocus={focusComposer}
+          />
         </div>
       {/if}
-      {#if blocked}
-        <div
-          class="border-destructive/40 bg-destructive/5 rounded-md border px-3 py-2 text-xs"
-          role="alert"
-        >
-          <div class="flex items-start gap-2">
-            <p class="text-destructive min-w-0 flex-1">
-              <span class="font-medium">This chat can't be continued here.</span>
-              {blocked.reason}
-            </p>
-            <button
-              type="button"
-              class="text-muted-foreground hover:text-foreground shrink-0"
-              aria-label="Dismiss"
-              onclick={() => (blocked = null)}><XIcon class="size-4" aria-hidden="true" /></button
-            >
-          </div>
-          <div class="mt-1.5 flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              class="bg-background hover:bg-muted inline-flex h-6 items-center gap-1 rounded border px-2"
-              onclick={() => void copyResume()}
-            >
-              {#if blocked.copied}<CheckIcon class="size-3.5" aria-hidden="true" />{/if}
-              Copy resume command
-            </button>
-            {#if blocked.command}
-              <code class="bg-muted rounded px-1.5 py-0.5 font-mono">{blocked.command}</code>
-            {/if}
-          </div>
-        </div>
-      {/if}
-      {#if sendError}
-        <p class="text-destructive text-xs" role="alert">{sendError}</p>
-      {/if}
-      <Composer
-        bind:textarea={composerBox}
-        draftKey={sessionId}
-        cwd={chat.summary?.cwd ?? ''}
-        commandScope={{ sessionId }}
-        {working}
-        queued={chat.queuedMessages}
-        onSubmit={submit}
-        onInterrupt={interrupt}
-        {onControl}
-        autofocus={focusComposer}
-      />
     </div>
-  {/if}
+    {#if chat && activityShown}
+      <ActivityPanel {chat} onClose={toggleActivity} onShowAgent={showAgent} />
+    {/if}
+  </div>
 </div>
 
 <ConfirmDialog

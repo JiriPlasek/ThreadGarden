@@ -14,7 +14,7 @@
   /** Middle column (spec §6.1): searchable, status-sorted chats of the selected place. */
   let { onCollapse }: { onCollapse?: () => void } = $props();
 
-  const { sessions, places, tabs, agents, settings } = useApp();
+  const { sessions, places, tabs, agents, settings, chats } = useApp();
 
   /**
    * Fixed row height of the virtual list, in rem so it follows the interface
@@ -202,6 +202,7 @@
         active={chat.sessionId === tabs.active}
         projectName={spansProjects ? (names.get(chat.projectId) ?? baseName(chat.cwd)) : undefined}
         {now}
+        running={chats.get(chat.sessionId)?.running ?? 0}
         onOpen={open}
         onRename={(c) => (renaming = c)}
         onTogglePin={togglePin}

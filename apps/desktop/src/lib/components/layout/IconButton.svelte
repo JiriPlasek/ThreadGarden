@@ -19,6 +19,7 @@
     shortcut,
     tabindex,
     onauxclick,
+    pressed,
   }: {
     label: string;
     onclick: () => void;
@@ -29,6 +30,8 @@
     shortcut?: Combo;
     tabindex?: number;
     onauxclick?: (e: MouseEvent) => void;
+    /** A toggle: announced as pressed or not (`aria-pressed`). */
+    pressed?: boolean;
   } = $props();
 
   const keys = $derived(shortcut ? formatShortcut(shortcut) : null);
@@ -46,6 +49,7 @@
           class="text-muted-foreground hover:text-foreground {className ?? ''}"
           aria-label={label}
           aria-keyshortcuts={aria}
+          aria-pressed={pressed}
           {tabindex}
           {disabled}
           {onclick}

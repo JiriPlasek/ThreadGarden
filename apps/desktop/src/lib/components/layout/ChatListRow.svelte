@@ -8,6 +8,7 @@
   import { fullTime, relativeTime } from '#lib/format/time.js';
   import { cn } from '#lib/utils.js';
   import { externalLabel, previewLine, rawStatus } from './chat-info';
+  import RunningBadge from './RunningBadge.svelte';
   import StatusIcon from './StatusIcon.svelte';
 
   let {
@@ -19,6 +20,7 @@
     active,
     projectName,
     now,
+    running = 0,
     onOpen,
     onRename,
     onTogglePin,
@@ -35,6 +37,8 @@
     /** Shown when the place spans projects; omitted inside a project. */
     projectName?: string;
     now: number;
+    /** Running agents and processes (known for chats open in a tab only). */
+    running?: number;
     onOpen: (chat: ChatSummary) => void;
     onRename: (chat: ChatSummary) => void;
     onTogglePin: (chat: ChatSummary) => void;
@@ -72,8 +76,14 @@
           {#if chat.pinned}
             <PinIcon class="text-muted-foreground size-3.5 shrink-0" aria-label="Pinned" />
           {/if}
+          {#if running > 0}
+            <RunningBadge count={running} class="ml-auto" />
+          {/if}
           <time
-            class="text-muted-foreground ml-auto shrink-0 text-[0.6875rem] tabular-nums"
+            class={cn(
+              'text-muted-foreground shrink-0 text-[0.6875rem] tabular-nums',
+              running === 0 && 'ml-auto',
+            )}
             datetime={chat.lastActivity > 0 ? new Date(chat.lastActivity).toISOString() : undefined}
             title={fullTime(chat.lastActivity)}>{relativeTime(chat.lastActivity, now)}</time
           >

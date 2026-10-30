@@ -7,6 +7,7 @@ import type {
   ChatStatus,
   ChatStatusEvent,
   ChatSummary,
+  ChatTask,
   ChatTasksEvent,
   Result,
 } from '@pahub/protocol';
@@ -42,6 +43,23 @@ export type ListMemory = {
 };
 type Schedule = (cb: () => void) => void;
 
+/** A task that has finished: it keeps its final status and stops counting time. */
+export const taskEnded = (t: ChatTask): boolean =>
+  t.endedAt !== undefined ||
+  t.status === 'completed' ||
+  t.status === 'failed' ||
+  t.status === 'stopped';
+
+/** A task that is doing work now (the "N running" badge): running, pending, or an unknown status that has not ended. */
+export const taskRunning = (t: ChatTask): boolean =>
+  t.status === 'running' ||
+  t.status === 'pending' ||
+  (t.status === 'unknown' && t.endedAt === undefined);
+
+/** How many of `tasks` are running. */
+export const runningTasks = (tasks: readonly ChatTask[]): number =>
+  tasks.reduce((n, t) => (taskRunning(t) ? n + 1 : n), 0);
+
 /** Upserts `incoming` into `items` by id: known ids are replaced in place, new ids are appended. */
 export const upsertItems = (items: ChatItem[], incoming: ChatItem[]): ChatItem[] => {
   const next = items.slice();
@@ -75,6 +93,18 @@ export class ChatState {
   error = $state<string | null>(null);
   /** `chat.models` for this chat; null until loaded. */
   models = $state.raw<ModelInfo[] | null>(null);
+  /**
+   * The chat's SDK tasks (subagents, background shells, monitors) as the
+   * service last sent them (`chat.open`, then every `chat.tasks` event replaces
+   * the list). Empty for chats pahub does not run.
+   */
+  tasks = $state.raw<ChatTask[]>([]);
+  /** The chat has had tasks while open here: the Activity panel shows by default. */
+  hadTasks = $state(false);
+  /** The user asked for the Activity panel in this chat although it never had tasks. */
+  activityRequested = $state(false);
+  /** Running tasks, for the "N running" badges. */
+  running = $derived(runningTasks(this.tasks));
   /** Message list geometry, kept while the chat is resident. */
   view: ListMemory = { heights: new Map(), stick: true, anchor: null };
 
@@ -134,6 +164,7 @@ export class ChatsState {
     if (opts.schedule) this.schedule = opts.schedule;
     api.on('chat.items', (e) => this.onItems(e));
     api.on('chat.status', (e) => this.onStatus(e));
+    api.on('chat.tasks', (e) => this.onTasks(e));
     api.onReconnect(() => this.resync());
   };
 
@@ -202,6 +233,8 @@ export class ChatsState {
       chat.status = r.summary.status;
       chat.waitingFor = r.summary.waitingFor;
       chat.hasMore = r.hasMore;
+      // An older service has no task tracking: no tasks.
+      this.setTasks(chat, Array.isArray(r.tasks) ? r.tasks : []);
       chat.seq = r.seq;
       chat.loaded = true;
       // Queued items at or below the snapshot are already part of it; applying a stale
@@ -244,6 +277,12 @@ export class ChatsState {
     if (!this.api || !chat) return;
     const models = await this.api.request('chat.models', { sessionId });
     if (this.byId.get(sessionId) === chat) chat.models = models;
+  };
+
+  /** Stops one background task (Activity panel); its `stopped` status arrives as `chat.tasks`. */
+  stopTask = async (sessionId: string, taskId: string): Promise<void> => {
+    if (!this.api) throw new Error('Not connected to the pahub service');
+    await this.api.request('chat.stopTask', { sessionId, taskId });
   };
 
   /** Changes a header setting of a live chat; the header shows the new value once applied. */
@@ -384,6 +423,16 @@ export class ChatsState {
     if (chat) this.dispatch(chat, e);
   };
 
+  private onTasks = (e: ChatTasksEvent): void => {
+    const chat = this.byId.get(e.sessionId);
+    if (chat) this.dispatch(chat, e);
+  };
+
+  private setTasks = (chat: ChatState, tasks: ChatTask[]): void => {
+    chat.tasks = tasks;
+    if (tasks.length > 0) chat.hadTasks = true;
+  };
+
   private onStatus = (e: ChatStatusEvent): void => {
     const chat = this.byId.get(e.sessionId);
     if (chat) {
@@ -415,7 +464,7 @@ export class ChatsState {
       chat.queued.push(e);
       this.scheduleFlush();
     } else if ('tasks' in e) {
-      // Task lists are not shown yet; their seq still counts.
+      this.setTasks(chat, e.tasks);
     } else {
       chat.status = e.status;
       chat.waitingFor = e.waitingFor;

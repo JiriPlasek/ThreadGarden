@@ -229,7 +229,13 @@ export const SHORTCUTS: readonly Shortcut[] = [
     description: 'Quick switcher: open the chat or run the command',
   },
 
-  // Interface — AppShell (interface size), Resizable (column dividers).
+  // Interface — ChatView (Activity panel), AppShell (interface size), Resizable (column dividers).
+  {
+    id: 'activity-toggle',
+    group: 'Interface',
+    combos: [['Mod', '.']],
+    description: 'Show or hide the Activity panel (agents and background processes)',
+  },
   {
     id: 'scale-up',
     group: 'Interface',

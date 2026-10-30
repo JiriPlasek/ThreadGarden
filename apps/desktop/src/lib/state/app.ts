@@ -61,6 +61,7 @@ const connectTo = async (conn: ServiceConnection): Promise<void> => {
     settings.load(),
     settings.restoreColumns(),
     settings.restoreScale(),
+    settings.restoreActivity(),
     tabs.restore(),
   ]);
   loaded = true;

@@ -12,6 +12,7 @@ pahub works with Claude Code; it is not affiliated with or endorsed by Anthropic
 
 - **History of every Claude Code conversation** on the machine, grouped by project (git worktrees under their repository), with titles, previews and full-text search. Reading history never changes it.
 - **Live chats in tabs**: streaming markdown with highlighted code, tool calls as compact expandable rows, edits as diffs, subagent activity under the call that started it, todo checklists, thinking blocks, and the model, context use, cost and authentication in the chat header.
+- **Activity panel** beside each chat pahub runs (Ctrl/Cmd+.): its subagents with their progress, and its background processes (a dev server, a watcher) with their status and running time; a process can be stopped from there. Tabs and chat-list rows show "N running" while any of them run.
 - **Needs you** and **Running** across all projects, a bottom strip with every running agent, a tray badge and desktop notifications. Permission prompts, questions and plan approvals are answered inline.
 - **Composer** with `@` file mentions (fuzzy, respecting `.gitignore`), slash commands from the running Claude Code, pasted or dropped images, queued messages while Claude works, and drafts that survive restarts.
 - **Resume, fork and end** any chat. Idle chats release their process after 15 minutes (configurable) and resume transparently on the next message.
@@ -82,6 +83,7 @@ Press **Ctrl+/** (**⌘/** on macOS), or **?** outside a text field, to see this
 
 | Keys             | Action                                                                      |
 | ---------------- | --------------------------------------------------------------------------- |
+| Ctrl+.           | Show or hide the Activity panel (agents and background processes)           |
 | Ctrl+= or Ctrl++ | Larger interface                                                            |
 | Ctrl+-           | Smaller interface                                                           |
 | Ctrl+0           | Default interface size                                                      |

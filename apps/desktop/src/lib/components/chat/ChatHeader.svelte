@@ -1,4 +1,5 @@
 <script lang="ts">
+  import ActivityIcon from '@lucide/svelte/icons/activity';
   import CheckIcon from '@lucide/svelte/icons/check';
   import CircleStopIcon from '@lucide/svelte/icons/circle-stop';
   import PowerIcon from '@lucide/svelte/icons/power';
@@ -8,6 +9,7 @@
   import IconButton from '#lib/components/layout/IconButton.svelte';
   import StatusIcon from '#lib/components/layout/StatusIcon.svelte';
   import { copyText } from '#lib/native.js';
+  import { shortcut } from '#lib/shortcuts.js';
   import type { ChatState } from '#lib/state/chats.svelte.js';
   import { useApp } from '#lib/state/context.js';
   import { tokens, usd } from './format';
@@ -17,9 +19,19 @@
    * mode pickers (chats pahub runs only), context usage, cost, auth, Claude
    * Code version, End session and Copy resume command. A chat running outside
    * pahub gets Stop when Claude Code's background service runs it, and a
-   * "stop it there" note when it is open in a terminal.
+   * "stop it there" note when it is open in a terminal. The Activity button
+   * shows or hides the Activity panel (Ctrl/Cmd+., handled by ChatView).
    */
-  let { chat }: { chat: ChatState } = $props();
+  let {
+    chat,
+    activityOpen = false,
+    onToggleActivity,
+  }: {
+    chat: ChatState;
+    /** The Activity panel is shown. */
+    activityOpen?: boolean;
+    onToggleActivity?: () => void;
+  } = $props();
 
   const { chats, places } = useApp();
 
@@ -147,6 +159,24 @@
       <span class="text-muted-foreground shrink-0 text-xs">{project}</span>
     {/if}
     <div class="ml-auto flex shrink-0 items-center gap-0.5">
+      {#if onToggleActivity}
+        <IconButton
+          label="Activity panel"
+          shortcut={shortcut('activity-toggle').combos[0]}
+          pressed={activityOpen}
+          class="relative"
+          onclick={onToggleActivity}
+        >
+          <ActivityIcon />
+          {#if !activityOpen && chat.running > 0}
+            <!-- Running tasks while the panel is hidden: the tab badge says how many. -->
+            <span
+              class="absolute top-0.5 right-0.5 size-1.5 rounded-full bg-emerald-500"
+              aria-hidden="true"
+            ></span>
+          {/if}
+        </IconButton>
+      {/if}
       <IconButton label="Copy resume command" onclick={copyResume}>
         {#if copied}<CheckIcon />{:else}<TerminalIcon />{/if}
       </IconButton>
