@@ -3,8 +3,10 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import ChatView from '../../src/lib/components/chat/ChatView.svelte';
 import {
+  fitImages,
   imageProblem,
   MAX_IMAGE_BYTES,
+  MAX_MESSAGE_IMAGE_BYTES,
   mentionAt,
   mentionText,
   slashAt,
@@ -215,6 +217,25 @@ describe('composer helpers', () => {
     expect(mentionText('src/a.ts', 'file')).toBe('@src/a.ts ');
     expect(mentionText('src/lib', 'dir')).toBe('@src/lib/');
     expect(mentionText('my docs/a.md', 'file')).toBe('@"my docs/a.md" ');
+  });
+
+  it('caps the images of one message so the request always fits (never a silent drop)', () => {
+    // base64 of n bytes: ceil(n / 3) * 4 characters, `=`-padded.
+    const img = (bytes: number) => {
+      const pad = (3 - (bytes % 3)) % 3;
+      return {
+        mediaType: 'image/png',
+        data: 'A'.repeat(Math.ceil(bytes / 3) * 4 - pad) + '='.repeat(pad),
+      };
+    };
+    const five = 5 * 1024 * 1024;
+    const kept = [img(five), img(five), img(five)];
+    const r = fitImages(kept, [img(five), img(five)]);
+    expect(r.accepted).toHaveLength(1);
+    expect(r.problem).toMatch(/1 image was not attached/);
+    expect(r.problem).toMatch(/20 MB/);
+    expect(fitImages([], [img(10)])).toEqual({ accepted: [img(10)], problem: null });
+    expect(MAX_MESSAGE_IMAGE_BYTES).toBe(4 * five);
   });
 
   it('accepts only small PNG, JPEG, GIF and WebP images', () => {

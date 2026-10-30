@@ -95,6 +95,43 @@ export const IMAGE_TYPES: readonly string[] = [
   'image/webp',
 ];
 export const MAX_IMAGE_BYTES = 5 * 1024 * 1024;
+/**
+ * All images of one message together. As base64 (~27 MiB) they still fit the
+ * service's request limit (`MAX_REQUEST_BYTES`), so a send never fails on size.
+ */
+export const MAX_MESSAGE_IMAGE_BYTES = 4 * MAX_IMAGE_BYTES;
+
+/** Decoded size of a base64 image (`=` padding excluded). */
+const imageBytes = (img: ImageRef): number => {
+  const pad = img.data.endsWith('==') ? 2 : img.data.endsWith('=') ? 1 : 0;
+  return Math.floor((img.data.length * 3) / 4) - pad;
+};
+
+/**
+ * The incoming images that still fit the message's image budget next to the
+ * ones already attached, and why the rest were not attached (null when all fit).
+ */
+export const fitImages = (
+  attached: readonly ImageRef[],
+  incoming: readonly ImageRef[],
+): { accepted: ImageRef[]; problem: string | null } => {
+  let total = attached.reduce((n, img) => n + imageBytes(img), 0);
+  const accepted: ImageRef[] = [];
+  for (const img of incoming) {
+    const size = imageBytes(img);
+    if (total + size > MAX_MESSAGE_IMAGE_BYTES) continue;
+    total += size;
+    accepted.push(img);
+  }
+  const refused = incoming.length - accepted.length;
+  return {
+    accepted,
+    problem:
+      refused === 0
+        ? null
+        : `${refused} image${refused === 1 ? ' was' : 's were'} not attached: the images of one message can total at most ${MAX_MESSAGE_IMAGE_BYTES / (1024 * 1024)} MB`,
+  };
+};
 
 /** Why an image cannot be attached, or null when it can. */
 export const imageProblem = (file: { name: string; type: string; size: number }): string | null => {

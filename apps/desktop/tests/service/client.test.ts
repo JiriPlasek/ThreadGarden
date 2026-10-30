@@ -67,6 +67,26 @@ describe('ServiceClient', () => {
     });
   });
 
+  it('refuses a request larger than the service accepts, with a clear error, without sending it', async () => {
+    const { MAX_REQUEST_BYTES } = await import('@pahub/protocol');
+    server.handlers['chat.send'] = () => ({ queued: false });
+    await connected();
+    const data = 'A'.repeat(MAX_REQUEST_BYTES);
+    await expect(
+      client.request('chat.send', {
+        sessionId: 's',
+        text: 'look',
+        images: [{ mediaType: 'image/png', data }],
+      }),
+    ).rejects.toMatchObject({ code: 'TOO_LARGE', message: expect.stringMatching(/too large/) });
+    expect(server.calls('chat.send')).toHaveLength(0);
+    // The connection is unaffected.
+    expect(client.status).toBe('open');
+    await expect(client.request('chat.send', { sessionId: 's', text: 'ok' })).resolves.toEqual({
+      queued: false,
+    });
+  });
+
   it('times out unanswered requests after 30 s', async () => {
     server.silent.add('places.counts');
     await connected();

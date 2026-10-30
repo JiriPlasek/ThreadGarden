@@ -19,6 +19,7 @@
   import { imageTypeOfPath, mentionForPath, pastedPathMention, registerDropTarget } from './drop';
   import {
     filterCommands,
+    fitImages,
     IMAGE_TYPES,
     imageFiles,
     imageProblem,
@@ -344,13 +345,14 @@
       if (p) problems.push(p);
       else ok.push(f);
     }
-    imageError = problems.length ? problems.join('; ') : null;
     try {
-      const read = await Promise.all(ok.map(readImage));
-      images = [...images, ...read];
+      const fit = fitImages(images, await Promise.all(ok.map(readImage)));
+      images = [...images, ...fit.accepted];
+      if (fit.problem) problems.push(fit.problem);
     } catch (err) {
-      imageError = err instanceof Error ? err.message : String(err);
+      problems.push(err instanceof Error ? err.message : String(err));
     }
+    imageError = problems.length ? problems.join('; ') : null;
   };
 
   const onpaste = (e: ClipboardEvent): void => {
@@ -405,7 +407,9 @@
         problems.push(`${name} ${DROP_ERRORS[code] ?? `could not be read (${code})`}`);
       }
     }
-    if (read.length > 0) images = [...images, ...read];
+    const fit = fitImages(images, read);
+    if (fit.accepted.length > 0) images = [...images, ...fit.accepted];
+    if (fit.problem) problems.push(fit.problem);
     imageError = problems.length > 0 ? problems.join('; ') : null;
   };
 

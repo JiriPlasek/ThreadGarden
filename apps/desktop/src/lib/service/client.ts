@@ -4,6 +4,7 @@
  * (spec §4.5). Protocol version mismatch makes the client `incompatible`.
  */
 import {
+  MAX_REQUEST_BYTES,
   PROTOCOL_VERSION,
   type EventData,
   type EventName,
@@ -14,7 +15,10 @@ import {
 
 export type ClientStatus = 'connecting' | 'open' | 'reconnecting' | 'incompatible';
 
-/** Rejection of a request; `code` is a protocol error code or DISCONNECTED / TIMEOUT / INCOMPATIBLE. */
+/**
+ * Rejection of a request; `code` is a protocol error code or DISCONNECTED /
+ * TIMEOUT / INCOMPATIBLE / TOO_LARGE.
+ */
 export class RequestError extends Error {
   constructor(
     readonly code: string,
@@ -157,6 +161,21 @@ export class ServiceClient {
     const ws = this.ws;
     if (!ws) return Promise.reject(new RequestError('DISCONNECTED', 'Not connected'));
     const id = this.nextId++;
+    const frame = JSON.stringify({ id, method, params });
+    // The service closes the connection on an oversized frame, which would lose
+    // the message silently: refuse it here instead. (UTF-8 is at most 3 bytes
+    // per UTF-16 unit, so only long frames need measuring.)
+    const bytes =
+      frame.length * 3 > MAX_REQUEST_BYTES ? new TextEncoder().encode(frame).length : frame.length;
+    if (bytes > MAX_REQUEST_BYTES) {
+      const mb = (n: number) => (n / (1024 * 1024)).toFixed(1);
+      return Promise.reject(
+        new RequestError(
+          'TOO_LARGE',
+          `This message is too large to send (${mb(bytes)} MB; at most ${mb(MAX_REQUEST_BYTES)} MB). Remove some images and try again.`,
+        ),
+      );
+    }
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
@@ -164,7 +183,7 @@ export class ServiceClient {
       }, this.timeoutMs);
       this.pending.set(id, { resolve, reject, timer });
       try {
-        ws.send(JSON.stringify({ id, method, params }));
+        ws.send(frame);
       } catch {
         clearTimeout(timer);
         this.pending.delete(id);
