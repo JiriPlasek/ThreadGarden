@@ -160,8 +160,9 @@ export class SessionHost {
 
   /**
    * Closes live chats idle for at least `idleReclaimMinutes` (never pinned,
-   * never waiting on the user); they become `paused`. Returns how many. A
-   * failure for one session is reported and the pass continues.
+   * never waiting on the user, never with running background tasks: closing
+   * the process would kill them, Ruling R29); they become `paused`. Returns
+   * how many. A failure for one session is reported and the pass continues.
    */
   reclaimIdle(now: number): number {
     const minutes = this.deps.getSettings().idleReclaimMinutes;
@@ -173,6 +174,7 @@ export class SessionHost {
         if (!s.live || s.status !== 'idle' || s.idleSince === null) continue;
         if (now - s.idleSince < limit) continue;
         if (s.pendingRequests().length > 0 || this.deps.isPinned(id)) continue;
+        if (s.runningTasks > 0) continue;
         s.pause();
         count++;
       } catch (err) {

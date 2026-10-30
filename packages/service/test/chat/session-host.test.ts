@@ -151,6 +151,30 @@ describe('SessionHost', () => {
     expect(host.list()).toHaveLength(2);
   });
 
+  it('reclaimIdle never closes a chat whose background tasks are running (R29)', async () => {
+    const ctx = setup();
+    const { host, timers } = ctx;
+    const { s, fake } = await idleChat(ctx);
+    fake.emit(started('b1', { task_type: 'local_bash', is_backgrounded: true }));
+    await settle();
+    timers.advance(33);
+    expect(s.runningTasks).toBe(1);
+    expect(s.status).toBe('idle');
+
+    expect(host.reclaimIdle(timers.now() + 60 * MIN)).toBe(0);
+    expect(s.live).toBe(true);
+    expect(fake.closed).toBe(false);
+
+    // Once the last task has ended, the idle chat is reclaimed as usual.
+    fake.emit(notification('b1', 'completed'));
+    await settle();
+    timers.advance(33);
+    expect(s.runningTasks).toBe(0);
+    expect(host.reclaimIdle(timers.now() + 60 * MIN)).toBe(1);
+    expect(fake.closed).toBe(true);
+    expect(host.get(s.sessionId)?.status).toBe('paused');
+  });
+
   it('reclaimIdle never closes needsYou or pinned', async () => {
     const ctx = setup();
     const { host, pinned, timers, adapter } = ctx;

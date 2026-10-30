@@ -103,8 +103,10 @@ chat or continuing a history chat, with SDK `resume` and the same session id).
 **End session** closes the process and returns the chat to history. A live
 chat that is idle (no turn running, nothing waiting on the user) for 15 minutes
 (setting; 0 disables) is reclaimed: its process is closed, it shows as
-paused, and the next message resumes it transparently. Pinned chats and chats
-waiting on the user are never reclaimed. Closing a tab never ends a session.
+paused, and the next message resumes it transparently. Pinned chats, chats
+waiting on the user and chats with a running background task (Ruling R29:
+closing the process would kill it) are never reclaimed. Closing a tab never
+ends a session.
 **Stop all work** interrupts and closes every live pahub session; the service
 keeps running.
 
