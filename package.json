@@ -8,10 +8,12 @@
     "node": ">=22"
   },
   "scripts": {
-    "lint": "pnpm -r lint",
+    "lint": "pnpm -r lint && eslint scripts",
     "format": "prettier --write . && pnpm -r format",
     "typecheck": "pnpm -r typecheck",
-    "test": "pnpm -r test"
+    "test": "pnpm -r test && pnpm test:perf",
+    "test:perf": "pnpm -r --workspace-concurrency=1 test:perf",
+    "test:e2e": "pnpm --filter desktop test:e2e"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

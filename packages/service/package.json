@@ -9,8 +9,9 @@
     "format": "prettier --write .",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
+    "test:perf": "vitest run --config vitest.perf.config.ts",
     "test:real": "vitest run --config vitest.real.config.ts",
-    "dev": "tsx src/main.ts",
+    "dev": "tsx src/bin.ts",
     "mock": "tsx src/testing/mock-main.ts",
     "build": "node scripts/build.mjs"
   },

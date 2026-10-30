@@ -2,13 +2,12 @@ import { randomBytes } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
 import { PROTOCOL_VERSION, type EventMsg } from '@pahub/protocol';
 import pkg from '../package.json' with { type: 'json' };
 import { nextSeqEpoch, seqBaseForEpoch } from './chat/event-log.js';
 import type { Timers } from './chat/live-session.js';
 import { SessionHost } from './chat/session-host.js';
-import { resolveClaudeConfigDir, resolveDataDir } from './config.js';
+import { resolveClaudeConfigDir } from './config.js';
 import { acquireInstanceLock, removeDiscovery, writeDiscovery } from './discovery.js';
 import { FileIndex } from './files/file-index.js';
 import { ExternalPoller, makeClaudeRunner, type ExternalSession } from './external/poller.js';
@@ -19,8 +18,8 @@ import { createQuickSearch } from './history/search.js';
 import { watchProjects } from './history/watcher.js';
 import { createLogger, type Logger } from './logger.js';
 import type { AgentAdapter } from './sdk/adapter.js';
-import { findInstalledClaude, type ClaudeFound, type ClaudeProblem } from './sdk/claude-path.js';
-import { RealAdapter, buildSessionEnv } from './sdk/real-adapter.js';
+import type { ClaudeFound, ClaudeProblem } from './sdk/claude-path.js';
+import { buildSessionEnv } from './sdk/real-adapter.js';
 import { registerChatHandlers } from './server/handlers/chat.js';
 import { makeResumeChecker, registerExternalHandlers } from './server/handlers/external.js';
 import { registerFileHandlers } from './server/handlers/files.js';
@@ -382,21 +381,3 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     onClosed: (cb) => void closedCallbacks.push(cb),
   };
 };
-
-const isEntry = (): boolean =>
-  process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
-
-if (isEntry()) {
-  const home = os.homedir();
-  startService({
-    dataDir: resolveDataDir(process.env, process.platform, home),
-    claudeConfigDir: resolveClaudeConfigDir(process.env, home),
-    adapter: new RealAdapter(),
-    locateClaude: findInstalledClaude,
-  })
-    .then((svc) => svc.onClosed(() => process.exit(0)))
-    .catch((err: unknown) => {
-      process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
-      process.exit(1);
-    });
-}

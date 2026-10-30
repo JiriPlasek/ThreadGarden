@@ -1,8 +1,7 @@
 import { monitorEventLoopDelay } from 'node:perf_hooks';
 import { describe, expect, it } from 'vitest';
 import { FileIndex } from '../../src/files/file-index.js';
-
-const slack = Number(process.env.PAHUB_PERF_SLACK ?? 1);
+import { slack } from './perf-helpers.js';
 
 describe('file index perf', () => {
   it('suggest on a cached 200,000-entry index ≤ 50 ms', async () => {

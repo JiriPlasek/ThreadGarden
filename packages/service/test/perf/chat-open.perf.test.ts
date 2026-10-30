@@ -10,8 +10,7 @@ import type { ChatItem } from '@pahub/protocol';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { startService, type ServiceHandle } from '../../src/main.js';
 import { generateCorpus } from '../../src/testing/corpus.js';
-
-const slack = Number(process.env.PAHUB_PERF_SLACK ?? 1);
+import { slack } from './perf-helpers.js';
 
 let dir: string;
 let svc: ServiceHandle;

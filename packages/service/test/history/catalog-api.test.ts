@@ -298,20 +298,4 @@ describe('quickSearch', () => {
     expect(search('brandnew', 5)[0]?.sessionId).toBe('session-2');
     expect(sessions).toHaveBeenCalled();
   });
-
-  it('quickSearch per keystroke ≤ 50 ms over 1,000 sessions (perf)', async () => {
-    const slack = Number(process.env.PAHUB_PERF_SLACK ?? 1);
-    const t = await setup(1000, 20);
-    const search = createQuickSearch(t.db, t.catalog);
-    search('warm', 10);
-    const times: number[] = [];
-    for (const q of ['r', 're', 'ref', 'refa', 'refac', 'parity', 'migrat', 'zzzzqq']) {
-      const t0 = performance.now();
-      search(q, 20);
-      times.push(performance.now() - t0);
-    }
-    const max = Math.max(...times);
-    console.info(`quickSearch over 1000 sessions: max ${max.toFixed(1)} ms`);
-    expect(max).toBeLessThanOrEqual(50 * slack);
-  });
 });
