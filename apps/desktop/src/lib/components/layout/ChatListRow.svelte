@@ -58,7 +58,7 @@
         data-active={active || undefined}
         tabindex="-1"
         class={cn(
-          'relative mx-1 flex h-full cursor-default flex-col justify-center gap-0.5 rounded-md px-2.5 select-none',
+          'relative mx-1 flex h-full cursor-pointer flex-col justify-center gap-0.5 rounded-md px-2.5 select-none',
           'hover:bg-accent/60',
           selected && 'bg-accent text-accent-foreground hover:bg-accent',
           active &&

@@ -126,6 +126,26 @@
   html {
     @apply font-sans;
   }
+  /* Tailwind 4's preflight resets buttons to the default cursor; anything clickable gets a pointer. */
+  button:not(:disabled),
+  a[href],
+  summary,
+  select:not(:disabled),
+  label[for],
+  input[type='checkbox']:not(:disabled),
+  input[type='radio']:not(:disabled),
+  [role='button']:not([aria-disabled='true']),
+  [role='tab']:not([aria-disabled='true']),
+  [role='option']:not([aria-disabled='true']),
+  [role='menuitem']:not([aria-disabled='true']),
+  [role='menuitemcheckbox']:not([aria-disabled='true']),
+  [role='menuitemradio']:not([aria-disabled='true']) {
+    cursor: pointer;
+  }
+  :disabled,
+  [aria-disabled='true'] {
+    cursor: not-allowed;
+  }
 }
 
 /* Chat markdown (rendered by src/lib/markdown.ts): dense, readable, theme-aware. */

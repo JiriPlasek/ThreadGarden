@@ -181,7 +181,7 @@
           role="option"
           aria-selected={i === active}
           class={cn(
-            'flex cursor-default items-start gap-2 rounded-md px-2 py-1.5 text-sm',
+            'flex cursor-pointer items-start gap-2 rounded-md px-2 py-1.5 text-sm',
             i === active && 'bg-accent text-accent-foreground',
           )}
           onmousemove={() => (active = i)}
