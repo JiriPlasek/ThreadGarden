@@ -175,8 +175,13 @@ export class Db implements LiveRegistry {
   // (invisible to search) and `commitFts` makes them current in one short
   // statement; a failed rebuild leaves the previous text searchable.
 
-  /** Starts a rebuild: returns the key to pass to `addFtsChunk`. */
+  /**
+   * Starts a rebuild: returns the key to pass to `addFtsChunk`. Rows of any
+   * non-current generation (e.g. staged rows orphaned by a crash) are removed
+   * first, so the new generation always starts empty.
+   */
   stageFts(sessionId: string): { key: string; gen: number } {
+    this.deleteFtsRowids(this.staleFtsRowids(sessionId));
     const gen = this.currentGen(sessionId) + 1;
     return { key: `${sessionId}#${gen}`, gen };
   }

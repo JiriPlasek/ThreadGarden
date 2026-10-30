@@ -128,4 +128,26 @@ describe('Db', () => {
     expect(db.listLive()).toEqual([]);
     db.close();
   });
+
+  it('a rebuild discards staged rows orphaned by a crash', () => {
+    const db = openDb(':memory:');
+    db.setFts('a', 'original zebra text');
+    // crash leftovers: rows staged under the next generation, never committed
+    db.raw
+      .prepare('INSERT INTO messages_fts (session_id, text) VALUES (?, ?)')
+      .run('a#2', 'orphan giraffe');
+    expect(db.searchFts('giraffe', 5)).toEqual([]);
+    const stage = db.stageFts('a');
+    db.addFtsChunk(stage.key, 'fresh walrus text');
+    db.commitFts('a', stage.gen);
+    expect(db.searchFts('walrus', 5)).toHaveLength(1);
+    expect(db.searchFts('giraffe', 5)).toEqual([]);
+    expect(db.searchFts('zebra', 5)).toEqual([]);
+    db.setFts('a', 'second walrus');
+    const n = db.raw
+      .prepare("SELECT count(*) AS n FROM messages_fts WHERE session_id LIKE 'a#%'")
+      .get();
+    expect(n?.n).toBe(1);
+    db.close();
+  });
 });

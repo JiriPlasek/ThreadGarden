@@ -197,7 +197,11 @@ export class Indexer {
       }
       this.db.commitFts(id, stage.gen);
     } catch (e) {
-      await this.dropStale(id);
+      try {
+        await this.dropStale(id);
+      } catch (cleanup) {
+        this.onError(cleanup, { sessionId: id, step: 'sync' }); // the original error is rethrown below
+      }
       throw e;
     }
     await this.dropStale(id);
