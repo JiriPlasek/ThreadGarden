@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { YourTurnState } from '../../src/lib/state/your-turn.svelte';
 import { setup, summary } from '../layout/harness';
-import type { FakeServer } from '../service/fake-ws';
+import { RpcFail, type FakeServer } from '../service/fake-ws';
 
 const flush = () => new Promise((r) => setTimeout(r, 20));
 
@@ -178,5 +178,44 @@ describe('"Your turn": marking chats seen (v1.1 §3)', () => {
     focus();
     env.app.tabs.openTab('q1');
     await vi.waitFor(() => expect(env.seen()).toEqual(['q1']));
+  });
+  it('a markSeen the service fails is retried the next time the chat is shown, not in a loop', async () => {
+    let failing = true;
+    const env = await start({
+      unread: ['u1'],
+      configure: (server) => {
+        const ok = server.handlers['chat.markSeen']!;
+        server.handlers['chat.markSeen'] = (p) => {
+          if (failing) throw new RpcFail('INTERNAL', 'database is locked');
+          return ok(p);
+        };
+      },
+    });
+    focus();
+    env.app.tabs.openTab('u1');
+    await vi.waitFor(() => expect(env.seen()).toEqual(['u1']));
+    // Still on screen: no retry loop.
+    await env.app.sessions.reload();
+    await flush();
+    expect(env.seen()).toEqual(['u1']);
+    // Shown again (another tab, then back): retried, and this time it sticks.
+    failing = false;
+    env.app.tabs.openTab('r1');
+    await flush();
+    env.app.tabs.openTab('u1');
+    await vi.waitFor(() => expect(env.seen()).toEqual(['u1', 'u1']));
+    expect(env.unread.has('u1')).toBe(false);
+    // A window focus is a new view too.
+    env.unread.add('u2');
+    failing = true;
+    await env.app.sessions.reload();
+    env.app.tabs.openTab('u2');
+    await vi.waitFor(() => expect(env.seen()).toEqual(['u1', 'u1', 'u2']));
+    await flush(); // the failure has arrived
+    failing = false;
+    blur();
+    await flush();
+    focus();
+    await vi.waitFor(() => expect(env.seen()).toEqual(['u1', 'u1', 'u2', 'u2']));
   });
 });

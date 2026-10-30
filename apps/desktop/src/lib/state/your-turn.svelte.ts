@@ -47,6 +47,11 @@ export class YourTurnState {
    */
   private readonly marked = new SvelteSet<string>();
   private readonly inflight = new Set<string>();
+  /**
+   * Chats whose markSeen failed while on screen: retried on their next view
+   * (another tab first, or the window losing focus), not in a loop.
+   */
+  private readonly failed = new Set<string>();
   private timer: ReturnType<typeof setTimeout> | undefined;
   /** The chat the pending timer marks. */
   private scheduled: string | null = null;
@@ -77,11 +82,14 @@ export class YourTurnState {
     const stopEffects = $effect.root(() => {
       $effect(() => {
         const id = deps.tabs.active;
-        const due = id !== null && this.focused && this.unread(id);
+        const focused = this.focused;
+        const due = id !== null && focused && this.unread(id);
         untrack(() => {
+          // A chat no longer on screen gets a fresh chance at its next view.
+          for (const f of [...this.failed]) if (f !== id || !focused) this.failed.delete(f);
           if (due && this.scheduled === id) return; // a list refresh, not a new chance
           this.cancel();
-          if (!due) return;
+          if (!due || this.failed.has(id)) return;
           this.scheduled = id;
           this.timer = setTimeout(() => {
             this.scheduled = null;
@@ -100,11 +108,15 @@ export class YourTurnState {
       stopEffects,
       api.on('chatFinished', (e) => {
         this.marked.delete(e.sessionId);
+        this.failed.delete(e.sessionId);
         if (this.visible(e.sessionId)) this.markSeen(e.sessionId);
         else this.finished.add(e.sessionId);
       }),
       // Turns may have ended while disconnected: the summaries fetched now decide.
-      api.onOpen(() => this.marked.clear()),
+      api.onOpen(() => {
+        this.marked.clear();
+        this.failed.clear();
+      }),
     ];
   };
 
@@ -137,9 +149,9 @@ export class YourTurnState {
   };
 
   /**
-   * A failed request is not retried at once (it is almost always a lost
-   * connection): after the next hello `marked` is cleared and the refreshed
-   * summaries decide again.
+   * A failed request is not retried at once. After a lost connection the next
+   * hello clears `marked` and the refreshed summaries decide again; after a
+   * service error the chat is unread again and is retried on its next view.
    */
   private markSeen = (sessionId: string): void => {
     const api = this.api;
@@ -148,7 +160,17 @@ export class YourTurnState {
     this.finished.delete(sessionId);
     this.marked.add(sessionId);
     quietly(
-      api.request('chat.markSeen', { sessionId }).finally(() => this.inflight.delete(sessionId)),
+      api
+        .request('chat.markSeen', { sessionId })
+        .then(
+          () => {},
+          (err: unknown) => {
+            this.failed.add(sessionId);
+            this.marked.delete(sessionId);
+            throw err;
+          },
+        )
+        .finally(() => this.inflight.delete(sessionId)),
     );
   };
 }
