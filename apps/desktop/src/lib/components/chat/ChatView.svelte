@@ -227,11 +227,46 @@
     if (first?.kind === 'permissionRequest') void focusRequest(first.requestId, true);
   };
 
+  /**
+   * A startup failure that needs a Claude Code update: the setup notice sits
+   * above the composer (sending again retries once Claude Code is updated)
+   * until dismissed.
+   */
   const setupItem = $derived(
     chat?.status === 'failed'
       ? chat.items.findLast((i) => i.kind === 'system' && i.setup === true)
       : undefined,
   );
+  let dismissedSetup = $state<string | null>(null);
+
+  // ── /model, /effort, /permissions (ruling R25) ──────────────────────────
+
+  const CONTROL_LABELS = {
+    model: 'Model',
+    effort: 'Effort',
+    permissionMode: 'Permission mode',
+  } as const;
+
+  /** Focuses (and opens, where the webview allows) the header picker; else says why not. */
+  const onControl = (control: keyof typeof CONTROL_LABELS): string | null => {
+    const label = CONTROL_LABELS[control];
+    const select = root?.querySelector<HTMLSelectElement>(`select[aria-label="${label}"]`);
+    if (!select) {
+      return control === 'effort'
+        ? 'This model has no effort levels to choose from.'
+        : `The ${label.toLowerCase()} picker is not available yet.`;
+    }
+    if (select.disabled) {
+      return `${label} applies to running chats; send a message to resume this one first.`;
+    }
+    select.focus();
+    try {
+      (select as HTMLSelectElement & { showPicker?: () => void }).showPicker?.();
+    } catch {
+      // Opening needs a user gesture in some webviews; focus is enough.
+    }
+    return null;
+  };
 </script>
 
 <!-- Esc anywhere in the chat stops a working turn; the controls inside handle their own keys. -->
@@ -277,74 +312,78 @@
     {/if}
 
     <div class="mx-auto w-full max-w-4xl shrink-0 space-y-1.5 px-4 pt-1 pb-3">
-      {#if setupItem && setupItem.kind === 'system'}
-        <SetupScreen kind="update" problem={setupItem.text} compact />
-      {:else}
-        {#if pending.length > 0}
-          <div
-            class="flex items-center gap-2 rounded-md bg-amber-500/10 px-3 py-1 text-xs text-amber-900 dark:text-amber-200"
-          >
-            <HandIcon class="size-3.5 shrink-0" aria-hidden="true" />
-            <span class="flex-1"
-              >Claude is waiting for you{pending.length > 1
-                ? ` (${pending.length} requests)`
-                : ''}</span
-            >
-            <button
-              type="button"
-              class="font-medium underline-offset-2 hover:underline"
-              onclick={showRequest}>Show</button
-            >
-          </div>
-        {/if}
-        {#if blocked}
-          <div
-            class="border-destructive/40 bg-destructive/5 rounded-md border px-3 py-2 text-xs"
-            role="alert"
-          >
-            <div class="flex items-start gap-2">
-              <p class="text-destructive min-w-0 flex-1">
-                <span class="font-medium">This chat can't be continued here.</span>
-                {blocked.reason}
-              </p>
-              <button
-                type="button"
-                class="text-muted-foreground hover:text-foreground shrink-0"
-                aria-label="Dismiss"
-                onclick={() => (blocked = null)}
-                ><XIcon class="size-3.5" aria-hidden="true" /></button
-              >
-            </div>
-            <div class="mt-1.5 flex flex-wrap items-center gap-2">
-              <button
-                type="button"
-                class="bg-background hover:bg-muted inline-flex h-6 items-center gap-1 rounded border px-2"
-                onclick={() => void copyResume()}
-              >
-                {#if blocked.copied}<CheckIcon class="size-3" aria-hidden="true" />{/if}
-                Copy resume command
-              </button>
-              {#if blocked.command}
-                <code class="bg-muted rounded px-1.5 py-0.5 font-mono">{blocked.command}</code>
-              {/if}
-            </div>
-          </div>
-        {/if}
-        {#if sendError}
-          <p class="text-destructive text-xs" role="alert">{sendError}</p>
-        {/if}
-        <Composer
-          bind:textarea={composerBox}
-          draftKey={sessionId}
-          cwd={chat.summary?.cwd ?? ''}
-          commandScope={{ sessionId }}
-          {working}
-          queued={chat.queuedMessages}
-          onSubmit={submit}
-          onInterrupt={interrupt}
-          autofocus={focusComposer}
+      {#if setupItem && setupItem.kind === 'system' && setupItem.id !== dismissedSetup}
+        <SetupScreen
+          kind="update"
+          problem={setupItem.text}
+          compact
+          onDismiss={() => (dismissedSetup = setupItem.id)}
         />
       {/if}
+      {#if pending.length > 0}
+        <div
+          class="flex items-center gap-2 rounded-md bg-amber-500/10 px-3 py-1 text-xs text-amber-900 dark:text-amber-200"
+        >
+          <HandIcon class="size-3.5 shrink-0" aria-hidden="true" />
+          <span class="flex-1"
+            >Claude is waiting for you{pending.length > 1
+              ? ` (${pending.length} requests)`
+              : ''}</span
+          >
+          <button
+            type="button"
+            class="font-medium underline-offset-2 hover:underline"
+            onclick={showRequest}>Show</button
+          >
+        </div>
+      {/if}
+      {#if blocked}
+        <div
+          class="border-destructive/40 bg-destructive/5 rounded-md border px-3 py-2 text-xs"
+          role="alert"
+        >
+          <div class="flex items-start gap-2">
+            <p class="text-destructive min-w-0 flex-1">
+              <span class="font-medium">This chat can't be continued here.</span>
+              {blocked.reason}
+            </p>
+            <button
+              type="button"
+              class="text-muted-foreground hover:text-foreground shrink-0"
+              aria-label="Dismiss"
+              onclick={() => (blocked = null)}><XIcon class="size-3.5" aria-hidden="true" /></button
+            >
+          </div>
+          <div class="mt-1.5 flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              class="bg-background hover:bg-muted inline-flex h-6 items-center gap-1 rounded border px-2"
+              onclick={() => void copyResume()}
+            >
+              {#if blocked.copied}<CheckIcon class="size-3" aria-hidden="true" />{/if}
+              Copy resume command
+            </button>
+            {#if blocked.command}
+              <code class="bg-muted rounded px-1.5 py-0.5 font-mono">{blocked.command}</code>
+            {/if}
+          </div>
+        </div>
+      {/if}
+      {#if sendError}
+        <p class="text-destructive text-xs" role="alert">{sendError}</p>
+      {/if}
+      <Composer
+        bind:textarea={composerBox}
+        draftKey={sessionId}
+        cwd={chat.summary?.cwd ?? ''}
+        commandScope={{ sessionId }}
+        {working}
+        queued={chat.queuedMessages}
+        onSubmit={submit}
+        onInterrupt={interrupt}
+        {onControl}
+        autofocus={focusComposer}
+      />
     </div>
   {/if}
 </div>

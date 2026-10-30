@@ -2,6 +2,7 @@
 //! or starting the detached service. The UI talks to the service directly.
 
 pub mod discovery;
+pub mod dropped;
 pub mod navigation;
 pub mod secrets;
 pub mod service;
@@ -9,7 +10,7 @@ pub mod tray;
 
 use std::path::PathBuf;
 
-use tauri::{AppHandle, Manager, WindowEvent};
+use tauri::{AppHandle, DragDropEvent, Manager, WindowEvent};
 use tokio::sync::Mutex;
 
 /// Serialises `service_connection` so concurrent calls never start two services.
@@ -92,6 +93,12 @@ fn app_quit(app: AppHandle) {
     app.exit(0);
 }
 
+/// An image from the latest file drop on the window, for the composer (ruling R24).
+#[tauri::command]
+async fn read_dropped_image(path: String) -> Result<dropped::DroppedImage, String> {
+    blocking(move || dropped::read_latest(std::path::Path::new(&path))).await
+}
+
 #[tauri::command]
 fn set_tray_needs_you(app: AppHandle, count: u32) -> Result<(), String> {
     tray::set_needs_you(&app, count).map_err(|e| e.to_string())
@@ -123,6 +130,7 @@ pub fn run() {
             api_key_clear,
             app_quit,
             set_tray_needs_you,
+            read_dropped_image,
         ])
         .setup(|app| {
             tray::create(app.handle())?;
@@ -135,10 +143,17 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            // Closing the window hides it to the tray; agents and notifications carry on.
-            if let WindowEvent::CloseRequested { api, .. } = event {
-                api.prevent_close();
-                let _ = window.hide();
+            match event {
+                // Closing the window hides it to the tray; agents and notifications carry on.
+                WindowEvent::CloseRequested { api, .. } => {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+                // Only the latest drop's images can be read (`read_dropped_image`).
+                WindowEvent::DragDrop(DragDropEvent::Drop { paths, .. }) => {
+                    dropped::remember(paths);
+                }
+                _ => {}
             }
         })
         .run(tauri::generate_context!())

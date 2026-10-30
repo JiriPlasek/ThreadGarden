@@ -104,9 +104,11 @@ describe('composer', () => {
     });
     await userEvent.type(composer(), '/');
     const list = await screen.findByRole('listbox', { name: /commands/i });
+    // The SDK's commands come first, then pahub's terminal-only table (R25).
     expect(
       within(list)
         .getAllByRole('option')
+        .slice(0, 3)
         .map((o) => o.textContent),
     ).toEqual([
       expect.stringContaining('/review'),
@@ -115,7 +117,7 @@ describe('composer', () => {
     ]);
     expect(server.calls('chat.commands')[0]!.params).toEqual({ sessionId: SID });
 
-    await userEvent.type(composer(), 'co');
+    await userEvent.type(composer(), 'comp');
     expect(within(list).getAllByRole('option')).toHaveLength(1);
     await userEvent.keyboard('{Tab}');
     expect(composer().value).toBe('/compact ');

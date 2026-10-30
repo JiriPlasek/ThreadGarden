@@ -37,6 +37,16 @@
       .finally(() => (checking = false));
   };
 
+  /**
+   * A file dropped anywhere but the composer must never navigate the webview
+   * to that file (the chat would be lost). Composers handle their own drops.
+   */
+  const isFileDrag = (e: DragEvent): boolean =>
+    [...(e.dataTransfer?.types ?? [])].includes('Files');
+  const cancelFileDrag = (e: DragEvent): void => {
+    if (isFileDrag(e)) e.preventDefault();
+  };
+
   const width = (c: Column): number => {
     const { initial, min, max } = COLUMNS[c];
     const w = settings.columnWidths[c] ?? initial;
@@ -44,6 +54,8 @@
   };
   const collapsed = (c: Column): boolean => settings.collapsed[c] === true;
 </script>
+
+<svelte:window ondragover={cancelFileDrag} ondrop={cancelFileDrag} />
 
 <div class="bg-background text-foreground flex h-screen flex-col overflow-hidden">
   {#if connection.status === 'reconnecting'}

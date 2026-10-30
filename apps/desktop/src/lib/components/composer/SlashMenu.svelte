@@ -1,9 +1,11 @@
 <script lang="ts">
-  import type { SlashCommand } from '#lib/state/interaction.svelte.js';
+  import type { MenuCommand } from './commands';
 
   /**
-   * The `/` command menu (spec §6.4): commands from `supportedCommands()` as a
-   * listbox, driven from the composer's keyboard like the mention picker.
+   * The `/` command menu (spec §6.4): commands from `supportedCommands()` plus
+   * pahub's table of terminal-only ones (ruling R25) as a listbox, driven from
+   * the composer's keyboard like the mention picker. Unavailable commands are
+   * greyed out with the reason; picking one shows that reason instead.
    */
   let {
     id,
@@ -14,7 +16,7 @@
     onHover,
   }: {
     id: string;
-    items: readonly SlashCommand[];
+    items: readonly MenuCommand[];
     active: number;
     loading?: boolean;
     onPick: (i: number) => void;
@@ -33,9 +35,11 @@
       id={optionId(i)}
       role="option"
       aria-selected={i === active}
+      aria-disabled={c.unavailable ? 'true' : undefined}
+      title={c.unavailable ? `Unavailable in pahub: ${c.unavailable}` : undefined}
       class="flex cursor-pointer items-baseline gap-2 px-2 py-1 {i === active
         ? 'bg-accent text-accent-foreground'
-        : ''}"
+        : ''} {c.unavailable ? 'opacity-55' : ''}"
       onmousedown={(e) => e.preventDefault()}
       onclick={() => onPick(i)}
       onmousemove={() => onHover(i)}
@@ -44,14 +48,18 @@
       {#if c.argumentHint}
         <span class="text-muted-foreground shrink-0 font-mono">{c.argumentHint}</span>
       {/if}
-      <span class="text-muted-foreground min-w-0 truncate">{c.description}</span>
+      {#if c.unavailable}
+        <span class="text-muted-foreground min-w-0 truncate"
+          ><span class="font-medium">Unavailable in pahub</span> · {c.unavailable}</span
+        >
+      {:else}
+        <span class="text-muted-foreground min-w-0 truncate">{c.description}</span>
+      {/if}
     </li>
   {/each}
   {#if items.length === 0}
     <li class="text-muted-foreground px-2 py-1" role="presentation">
-      {loading
-        ? 'Loading commands…'
-        : 'No matching commands (the list fills in once Claude Code has run in this project)'}
+      {loading ? 'Loading commands…' : 'No matching commands'}
     </li>
   {/if}
 </ul>

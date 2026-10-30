@@ -46,9 +46,10 @@
       await requests.respond({ requestId: item.requestId, decision, ...extra });
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);
-    } finally {
       busy = false;
     }
+    // On success the card stays disabled until the service settles the request:
+    // a second answer would be refused.
   };
 
   const openFeedback = (): void => {

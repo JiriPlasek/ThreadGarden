@@ -112,6 +112,16 @@
     }
   };
 
+  /** `/model` and `/permissions` in the first message open this dialog's pickers (R25). */
+  const onControl = (control: 'model' | 'effort' | 'permissionMode'): string | null => {
+    if (control === 'effort') {
+      return 'Effort can be chosen in the chat header once the chat has started.';
+    }
+    const id = control === 'model' ? 'new-chat-model' : 'new-chat-mode';
+    document.getElementById(id)?.focus();
+    return null;
+  };
+
   const selectClass = 'bg-background h-8 w-full min-w-0 rounded-md border px-2 text-sm';
 </script>
 
@@ -189,6 +199,7 @@
         placeholder="What should Claude do?"
         autofocus
         onSubmit={create}
+        {onControl}
       />
     {/key}
   </Dialog.Content>

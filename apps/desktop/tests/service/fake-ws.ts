@@ -82,14 +82,23 @@ export class FakeSocket {
     if (this.server.silent.has(req.method)) return;
     queueMicrotask(() => {
       if (!this.open) return;
-      try {
-        const h = this.server.handlers[req.method];
-        if (!h) throw new RpcFail('METHOD_NOT_FOUND');
-        this.deliver({ id: req.id, result: h(req.params) });
-      } catch (err) {
+      const fail = (err: unknown): void => {
         if (err instanceof RpcFail) {
           this.deliver({ id: req.id, error: { code: err.code, message: err.message } });
         } else throw err;
+      };
+      try {
+        const h = this.server.handlers[req.method];
+        if (!h) throw new RpcFail('METHOD_NOT_FOUND');
+        const result = h(req.params);
+        // A handler may answer later (a Promise), e.g. to hold a request in flight.
+        if (result instanceof Promise) {
+          result.then((r) => this.deliver({ id: req.id, result: r }), fail);
+        } else {
+          this.deliver({ id: req.id, result });
+        }
+      } catch (err) {
+        fail(err);
       }
     });
   }

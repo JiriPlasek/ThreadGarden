@@ -4,10 +4,19 @@
   import ImagePlusIcon from '@lucide/svelte/icons/image-plus';
   import SquareIcon from '@lucide/svelte/icons/square';
   import { onDestroy, onMount, tick, untrack } from 'svelte';
+  import { readDroppedImage } from '#lib/native.js';
   import { useApp } from '#lib/state/context.js';
   import type { FileSuggestion, SlashCommand } from '#lib/state/interaction.svelte.js';
   import Attachments from './Attachments.svelte';
   import { caretLineTop } from './caret';
+  import {
+    localCommand,
+    menuCommands,
+    unavailableNotice,
+    type Control,
+    type MenuCommand,
+  } from './commands';
+  import { imageTypeOfPath, mentionForPath, pastedPathMention, registerDropTarget } from './drop';
   import {
     filterCommands,
     IMAGE_TYPES,
@@ -36,6 +45,13 @@
    *
    * Esc closes an open picker here; otherwise it bubbles to the chat view,
    * which interrupts a working chat.
+   *
+   * Terminal-only commands (ruling R25) never go out as text: `/model`,
+   * `/effort` and `/permissions` open the matching picker (`onControl`), the
+   * others show why they are unavailable. Files dropped from the OS (ruling
+   * R24) become `@` mentions, images among them are attached; a pasted
+   * absolute path inside `cwd` becomes a mention. File drops are always
+   * cancelled so the webview never navigates to a dropped file.
    */
   let {
     draftKey,
@@ -48,6 +64,7 @@
     autofocus = false,
     onSubmit,
     onInterrupt,
+    onControl,
     textarea = $bindable(null),
   }: {
     draftKey: string;
@@ -65,6 +82,8 @@
     /** Sends; resolves true when the message went out (the box clears) or false to keep it. */
     onSubmit: (text: string, images: ImageRef[]) => Promise<boolean>;
     onInterrupt?: () => void;
+    /** Opens a pahub control for `/model`, `/effort`, `/permissions`; returns a notice when it cannot. */
+    onControl?: (control: Control) => string | null;
     textarea?: HTMLTextAreaElement | null;
   } = $props();
 
@@ -82,6 +101,9 @@
   let sending = $state(false);
   let dragging = $state(false);
   let fileInput = $state<HTMLInputElement | null>(null);
+  let root = $state<HTMLDivElement | null>(null);
+  /** Why the last command was not sent (terminal-only, or no matching control). */
+  let notice = $state<string | null>(null);
 
   // ── pickers ─────────────────────────────────────────────────────────────
 
@@ -94,8 +116,10 @@
   let suggestTimer: ReturnType<typeof setTimeout> | undefined;
   let suggestGen = 0;
 
-  const commandItems = $derived(
-    picker?.kind === 'slash' ? filterCommands(commands ?? [], picker.token.query) : [],
+  const commandItems = $derived<MenuCommand[]>(
+    picker?.kind === 'slash'
+      ? filterCommands(menuCommands(commands ?? []), picker.token.query)
+      : [],
   );
   const optionCount = $derived(
     picker?.kind === 'mention' ? files.length : picker ? commandItems.length : 0,
@@ -108,6 +132,27 @@
     picker = null;
     clearTimeout(suggestTimer);
     suggestGen++;
+  };
+
+  const runControl = (control: Control): void => {
+    notice = onControl ? onControl(control) : 'This setting cannot be changed from here.';
+  };
+
+  /** Inserts `insert` at the caret (or the end), separated from the text before it. */
+  const insertText = async (insert: string): Promise<void> => {
+    const el = textarea;
+    const focused = !!el && document.activeElement === el;
+    const start = focused ? (el.selectionStart ?? text.length) : text.length;
+    const end = focused ? (el.selectionEnd ?? start) : text.length;
+    const before = text.slice(0, start);
+    const pad = before && !/\s$/.test(before) ? ' ' : '';
+    const next = replaceRange(text, start, end, pad + insert);
+    text = next.text;
+    interaction.saveDraft(draftKey, text);
+    await tick();
+    el?.focus();
+    el?.setSelectionRange(next.caret, next.caret);
+    resize();
   };
 
   const loadCommands = (): void => {
@@ -171,6 +216,18 @@
       if (f) next = replaceRange(text, p.token.start, p.token.end, mentionText(f.path, f.kind));
     } else {
       const c = commandItems[i];
+      if (c?.unavailable) {
+        closePicker();
+        notice = unavailableNotice(c);
+        return;
+      }
+      if (c?.control) {
+        closePicker();
+        text = replaceRange(text, 0, p.token.end, '').text.trimStart();
+        interaction.saveDraft(draftKey, text);
+        runControl(c.control);
+        return;
+      }
       if (c) next = replaceRange(text, 0, p.token.end, `/${c.name} `);
     }
     if (!next) return;
@@ -196,6 +253,7 @@
   };
 
   const oninput = (): void => {
+    notice = null;
     interaction.saveDraft(draftKey, text);
     resize();
     updatePicker();
@@ -206,13 +264,36 @@
     if ((!value && images.length === 0) || sending) return;
     sending = true;
     try {
-      const sent = await onSubmit(value, images);
+      if (value.startsWith('/')) {
+        const reported = commands ?? (await interaction.commands(commandScope).catch(() => []));
+        commands = reported;
+        const local = localCommand(value, reported);
+        if (local?.unavailable) {
+          notice = unavailableNotice(local);
+          return;
+        }
+        if (local?.control) {
+          text = '';
+          interaction.clearDraft(draftKey);
+          runControl(local.control);
+          return;
+        }
+      }
+      const sentText = text;
+      const sentImages = images;
+      const sent = await onSubmit(value, sentImages);
       if (sent) {
-        text = '';
-        images = [];
+        // Text typed while the message was on its way stays in the box.
+        if (text === sentText) {
+          text = '';
+          interaction.clearDraft(draftKey);
+        } else {
+          interaction.saveDraft(draftKey, text);
+        }
+        images = images.filter((img) => !sentImages.includes(img));
         imageError = null;
+        notice = null;
         closePicker();
-        interaction.clearDraft(draftKey);
         await tick();
         resize();
       }
@@ -274,21 +355,58 @@
 
   const onpaste = (e: ClipboardEvent): void => {
     const list = imageFiles(e.clipboardData);
-    if (list.length > 0) void attach(list);
+    if (list.length > 0) {
+      void attach(list);
+      return;
+    }
+    const pasted = e.clipboardData?.getData?.('text/plain') ?? '';
+    const mention = pastedPathMention(pasted, cwd);
+    if (mention) {
+      e.preventDefault();
+      void insertText(mention);
+    }
   };
 
+  const hasFiles = (e: DragEvent): boolean => [...(e.dataTransfer?.types ?? [])].includes('Files');
+
   const ondragover = (e: DragEvent): void => {
-    if (![...(e.dataTransfer?.types ?? [])].includes('Files')) return;
+    if (!hasFiles(e)) return;
     e.preventDefault();
     dragging = true;
   };
 
+  /** HTML5 drop (browser mode): images are attached, other files explained. */
   const ondrop = (e: DragEvent): void => {
     dragging = false;
-    const list = imageFiles(e.dataTransfer);
-    if (list.length === 0) return;
+    if (!hasFiles(e)) return;
+    // Never let the webview open a dropped file (that would lose the chat).
     e.preventDefault();
-    void attach(list);
+    const list = [...(e.dataTransfer?.files ?? [])];
+    if (list.length > 0) void attach(list);
+  };
+
+  const DROP_ERRORS: Record<string, string> = {
+    'too-large': 'is larger than 5 MB; images can be at most 5 MB',
+    'unsupported-type': 'is not a PNG, JPEG, GIF or WebP image',
+  };
+
+  /** Native drop (desktop app): images attached through the shell, other files mentioned. */
+  const dropPaths = async (paths: string[]): Promise<void> => {
+    const others = paths.filter((p) => !imageTypeOfPath(p));
+    if (others.length > 0) await insertText(others.map((p) => mentionForPath(p, cwd)).join(''));
+    const problems: string[] = [];
+    const read: ImageRef[] = [];
+    for (const p of paths.filter((x) => imageTypeOfPath(x))) {
+      const name = p.split(/[\\/]/).pop() ?? p;
+      try {
+        read.push(await readDroppedImage(p));
+      } catch (err) {
+        const code = err instanceof Error ? err.message : String(err);
+        problems.push(`${name} ${DROP_ERRORS[code] ?? `could not be read (${code})`}`);
+      }
+    }
+    if (read.length > 0) images = [...images, ...read];
+    imageError = problems.length > 0 ? problems.join('; ') : null;
   };
 
   const onPickFiles = (e: Event & { currentTarget: HTMLInputElement }): void => {
@@ -299,6 +417,9 @@
   // ── lifecycle ───────────────────────────────────────────────────────────
 
   onMount(() => {
+    const unregister = root
+      ? registerDropTarget({ el: root, drop: dropPaths, hover: (on) => (dragging = on) })
+      : () => {};
     const key = draftKey;
     if (interaction.cachedDraft(key) === undefined) {
       interaction
@@ -315,6 +436,7 @@
       resize();
       if (autofocus) textarea?.focus();
     });
+    return unregister;
   });
 
   onDestroy(() => {
@@ -332,6 +454,7 @@
 <!-- The drop zone covers the whole composer; the textarea and buttons inside handle the keyboard. -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
+  bind:this={root}
   class="bg-background relative rounded-lg border shadow-xs {dragging
     ? 'ring-2 ring-amber-500/50'
     : ''} focus-within:ring-ring/40 focus-within:ring-2"
@@ -387,6 +510,15 @@
 
   {#if imageError}
     <p class="text-destructive px-3 pb-1 text-xs" role="alert">{imageError}</p>
+  {/if}
+  {#if notice}
+    <p
+      class="px-3 pb-1 text-xs text-amber-900 dark:text-amber-200"
+      role="status"
+      aria-label="Command notice"
+    >
+      {notice}
+    </p>
   {/if}
 
   <div class="flex items-center gap-1 px-2 pb-1.5">

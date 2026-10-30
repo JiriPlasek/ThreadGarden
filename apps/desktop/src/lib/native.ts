@@ -6,6 +6,7 @@
  */
 import { invoke, isTauri as detectTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import type { ImageRef } from '@pahub/protocol';
 import pkg from '../../package.json';
 
 /**
@@ -112,6 +113,45 @@ export const pickFolder = async (): Promise<string | null> => {
   const { open } = await import('@tauri-apps/plugin-dialog');
   const picked = await open({ directory: true, multiple: false });
   return typeof picked === 'string' ? picked : null;
+};
+
+export type DropPoint = { x: number; y: number };
+export type FileDropHandlers = {
+  /** Files were dropped at `point` (CSS pixels of the viewport). */
+  drop: (paths: string[], point: DropPoint) => void;
+  over: (point: DropPoint) => void;
+  leave: () => void;
+};
+
+/**
+ * Native file drag and drop (ruling R24): the desktop webview receives OS
+ * drops as paths. Resolves to an unsubscribe function; a no-op in a browser,
+ * where the composer handles HTML5 image drops instead.
+ */
+export const onFileDrop = async (h: FileDropHandlers): Promise<() => void> => {
+  if (!isTauri) return () => {};
+  const { getCurrentWebview } = await import('@tauri-apps/api/webview');
+  return getCurrentWebview().onDragDropEvent((e) => {
+    const p = e.payload;
+    const scale = window.devicePixelRatio || 1;
+    const at = (pos: { x: number; y: number }): DropPoint => ({
+      x: pos.x / scale,
+      y: pos.y / scale,
+    });
+    if (p.type === 'drop') h.drop(p.paths, at(p.position));
+    else if (p.type === 'enter' || p.type === 'over') h.over(at(p.position));
+    else h.leave();
+  });
+};
+
+/**
+ * Reads an image from the latest native file drop (PNG, JPEG, GIF, WebP,
+ * at most 5 MB; checked by the shell before reading). Rejects with a code:
+ * `too-large`, `unsupported-type`, `not-dropped`, `not-a-file`, `read-failed: …`.
+ */
+export const readDroppedImage = async (path: string): Promise<ImageRef> => {
+  if (!isTauri) throw new Error('read-failed: dropped files need the desktop app');
+  return invoke<ImageRef>('read_dropped_image', { path });
 };
 
 /** Number of chats waiting on the user, shown on the tray icon. */
