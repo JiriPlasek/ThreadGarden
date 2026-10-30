@@ -3,6 +3,7 @@ import {
   ChatItemSchema,
   ChatTaskSchema,
   ChatSummarySchema,
+  PlaceSchema,
   ProjectSchema,
   RequestSchema,
   SettingsPatchSchema,
@@ -116,6 +117,9 @@ describe('protocol schemas', () => {
       'system.status',
       // v1.1 T2: "Your turn"
       'chat.markSeen',
+      // v1.2 B1: buckets
+      'chat.setBucket',
+      'chat.archiveOlder',
     ];
     expect(Object.keys(methods).sort()).toEqual([...expected].sort());
     for (const name of expected) {
@@ -138,6 +142,8 @@ describe('protocol schemas', () => {
         'needsYou',
         // v1.1 T2: "Your turn"
         'chatFinished',
+        // v1.2 B1: buckets
+        'chatBackFromHold',
       ].sort(),
     );
   });
@@ -271,5 +277,108 @@ describe('protocol schemas', () => {
     const finished = { sessionId: 's', title: 'Fix the build', projectName: 'pahub' };
     expect(events.chatFinished.parse(finished)).toEqual(finished);
     expect(events.chatFinished.safeParse({ sessionId: 's' }).success).toBe(false);
+  });
+
+  // ── v1.2 B1: buckets (Active / On hold / Archived) ──────────────────────────
+
+  describe('v1.2 buckets', () => {
+    const summary = {
+      sessionId: 's',
+      title: 't',
+      projectId: 'p',
+      cwd: '/w',
+      status: 'idle',
+      preview: '',
+      lastActivity: 1,
+      pinned: false,
+      live: false,
+      external: null,
+    };
+
+    it('ChatSummary defaults to the active bucket and not back from hold', () => {
+      const parsed = ChatSummarySchema.parse(summary);
+      expect(parsed.bucket).toBe('active');
+      expect(parsed.backFromHold).toBe(false);
+      expect(parsed).not.toHaveProperty('holdUntil');
+      expect(parsed).not.toHaveProperty('holdNote');
+      const held = ChatSummarySchema.parse({
+        ...summary,
+        bucket: 'onHold',
+        holdUntil: 1000,
+        holdNote: 'waiting for review',
+      });
+      expect(held).toMatchObject({
+        bucket: 'onHold',
+        holdUntil: 1000,
+        holdNote: 'waiting for review',
+      });
+      expect(ChatSummarySchema.parse({ ...summary, backFromHold: true }).backFromHold).toBe(true);
+    });
+
+    it('an unknown bucket from a newer service reads as active (forward compatibility)', () => {
+      expect(ChatSummarySchema.parse({ ...summary, bucket: 'someday' }).bucket).toBe('active');
+    });
+
+    it('places: active, onHold, archived; all stays accepted (alias of active)', () => {
+      for (const kind of ['needsYou', 'running', 'all', 'active', 'onHold', 'archived']) {
+        expect(PlaceSchema.safeParse({ kind }).success, kind).toBe(true);
+      }
+      expect(PlaceSchema.parse({ kind: 'project', projectId: 'p' })).toEqual({
+        kind: 'project',
+        projectId: 'p',
+      });
+      expect(
+        PlaceSchema.parse({ kind: 'project', projectId: 'p', include: ['onHold', 'archived'] }),
+      ).toEqual({ kind: 'project', projectId: 'p', include: ['onHold', 'archived'] });
+      expect(
+        PlaceSchema.safeParse({ kind: 'project', projectId: 'p', include: ['active'] }).success,
+      ).toBe(false);
+    });
+
+    it('places.counts reports every bucket (all = active for older UIs)', () => {
+      const r = methods['places.counts'].result;
+      const counts = { needsYou: 1, running: 2, all: 3, active: 3, onHold: 4, archived: 5 };
+      expect(r.parse(counts)).toEqual(counts);
+      expect(r.safeParse({ needsYou: 1, running: 2, all: 3 }).success).toBe(false);
+    });
+
+    it('chat.setBucket: bulk ids, a bucket, an optional until and a short note', () => {
+      const p = methods['chat.setBucket'].params;
+      expect(p.safeParse({ sessionIds: ['a', 'b'], bucket: 'archived' }).success).toBe(true);
+      expect(
+        p.safeParse({ sessionIds: ['a'], bucket: 'onHold', holdUntil: 5, holdNote: 'Petr' })
+          .success,
+      ).toBe(true);
+      expect(p.safeParse({ sessionIds: ['a'], bucket: 'later' }).success).toBe(false);
+      expect(
+        p.safeParse({ sessionIds: ['a'], bucket: 'onHold', holdNote: 'x'.repeat(201) }).success,
+      ).toBe(false);
+      expect(
+        p.safeParse({ sessionIds: ['a'], bucket: 'onHold', holdNote: 'x'.repeat(200) }).success,
+      ).toBe(true);
+      const result = { updated: 1, skipped: [{ sessionId: 'b', reason: 'LIVE' }] };
+      expect(methods['chat.setBucket'].result.parse(result)).toEqual(result);
+    });
+
+    it('chat.archiveOlder takes a day count and an optional project', () => {
+      const p = methods['chat.archiveOlder'].params;
+      expect(p.safeParse({ olderThanDays: 30 }).success).toBe(true);
+      expect(p.safeParse({ olderThanDays: 30, projectId: 'p' }).success).toBe(true);
+      expect(p.safeParse({}).success).toBe(false);
+      expect(p.safeParse({ olderThanDays: -1 }).success).toBe(false);
+      // A dry run counts what would be archived (for the confirmation).
+      expect(p.safeParse({ olderThanDays: 30, dryRun: true }).success).toBe(true);
+      expect(methods['chat.archiveOlder'].result.parse({ archived: 3 })).toEqual({ archived: 3 });
+    });
+
+    it('search.quick flags archived matches; chatBackFromHold names the chat', () => {
+      const hit = { sessionId: 's', title: 't', projectName: 'p', score: 1 };
+      const r = methods['search.quick'].result;
+      expect(r.parse({ items: [hit] }).items[0]).not.toHaveProperty('archived');
+      expect(r.parse({ items: [{ ...hit, archived: true }] }).items[0]?.archived).toBe(true);
+      const back = { sessionId: 's', title: 'Fix the build', projectName: 'pahub' };
+      expect(events.chatBackFromHold.parse(back)).toEqual(back);
+      expect(events.chatBackFromHold.safeParse({ sessionId: 's' }).success).toBe(false);
+    });
   });
 });

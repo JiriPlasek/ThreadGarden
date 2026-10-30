@@ -2,7 +2,7 @@
  * Router handlers for one chat (§4.3–§4.5, §6.4): open / page / replay,
  * create / send / resume, controls, permission answers, fork, stopping a
  * task (v1.1 §2), the command and model lists, and the seen state behind
- * "Your turn" (v1.1 `chat.markSeen`).
+ * "Your turn" (v1.1 `chat.markSeen`) and "Back from hold" (v1.2).
  *
  * Validation that the protocol schema leaves open happens here: permission
  * modes are limited to what pahub offers (Ruling R11: never
@@ -173,11 +173,20 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): voi
     deps.emit({ event: 'sessions.changed', data: { sessionIds } });
 
   /**
-   * v1.1 "Your turn": the user has seen the chat's latest turn. Lists change
-   * (Needs you, counts) only when that cleared an unread turn.
+   * v1.1 "Your turn": the user has seen the chat's latest turn, and (v1.2)
+   * that it came back from hold. Lists change (Needs you, counts) only when
+   * that cleared something.
    */
   const markSeen = (sessionId: string): void => {
-    if (db.markSeen(sessionId, (deps.now ?? Date.now)())) changed([sessionId]);
+    const seen = db.markSeen(sessionId, (deps.now ?? Date.now)());
+    const back = db.clearBackFromHold(sessionId);
+    if (seen || back) changed([sessionId]);
+  };
+  /** v1.2 auto-unarchive: an archived chat that is sent a message returns to Active. */
+  const unarchive = (sessionId: string): void => {
+    if (db.unarchive([sessionId]).length === 0) return;
+    catalog.bucketChanged([sessionId], 'active');
+    changed([sessionId]);
   };
 
   /** A Claude Code process may be started: `claude` is found and the auth policy is met. */
@@ -350,6 +359,7 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): voi
     }
     const sent = s.send(input);
     markSeen(p.sessionId); // replying means the last turn was seen
+    unarchive(p.sessionId); // nothing gets lost in the archive
     return sent;
   });
 

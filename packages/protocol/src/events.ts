@@ -53,6 +53,17 @@ export const events = {
     title: z.string(),
     projectName: z.string(),
   }),
+  // ── v1.2 B1: buckets ──────────────────────────────────────────────────────
+  /**
+   * An on-hold chat's time ran out: it is back in Active and under Needs you
+   * (`backFromHold`). Sent once, when the service notices; the UI decides
+   * whether to notify.
+   */
+  chatBackFromHold: z.object({
+    sessionId: z.string(),
+    title: z.string(),
+    projectName: z.string(),
+  }),
 } as const;
 
 export type EventName = keyof typeof events;

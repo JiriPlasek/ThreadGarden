@@ -1,12 +1,12 @@
 /**
  * pahub's own SQLite store (`node:sqlite`, WAL). It holds the history index,
  * pahub-side titles/pins, drafts, settings, UI state, the live-session
- * registry and the seen/turn-ended times behind "Your turn". It never touches
- * Claude Code's data.
+ * registry, the seen/turn-ended times behind "Your turn" and the chats'
+ * buckets (v1.2). It never touches Claude Code's data.
  */
 import './sqlite-warning.js';
 import { DatabaseSync } from 'node:sqlite';
-import { SettingsSchema, type Settings, type SettingsPatch } from '@pahub/protocol';
+import { SettingsSchema, type Bucket, type Settings, type SettingsPatch } from '@pahub/protocol';
 import type { LiveRegistry } from '../chat/live-session.js';
 import type { SDKSessionInfo } from '../sdk/adapter.js';
 import { migrate } from './migrations.js';
@@ -24,6 +24,16 @@ export type SessionRow = {
   fileSize: number | null;
   customTitle: string | null;
   pinned: boolean;
+} & BucketState;
+
+/** v1.2: a chat's bucket (pahub's own metadata). */
+export type BucketState = {
+  bucket: Bucket;
+  /** On hold until (epoch ms); null when not on hold or on hold indefinitely. */
+  holdUntil: number | null;
+  holdNote: string | null;
+  /** When a hold that ran out brought the chat back, until it is seen; else null. */
+  backAt: number | null;
 };
 
 export type ProjectRow = {
@@ -41,7 +51,38 @@ export type SessionFilter = {
   excludeProjectIds?: string[];
   /** These session ids are left out (already shown from a live source). */
   excludeIds?: string[];
+  /** v1.2: only chats in these buckets (default: any). */
+  buckets?: readonly Bucket[];
 };
+
+const KNOWN_BUCKETS: readonly Bucket[] = ['active', 'onHold', 'archived'];
+
+/** A stored bucket; anything this version does not know is `active` (forward compatibility). */
+export const toBucket = (v: unknown): Bucket => (v === 'onHold' || v === 'archived' ? v : 'active');
+
+/**
+ * SQL condition: `column` (`b.bucket`, NULL without a `chat_buckets` row) is one
+ * of `buckets`. Unknown stored values count as `active`, as `toBucket` reads them.
+ */
+const bucketIn = (column: string, buckets: readonly Bucket[]): string => {
+  const quote = (b: Bucket) => `'${b}'`;
+  if (buckets.includes('active')) {
+    const others = KNOWN_BUCKETS.filter((b) => !buckets.includes(b));
+    return others.length === 0
+      ? '1'
+      : `(${column} IS NULL OR ${column} NOT IN (${others.map(quote).join(',')}))`;
+  }
+  return buckets.length === 0 ? '0' : `${column} IN (${buckets.map(quote).join(',')})`;
+};
+
+/** SQL expression: the bucket of `column` as `toBucket` reads it. */
+const bucketOf = (column: string): string =>
+  `CASE WHEN ${column} IN ('onHold', 'archived') THEN ${column} ELSE 'active' END`;
+
+/** SQL condition: the chat in `s` has an unseen finished turn ("Your turn"). */
+const UNREAD_SQL = `EXISTS (SELECT 1 FROM turn_state t WHERE t.session_id = s.session_id
+  AND t.last_turn_ended_at IS NOT NULL
+  AND (t.last_seen_at IS NULL OR t.last_turn_ended_at > t.last_seen_at))`;
 
 const notIn = (column: string, values: string[] | undefined, where: string[], params: string[]) => {
   if (!values || values.length === 0) return;
@@ -85,10 +126,26 @@ const toSession = (r: Row): SessionRow => ({
   fileSize: (r.file_size as number | null) ?? null,
   customTitle: (r.custom_title as string | null) ?? null,
   pinned: r.pinned === 1,
+  ...toBucketState(r),
 });
 
-const SESSION_SELECT = `SELECT s.*, m.custom_title AS custom_title, COALESCE(m.pinned, 0) AS pinned
-  FROM sessions s LEFT JOIN meta m ON m.session_id = s.session_id`;
+const toBucketState = (r: Row | undefined): BucketState => {
+  const bucket = toBucket(r?.bucket);
+  const onHold = bucket === 'onHold';
+  return {
+    bucket,
+    holdUntil: onHold ? ((r?.hold_until as number | null | undefined) ?? null) : null,
+    holdNote: onHold ? ((r?.hold_note as string | null | undefined) ?? null) : null,
+    backAt: (r?.back_at as number | null | undefined) ?? null,
+  };
+};
+
+/** Sessions with their bucket (v1.2) as `b`. */
+const WITH_BUCKET = `sessions s LEFT JOIN chat_buckets b ON b.session_id = s.session_id`;
+
+const SESSION_SELECT = `SELECT s.*, m.custom_title AS custom_title, COALESCE(m.pinned, 0) AS pinned,
+    b.bucket AS bucket, b.hold_until AS hold_until, b.hold_note AS hold_note, b.back_at AS back_at
+  FROM ${WITH_BUCKET} LEFT JOIN meta m ON m.session_id = s.session_id`;
 
 export class Db implements LiveRegistry {
   constructor(readonly raw: DatabaseSync) {}
@@ -150,6 +207,7 @@ export class Db implements LiveRegistry {
     }
     notIn('s.project_id', filter.excludeProjectIds, where, params as string[]);
     notIn('s.session_id', filter.excludeIds, where, params as string[]);
+    if (filter.buckets) where.push(bucketIn('b.bucket', filter.buckets));
     if (cursor) {
       const at = cursor.indexOf(':');
       const modified = Number(cursor.slice(0, at));
@@ -170,17 +228,20 @@ export class Db implements LiveRegistry {
       : { items };
   }
 
-  /** Number of indexed sessions, optionally leaving out some projects. */
-  countSessions(excludeProjectIds: string[] = []): number {
+  /** v1.2: indexed sessions per bucket, optionally leaving out some projects (one query). */
+  countBuckets(excludeProjectIds: string[] = []): Record<Bucket, number> {
     const where: string[] = [];
     const params: string[] = [];
-    notIn('project_id', excludeProjectIds, where, params);
-    const r = this.raw
+    notIn('s.project_id', excludeProjectIds, where, params);
+    const rows = this.raw
       .prepare(
-        `SELECT COUNT(*) AS n FROM sessions ${where.length ? `WHERE ${where.join(' AND ')}` : ''}`,
+        `SELECT ${bucketOf('b.bucket')} AS kind, COUNT(*) AS n FROM ${WITH_BUCKET}
+         ${where.length ? `WHERE ${where.join(' AND ')}` : ''} GROUP BY kind`,
       )
-      .get(...params);
-    return Number(r?.n ?? 0);
+      .all(...params);
+    const out: Record<Bucket, number> = { active: 0, onHold: 0, archived: 0 };
+    for (const r of rows) out[toBucket(r.kind)] += Number(r.n);
+    return out;
   }
 
   /** Newest transcript change per project. */
@@ -419,6 +480,156 @@ export class Db implements LiveRegistry {
     return (
       this.raw.prepare('SELECT pinned FROM meta WHERE session_id = ?').get(sessionId)?.pinned === 1
     );
+  }
+
+  // --- buckets (v1.2) -------------------------------------------------------------
+  //
+  // A chat's bucket lives in `chat_buckets` (kept when a transcript
+  // disappears, like titles); a chat without a row there is active.
+
+  /** A chat's pin and bucket, whether or not it is indexed. */
+  metaOf(sessionId: string): { pinned: boolean } & BucketState {
+    const r = this.raw.prepare('SELECT * FROM chat_buckets WHERE session_id = ?').get(sessionId);
+    return { pinned: this.isSessionPinned(sessionId), ...toBucketState(r) };
+  }
+
+  /**
+   * Moves chats into `bucket` (one transaction). `hold` applies to `onHold`
+   * only; every move clears "back from hold".
+   */
+  setBucket(
+    sessionIds: readonly string[],
+    bucket: Bucket,
+    hold: { until?: number | undefined; note?: string | undefined } = {},
+  ): void {
+    if (sessionIds.length === 0) return;
+    const onHold = bucket === 'onHold';
+    const note = onHold && hold.note?.trim() ? hold.note.trim() : null;
+    const until = onHold ? (hold.until ?? null) : null;
+    this.inTransaction(() => this.setBucketRows(sessionIds, bucket, until, note));
+  }
+
+  /** Archived chats among `sessionIds` become active; returns those, in the given order. */
+  unarchive(sessionIds: readonly string[]): string[] {
+    if (sessionIds.length === 0) return [];
+    const marks = sessionIds.map(() => '?').join(',');
+    const changed = new Set(
+      this.raw
+        .prepare(
+          `UPDATE chat_buckets SET bucket = 'active' WHERE bucket = 'archived'
+           AND session_id IN (${marks}) RETURNING session_id`,
+        )
+        .all(...sessionIds)
+        .map((r) => r.session_id as string),
+    );
+    return sessionIds.filter((id) => changed.has(id));
+  }
+
+  /**
+   * Holds that ran out by `now` end (one statement): those chats become
+   * active and "back from hold" as of the hold's end. Returns them in the
+   * order they came due.
+   */
+  releaseHolds(now: number): string[] {
+    return this.raw
+      .prepare(
+        `UPDATE chat_buckets
+         SET bucket = 'active', back_at = hold_until, hold_until = NULL, hold_note = NULL
+         WHERE bucket = 'onHold' AND hold_until IS NOT NULL AND hold_until <= ?
+         RETURNING session_id, back_at`,
+      )
+      .all(now)
+      .map((r) => ({ id: r.session_id as string, at: r.back_at as number }))
+      .sort((a, b) => a.at - b.at || a.id.localeCompare(b.id))
+      .map((r) => r.id);
+  }
+
+  /** The user has seen a chat that came back from hold; true when that cleared the flag. */
+  clearBackFromHold(sessionId: string): boolean {
+    const r = this.raw
+      .prepare(
+        'UPDATE chat_buckets SET back_at = NULL WHERE session_id = ? AND back_at IS NOT NULL',
+      )
+      .run(sessionId);
+    return Number(r.changes) > 0;
+  }
+
+  /** Chats back from hold → when they came back, most recent first. */
+  backFromHold(): Map<string, number> {
+    const rows = this.raw
+      .prepare(
+        `SELECT session_id, back_at FROM chat_buckets WHERE back_at IS NOT NULL
+         ORDER BY back_at DESC, session_id`,
+      )
+      .all();
+    return new Map(rows.map((r) => [r.session_id as string, r.back_at as number]));
+  }
+
+  /**
+   * Archives (with `dryRun`: only finds) the active indexed chats last
+   * modified before `before`, of one project or outside `excludeProjectIds`,
+   * in one transaction. Unread chats, chats back from hold and `excludeIds`
+   * are left alone. Returns the ids.
+   */
+  archiveOlder(o: {
+    before: number;
+    projectId?: string | undefined;
+    excludeProjectIds?: string[];
+    excludeIds?: string[];
+    dryRun?: boolean;
+  }): string[] {
+    const where = [
+      's.last_modified < ?',
+      bucketIn('b.bucket', ['active']),
+      'b.back_at IS NULL',
+      `NOT ${UNREAD_SQL}`,
+    ];
+    const params: (string | number)[] = [o.before];
+    if (o.projectId !== undefined) {
+      where.push('s.project_id = ?');
+      params.push(o.projectId);
+    }
+    notIn('s.project_id', o.excludeProjectIds, where, params as string[]);
+    notIn('s.session_id', o.excludeIds, where, params as string[]);
+    const select = this.raw.prepare(
+      `SELECT s.session_id FROM ${WITH_BUCKET}
+       WHERE ${where.join(' AND ')} ORDER BY s.last_modified DESC, s.session_id`,
+    );
+    const find = () => select.all(...params).map((r) => r.session_id as string);
+    if (o.dryRun) return find();
+    let ids: string[] = [];
+    this.inTransaction(() => {
+      ids = find();
+      this.setBucketRows(ids, 'archived', null, null);
+    });
+    return ids;
+  }
+
+  private setBucketRows(
+    sessionIds: readonly string[],
+    bucket: Bucket,
+    until: number | null,
+    note: string | null,
+  ): void {
+    const upsert = this.raw.prepare(
+      `INSERT INTO chat_buckets (session_id, bucket, hold_until, hold_note, back_at)
+       VALUES (?, ?, ?, ?, NULL)
+       ON CONFLICT(session_id) DO UPDATE SET bucket = excluded.bucket,
+         hold_until = excluded.hold_until, hold_note = excluded.hold_note, back_at = NULL`,
+    );
+    for (const id of sessionIds) upsert.run(id, bucket, until, note);
+  }
+
+  /** Runs `fn` in one transaction (rolled back if it throws). */
+  private inTransaction(fn: () => void): void {
+    this.raw.exec('BEGIN');
+    try {
+      fn();
+      this.raw.exec('COMMIT');
+    } catch (e) {
+      this.raw.exec('ROLLBACK');
+      throw e;
+    }
   }
 
   // --- drafts -------------------------------------------------------------------

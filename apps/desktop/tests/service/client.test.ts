@@ -16,6 +16,8 @@ const summary = (sessionId: string): ChatSummary => ({
   live: true,
   external: null,
   unread: false,
+  bucket: 'active',
+  backFromHold: false,
 });
 const text = (id: string, markdown: string): ChatItem => ({
   kind: 'assistantText',

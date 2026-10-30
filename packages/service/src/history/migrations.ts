@@ -67,12 +67,28 @@ const steps: string[] = [
   `INSERT OR IGNORE INTO settings (key, json)
      SELECT 'notifyOnFinish', json FROM settings
      WHERE key = 'notifications' AND json IN ('true', 'false');`,
+  // v1.2 buckets: a chat is 'active' (no row, or the default), 'onHold' or
+  // 'archived'; pahub's own metadata. `back_at` is set (to the hold's end)
+  // when a hold ran out, until the user has seen the chat.
+  `
+  CREATE TABLE IF NOT EXISTS chat_buckets (
+    session_id TEXT PRIMARY KEY,
+    bucket TEXT NOT NULL DEFAULT 'active',
+    hold_until INTEGER,
+    hold_note TEXT,
+    back_at INTEGER
+  );
+  CREATE INDEX IF NOT EXISTS chat_buckets_bucket ON chat_buckets (bucket);
+  CREATE INDEX IF NOT EXISTS chat_buckets_hold ON chat_buckets (hold_until) WHERE bucket = 'onHold';
+  CREATE INDEX IF NOT EXISTS chat_buckets_back ON chat_buckets (back_at) WHERE back_at IS NOT NULL;
+  `,
 ];
 
-export const migrate = (db: DatabaseSync): void => {
+/** Runs the steps not run yet; `upTo` stops early (tests build older schemas with it). */
+export const migrate = (db: DatabaseSync, upTo = steps.length): void => {
   const row = db.prepare('PRAGMA user_version').get() as { user_version: number } | undefined;
   let version = row?.user_version ?? 0;
-  while (version < steps.length) {
+  while (version < Math.min(upTo, steps.length)) {
     db.exec('BEGIN');
     try {
       db.exec(steps[version] as string);

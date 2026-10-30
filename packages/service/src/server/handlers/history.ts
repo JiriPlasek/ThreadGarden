@@ -1,5 +1,6 @@
-/** Router handlers for places, projects, search, chat metadata, drafts and settings. */
-import type { SettingsPatch } from '@pahub/protocol';
+/** Router handlers for places, projects, search, chat metadata, buckets, drafts and settings. */
+import type { EventMsg, SettingsPatch } from '@pahub/protocol';
+import { Buckets } from '../../history/buckets.js';
 import type { Catalog } from '../../history/catalog.js';
 import type { Db } from '../../history/db.js';
 import type { QuickHit } from '../../history/search.js';
@@ -12,6 +13,10 @@ export type HistoryHandlerDeps = {
   now?: () => number;
   /** Called after `settings.set` with the applied patch (e.g. to find `claude` again). */
   onSettingsChanged?: (patch: SettingsPatch) => void;
+  /** v1.2 buckets; default: one over `db`/`catalog` that sends events to `emit`. */
+  buckets?: Buckets;
+  /** Events (`sessions.changed`, …) for the default `buckets`. */
+  emit?: (e: EventMsg) => void;
 };
 
 /**
@@ -21,6 +26,7 @@ export type HistoryHandlerDeps = {
 export const registerHistoryHandlers = (router: Router, deps: HistoryHandlerDeps): void => {
   const { db, catalog, quickSearch } = deps;
   const now = deps.now ?? Date.now;
+  const buckets = deps.buckets ?? new Buckets({ db, catalog, emit: deps.emit ?? (() => {}), now });
 
   router.register('places.counts', async () => catalog.counts());
   router.register('projects.list', async () => catalog.projects());
@@ -51,6 +57,18 @@ export const registerHistoryHandlers = (router: Router, deps: HistoryHandlerDeps
     catalog.invalidate();
     return {};
   });
+
+  // ── v1.2 B1: buckets ──
+  router.register('chat.setBucket', async (p) =>
+    buckets.set(p.sessionIds, p.bucket, { until: p.holdUntil, note: p.holdNote }),
+  );
+  router.register('chat.archiveOlder', async (p) =>
+    buckets.archiveOlder({
+      projectId: p.projectId,
+      olderThanDays: p.olderThanDays,
+      ...(p.dryRun ? { dryRun: true } : {}),
+    }),
+  );
 
   router.register('drafts.get', async (p) => ({ text: db.getDraft(p.key)?.text ?? '' }));
   router.register('drafts.set', async (p) => {

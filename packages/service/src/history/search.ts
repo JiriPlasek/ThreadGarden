@@ -1,6 +1,8 @@
 /**
  * Quick switcher search (Ctrl+K, spec §6.1): fuzzy match over chat titles and
  * project names (`fuzzysort`), merged with full-text hits from the index.
+ * v1.2: archived chats are searched too; their hits are flagged and come
+ * after every other hit (the UI groups them last).
  */
 import fuzzysort, { type Prepared } from 'fuzzysort';
 import type { Catalog } from './catalog.js';
@@ -12,6 +14,7 @@ export type QuickHit = {
   projectName: string;
   snippet?: string;
   score: number;
+  archived?: boolean;
 };
 
 const PROJECT_WEIGHT = 0.6;
@@ -59,6 +62,7 @@ export const createQuickSearch = (
         projectName: r.projectName,
         score,
         ...(snippet ? { snippet } : {}),
+        ...(r.bucket === 'archived' ? { archived: true } : {}),
       });
     };
 
@@ -69,6 +73,8 @@ export const createQuickSearch = (
     }
     for (const h of db.searchFts(q, limit)) add(h.sessionId, FTS_SCORE, h.snippet);
 
-    return [...hits.values()].sort((a, b) => b.score - a.score).slice(0, limit);
+    // The best `limit` hits, archived ones last.
+    const best = [...hits.values()].sort((a, b) => b.score - a.score).slice(0, limit);
+    return [...best.filter((h) => !h.archived), ...best.filter((h) => h.archived)];
   };
 };
