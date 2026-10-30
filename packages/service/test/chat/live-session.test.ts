@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ChatItem, EventMsg } from '@pahub/protocol';
 import { LiveSession, type LiveSessionOptions } from '../../src/chat/live-session.js';
+import { ServiceError } from '../../src/server/router.js';
 import type { PermissionUpdate } from '../../src/sdk/adapter.js';
 import { FakeAdapter } from '../../src/testing/fake-adapter.js';
 import {
@@ -648,6 +649,41 @@ describe('LiveSession', () => {
 
     s.setAuth({ kind: 'subscription', label: 'Claude Max' });
     expect(headers().at(-1)).toMatchObject({ auth: { kind: 'subscription', label: 'Claude Max' } });
+  });
+
+  it('rejects bypassPermissions when creating or resuming, before starting a process', () => {
+    const { adapter, registry, opts } = setup();
+    const bypass = { ...opts, permissionMode: 'bypassPermissions' as const };
+    for (const start of [
+      () => LiveSession.create('/p', { text: 'go' }, bypass),
+      () => LiveSession.resume('sess-1', '/p', bypass),
+    ]) {
+      let caught: unknown;
+      try {
+        start();
+      } catch (err) {
+        caught = err;
+      }
+      expect(caught).toBeInstanceOf(ServiceError);
+      expect(caught).toMatchObject({
+        code: 'INVALID_PARAMS',
+        message: expect.stringMatching(/bypassPermissions/),
+      });
+    }
+    expect(adapter.started).toEqual([]);
+    expect(registry.live.size).toBe(0);
+  });
+
+  it('rejects setPermissionMode(bypassPermissions) and keeps the current mode', async () => {
+    const { adapter, opts } = setup();
+    const s = LiveSession.create('/p', { text: 'go' }, { ...opts, permissionMode: 'default' });
+    const fake = adapter.lastSession();
+    await expect(s.setPermissionMode('bypassPermissions')).rejects.toMatchObject({
+      name: 'ServiceError',
+      code: 'INVALID_PARAMS',
+    });
+    expect(fake.permissionMode).toBe('default');
+    expect(s.choices.permissionMode).toBe('default');
   });
 
   it('setModel, setPermissionMode and setEffort apply live and update the header', async () => {

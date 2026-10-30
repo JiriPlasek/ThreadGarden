@@ -405,6 +405,8 @@ describe('Normalizer', () => {
       'tool_use_summary',
       'prompt_suggestion',
       'auth_status',
+      // Not in the SDK's SDKMessage union, but CLI 2.1.314 emits ~3 per turn (Ruling R9).
+      'command_lifecycle',
     ];
     const systemSubtypes = [
       'init',
@@ -444,6 +446,33 @@ describe('Normalizer', () => {
         stderr: '',
         outcome: 'success',
         uuid: 'h1',
+        session_id: 's',
+      },
+      // A successful hook never renders, even with output (Ruling R10): SessionStart
+      // hooks routinely print whole context documents.
+      {
+        type: 'system',
+        subtype: 'hook_response',
+        hook_name: 'SessionStart:startup',
+        hook_event: 'SessionStart',
+        output: '{"hookSpecificOutput":{"additionalContext":"a very long document"}}',
+        stdout: '{"hookSpecificOutput":{"additionalContext":"a very long document"}}',
+        stderr: '',
+        exit_code: 0,
+        outcome: 'success',
+        uuid: 'h2',
+        session_id: 's',
+      },
+      {
+        type: 'system',
+        subtype: 'hook_response',
+        hook_name: 'slow',
+        hook_event: 'PreToolUse',
+        output: 'partial',
+        stdout: 'partial',
+        stderr: '',
+        outcome: 'cancelled',
+        uuid: 'h3',
         session_id: 's',
       },
       {
@@ -503,7 +532,49 @@ describe('Normalizer', () => {
     ]);
     expect(
       sys('hook_response', { hook_name: 'greet', output: 'Hello', outcome: 'success' }, 'hr2'),
-    ).toEqual([{ kind: 'system', id: 'hr2', level: 'info', text: 'Hook greet: Hello' }]);
+    ).toEqual([]);
+    expect(
+      sys(
+        'hook_response',
+        {
+          hook_name: 'fmt',
+          output: '',
+          stderr: 'prettier: bad syntax',
+          exit_code: 2,
+          outcome: 'error',
+        },
+        'hr3',
+      ),
+    ).toEqual([
+      {
+        kind: 'system',
+        id: 'hr3',
+        level: 'warning',
+        text: 'Hook fmt failed (exit code 2): prettier: bad syntax',
+      },
+    ]);
+    expect(
+      sys(
+        'hook_response',
+        { hook_name: 'gate', output: '', stderr: '', exit_code: 1, outcome: 'error' },
+        'hr4',
+      ),
+    ).toEqual([
+      { kind: 'system', id: 'hr4', level: 'warning', text: 'Hook gate failed (exit code 1)' },
+    ]);
+    const [long] = sys(
+      'hook_response',
+      { hook_name: 'big', output: '', stderr: `${'x'.repeat(5_000)}TAIL`, outcome: 'error' },
+      'hr5',
+    );
+    expect(long).toMatchObject({ kind: 'system', level: 'warning' });
+    const longText = (long as { text: string }).text;
+    expect(longText.length).toBeLessThan(1_100);
+    expect(longText).toMatch(/^Hook big failed: x+…$/);
+    // An outcome this pahub does not know stays visible as raw JSON.
+    expect(sys('hook_response', { hook_name: 'h', outcome: 'timed_out' }, 'hr6')).toEqual([
+      expect.objectContaining({ kind: 'unknown', id: 'hr6', sdkType: 'system:hook_response' }),
+    ]);
     expect(sys('model_refusal_fallback', { content: 'Retried on Sonnet' }, 'mf')).toEqual([
       { kind: 'system', id: 'mf', level: 'warning', text: 'Retried on Sonnet' },
     ]);

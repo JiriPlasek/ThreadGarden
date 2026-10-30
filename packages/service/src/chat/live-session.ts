@@ -35,6 +35,7 @@ import type {
   StartOptions,
 } from '../sdk/adapter.js';
 import { startupFailureMessage, type StartupFailureMessage } from '../sdk/startup-failure.js';
+import { ServiceError } from '../server/router.js';
 import { EventLog, type ChatEvent, type ChatEventDraft } from './event-log.js';
 import { Normalizer, deriveStatus } from './normalize.js';
 
@@ -136,6 +137,19 @@ type Pending = {
 };
 type Rec = Record<string, unknown>;
 
+/**
+ * Ruling R11: pahub v1 never runs a session in `bypassPermissions` (and never
+ * sets the SDK's `allowDangerouslySkipPermissions`).
+ */
+const rejectBypass = (mode: string | undefined): void => {
+  if (mode === 'bypassPermissions') {
+    throw new ServiceError(
+      'INVALID_PARAMS',
+      'pahub does not support the bypassPermissions permission mode',
+    );
+  }
+};
+
 const isRec = (v: unknown): v is Rec => typeof v === 'object' && v !== null && !Array.isArray(v);
 const str = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined);
 const num = (v: unknown): number | undefined =>
@@ -171,6 +185,7 @@ export class LiveSession {
   private lastFlushAt = Number.NEGATIVE_INFINITY;
 
   constructor(private readonly deps: LiveSessionOptions) {
+    rejectBypass(deps.permissionMode);
     this.log = deps.log ?? new EventLog();
     this.timers = deps.timers ?? realTimers;
     this.normalizer = new Normalizer({ now: deps.now });
@@ -363,6 +378,7 @@ export class LiveSession {
   }
 
   async setPermissionMode(value: string): Promise<void> {
+    rejectBypass(value);
     const mode = value as PermissionMode;
     await this.requireLive().setPermissionMode(mode);
     this.chosen.permissionMode = mode;

@@ -23,7 +23,13 @@ export const NON_VISUAL_TYPES: ReadonlySet<string> = new Set([
   'tool_use_summary',
   'prompt_suggestion',
   'auth_status',
+  // Queued-command lifecycle frames; outside the SDK 0.3.314 union but emitted by
+  // CLI 2.1.314 several times per turn (Ruling R9).
+  'command_lifecycle',
 ]);
+
+/** Longest hook stderr/output shown in a hook-failure line. */
+export const HOOK_DETAIL_LIMIT = 1_000;
 
 /** `type: 'system'` subtypes that never render in the chat. */
 export const NON_VISUAL_SYSTEM_SUBTYPES: ReadonlySet<string> = new Set([
@@ -93,19 +99,22 @@ export const systemLine = (subtype: string, m: Rec): SystemLine | null | undefin
       };
     }
     case 'hook_response': {
+      // Ruling R10: only a failed hook is shown; success (with or without
+      // output) and cancellation are silent. An unknown outcome falls to `unknown`.
+      if (m.outcome === 'success' || m.outcome === 'cancelled') return null;
+      if (m.outcome !== 'error' && m.outcome !== 'failed') return undefined;
       const name = str(m.hook_name) ?? str(m.hook_event) ?? 'hook';
-      if (m.outcome === 'error') {
-        const detail = nonEmpty(m.stderr) ?? nonEmpty(m.output);
-        const code = num(m.exit_code);
-        return {
-          level: 'warning',
-          text:
-            `Hook ${name} failed` +
-            (detail ? `: ${detail}` : code === undefined ? '' : ` (exit code ${code})`),
-        };
-      }
-      const output = m.outcome === 'success' ? nonEmpty(m.output) : undefined;
-      return output ? { level: 'info', text: `Hook ${name}: ${output}` } : null;
+      const raw = nonEmpty(m.stderr) ?? nonEmpty(m.output);
+      const detail =
+        raw && raw.length > HOOK_DETAIL_LIMIT ? `${raw.slice(0, HOOK_DETAIL_LIMIT)}…` : raw;
+      const code = num(m.exit_code);
+      return {
+        level: 'warning',
+        text:
+          `Hook ${name} failed` +
+          (code === undefined ? '' : ` (exit code ${code})`) +
+          (detail ? `: ${detail}` : ''),
+      };
     }
     case 'model_refusal_fallback':
       return {

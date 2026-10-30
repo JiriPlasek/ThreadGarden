@@ -5,10 +5,11 @@ import {
   type FindClaudeOptions,
 } from '../../src/sdk/claude-path.js';
 
-type Over = Partial<FindClaudeOptions> & { files?: string[] };
+type Over = Partial<FindClaudeOptions> & { files?: string[]; shims?: Record<string, string> };
 
 const opts = (over: Over = {}) => {
-  const files = new Set(over.files ?? []);
+  const shims = over.shims ?? {};
+  const files = new Set([...(over.files ?? []), ...Object.keys(shims)]);
   const runs: { cmd: string; args: string[] }[] = [];
   const o: FindClaudeOptions = {
     settingPath: null,
@@ -20,10 +21,37 @@ const opts = (over: Over = {}) => {
       runs.push({ cmd, args });
       return '2.1.314 (Claude Code)\n';
     },
+    readFile: (p) => {
+      const text = shims[p];
+      if (text === undefined) throw new Error(`ENOENT: ${p}`);
+      return text;
+    },
     ...over,
   };
   return { o, runs };
 };
+
+// What `npm install -g @anthropic-ai/claude-code` writes as claude.cmd (cmd-shim).
+const NPM_JS_SHIM = [
+  '@ECHO off',
+  'GOTO start',
+  ':find_dp0',
+  'SET dp0=%~dp0',
+  'EXIT /b',
+  ':start',
+  'SETLOCAL',
+  'CALL :find_dp0',
+  '',
+  'IF EXIST "%dp0%\\node.exe" (',
+  '  SET "_prog=%dp0%\\node.exe"',
+  ') ELSE (',
+  '  SET "_prog=node"',
+  '  SET PATHEXT=%PATHEXT:;.JS;=;%',
+  ')',
+  '',
+  'endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\node_modules\\@anthropic-ai\\claude-code\\cli.js" %*',
+  '',
+].join('\r\n');
 
 describe('findClaude', () => {
   it('findClaude prefers settings path', async () => {
@@ -70,14 +98,112 @@ describe('findClaude', () => {
     });
   });
 
-  it('finds claude.cmd on PATH on win32 and ignores an extensionless shim', async () => {
+  it('prefers claude.exe over a claude.cmd in the same PATH directory', async () => {
     const { o } = opts({
       platform: 'win32',
       home: 'C:\\Users\\u',
       env: { PATH: 'C:\\npm' },
-      files: ['C:\\npm\\claude', 'C:\\npm\\claude.cmd'],
+      files: ['C:\\npm\\claude.exe'],
+      shims: { 'C:\\npm\\claude.cmd': NPM_JS_SHIM },
     });
-    await expect(findClaude(o)).resolves.toMatchObject({ path: 'C:\\npm\\claude.cmd' });
+    await expect(findClaude(o)).resolves.toMatchObject({ path: 'C:\\npm\\claude.exe' });
+  });
+
+  it('prefers ~/.local/bin/claude.exe over a claude.cmd earlier on PATH', async () => {
+    const { o } = opts({
+      platform: 'win32',
+      home: 'C:\\Users\\u',
+      env: { PATH: 'C:\\npm' },
+      files: ['C:\\Users\\u\\.local\\bin\\claude.exe'],
+      shims: { 'C:\\npm\\claude.cmd': NPM_JS_SHIM },
+    });
+    await expect(findClaude(o)).resolves.toMatchObject({
+      path: 'C:\\Users\\u\\.local\\bin\\claude.exe',
+    });
+  });
+
+  it('resolves an npm claude.cmd to the cli.js it starts and checks it with node', async () => {
+    const cli = 'C:\\npm\\node_modules\\@anthropic-ai\\claude-code\\cli.js';
+    const { o, runs } = opts({
+      platform: 'win32',
+      home: 'C:\\Users\\u',
+      env: { PATH: 'C:\\npm' },
+      // An extensionless `claude` next to it is npm's sh shim and is ignored.
+      files: ['C:\\npm\\claude', cli],
+      shims: { 'C:\\npm\\claude.cmd': NPM_JS_SHIM },
+    });
+    await expect(findClaude(o)).resolves.toEqual({ path: cli, version: '2.1.314' });
+    expect(runs).toEqual([{ cmd: 'node', args: [cli, '--version'] }]);
+  });
+
+  it('resolves a pnpm-style claude.cmd that starts a native exe', async () => {
+    const exe = 'C:\\pnpm\\global\\5\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe';
+    const target = '"%~dp0\\global\\5\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe"';
+    const { o, runs } = opts({
+      platform: 'win32',
+      home: 'C:\\Users\\u',
+      env: { PATH: 'C:\\pnpm' },
+      files: [exe],
+      shims: {
+        'C:\\pnpm\\claude.cmd': [
+          '@SETLOCAL',
+          '@IF EXIST "%~dp0\\node.exe" (',
+          `  ${target}   %*`,
+          ') ELSE (',
+          `  ${target}   %*`,
+          ')',
+        ].join('\r\n'),
+      },
+    });
+    await expect(findClaude(o)).resolves.toEqual({ path: exe, version: '2.1.314' });
+    expect(runs).toEqual([{ cmd: exe, args: ['--version'] }]);
+  });
+
+  it('a claude.cmd whose target cannot be determined is unrunnable with an explanation', async () => {
+    const { o, runs } = opts({
+      platform: 'win32',
+      home: 'C:\\Users\\u',
+      env: { PATH: 'C:\\tools' },
+      shims: { 'C:\\tools\\claude.cmd': '@echo off\r\nclaude-wrapper %*\r\n' },
+    });
+    const r = await findClaude(o);
+    expect(r).toMatchObject({ problem: 'unrunnable' });
+    expect('detail' in r && r.detail).toMatch(/\.cmd launcher.*cannot start.*native/s);
+    expect(runs).toEqual([]);
+  });
+
+  it('a claude.cmd whose target is missing or not spawnable is unrunnable', async () => {
+    const missing = opts({
+      platform: 'win32',
+      home: 'C:\\Users\\u',
+      env: { PATH: 'C:\\npm' },
+      shims: { 'C:\\npm\\claude.cmd': NPM_JS_SHIM }, // cli.js itself does not exist
+    });
+    await expect(findClaude(missing.o)).resolves.toMatchObject({
+      problem: 'unrunnable',
+      detail: expect.stringContaining('missing'),
+    });
+    const batTarget = opts({
+      platform: 'win32',
+      home: 'C:\\Users\\u',
+      env: { PATH: 'C:\\x' },
+      files: ['C:\\x\\real.bat'],
+      shims: { 'C:\\x\\claude.cmd': '"%~dp0\\real.bat" %*' },
+    });
+    await expect(findClaude(batTarget.o)).resolves.toMatchObject({ problem: 'unrunnable' });
+    expect(batTarget.runs).toEqual([]);
+  });
+
+  it('a settings path pointing at a .cmd launcher is resolved too', async () => {
+    const cli = 'D:\\node\\node_modules\\@anthropic-ai\\claude-code\\cli.js';
+    const { o } = opts({
+      platform: 'win32',
+      home: 'C:\\Users\\u',
+      settingPath: 'D:\\node\\claude.cmd',
+      files: [cli],
+      shims: { 'D:\\node\\claude.cmd': NPM_JS_SHIM },
+    });
+    await expect(findClaude(o)).resolves.toMatchObject({ path: cli });
   });
 
   it('falls back to ~/.local/bin/claude', async () => {

@@ -63,3 +63,16 @@ So the status bar's authentication label can come from `accountInfo()`:
 - Running the service from inside a Claude Code terminal (inherited
   `CLAUDECODE`, `CLAUDE_CODE_SESSION_ID`, …) did not change the session id
   or the authentication.
+
+## Finding `claude`
+
+`packages/service/src/sdk/claude-path.ts` hands the SDK the user's installed
+`claude` as `pathToClaudeCodeExecutable`; there is no fallback to the SDK's
+bundled binary. SDK 0.3.314 runs a path ending in `.js`/`.mjs`/`.ts`/`.tsx`/`.jsx`
+with `node` (or `bun`) and spawns anything else directly with
+`child_process.spawn` and no shell. On Windows that means a `.cmd` or `.bat`
+launcher (what `npm install -g` creates) cannot be started. So discovery
+prefers `claude.exe` everywhere. A `claude.cmd` is used only after resolving
+it to the program it starts (npm's `cli.js` or a native `.exe`). If that
+program cannot be determined, cannot be spawned or is missing, discovery
+reports `unrunnable` with an explanation.
