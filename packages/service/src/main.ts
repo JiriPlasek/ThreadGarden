@@ -5,7 +5,7 @@ import path from 'node:path';
 import { PROTOCOL_VERSION, type EventMsg } from '@pahub/protocol';
 import pkg from '../package.json' with { type: 'json' };
 import { nextSeqEpoch, seqBaseForEpoch } from './chat/event-log.js';
-import type { Timers } from './chat/live-session.js';
+import { realTimers, type Timers } from './chat/live-session.js';
 import { SessionHost } from './chat/session-host.js';
 import { resolveClaudeConfigDir } from './config.js';
 import { acquireInstanceLock, removeDiscovery, writeDiscovery } from './discovery.js';
@@ -14,6 +14,7 @@ import { ExternalPoller, makeClaudeRunner, type ExternalSession } from './extern
 import { Catalog, titleFor, type LiveChat } from './history/catalog.js';
 import { openDb, type Db } from './history/db.js';
 import { Indexer } from './history/indexer.js';
+import { FolderCheck, ProjectOrderNotifier } from './history/project-activity.js';
 import { createQuickSearch } from './history/search.js';
 import { watchProjects } from './history/watcher.js';
 import { createLogger, type Logger } from './logger.js';
@@ -146,6 +147,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   let watcher: { close(): void } | undefined;
   let server: Awaited<ReturnType<typeof startWsServer>> | undefined;
   let poller: ExternalPoller | undefined;
+  let projectOrder: ProjectOrderNotifier | undefined;
   let startSync: (() => void) | undefined;
   const live = (): { list(): LiveChat[] } | undefined => opts.live ?? host;
   const claudeRunner = opts.claudeRunner ?? makeClaudeRunner;
@@ -234,6 +236,10 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       const epoch = nextSeqEpoch(opened.getUiState(SEQ_EPOCH_KEY));
       opened.setUiState(SEQ_EPOCH_KEY, epoch);
       const onError = (err: unknown, context: string) => log.error(`${context}: ${errorText(err)}`);
+      const projectsChanged = () => broadcastRef.fn({ event: 'projects.changed', data: {} });
+      // v1.1 §4: project folders that no longer exist (stat only, cached).
+      const folders = new FolderCheck({ onChange: projectsChanged, onError });
+      const projectOrderRef: { current?: ProjectOrderNotifier } = {};
       const sessionHost = new SessionHost({
         adapter,
         registry: opened,
@@ -258,6 +264,13 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         },
         onError,
         seqBase: seqBaseForEpoch(epoch),
+        // v1.1 "Your turn": pahub's own record of the turn end; lists show the chat unread.
+        onTurnEnded: (id, at) => {
+          opened.setTurnEnded(id, at);
+          emitChat({ event: 'sessions.changed', data: { sessionIds: [id] } });
+        },
+        // v1.1 §4: live activity may reorder the projects.
+        onActivity: () => projectOrderRef.current?.notify(),
       });
       host = sessionHost;
 
@@ -299,8 +312,17 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         db: opened,
         live: live() ?? sessionHost,
         externals: opts.externals ?? (() => poller?.snapshot() ?? []),
+        folderExists: (p) => folders.exists(p),
       });
       catalogRef.current = cat;
+      projectOrder = new ProjectOrderNotifier({
+        changed: () => cat.projectOrderChanged(),
+        emit: projectsChanged,
+        timers: opts.sessionTimers ?? realTimers,
+        now: clock,
+        onError,
+      });
+      projectOrderRef.current = projectOrder;
       registerHistoryHandlers(router, {
         db: opened,
         catalog: cat,
@@ -324,6 +346,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
           : { historyCacheChars: opts.historyCacheChars }),
         emit: (e) => emitChat(e),
         onError,
+        now: clock,
       });
       watcher = watchProjects(
         path.join(claudeDir, 'projects'),
@@ -332,7 +355,13 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         { onError: (err) => log.error(`watcher: ${String(err)}`) },
       );
       startSync = () =>
-        void index.fullSync().catch((err: unknown) => log.error(`full sync: ${String(err)}`));
+        void index
+          .fullSync()
+          // A sync is when folders are known to be worth checking again (v1.1 §4).
+          .then(() =>
+            closing ? undefined : folders.refresh(opened.listProjects().map((p) => p.path)),
+          )
+          .catch((err: unknown) => log.error(`full sync: ${String(err)}`));
     }
 
     registerFileHandlers(router, { index: new FileIndex() });
@@ -417,6 +446,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         // Live sessions end with the process; the registry still lists them,
         // so the next start shows them as interrupted (§4.2).
         await step('sessions', () => host?.dispose());
+        await step('project order', () => projectOrder?.dispose());
         await step('poller', () => poller?.stop());
         await step('watcher', () => watcher?.close());
         // No index write may race the database close below.

@@ -869,3 +869,116 @@ describe('LiveSession', () => {
     expect(s.resolveItemId('final')).toBe('sb');
   });
 });
+
+// ── v1.1 T2: "Your turn" and live activity ───────────────────────────────────
+
+describe('LiveSession turn ends and activity (v1.1)', () => {
+  const finished = (events: EventMsg[]) => events.filter((e) => e.event === 'chatFinished');
+
+  it('reports each turn end once (onTurnEnded, then chatFinished) after the status is idle', async () => {
+    const turns: [string, number, string][] = [];
+    const ctx = setup();
+    const s = LiveSession.create(
+      '/work/proj',
+      { text: 'Fix the build\nplease' },
+      {
+        ...ctx.opts,
+        onTurnEnded: (id, at) => turns.push([id, at, s.status]),
+      },
+    );
+    const fake = ctx.adapter.lastSession();
+    fake.emit(init(s.sessionId));
+    fake.emit(assistantText('a1', 'done'));
+    await settle();
+    expect(turns).toEqual([]);
+    expect(finished(ctx.events)).toEqual([]);
+
+    ctx.timers.advance(500);
+    fake.emit(result('r1'));
+    await settle();
+    expect(turns).toEqual([[s.sessionId, ctx.timers.now(), 'idle']]);
+    expect(finished(ctx.events)).toEqual([
+      {
+        event: 'chatFinished',
+        data: { sessionId: s.sessionId, title: 'Fix the build', projectName: 'proj' },
+      },
+    ]);
+    // chatFinished follows the idle status (a client acting on it sees the new state).
+    const order = ctx.events.map((e) =>
+      e.event === 'chat.status' ? (e.data as { status: string }).status : e.event,
+    );
+    expect(order.lastIndexOf('idle')).toBeLessThan(order.indexOf('chatFinished'));
+
+    s.send({ text: 'again' });
+    fake.emit(assistantText('a2', 'ok'));
+    fake.emit(result('r2'));
+    await settle();
+    expect(turns).toHaveLength(2);
+    expect(finished(ctx.events)).toHaveLength(2);
+  });
+
+  it('names the chat with describe when it can', async () => {
+    const ctx = setup({ describe: () => ({ title: 'Indexed title', projectName: 'pahub' }) });
+    const s = LiveSession.create('/work/proj', { text: 'hi' }, ctx.opts);
+    ctx.adapter.lastSession().emit(result('r1'));
+    await settle();
+    expect(finished(ctx.events)[0]?.data).toEqual({
+      sessionId: s.sessionId,
+      title: 'Indexed title',
+      projectName: 'pahub',
+    });
+  });
+
+  it('a startup failure is not a finished turn; a failing onTurnEnded is contained', async () => {
+    const onError = vi.fn();
+    const ctx = setup({
+      onError,
+      onTurnEnded: () => {
+        throw new Error('db is locked');
+      },
+    });
+    LiveSession.create('/p', { text: 'go' }, ctx.opts);
+    const fake = ctx.adapter.lastSession();
+    fake.emit(
+      result('r-start', {
+        subtype: 'error_during_execution',
+        is_error: true,
+        startup_failure_reason: 'cli_version_too_old',
+      }),
+    );
+    await settle();
+    expect(finished(ctx.events)).toEqual([]);
+    expect(onError).not.toHaveBeenCalled();
+
+    const ok = LiveSession.create('/p', { text: 'go' }, ctx.opts);
+    ctx.adapter.lastSession().emit(result('r1'));
+    await settle();
+    expect(ok.status).toBe('idle');
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(finished(ctx.events)).toHaveLength(1); // still announced
+  });
+
+  it('tracks the time of the last real activity (sends and SDK messages) and reports it', async () => {
+    const activity = vi.fn();
+    const ctx = setup({ onActivity: activity });
+    const restored = LiveSession.restore('old', '/p', 'failed', ctx.opts, {
+      level: 'error',
+      text: 'Interrupted',
+    });
+    expect(restored.lastActivity).toBeNull(); // a recovery note is not activity
+    expect(activity).not.toHaveBeenCalled();
+
+    const s = LiveSession.create('/p', { text: 'go' }, ctx.opts);
+    const sentAt = ctx.timers.now();
+    expect(s.lastActivity).toBe(sentAt);
+    expect(activity).toHaveBeenLastCalledWith(s.sessionId);
+    ctx.timers.advance(2_000);
+    ctx.adapter.lastSession().emit(assistantText('a1', 'hello'));
+    await settle();
+    expect(s.lastActivity).toBe(sentAt + 2_000);
+    const calls = activity.mock.calls.length;
+    s.end(); // closing is not activity
+    expect(s.lastActivity).toBe(sentAt + 2_000);
+    expect(activity.mock.calls.length).toBe(calls);
+  });
+});

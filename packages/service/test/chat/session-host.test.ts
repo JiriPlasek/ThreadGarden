@@ -132,6 +132,7 @@ describe('SessionHost', () => {
       cwd: '/a',
       status: 'idle',
       live: true,
+      lastActivity: ctx.timers.now(),
     });
     expect(byId.get(waiting.sessionId)).toMatchObject({
       cwd: '/b',
@@ -426,5 +427,30 @@ describe('SessionHost', () => {
     expect(nextSeqEpoch(1)).toBe(2);
     expect(nextSeqEpoch(MAX_SEQ_EPOCH)).toBe(1);
     expect(Number.isSafeInteger(seqBaseForEpoch(MAX_SEQ_EPOCH) + 2 ** 32)).toBe(true);
+  });
+
+  // ── v1.1 T2 ─────────────────────────────────────────────────────────────────
+
+  it('hands turn ends and activity to its deps and lists each chat with its last activity', async () => {
+    const turns: string[] = [];
+    const activity: string[] = [];
+    const ctx = setup({
+      onTurnEnded: (id) => turns.push(id),
+      onActivity: (id) => activity.push(id),
+    });
+    const { s } = await idleChat(ctx);
+    expect(turns).toEqual([s.sessionId]);
+    expect(activity.length).toBeGreaterThan(0);
+    expect(new Set(activity)).toEqual(new Set([s.sessionId]));
+    expect(ctx.host.list()).toEqual([
+      expect.objectContaining({ sessionId: s.sessionId, lastActivity: ctx.timers.now() }),
+    ]);
+    // A resumed chat still reports its turns.
+    s.pause();
+    const again = ctx.host.ensureLive(s.sessionId, '/proj');
+    again.send({ text: 'more' });
+    ctx.adapter.lastSession().emit(result('r-again'));
+    await settle();
+    expect(turns).toEqual([s.sessionId, s.sessionId]);
   });
 });

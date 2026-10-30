@@ -124,10 +124,12 @@ service and the UI; the service validates every request.
   `chat.older`, `chat.since`, `chat.create`, `chat.send`, `chat.respond`,
   `chat.fork`, `chat.end`, model/mode/effort controls, `chat.resumeCheck`),
   pahub-side metadata, drafts, UI state, settings, `files.suggest`,
-  `work.stopAll`, `service.shutdown` and `system.status`.
+  `work.stopAll`, `service.shutdown` and `system.status`. `chat.markSeen`
+  records that the user has seen a chat's latest turn ("Your turn", below).
 - **Events** `{event, data}` are pushed to every client: `chat.items` and
   `chat.status` per chat, plus list-level events (`sessions.changed`,
-  `projects.changed`, `external.changed`, `index.progress`).
+  `projects.changed`, `external.changed`, `index.progress`). `needsYou` and
+  `chatFinished` (a pahub chat ended a turn) tell the UI when to notify.
 - **Sequencing and resync.** Every `chat.items` / `chat.status` event carries
   a per-chat sequence number, and each chat keeps its last 5,000 events. A
   reconnecting UI asks `chat.since {seq}` for everything after the last seq it
@@ -174,7 +176,13 @@ progress in Settings and works meanwhile.
 **Projects.** A project is a working directory that has sessions, grouped by
 real path; git worktrees are grouped under their repository (from `git`
 metadata, read-only). Display names are directory basenames, disambiguated by
-their parent when two collide.
+their parent when two collide. The list is ordered pinned first, then by most
+recent activity, where activity includes what pahub's live chats are doing
+right now: a project rises as soon as a chat in it is active, and
+`projects.changed` (at most once a second) tells clients when live activity
+changed the order. Each project says whether its folder still `exists`
+(a `stat`, cached per folder, refreshed at most every 60 s and after a sync);
+the UI groups the missing ones under Missing folders.
 
 **Catalog and paging.** Lists combine three sources: index rows, pahub's own
 live chats (status, what they wait for) and external sessions. The live and
@@ -185,6 +193,15 @@ a chat changes status. Hidden projects stay visible in Needs you and Running
 (an agent waiting for you is never hidden) but are left out of All chats.
 Titles follow pahub custom title → SDK title → summary → first prompt; all
 but a custom title are cut to 80 characters.
+
+**Your turn.** When a pahub chat's turn ends (a `result`), the service stores
+the time in `pahub.db` (`turn_state`, pahub's own table) and emits
+`chatFinished`. A chat is `unread` while its last turn ended after it was last
+seen (`chat.markSeen`, also implied by `chat.send` and `chat.create`) and it is
+neither waiting on the user nor working. Needs you lists the waiting chats
+first, then the unread ones by most recent turn end, and its count includes
+both. The two times are ordered by operation as well as by clock, so a turn
+end and a seen mark in the same millisecond still compare correctly.
 
 **Chat view.** `chat.open` returns the last N items of the SDK history merged
 with the live session's items (the live version wins for anything both have),

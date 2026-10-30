@@ -102,6 +102,18 @@ export type LiveSessionDeps = {
    * Default: `console.error`. Must not throw; a throw is ignored.
    */
   onError?: (err: unknown, context: string) => void;
+  // ── v1.1 T2 ──
+  /**
+   * A turn ended (a `result` that is not a startup failure), at `at`; called
+   * after the status changed and before `chatFinished` is emitted. A throw is
+   * reported through `onError`.
+   */
+  onTurnEnded?: (sessionId: string, at: number) => void;
+  /**
+   * The chat did something (a message sent, an SDK message received); called
+   * very often while a reply streams, so it must be cheap. A throw is reported.
+   */
+  onActivity?: (sessionId: string) => void;
 };
 
 export const defaultOnError = (err: unknown, context: string): void => {
@@ -217,6 +229,7 @@ export class LiveSession {
   private statusValue: ChatStatus = 'history';
   private headerValue: ChatHeaderInfo = {};
   private idleSinceValue: number | null = null;
+  private lastActivityValue: number | null = null;
   private published = '';
   private firstText: string | undefined;
   private contextUsed: number | undefined;
@@ -296,6 +309,11 @@ export class LiveSession {
   /** When the chat last became idle (no turn, nothing pending); null while not idle. */
   get idleSince(): number | null {
     return this.idleSinceValue;
+  }
+
+  /** When this chat last sent or received anything (null: nothing yet in this instance). */
+  get lastActivity(): number | null {
+    return this.lastActivityValue;
   }
 
   /** True while the Claude Code process exists. */
@@ -380,6 +398,7 @@ export class LiveSession {
       ],
       false,
     );
+    this.noteActivity();
     if (!queued) this.setStatus('working');
     return { queued };
   }
@@ -549,12 +568,17 @@ export class LiveSession {
 
   private handle(m: SDKMessage): void {
     try {
+      this.noteActivity();
       this.updateHeader(m);
       this.requestAuth(m);
       const r = this.normalizer.push(m);
       if (r.items.length > 0) this.pushItems(r.items, r.replace);
-      if (this.noteStartupFailure(m)) this.setStatus('failed');
-      else this.setStatus(this.nextStatus(m));
+      if (this.noteStartupFailure(m)) {
+        this.setStatus('failed');
+      } else {
+        this.setStatus(this.nextStatus(m));
+        if ((m as { type?: unknown }).type === 'result') this.turnEnded();
+      }
     } catch (err) {
       // Defensive: one odd message must not take the chat down.
       this.pushItems(
@@ -704,18 +728,34 @@ export class LiveSession {
       signal.addEventListener('abort', onAbort, { once: true });
       this.pushItems([item], false);
       this.setStatus('needsYou');
-      const d = this.guard('describe', () => this.deps.describe?.(this.id, this.dir)) ?? {};
-      this.out({
-        event: 'needsYou',
-        data: {
-          sessionId: this.id,
-          title: d.title ?? titleFrom(this.firstText),
-          projectName: d.projectName ?? (basename(this.dir) || this.dir),
-          what,
-        },
-      });
+      this.out({ event: 'needsYou', data: { ...this.describeChat(), what } });
     });
   };
+
+  /** Session id, title and project name for notifications (`describe`, else first message / cwd). */
+  private describeChat(): { sessionId: string; title: string; projectName: string } {
+    const d = this.guard('describe', () => this.deps.describe?.(this.id, this.dir)) ?? {};
+    return {
+      sessionId: this.id,
+      title: d.title ?? titleFrom(this.firstText),
+      projectName: d.projectName ?? (basename(this.dir) || this.dir),
+    };
+  }
+
+  // ── v1.1 T2: turn ends and activity ─────────────────────────────────────
+
+  /** Records the activity time and tells `onActivity`. */
+  private noteActivity(): void {
+    this.lastActivityValue = this.deps.now();
+    if (this.deps.onActivity) this.guard('onActivity', () => this.deps.onActivity?.(this.id));
+  }
+
+  /** A turn ended: `onTurnEnded` (pahub's unread state), then `chatFinished` for the UI. */
+  private turnEnded(): void {
+    const at = this.deps.now();
+    this.guard('onTurnEnded', () => this.deps.onTurnEnded?.(this.id, at));
+    this.out({ event: 'chatFinished', data: this.describeChat() });
+  }
 
   private finish(requestId: string, state: PermissionItem['state'], r: PermissionResult): void {
     const p = this.pending.get(requestId);
