@@ -164,6 +164,44 @@ describe('your turn (service)', () => {
     expect(count(c.events, finishedFor(sessionId))).toBe(1);
   });
 
+  it('a turn the user stopped from pahub (Stop, End, Stop all) is neither announced nor unread', async () => {
+    const adapter = new FakeAdapter();
+    const c = await start(adapter);
+    const summary = async (id: string) =>
+      (await c.call<Any>('sessions.summaries', { sessionIds: [id] })).items[0];
+
+    // Stop / Esc: chat.interrupt, then the interrupted turn's result.
+    const stopped = await c.call<{ sessionId: string }>('chat.create', { cwd: dir, text: 'a' });
+    const fake = adapter.lastSession();
+    await c.call('chat.interrupt', { sessionId: stopped.sessionId });
+    fake.emit(result('r1', { subtype: 'error_during_execution', is_error: true }));
+    await c.waitFor(chatStatus(stopped.sessionId, 'idle'));
+    await c.call('places.counts', {});
+    expect(count(c.events, finishedFor(stopped.sessionId))).toBe(0);
+    expect(await summary(stopped.sessionId)).toMatchObject({ status: 'idle', unread: false });
+    expect((await c.call<Any>('places.counts', {})).needsYou).toBe(0);
+
+    // The next turn is announced as usual.
+    await c.call('chat.send', { sessionId: stopped.sessionId, text: 'go on' });
+    fake.emit(result('r2'));
+    await c.waitFor(finishedFor(stopped.sessionId));
+    expect(await summary(stopped.sessionId)).toMatchObject({ status: 'idle', unread: true });
+    await c.call('chat.markSeen', { sessionId: stopped.sessionId });
+
+    // End and Stop all close the process: its messages are no longer read, so no turn ends.
+    const ended = await c.call<{ sessionId: string }>('chat.create', { cwd: dir, text: 'b' });
+    await c.call('chat.end', { sessionId: ended.sessionId });
+    const all = await c.call<{ sessionId: string }>('chat.create', { cwd: dir, text: 'c' });
+    await c.call('work.stopAll', {});
+    await c.call('places.counts', {});
+    for (const id of [ended.sessionId, all.sessionId]) {
+      expect(count(c.events, finishedFor(id)), id).toBe(0);
+      // Ended chats that were never indexed have no summary at all.
+      expect((await summary(id))?.unread ?? false, id).toBe(false);
+    }
+    expect((await c.call<Any>('places.counts', {})).needsYou).toBe(0);
+  });
+
   it('unread state survives a service restart', async () => {
     const adapter = new FakeAdapter();
     let c = await start(adapter);

@@ -197,7 +197,8 @@ Titles follow pahub custom title → SDK title → summary → first prompt; all
 but a custom title are cut to 80 characters.
 
 **Your turn.** When a pahub chat's turn ends (a `result` that leaves it
-waiting for the user, not one followed by queued input), the service stores
+waiting for the user, not one followed by queued input, and not one of a turn
+the user stopped from pahub with Stop or Esc), the service stores
 the time in `pahub.db` (`turn_state`, pahub's own table) and emits
 `chatFinished`. A chat is `unread` while its last turn ended after it was last
 seen (`chat.markSeen`, also implied by `chat.send` and `chat.create`) and it is

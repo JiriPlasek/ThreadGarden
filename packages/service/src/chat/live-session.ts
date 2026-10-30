@@ -241,6 +241,8 @@ export class LiveSession {
   private lastActivityValue: number | null = null;
   /** User inputs sent with `priority: 'next'` since the last `result` (Ruling R28). */
   private queuedInputs = 0;
+  /** The user stopped the turn in progress from pahub (Stop, Esc): its result is not a finish. */
+  private interruptRequested = false;
   private published = '';
   private firstText: string | undefined;
   private contextUsed: number | undefined;
@@ -431,9 +433,23 @@ export class LiveSession {
     return { queued };
   }
 
+  /**
+   * Stops the turn in progress (Stop / Esc). The `result` that follows is not
+   * a finished turn: the user stopped it from pahub, so there is no
+   * `chatFinished` and the chat does not become unread. Pressed while nothing
+   * runs, or if the SDK refuses, the next turn end counts as usual.
+   */
   async interrupt(): Promise<void> {
     const session = this.session;
-    if (session) await session.interrupt();
+    if (!session) return;
+    const turn = BUSY.has(this.statusValue);
+    if (turn) this.interruptRequested = true;
+    try {
+      await session.interrupt();
+    } catch (err) {
+      if (turn) this.interruptRequested = false;
+      throw err;
+    }
   }
 
   /**
@@ -812,10 +828,13 @@ export class LiveSession {
    * boundary, so the count restarts there and the next `result` decides.
    */
   private resultArrived(): void {
+    const interrupted = this.interruptRequested;
+    this.interruptRequested = false;
     if (this.queuedInputs > 0) {
       this.queuedInputs = 0;
       return;
     }
+    if (interrupted) return;
     this.turnEnded();
   }
 

@@ -1136,6 +1136,50 @@ describe('LiveSession turn ends and activity (v1.1)', () => {
     expect(finished(ctx.events)).toHaveLength(2);
   });
 
+  it('a turn the user stopped from pahub is not a finished turn; the next one is', async () => {
+    const turns: string[] = [];
+    const ctx = setup({ onTurnEnded: (id) => turns.push(id) });
+    const s = LiveSession.create('/p', { text: 'long job' }, ctx.opts);
+    const fake = ctx.adapter.lastSession();
+    fake.emit(assistantText('a1', 'working on it'));
+    await settle();
+    await s.interrupt(); // Stop / Esc
+    expect(fake.interrupted).toBe(1);
+    fake.emit(result('r1', { subtype: 'error_during_execution', is_error: true }));
+    await settle();
+    expect(s.status).toBe('idle');
+    expect(turns).toEqual([]);
+    expect(finished(ctx.events)).toEqual([]);
+
+    // The next turn is announced as usual.
+    s.send({ text: 'go on' });
+    fake.emit(result('r2'));
+    await settle();
+    expect(turns).toEqual([s.sessionId]);
+    expect(finished(ctx.events)).toHaveLength(1);
+
+    // Stop pressed while idle (nothing to stop) does not swallow the next turn end.
+    await s.interrupt();
+    s.send({ text: 'one more' });
+    fake.emit(result('r3'));
+    await settle();
+    expect(turns).toHaveLength(2);
+    expect(finished(ctx.events)).toHaveLength(2);
+  });
+
+  it('a failed interrupt leaves the turn end announced', async () => {
+    const turns: string[] = [];
+    const ctx = setup({ onTurnEnded: (id) => turns.push(id) });
+    const s = LiveSession.create('/p', { text: 'job' }, ctx.opts);
+    const fake = ctx.adapter.lastSession();
+    vi.spyOn(fake, 'interrupt').mockRejectedValueOnce(new Error('no'));
+    await expect(s.interrupt()).rejects.toThrow('no');
+    fake.emit(result('r1'));
+    await settle();
+    expect(turns).toEqual([s.sessionId]);
+    expect(finished(ctx.events)).toHaveLength(1);
+  });
+
   it('a result with a queued follow-up is not a finished turn (R28); the last result is', async () => {
     const turns: string[] = [];
     const ctx = setup({ onTurnEnded: (id) => turns.push(id) });
