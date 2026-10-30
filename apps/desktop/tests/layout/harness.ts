@@ -3,6 +3,7 @@ import { ServiceClient } from '../../src/lib/service/client';
 import { AgentsState } from '../../src/lib/state/agents.svelte';
 import { ChatsState } from '../../src/lib/state/chats.svelte';
 import { ConnectionState } from '../../src/lib/state/connection.svelte';
+import { InteractionState } from '../../src/lib/state/interaction.svelte';
 import { APP_CONTEXT, type AppState } from '../../src/lib/state/context';
 import { PlacesState } from '../../src/lib/state/places.svelte';
 import { SessionsState } from '../../src/lib/state/sessions.svelte';
@@ -47,6 +48,13 @@ export const setup = async (configure?: (server: FakeServer) => void) => {
     'sessions.list': () => ({ items: [] }),
     'uiState.get': () => ({ value: null }),
     'uiState.set': () => ({}),
+    'system.status': () => ({
+      claude: { found: true, path: '/usr/bin/claude', version: '2.1.314' },
+      externalAvailable: true,
+      indexing: { done: 0, total: 0 },
+    }),
+    'drafts.get': () => ({ text: '' }),
+    'drafts.set': () => ({}),
     'chat.open': (p: unknown) => ({
       summary: summary((p as { sessionId: string }).sessionId),
       header: {},
@@ -67,6 +75,7 @@ export const setup = async (configure?: (server: FakeServer) => void) => {
     chats: new ChatsState(),
     settings: new SettingsState(),
     agents: new AgentsState(),
+    interaction: new InteractionState(),
   };
   app.connection.init(client);
   app.places.init(client);
@@ -75,6 +84,7 @@ export const setup = async (configure?: (server: FakeServer) => void) => {
   app.tabs.init(client);
   app.settings.init(client);
   app.agents.init(client);
+  app.interaction.init(client);
   app.tabs.subscribe(() => app.chats.sync(app.tabs.open));
 
   const context = new Map<unknown, unknown>([[APP_CONTEXT, app]]);

@@ -9,6 +9,8 @@
 
 <script lang="ts">
   import PanelLeftOpenIcon from '@lucide/svelte/icons/panel-left-open';
+  import NewChatDialog from '#lib/components/NewChatDialog.svelte';
+  import SetupScreen from '#lib/components/SetupScreen.svelte';
   import { useApp } from '#lib/state/context.js';
   import AgentsStrip from './AgentsStrip.svelte';
   import ChatList from './ChatList.svelte';
@@ -21,8 +23,19 @@
   /**
    * Main window (spec §6.1): places | chat list | open chat with tabs, and the
    * running-agents strip along the bottom. The first two columns resize and collapse.
+   * Without a usable Claude Code the setup screen comes first (spec §6.4); the
+   * user can still browse history without it.
    */
-  const { settings, connection, places } = useApp();
+  const { settings, connection, places, interaction } = useApp();
+
+  let checking = $state(false);
+  const checkAgain = (): void => {
+    checking = true;
+    interaction
+      .loadStatus()
+      .catch(() => {})
+      .finally(() => (checking = false));
+  };
 
   const width = (c: Column): number => {
     const { initial, min, max } = COLUMNS[c];
@@ -47,65 +60,82 @@
     </div>
   {/if}
 
-  <div class="flex min-h-0 flex-1">
-    {#if collapsed('places')}
-      <div class="bg-sidebar flex w-9 shrink-0 flex-col items-center gap-1 border-r py-1.5">
-        <IconButton
-          label="Show places"
-          side="right"
-          onclick={() => settings.setCollapsed('places', false)}
-        >
-          <PanelLeftOpenIcon />
-        </IconButton>
-        {#if places.counts.needsYou > 0}
-          <button
-            type="button"
-            class="rounded-full bg-amber-500/20 px-1.5 text-[11px] leading-4 font-medium text-amber-800 tabular-nums dark:text-amber-300"
-            title="Needs you"
-            aria-label="Needs you: {places.counts.needsYou}"
-            onclick={() => places.select({ kind: 'needsYou' })}>{places.counts.needsYou}</button
-          >
-        {/if}
-      </div>
-    {:else}
-      <aside class="bg-sidebar text-sidebar-foreground shrink-0" style:width="{width('places')}px">
-        <PlacesColumn onCollapse={() => settings.setCollapsed('places', true)} />
-      </aside>
-      <Resizable
-        label="Resize places"
-        width={width('places')}
-        {...COLUMNS.places}
-        onChange={(w) => settings.setColumnWidth('places', w)}
+  {#if interaction.claudeMissing && !interaction.setupDismissed}
+    <main class="flex min-h-0 flex-1 items-center justify-center overflow-y-auto">
+      <SetupScreen
+        kind="missing"
+        problem={interaction.status?.claude.problem}
+        {checking}
+        onRetry={checkAgain}
+        onDismiss={() => (interaction.setupDismissed = true)}
       />
-    {/if}
-
-    {#if collapsed('list')}
-      <div class="flex w-9 shrink-0 flex-col items-center border-r py-1.5">
-        <IconButton
-          label="Show chat list"
-          side="right"
-          onclick={() => settings.setCollapsed('list', false)}
-        >
-          <PanelLeftOpenIcon />
-        </IconButton>
-      </div>
-    {:else}
-      <div class="shrink-0" style:width="{width('list')}px">
-        <ChatList onCollapse={() => settings.setCollapsed('list', true)} />
-      </div>
-      <Resizable
-        label="Resize chat list"
-        width={width('list')}
-        {...COLUMNS.list}
-        onChange={(w) => settings.setColumnWidth('list', w)}
-      />
-    {/if}
-
-    <main class="flex min-w-0 flex-1 flex-col">
-      <TabsBar />
-      <ChatPane />
     </main>
-  </div>
+  {:else}
+    <div class="flex min-h-0 flex-1">
+      {#if collapsed('places')}
+        <div class="bg-sidebar flex w-9 shrink-0 flex-col items-center gap-1 border-r py-1.5">
+          <IconButton
+            label="Show places"
+            side="right"
+            onclick={() => settings.setCollapsed('places', false)}
+          >
+            <PanelLeftOpenIcon />
+          </IconButton>
+          {#if places.counts.needsYou > 0}
+            <button
+              type="button"
+              class="rounded-full bg-amber-500/20 px-1.5 text-[11px] leading-4 font-medium text-amber-800 tabular-nums dark:text-amber-300"
+              title="Needs you"
+              aria-label="Needs you: {places.counts.needsYou}"
+              onclick={() => places.select({ kind: 'needsYou' })}>{places.counts.needsYou}</button
+            >
+          {/if}
+        </div>
+      {:else}
+        <aside
+          class="bg-sidebar text-sidebar-foreground shrink-0"
+          style:width="{width('places')}px"
+        >
+          <PlacesColumn onCollapse={() => settings.setCollapsed('places', true)} />
+        </aside>
+        <Resizable
+          label="Resize places"
+          width={width('places')}
+          {...COLUMNS.places}
+          onChange={(w) => settings.setColumnWidth('places', w)}
+        />
+      {/if}
 
-  <AgentsStrip />
+      {#if collapsed('list')}
+        <div class="flex w-9 shrink-0 flex-col items-center border-r py-1.5">
+          <IconButton
+            label="Show chat list"
+            side="right"
+            onclick={() => settings.setCollapsed('list', false)}
+          >
+            <PanelLeftOpenIcon />
+          </IconButton>
+        </div>
+      {:else}
+        <div class="shrink-0" style:width="{width('list')}px">
+          <ChatList onCollapse={() => settings.setCollapsed('list', true)} />
+        </div>
+        <Resizable
+          label="Resize chat list"
+          width={width('list')}
+          {...COLUMNS.list}
+          onChange={(w) => settings.setColumnWidth('list', w)}
+        />
+      {/if}
+
+      <main class="flex min-w-0 flex-1 flex-col">
+        <TabsBar />
+        <ChatPane />
+      </main>
+    </div>
+
+    <AgentsStrip />
+  {/if}
 </div>
+
+<NewChatDialog />

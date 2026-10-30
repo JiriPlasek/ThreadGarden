@@ -1,15 +1,45 @@
 <script lang="ts">
+  import type { ImageRef } from '@pahub/protocol';
+  import CheckIcon from '@lucide/svelte/icons/check';
+  import HandIcon from '@lucide/svelte/icons/hand';
+  import XIcon from '@lucide/svelte/icons/x';
+  import { tick, untrack } from 'svelte';
+  import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
+  import Composer from '#lib/components/composer/Composer.svelte';
+  import SetupScreen from '#lib/components/SetupScreen.svelte';
+  import { copyText } from '#lib/native.js';
+  import { RequestError } from '#lib/service/client.js';
+  import type { ResumeCheck } from '#lib/state/chats.svelte.js';
   import { useApp } from '#lib/state/context.js';
   import ChatHeader from './ChatHeader.svelte';
+  import type { RequestActions } from './context';
   import MessageList from './MessageList.svelte';
 
-  /** One open chat: header with controls, then the virtualised messages. */
+  /**
+   * One open chat: header with controls, the virtualised messages, and the
+   * composer. Sending to a chat pahub is not running resumes it, behind the
+   * resume-safety check (spec §4.4): blocked → the reason and the terminal
+   * command, cannot verify / recently modified → a confirmation, ok → send.
+   *
+   * Focus: when a new permission request, question or plan arrives in this
+   * chat, focus moves to its card — unless the user is typing (the composer
+   * has text, or another text field is focused) or focus is elsewhere in the
+   * window (e.g. the chat list). The "waiting for you" bar always offers a jump.
+   */
   let { sessionId }: { sessionId: string } = $props();
 
-  const { chats, tabs } = useApp();
+  const { chats, tabs, interaction } = useApp();
+  /** A chat just created from the new-chat dialog starts with its composer focused. */
+  const focusComposer = untrack(() => interaction.takeComposerFocus(sessionId));
   const chat = $derived(chats.get(sessionId));
 
+  let root = $state<HTMLDivElement | null>(null);
+  let composerBox = $state<HTMLTextAreaElement | null>(null);
+  let list = $state<ReturnType<typeof MessageList> | null>(null);
+
   let forkError = $state<string | null>(null);
+  let sendError = $state<string | null>(null);
+  let blocked = $state<{ reason: string; command: string | null; copied: boolean } | null>(null);
 
   const fork = (itemId: string): void => {
     forkError = null;
@@ -20,9 +50,193 @@
         forkError = err instanceof Error ? err.message : String(err);
       });
   };
+
+  const requests: RequestActions = {
+    respond: (p, answers) => chats.respond(sessionId, p, answers),
+    decision: (requestId) => chats.get(sessionId)?.decisions.get(requestId),
+  };
+
+  // ── sending and resume safety ───────────────────────────────────────────
+
+  const deliver = async (text: string, images: ImageRef[]): Promise<boolean> => {
+    try {
+      await chats.send(sessionId, text, images);
+      blocked = null;
+      return true;
+    } catch (err) {
+      if (err instanceof RequestError && err.code === 'RESUME_BLOCKED') {
+        blocked = { reason: err.message, command: null, copied: false };
+      } else {
+        sendError = err instanceof Error ? err.message : String(err);
+      }
+      return false;
+    }
+  };
+
+  let confirmOpen = $state(false);
+  let confirmText = $state('');
+  let pendingSend: { text: string; images: ImageRef[] } | null = null;
+  let settle: ((sent: boolean) => void) | null = null;
+
+  const describe = (check: ResumeCheck): string => {
+    const parts: string[] = [];
+    if (check.status === 'unverified') {
+      parts.push(
+        `pahub can't check whether this chat is open elsewhere${check.reason ? ` (${check.reason})` : ''}.`,
+      );
+    }
+    if (check.recentlyModified) {
+      parts.push(
+        'Its transcript changed within the last 2 minutes, so it may still be in use in a terminal.',
+      );
+    }
+    parts.push(
+      'Continuing a chat in two places at once mixes both into one transcript. Continue here only if it is not open anywhere else.',
+    );
+    return parts.join(' ');
+  };
+
+  /** Resolves once the user confirmed (and the message went out) or cancelled. */
+  const askToResume = (check: ResumeCheck, text: string, images: ImageRef[]): Promise<boolean> =>
+    new Promise((resolve) => {
+      settle?.(false);
+      settle = resolve;
+      pendingSend = { text, images };
+      confirmText = describe(check);
+      confirmOpen = true;
+    });
+
+  const confirmResume = async (): Promise<void> => {
+    const p = pendingSend;
+    pendingSend = null;
+    const sent = p ? await deliver(p.text, p.images) : false;
+    settle?.(sent);
+    settle = null;
+  };
+
+  $effect(() => {
+    if (!confirmOpen && settle) {
+      settle(false);
+      settle = null;
+      pendingSend = null;
+    }
+  });
+
+  const submit = async (text: string, images: ImageRef[]): Promise<boolean> => {
+    sendError = null;
+    const c = chats.get(sessionId);
+    if (!c) return false;
+    if (c.ownedLive) return deliver(text, images);
+    let check: ResumeCheck;
+    try {
+      check = await chats.resumeCheck(sessionId);
+    } catch (err) {
+      sendError = err instanceof Error ? err.message : String(err);
+      return false;
+    }
+    if (check.status === 'blocked') {
+      blocked = { reason: check.reason, command: null, copied: false };
+      return false;
+    }
+    blocked = null;
+    if (check.status === 'unverified' || check.recentlyModified) {
+      return askToResume(check, text, images);
+    }
+    return deliver(text, images);
+  };
+
+  const copyResume = async (): Promise<void> => {
+    if (!blocked) return;
+    try {
+      const command = await chats.resumeCommand(sessionId);
+      if (blocked) blocked = { ...blocked, command };
+      await copyText(command);
+      if (blocked) blocked = { ...blocked, copied: true };
+    } catch (err) {
+      sendError = err instanceof Error ? err.message : String(err);
+    }
+  };
+
+  // ── interrupt ───────────────────────────────────────────────────────────
+
+  const working = $derived(chat?.ownedLive === true && chat.status === 'working');
+
+  const interrupt = (): void => {
+    chats.interrupt(sessionId).catch((err: unknown) => {
+      sendError = err instanceof Error ? err.message : String(err);
+    });
+  };
+
+  const onkeydown = (e: KeyboardEvent): void => {
+    if (e.key === 'Escape' && !e.defaultPrevented && working) {
+      e.preventDefault();
+      interrupt();
+    }
+  };
+
+  // ── needs-you focus ─────────────────────────────────────────────────────
+
+  const pending = $derived(chat?.pendingRequests ?? []);
+  let seen = new Set<string>();
+  let primed = false;
+
+  /** Whether moving focus now would interrupt the user. */
+  const busyElsewhere = (): boolean => {
+    const a = document.activeElement;
+    if (!a || a === document.body) return false;
+    if (!root?.contains(a)) return true;
+    if (a === composerBox) return composerBox.value.trim() !== '';
+    return (
+      a instanceof HTMLInputElement ||
+      a instanceof HTMLTextAreaElement ||
+      a instanceof HTMLSelectElement ||
+      (a instanceof HTMLElement && a.isContentEditable)
+    );
+  };
+
+  const focusRequest = async (requestId: string, force = false): Promise<void> => {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await tick();
+      const el = root?.querySelector<HTMLElement>(
+        `[data-request-id="${CSS.escape(requestId)}"] [data-autofocus]`,
+      );
+      if (el) {
+        if (force || !busyElsewhere()) el.focus();
+        return;
+      }
+      await new Promise((r) => setTimeout(r, 16));
+    }
+  };
+
+  $effect(() => {
+    const ids = pending.map((r) => (r.kind === 'permissionRequest' ? r.requestId : r.id));
+    const loaded = chat?.loaded === true;
+    untrack(() => {
+      if (!loaded) return;
+      const fresh = primed ? ids.filter((id) => !seen.has(id)) : [];
+      seen = new Set(ids);
+      primed = true;
+      const last = fresh.at(-1);
+      if (last && tabs.active === sessionId && !busyElsewhere()) void focusRequest(last);
+    });
+  });
+
+  const showRequest = (): void => {
+    const first = pending[0];
+    list?.scrollToBottom();
+    if (first?.kind === 'permissionRequest') void focusRequest(first.requestId, true);
+  };
+
+  const setupItem = $derived(
+    chat?.status === 'failed'
+      ? chat.items.findLast((i) => i.kind === 'system' && i.setup === true)
+      : undefined,
+  );
 </script>
 
-<div class="flex min-h-0 flex-1 flex-col">
+<!-- Esc anywhere in the chat stops a working turn; the controls inside handle their own keys. -->
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div class="flex min-h-0 flex-1 flex-col" bind:this={root} {onkeydown}>
   {#if chat}
     <ChatHeader {chat} />
   {/if}
@@ -51,13 +265,94 @@
       </div>
     {:else}
       <MessageList
+        bind:this={list}
         items={chat.items}
         hasMore={chat.hasMore}
         loadingOlder={chat.loadingOlder}
         onLoadOlder={() => void chats.loadOlder(sessionId)}
         onFork={fork}
+        {requests}
         memory={chat.view}
       />
     {/if}
+
+    <div class="mx-auto w-full max-w-4xl shrink-0 space-y-1.5 px-4 pt-1 pb-3">
+      {#if setupItem && setupItem.kind === 'system'}
+        <SetupScreen kind="update" problem={setupItem.text} compact />
+      {:else}
+        {#if pending.length > 0}
+          <div
+            class="flex items-center gap-2 rounded-md bg-amber-500/10 px-3 py-1 text-xs text-amber-900 dark:text-amber-200"
+          >
+            <HandIcon class="size-3.5 shrink-0" aria-hidden="true" />
+            <span class="flex-1"
+              >Claude is waiting for you{pending.length > 1
+                ? ` (${pending.length} requests)`
+                : ''}</span
+            >
+            <button
+              type="button"
+              class="font-medium underline-offset-2 hover:underline"
+              onclick={showRequest}>Show</button
+            >
+          </div>
+        {/if}
+        {#if blocked}
+          <div
+            class="border-destructive/40 bg-destructive/5 rounded-md border px-3 py-2 text-xs"
+            role="alert"
+          >
+            <div class="flex items-start gap-2">
+              <p class="text-destructive min-w-0 flex-1">
+                <span class="font-medium">This chat can't be continued here.</span>
+                {blocked.reason}
+              </p>
+              <button
+                type="button"
+                class="text-muted-foreground hover:text-foreground shrink-0"
+                aria-label="Dismiss"
+                onclick={() => (blocked = null)}
+                ><XIcon class="size-3.5" aria-hidden="true" /></button
+              >
+            </div>
+            <div class="mt-1.5 flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                class="bg-background hover:bg-muted inline-flex h-6 items-center gap-1 rounded border px-2"
+                onclick={() => void copyResume()}
+              >
+                {#if blocked.copied}<CheckIcon class="size-3" aria-hidden="true" />{/if}
+                Copy resume command
+              </button>
+              {#if blocked.command}
+                <code class="bg-muted rounded px-1.5 py-0.5 font-mono">{blocked.command}</code>
+              {/if}
+            </div>
+          </div>
+        {/if}
+        {#if sendError}
+          <p class="text-destructive text-xs" role="alert">{sendError}</p>
+        {/if}
+        <Composer
+          bind:textarea={composerBox}
+          draftKey={sessionId}
+          cwd={chat.summary?.cwd ?? ''}
+          commandScope={{ sessionId }}
+          {working}
+          queued={chat.queuedMessages}
+          onSubmit={submit}
+          onInterrupt={interrupt}
+          autofocus={focusComposer}
+        />
+      {/if}
+    </div>
   {/if}
 </div>
+
+<ConfirmDialog
+  bind:open={confirmOpen}
+  title="Continue this chat here?"
+  description={confirmText}
+  confirmLabel="Continue here"
+  onConfirm={confirmResume}
+/>

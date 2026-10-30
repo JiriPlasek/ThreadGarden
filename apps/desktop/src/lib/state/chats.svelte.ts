@@ -1,5 +1,7 @@
 import type {
   ChatHeaderInfo,
+  ImageRef,
+  Params,
   ChatItem,
   ChatItemsEvent,
   ChatStatus,
@@ -16,6 +18,14 @@ export const OLDER_PAGE = 200;
 
 type ChatEvent = ChatItemsEvent | ChatStatusEvent;
 export type ModelInfo = Result<'chat.models'>[number];
+export type ResumeCheck = Result<'chat.resumeCheck'>;
+export type RespondParams = Omit<Params<'chat.respond'>, 'sessionId'>;
+/** How the user answered a request in this window (the item's state cannot say "always"). */
+export type Decision = {
+  decision: RespondParams['decision'];
+  /** The answers given to an AskUserQuestion form. */
+  answers?: Record<string, string>;
+};
 
 /** Statuses with a Claude process behind them: header controls apply live. */
 export const LIVE_STATUSES: readonly ChatStatus[] = ['needsYou', 'working', 'idle'];
@@ -71,6 +81,20 @@ export class ChatState {
   get live(): boolean {
     return LIVE_STATUSES.includes(this.status);
   }
+
+  /**
+   * True while pahub's own process runs this chat: messages go straight to it.
+   * Otherwise (history, paused, failed, external) sending resumes the session
+   * and needs the resume-safety check first (spec §4.4).
+   */
+  get ownedLive(): boolean {
+    return this.live && !this.summary?.external;
+  }
+
+  /** Answers given here, by request id (shows "Always allowed" / the chosen answers). */
+  readonly decisions = new SvelteMap<string, Decision>();
+  /** Messages sent while Claude was working that the service queued (spec §6.4). */
+  queuedMessages = $state(0);
 
   /** Permission requests the user still has to answer. */
   pendingRequests = $derived(
@@ -203,6 +227,55 @@ export class ChatsState {
   setPermissionMode = (sessionId: string, value: string): Promise<void> =>
     this.setHeader('chat.setPermissionMode', 'permissionMode', sessionId, value);
 
+  /** Sends a message; resolves to whether the service queued it behind the running turn. */
+  send = async (sessionId: string, text: string, images?: ImageRef[]): Promise<boolean> => {
+    if (!this.api) throw new Error('Not connected to the pahub service');
+    const r = await this.api.request('chat.send', {
+      sessionId,
+      text,
+      ...(images?.length ? { images } : {}),
+    });
+    const chat = this.byId.get(sessionId);
+    if (r.queued && chat) chat.queuedMessages += 1;
+    return r.queued;
+  };
+
+  /** Starts a chat in `cwd` with its first message; resolves to the new chat's id. */
+  create = async (p: Params<'chat.create'>): Promise<string> => {
+    if (!this.api) throw new Error('Not connected to the pahub service');
+    if (p.permissionMode === 'bypassPermissions') {
+      throw new Error('pahub does not offer the bypassPermissions mode'); // Ruling R11
+    }
+    const params = { ...p };
+    if (!params.images?.length) delete params.images;
+    return (await this.api.request('chat.create', params)).sessionId;
+  };
+
+  /** Stops the current turn (Stop button / Esc). */
+  interrupt = async (sessionId: string): Promise<void> => {
+    if (!this.api) throw new Error('Not connected to the pahub service');
+    await this.api.request('chat.interrupt', { sessionId });
+  };
+
+  /** Answers a permission request, question or plan approval. */
+  respond = async (
+    sessionId: string,
+    p: RespondParams,
+    answers?: Record<string, string>,
+  ): Promise<void> => {
+    if (!this.api) throw new Error('Not connected to the pahub service');
+    await this.api.request('chat.respond', { sessionId, ...p });
+    this.byId
+      .get(sessionId)
+      ?.decisions.set(p.requestId, { decision: p.decision, ...(answers ? { answers } : {}) });
+  };
+
+  /** Whether this chat may be resumed here (spec §4.4). */
+  resumeCheck = async (sessionId: string): Promise<ResumeCheck> => {
+    if (!this.api) throw new Error('Not connected to the pahub service');
+    return this.api.request('chat.resumeCheck', { sessionId });
+  };
+
   /** Ends the chat's Claude process (the chat stays open as history). */
   end = async (sessionId: string): Promise<void> => {
     if (!this.api) throw new Error('Not connected to the pahub service');
@@ -287,6 +360,8 @@ export class ChatsState {
     } else {
       chat.status = e.status;
       chat.waitingFor = e.waitingFor;
+      // The turn ended: whatever was queued has been taken up.
+      if (e.status !== 'working' && e.status !== 'needsYou') chat.queuedMessages = 0;
       if (e.header) chat.header = { ...chat.header, ...e.header };
     }
   };

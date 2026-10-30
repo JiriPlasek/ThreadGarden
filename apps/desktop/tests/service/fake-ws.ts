@@ -3,8 +3,11 @@ import { PROTOCOL_VERSION } from '@pahub/protocol';
 export type Sent = { id: number; method: string; params: unknown };
 
 export class RpcFail extends Error {
-  constructor(readonly code: string) {
-    super(code);
+  constructor(
+    readonly code: string,
+    message = code,
+  ) {
+    super(message);
   }
 }
 
@@ -85,7 +88,7 @@ export class FakeSocket {
         this.deliver({ id: req.id, result: h(req.params) });
       } catch (err) {
         if (err instanceof RpcFail) {
-          this.deliver({ id: req.id, error: { code: err.code, message: err.code } });
+          this.deliver({ id: req.id, error: { code: err.code, message: err.message } });
         } else throw err;
       }
     });

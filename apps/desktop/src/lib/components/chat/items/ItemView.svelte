@@ -2,7 +2,9 @@
   import type { ChatItem } from '@pahub/protocol';
   import AssistantText from './AssistantText.svelte';
   import ItemBoundary from './ItemBoundary.svelte';
-  import PermissionSummary from './PermissionSummary.svelte';
+  import PermissionCard from './PermissionCard.svelte';
+  import PlanApproval from './PlanApproval.svelte';
+  import QuestionForm from './QuestionForm.svelte';
   import ResultFooter from './ResultFooter.svelte';
   import SystemNotice from './SystemNotice.svelte';
   import Thinking from './Thinking.svelte';
@@ -37,7 +39,13 @@
     {:else if item.kind === 'todo'}
       <TodoList {item} />
     {:else if item.kind === 'permissionRequest'}
-      <PermissionSummary {item} />
+      {#if item.variant === 'question'}
+        <QuestionForm {item} />
+      {:else if item.variant === 'plan'}
+        <PlanApproval {item} />
+      {:else}
+        <PermissionCard {item} />
+      {/if}
     {:else if item.kind === 'system'}
       <SystemNotice {item} />
     {:else if item.kind === 'compactBoundary'}

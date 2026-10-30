@@ -6,6 +6,7 @@ import { getContext } from 'svelte';
 import { agents, type AgentsState } from './agents.svelte';
 import { chats, type ChatsState } from './chats.svelte';
 import { connection, type ConnectionState } from './connection.svelte';
+import { interaction, type InteractionState } from './interaction.svelte';
 import { places, type PlacesState } from './places.svelte';
 import { sessions, type SessionsState } from './sessions.svelte';
 import { settings, type SettingsState } from './settings.svelte';
@@ -19,11 +20,21 @@ export type AppState = {
   chats: ChatsState;
   settings: SettingsState;
   agents: AgentsState;
+  interaction: InteractionState;
 };
 
 export const APP_CONTEXT = Symbol('pahub.app');
 
-const singletons: AppState = { connection, places, sessions, tabs, chats, settings, agents };
+const singletons: AppState = {
+  connection,
+  places,
+  sessions,
+  tabs,
+  chats,
+  settings,
+  agents,
+  interaction,
+};
 
 /** Must be called during component initialisation. */
 export const useApp = (): AppState => getContext<AppState | undefined>(APP_CONTEXT) ?? singletons;

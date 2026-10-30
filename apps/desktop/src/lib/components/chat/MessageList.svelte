@@ -3,7 +3,7 @@
   import ArrowDownIcon from '@lucide/svelte/icons/arrow-down';
   import { onDestroy, untrack } from 'svelte';
   import type { ListMemory } from '#lib/state/chats.svelte.js';
-  import { setChatActions } from './context';
+  import { setChatActions, type RequestActions } from './context';
   import ItemBoundary from './items/ItemBoundary.svelte';
   import ItemView from './items/ItemView.svelte';
   import ToolGroup from './items/ToolGroup.svelte';
@@ -25,6 +25,7 @@
     loadingOlder = false,
     onLoadOlder,
     onFork,
+    requests,
     memory,
     fallbackHeight = 600,
     overscan = 6,
@@ -34,6 +35,8 @@
     loadingOlder?: boolean;
     onLoadOlder?: () => void;
     onFork?: (itemId: string) => void;
+    /** Answers permission requests, questions and plans (cards are read-only without it). */
+    requests?: RequestActions;
     /** Heights and scroll position to resume from (kept per chat across tab switches). */
     memory?: ListMemory;
     /** Viewport height used until the real one is measured (and in tests). */
@@ -49,6 +52,9 @@
   setChatActions({
     get fork() {
       return onFork;
+    },
+    get requests() {
+      return requests;
     },
   });
 
