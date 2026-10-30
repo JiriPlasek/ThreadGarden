@@ -3,7 +3,15 @@ import { settingsDefaults, type ChatItem, type EventMsg, type Settings } from '@
 import { MAX_SEQ_EPOCH, nextSeqEpoch, seqBaseForEpoch } from '../../src/chat/event-log.js';
 import { SessionHost, type SessionHostDeps } from '../../src/chat/session-host.js';
 import { FakeAdapter } from '../../src/testing/fake-adapter.js';
-import { ManualTimers, MemoryRegistry, result, settle, statuses } from './live-helpers.js';
+import {
+  ManualTimers,
+  MemoryRegistry,
+  notification,
+  result,
+  settle,
+  started,
+  statuses,
+} from './live-helpers.js';
 
 class ThrowingRegistry extends MemoryRegistry {
   override markEnded(sessionId: string): void {
@@ -452,5 +460,28 @@ describe('SessionHost', () => {
     ctx.adapter.lastSession().emit(result('r-again'));
     await settle();
     expect(turns).toEqual([s.sessionId, s.sessionId]);
+  });
+
+  it('lists the running tasks of a live chat and reports changes of the count (R29)', async () => {
+    const counts: [string, number][] = [];
+    const ctx = setup({ onRunningTasks: (id, n) => counts.push([id, n]) });
+    const { s, fake } = await idleChat(ctx);
+    expect(ctx.host.list()[0]).not.toHaveProperty('runningTasks');
+    fake.emit(started('b1', { task_type: 'local_bash', is_backgrounded: true }));
+    await settle();
+    ctx.timers.advance(33);
+    expect(s.status).toBe('idle');
+    expect(ctx.host.list()).toEqual([
+      expect.objectContaining({ sessionId: s.sessionId, status: 'idle', runningTasks: 1 }),
+    ]);
+    expect(counts).toEqual([[s.sessionId, 1]]);
+    fake.emit(notification('b1', 'completed'));
+    await settle();
+    ctx.timers.advance(33);
+    expect(ctx.host.list()[0]).not.toHaveProperty('runningTasks');
+    expect(counts).toEqual([
+      [s.sessionId, 1],
+      [s.sessionId, 0],
+    ]);
   });
 });

@@ -277,6 +277,8 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         },
         // v1.1 §4: live activity may reorder the projects.
         onActivity: () => projectOrderRef.current?.notify(),
+        // Ruling R29: running background tasks put a chat under Running, idle or not.
+        onRunningTasks: (id) => emitChat({ event: 'sessions.changed', data: { sessionIds: [id] } }),
       });
       host = sessionHost;
 

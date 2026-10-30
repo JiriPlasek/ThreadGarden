@@ -202,7 +202,7 @@
         active={chat.sessionId === tabs.active}
         projectName={spansProjects ? (names.get(chat.projectId) ?? baseName(chat.cwd)) : undefined}
         {now}
-        running={chats.get(chat.sessionId)?.running ?? 0}
+        running={chats.get(chat.sessionId)?.running ?? chat.runningTasks ?? 0}
         onOpen={open}
         onRename={(c) => (renaming = c)}
         onTogglePin={togglePin}

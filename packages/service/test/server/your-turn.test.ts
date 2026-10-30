@@ -10,7 +10,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { startService, type ServiceHandle, type StartOptions } from '../../src/main.js';
 import type { SessionMessage } from '../../src/sdk/adapter.js';
 import { FakeAdapter } from '../../src/testing/fake-adapter.js';
-import { result } from '../chat/live-helpers.js';
+import { notification, result, started } from '../chat/live-helpers.js';
 import { TestClient, chatStatus, eventually } from '../e2e/ws-client.js';
 
 let dir: string;
@@ -262,5 +262,35 @@ describe('project order and missing folders (service)', () => {
     });
     const list = await c.call<Any[]>('projects.list', {});
     expect(list.find((p) => p.displayName === 'here')?.exists).toBe(true);
+  });
+});
+
+describe('running background tasks (service, Ruling R29)', () => {
+  it('an idle chat whose dev server runs is listed under Running until the server stops', async () => {
+    const adapter = new FakeAdapter();
+    const c = await start(adapter);
+    const { sessionId } = await c.call<{ sessionId: string }>('chat.create', {
+      cwd: dir,
+      text: 'Start the dev server',
+    });
+    const fake = adapter.lastSession();
+    fake.emit(started('b1', { task_type: 'local_bash', description: 'npm run dev' }));
+    fake.emit(result('r1'));
+    await c.waitFor(chatStatus(sessionId, 'idle'));
+    const running = async () =>
+      (await c.call<Any>('sessions.list', { place: { kind: 'running' }, limit: 10 })).items;
+    await eventually(async () => (await running()).length === 1);
+    expect(await running()).toEqual([
+      expect.objectContaining({ sessionId, status: 'idle', runningTasks: 1 }),
+    ]);
+    expect((await c.call<Any>('places.counts', {})).running).toBe(1);
+    // Clients learn of it through sessions.changed (the status did not change).
+    expect(count(c.events, changedFor(sessionId))).toBeGreaterThan(0);
+
+    const before = count(c.events, changedFor(sessionId));
+    fake.emit(notification('b1', 'stopped'));
+    await eventually(() => count(c.events, changedFor(sessionId)) > before);
+    expect(await running()).toEqual([]);
+    expect((await c.call<Any>('places.counts', {})).running).toBe(0);
   });
 });

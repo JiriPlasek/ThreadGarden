@@ -3,6 +3,8 @@ import { fireEvent, render, screen, waitFor, within } from '@testing-library/sve
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import ChatView from '../../src/lib/components/chat/ChatView.svelte';
+import AgentsStrip from '../../src/lib/components/layout/AgentsStrip.svelte';
+import ChatList from '../../src/lib/components/layout/ChatList.svelte';
 import ChatListRow from '../../src/lib/components/layout/ChatListRow.svelte';
 import TabsBar from '../../src/lib/components/layout/TabsBar.svelte';
 import { runningTasks } from '../../src/lib/state/chats.svelte';
@@ -524,5 +526,34 @@ describe('running badge', () => {
     unmount();
     const plain = render(ChatListRow, { props });
     expect(plain.container.textContent).not.toContain('running');
+  });
+
+  it('R29: an idle chat with running tasks shows its pill in the list and strip, unopened', async () => {
+    const { context } = await setup((server) => {
+      server.handlers['sessions.list'] = (p) =>
+        (p as { place: { kind: string } }).place.kind === 'needsYou'
+          ? { items: [] }
+          : {
+              items: [
+                summary('dev', { status: 'idle', live: true, runningTasks: 1, title: 'dev one' }),
+                summary('quiet', { status: 'idle', live: true, title: 'quiet one' }),
+              ],
+            };
+    });
+    render(ChatList, { context });
+    await waitFor(() => expect(screen.getAllByRole('option')).toHaveLength(2));
+    const [dev, quiet] = screen.getAllByRole('option') as HTMLElement[];
+    expect(dev!.textContent).toContain('1 running');
+    // The status stays idle: no working icon.
+    expect(within(dev!).getByRole('img', { name: 'Idle' })).toBeTruthy();
+    expect(quiet!.textContent).not.toContain('running');
+
+    render(AgentsStrip, { context });
+    const strip = await screen.findByRole('list', { name: /running agents/i });
+    await waitFor(() => expect(within(strip).getAllByRole('listitem')).toHaveLength(2));
+    const [first, second] = within(strip).getAllByRole('listitem');
+    expect(first!.textContent).toContain('dev one');
+    expect(first!.textContent).toContain('1 running');
+    expect(second!.textContent).not.toContain('running');
   });
 });

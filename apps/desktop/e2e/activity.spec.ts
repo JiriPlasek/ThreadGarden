@@ -45,6 +45,15 @@ test('activity panel: a subagent runs and ends, a dev server runs and is stopped
   await expect(
     list.locator('[role="option"][data-session-id="session-979"]').getByText('1 running'),
   ).toBeVisible();
+  // Ruling R29: its turn is over, but the dev server runs, so it is listed under Running.
+  const row = list.locator('[role="option"][data-session-id="session-979"]');
+  await expect(row.getByRole('img', { name: 'Idle' })).toBeVisible();
+  await page
+    .getByRole('navigation', { name: 'Places' })
+    .getByRole('button', { name: /^Running( \d+)?$/ })
+    .click();
+  await expect(row.getByText('1 running')).toBeVisible();
+  await expect(row.getByRole('img', { name: 'Idle' })).toBeVisible();
 
   // Ctrl+. hides and shows the panel.
   await page.keyboard.press('Control+.');
@@ -58,6 +67,8 @@ test('activity panel: a subagent runs and ends, a dev server runs and is stopped
   await expect(dialog).toHaveCount(0);
   await expect(server.getByRole('img', { name: 'Stopped' })).toBeVisible();
   await expect(page.getByRole('tab', { selected: true })).not.toContainText('running');
+  // Nothing runs any more: it leaves Running.
+  await expect(row).toHaveCount(0);
 
   // Clicking the agent shows the Agent call that started it.
   await agent.getByRole('button').click();

@@ -6,15 +6,17 @@
   import { useApp } from '#lib/state/context.js';
   import { cn } from '#lib/utils.js';
   import { baseName, externalLabel, previewLine, rawStatus } from './chat-info';
+  import RunningBadge from './RunningBadge.svelte';
   import StatusIcon, { statusLabel } from './StatusIcon.svelte';
 
   /**
    * Bottom strip (spec §6.1, Ruling R21): every live pahub chat and every active
    * external session from every project, needs-you → working → idle. Clicking one
-   * opens (or focuses) its tab. "Stop all work" (enabled while any pahub chat is
+   * opens (or focuses) its tab; a chat with running background tasks shows its
+   * "N running" pill (Ruling R29). "Stop all work" (enabled while any pahub chat is
    * live; it closes idle ones too) sits behind a confirmation.
    */
-  const { agents, tabs, places } = useApp();
+  const { agents, chats, tabs, places } = useApp();
 
   let confirming = $state(false);
 
@@ -33,6 +35,7 @@
       {#each agents.items as agent (agent.sessionId)}
         {@const project = names.get(agent.projectId) ?? baseName(agent.cwd)}
         {@const detail = previewLine(agent)}
+        {@const running = chats.get(agent.sessionId)?.running ?? agent.runningTasks ?? 0}
         <li class="shrink-0">
           <button
             type="button"
@@ -48,6 +51,9 @@
             <StatusIcon status={agent.status} raw={rawStatus(agent)} unread={agent.unread} />
             <span class="truncate">{agent.title}</span>
             <span class="text-muted-foreground max-w-24 shrink-0 truncate">{project}</span>
+            {#if running > 0}
+              <RunningBadge count={running} />
+            {/if}
             {#if agent.external}
               <span role="img" aria-label={externalLabel(agent)} class="text-muted-foreground">
                 <SquareTerminalIcon class="size-3.5" aria-hidden="true" />

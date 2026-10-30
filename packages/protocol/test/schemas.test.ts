@@ -246,6 +246,11 @@ describe('protocol schemas', () => {
     };
     expect(ChatSummarySchema.parse(summary).unread).toBe(false);
     expect(ChatSummarySchema.parse({ ...summary, unread: true }).unread).toBe(true);
+    // Ruling R29: a live chat's running background tasks (absent when none).
+    expect(ChatSummarySchema.parse(summary)).not.toHaveProperty('runningTasks');
+    expect(ChatSummarySchema.parse({ ...summary, runningTasks: 2 }).runningTasks).toBe(2);
+    expect(ChatSummarySchema.safeParse({ ...summary, runningTasks: -1 }).success).toBe(false);
+    expect(ChatSummarySchema.safeParse({ ...summary, runningTasks: 1.5 }).success).toBe(false);
     const project = {
       projectId: 'p',
       path: '/w',

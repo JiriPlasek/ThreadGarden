@@ -39,6 +39,12 @@ export const ChatSummarySchema = z.object({
    * neither waiting on the user nor working (pahub-side state, never Claude Code's).
    */
   unread: z.boolean().default(false),
+  /**
+   * Ruling R29: background tasks (agents, processes) running in a live pahub
+   * chat; absent when none. Such a chat counts as Running even while its turn
+   * is idle (its status stays idle).
+   */
+  runningTasks: z.number().int().nonnegative().optional(),
 });
 export type ChatSummary = z.infer<typeof ChatSummarySchema>;
 

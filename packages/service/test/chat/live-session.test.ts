@@ -15,6 +15,7 @@ import {
   notification,
   progress,
   sdk,
+  updated,
   settle,
   started,
   statuses,
@@ -1049,6 +1050,58 @@ describe('LiveSession tasks', () => {
     // Stopping a task that already ended is a no-op.
     await s.stopTask('b1');
     expect(fake.stoppedTasks).toEqual(['b1']);
+  });
+
+  it('counts the running tasks and reports each change of the count (R29)', async () => {
+    const changes: [string, number][] = [];
+    const { adapter, timers, opts } = setup({ onRunningTasks: (id, n) => changes.push([id, n]) });
+    const s = LiveSession.create('/p', { text: 'go' }, opts);
+    const fake = adapter.lastSession();
+    await settle();
+    expect(s.runningTasks).toBe(0);
+    fake.emit(started('b1', { task_type: 'local_bash', is_backgrounded: true }));
+    await settle();
+    timers.advance(33);
+    expect(s.runningTasks).toBe(1);
+    expect(changes).toEqual([[s.sessionId, 1]]);
+    // Progress of a running task does not change the count.
+    fake.emit(progress('b1', { usage: { total_tokens: 3, tool_uses: 1, duration_ms: 1 } }));
+    fake.emit(started('a1', { task_type: 'local_agent' }));
+    await settle();
+    timers.advance(33);
+    expect(changes).toEqual([
+      [s.sessionId, 1],
+      [s.sessionId, 2],
+    ]);
+    // Paused and ended tasks do not count; the turn's own status is irrelevant.
+    fake.emit(updated('a1', { status: 'paused' }));
+    fake.emit(result('r1'));
+    await settle();
+    timers.advance(33);
+    expect(s.status).toBe('idle');
+    expect(s.runningTasks).toBe(1);
+    fake.emit(notification('b1', 'stopped'));
+    await settle();
+    timers.advance(33);
+    expect(s.runningTasks).toBe(0);
+    expect(changes.at(-1)).toEqual([s.sessionId, 0]);
+    // The process ending empties the list: nothing left to report.
+    const before = changes.length;
+    s.end();
+    expect(s.runningTasks).toBe(0);
+    expect(changes).toHaveLength(before);
+  });
+
+  it('a process that ends with tasks running reports the count back to 0', async () => {
+    const changes: number[] = [];
+    const { adapter, timers, opts } = setup({ onRunningTasks: (_id, n) => changes.push(n) });
+    const s = LiveSession.create('/p', { text: 'go' }, opts);
+    adapter.lastSession().emit(started('b1', { task_type: 'local_bash' }));
+    await settle();
+    timers.advance(33);
+    s.end();
+    expect(changes).toEqual([1, 0]);
+    expect(s.runningTasks).toBe(0);
   });
 
   it('stopTask errors: UNKNOWN_TASK, STOP_FAILED, NOT_LIVE', async () => {

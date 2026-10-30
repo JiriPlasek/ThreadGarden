@@ -43,6 +43,8 @@ export type LiveChat = {
   waitingFor?: string;
   /** When the chat last did something (sent, received output); its project rises at once (v1.1). */
   lastActivity?: number;
+  /** Background tasks running in its process (Ruling R29); absent or 0 when none. */
+  runningTasks?: number;
 };
 
 const externalInfo = (e: ExternalSession): ExternalInfo => ({
@@ -128,6 +130,13 @@ type Turns = Map<string, number>;
 
 const isUnread = (s: ChatSummary, turns: Turns): boolean =>
   turns.has(s.sessionId) && !BUSY.has(s.status);
+
+/**
+ * The Running place, its count and the projects' running counts: a working
+ * chat, or (Ruling R29) a live pahub chat with running background tasks even
+ * while its turn is idle (e.g. its dev server still runs).
+ */
+const isRunning = (s: ChatSummary): boolean => s.status === 'working' || (s.runningTasks ?? 0) > 0;
 
 const byOrder = (a: ChatSummary, b: ChatSummary): number =>
   rank(a.status) - rank(b.status) ||
@@ -253,7 +262,7 @@ export class Catalog {
     let running = 0;
     let extra = 0;
     for (const e of overlay.values()) {
-      if (e.summary.status === 'working') running++;
+      if (isRunning(e.summary)) running++;
       if (!e.indexed && !hidden.includes(e.summary.projectId)) extra++;
     }
     const needsYou = this.needsYouList(overlay, turns).length;
@@ -280,7 +289,7 @@ export class Catalog {
       for (const s of overlay) {
         if (s.projectId !== p.projectId) continue;
         lastActivity = Math.max(lastActivity, s.lastActivity);
-        if (s.status === 'working') running++;
+        if (isRunning(s)) running++;
       }
       return {
         projectId: p.projectId,
@@ -398,6 +407,8 @@ export class Catalog {
         ...(l.lastActivity === undefined
           ? {}
           : { lastActivity: Math.max(row?.lastModified ?? 0, l.lastActivity) }),
+        // Only a chat with a process has tasks.
+        ...(l.live && (l.runningTasks ?? 0) > 0 ? { runningTasks: l.runningTasks } : {}),
       };
       summary.unread = isUnread(summary, turns);
       out.set(l.sessionId, { indexed: row !== undefined, summary });
@@ -477,7 +488,7 @@ export class Catalog {
           case 'needsYou':
             return s.status === 'needsYou';
           case 'running':
-            return s.status === 'working';
+            return isRunning(s);
           case 'project':
             return s.projectId === place.projectId;
           case 'all':

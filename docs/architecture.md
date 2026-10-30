@@ -193,6 +193,13 @@ returned in full on the first page of any place; later pages are index rows
 only, keyset-paged and excluding overlay ids, so the cursor never drifts when
 a chat changes status. Hidden projects stay visible in Needs you and Running
 (an agent waiting for you is never hidden) but are left out of All chats.
+Running lists the working chats and (Ruling R29) every live pahub chat with a
+running background task (an agent or process, not paused or finished), even
+while its turn is idle: an idle chat whose dev server still runs is listed
+there with its status still idle and its `runningTasks` count, and it counts
+in `places.counts.running` and its project's running count. The session host
+reports each change of that count, and the service sends `sessions.changed`
+for the chat so lists refresh.
 Titles follow pahub custom title → SDK title → summary → first prompt; all
 but a custom title are cut to 80 characters.
 

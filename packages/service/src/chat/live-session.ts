@@ -46,7 +46,7 @@ import { startupFailureMessage, type StartupFailureMessage } from '../sdk/startu
 import { ServiceError } from '../server/router.js';
 import { EventLog, type ChatEvent, type ChatEventDraft } from './event-log.js';
 import { Normalizer, deriveStatus } from './normalize.js';
-import { TaskTracker, taskEnded } from './tasks.js';
+import { TaskTracker, runningCount, taskEnded } from './tasks.js';
 
 /** pahub's record of which sessions have a live process (Task 6 backs it with the db). */
 export interface LiveRegistry {
@@ -116,6 +116,12 @@ export type LiveSessionDeps = {
    * reported through `onError`.
    */
   onTurnEnded?: (sessionId: string, at: number) => void;
+  /**
+   * Ruling R29: the number of running background tasks changed (published
+   * with the `chat.tasks` event that changed it). A throw is reported and
+   * changes nothing.
+   */
+  onRunningTasks?: (sessionId: string, count: number) => void;
   /**
    * The chat did something (a message sent, an SDK message received); called
    * very often while a reply streams, so it must be cheap. A throw is reported.
@@ -262,6 +268,8 @@ export class LiveSession {
   private lastTasksFlushAt = Number.NEGATIVE_INFINITY;
   /** The task list last published (JSON), so an unchanged list is not sent again. */
   private publishedTasks = '[]';
+  /** How many of the published tasks are running (Ruling R29). */
+  private publishedRunning = 0;
 
   constructor(private readonly deps: LiveSessionOptions) {
     rejectBypass(deps.permissionMode);
@@ -367,6 +375,11 @@ export class LiveSession {
   /** The current process's tasks (subagents, background shells, …). */
   tasks(): ChatTask[] {
     return this.tracker.list();
+  }
+
+  /** How many published tasks are running (Ruling R29: such a chat counts as Running). */
+  get runningTasks(): number {
+    return this.publishedRunning;
   }
 
   pendingRequests(): ChatItem[] {
@@ -965,6 +978,11 @@ export class LiveSession {
     this.publishedTasks = key;
     this.lastTasksFlushAt = this.deps.now();
     this.record({ event: 'chat.tasks', data: { sessionId: this.id, tasks } });
+    const running = runningCount(tasks);
+    if (running !== this.publishedRunning) {
+      this.publishedRunning = running;
+      this.guard('onRunningTasks', () => this.deps.onRunningTasks?.(this.id, running));
+    }
   }
 
   /** Empties the task list (the process is gone or new) and publishes that at once. */

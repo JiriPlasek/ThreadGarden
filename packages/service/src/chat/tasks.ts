@@ -114,6 +114,18 @@ const ENDED: ReadonlySet<ChatTaskStatus> = new Set(['completed', 'failed', 'stop
 export const taskEnded = (t: ChatTask): boolean => ENDED.has(t.status) || t.endedAt !== undefined;
 const isFinished = taskEnded;
 
+/**
+ * Doing work now: running, pending, or an unknown status that has not ended.
+ * Paused does not count. The same rule as the desktop's "N running" badge;
+ * a live chat with such a task counts as Running (Ruling R29).
+ */
+export const taskRunning = (t: ChatTask): boolean =>
+  t.status === 'running' || t.status === 'pending' || (t.status === 'unknown' && !t.endedAt);
+
+/** How many of `tasks` are running (see `taskRunning`). */
+export const runningCount = (tasks: readonly ChatTask[]): number =>
+  tasks.reduce((n, t) => (taskRunning(t) ? n + 1 : n), 0);
+
 type Entry = {
   /** The live record, edited in place (always through `edit`). */
   task: ChatTask;

@@ -61,6 +61,8 @@ export type SessionHostDeps = {
   onTurnEnded?: LiveSessionDeps['onTurnEnded'];
   /** Handed to every session (see `LiveSessionDeps.onActivity`). */
   onActivity?: LiveSessionDeps['onActivity'];
+  /** Handed to every session (see `LiveSessionDeps.onRunningTasks`, Ruling R29). */
+  onRunningTasks?: LiveSessionDeps['onRunningTasks'];
 };
 
 export class SessionHost {
@@ -218,10 +220,12 @@ export class SessionHost {
     live: boolean;
     waitingFor?: string;
     lastActivity?: number;
+    runningTasks?: number;
   }[] {
     return [...this.sessions.values()].map((s) => {
       const waitingFor = s.waitingFor();
       const lastActivity = s.lastActivity;
+      const runningTasks = s.live ? s.runningTasks : 0;
       return {
         sessionId: s.sessionId,
         cwd: s.cwd,
@@ -229,6 +233,7 @@ export class SessionHost {
         live: s.live,
         ...(waitingFor === undefined ? {} : { waitingFor }),
         ...(lastActivity === null ? {} : { lastActivity }),
+        ...(runningTasks > 0 ? { runningTasks } : {}),
       };
     });
   }
@@ -271,7 +276,17 @@ export class SessionHost {
   }
 
   private options(extra: Partial<LiveSessionOptions>): LiveSessionOptions {
-    const { adapter, registry, emit, now, describe, onError, onTurnEnded, onActivity } = this.deps;
+    const {
+      adapter,
+      registry,
+      emit,
+      now,
+      describe,
+      onError,
+      onTurnEnded,
+      onActivity,
+      onRunningTasks,
+    } = this.deps;
     return {
       adapter,
       registry,
@@ -284,6 +299,7 @@ export class SessionHost {
       ...(onError ? { onError } : {}),
       ...(onTurnEnded ? { onTurnEnded } : {}),
       ...(onActivity ? { onActivity } : {}),
+      ...(onRunningTasks ? { onRunningTasks } : {}),
       ...extra,
       log: extra.log ?? new EventLog(undefined, this.seqBase),
     };
