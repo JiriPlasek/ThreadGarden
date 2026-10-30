@@ -13,14 +13,15 @@ import {
  * Cap on indexed text per session, in characters (~2 MB of mostly-ASCII text).
  * When a transcript has more, the most RECENT text (the tail) is kept and the
  * oldest is dropped: recent context is what people search for. The whole
- * transcript is still paged through (with event-loop yields) but only the tail
- * is held and indexed, which bounds index size and memory. The chat view is
+ * transcript is still walked (in slices, with event-loop yields) but only the
+ * tail is held and indexed, which bounds index size. The chat view is
  * unaffected: it reads messages from the SDK, not from the index.
  */
 export const MAX_TEXT_CHARS = 2 * 1024 * 1024;
 
 const BATCH = 20;
-const PAGE = 100;
+/** Messages extracted between event-loop yields. */
+const SLICE = 100;
 const DELETE_BATCH = 8;
 const UNKNOWN_PROJECT = '(unknown)';
 
@@ -50,14 +51,27 @@ export type IndexerOptions = {
   maxTextChars?: number;
   /** Called when one session fails to sync; the sync carries on with the rest. */
   onError?: (error: unknown, context: { sessionId: string; step: 'refresh' | 'sync' }) => void;
+  /**
+   * Sessions not to re-index right now (a pahub chat mid-turn: its transcript
+   * grows with every streamed message). Their refreshes wait for
+   * `resumeDeferred()`; the chat view never depends on the index.
+   */
+  deferWhile?: (sessionId: string) => boolean;
 };
+
+/** Thrown inside a sync that `stop()` ended; never reported. */
+class Stopped extends Error {}
 
 export class Indexer {
   private readonly platform: NodeJS.Platform;
   private readonly gitCommonDir: GitCommonDir;
   private readonly maxText: number;
   private readonly onError: NonNullable<IndexerOptions['onError']>;
+  private readonly deferWhile: (sessionId: string) => boolean;
+  /** Sessions whose refresh waits until `deferWhile` lets go of them. */
+  private readonly deferred = new Set<string>();
   private running: Promise<void> = Promise.resolve();
+  private stopped = false;
 
   constructor(
     private readonly adapter: AgentAdapter,
@@ -69,22 +83,49 @@ export class Indexer {
     this.gitCommonDir = options.gitCommonDir ?? defaultGitCommonDir;
     this.maxText = options.maxTextChars ?? MAX_TEXT_CHARS;
     this.onError = options.onError ?? (() => {});
+    this.deferWhile = options.deferWhile ?? (() => false);
+  }
+
+  /**
+   * Stops indexing (service shutdown): a running sync ends at its next step
+   * and nothing new starts. Resolves once nothing touches the database.
+   */
+  stop(): Promise<void> {
+    this.stopped = true;
+    return this.running;
   }
 
   /** Upserts every session's metadata and (re)indexes the ones that changed. */
   fullSync(): Promise<void> {
     return this.serial(async () => {
       const all = await this.adapter.listSessions();
+      this.check();
       await this.process(all, true);
       this.removeVanished(new Set(all.map((i) => i.sessionId)));
     });
   }
 
-  /** Re-reads the given sessions (e.g. after the watcher saw a transcript change). */
+  /**
+   * Re-reads the given sessions (e.g. after the watcher saw a transcript
+   * change). Sessions `deferWhile` holds back are kept for `resumeDeferred`.
+   */
   refresh(sessionIds: string[]): Promise<void> {
+    const now = sessionIds.filter((id) => {
+      if (!this.deferWhile(id)) return true;
+      this.deferred.add(id);
+      return false;
+    });
+    if (now.length === 0) return this.running;
     return this.serial(async () => {
       const infos: SDKSessionInfo[] = [];
-      for (const id of sessionIds) {
+      for (const id of now) {
+        this.check();
+        // Busy again by the time this refresh runs (a new turn): wait for that one too.
+        if (this.deferWhile(id)) {
+          this.deferred.add(id);
+          continue;
+        }
+        this.deferred.delete(id);
         try {
           const info = await this.adapter.getSessionInfo(id);
           if (info) infos.push(info);
@@ -96,10 +137,30 @@ export class Indexer {
     });
   }
 
+  /** Indexes the deferred sessions that are no longer busy (a turn ended, a chat stopped). */
+  resumeDeferred(): Promise<void> {
+    const ready = [...this.deferred].filter((id) => !this.deferWhile(id));
+    if (ready.length === 0) return this.running;
+    for (const id of ready) this.deferred.delete(id);
+    return this.refresh(ready);
+  }
+
   private serial(fn: () => Promise<void>): Promise<void> {
-    const next = this.running.then(fn, fn);
+    const run = async (): Promise<void> => {
+      if (this.stopped) return;
+      try {
+        await fn();
+      } catch (e) {
+        if (!(e instanceof Stopped)) throw e;
+      }
+    };
+    const next = this.running.then(run, run);
     this.running = next.catch(() => {});
     return next;
+  }
+
+  private check(): void {
+    if (this.stopped) throw new Stopped();
   }
 
   private async process(infos: SDKSessionInfo[], progress: boolean): Promise<void> {
@@ -108,9 +169,11 @@ export class Indexer {
     let done = 0;
     for (let i = 0; i < infos.length; i += BATCH) {
       for (const info of infos.slice(i, i + BATCH)) {
+        this.check();
         try {
           if (await this.one(info, seenProjects)) changed.push(info.sessionId);
         } catch (e) {
+          if (e instanceof Stopped) throw e;
           this.onError(e, { sessionId: info.sessionId, step: 'sync' });
         }
         done++;
@@ -159,19 +222,23 @@ export class Indexer {
   }
 
   /**
-   * Pages through the whole transcript (yielding between pages) keeping only
-   * the newest `maxText` characters, then writes them as a staged FTS
-   * generation and swaps it in with one short statement. Any failure leaves the
-   * previous index text intact.
+   * Reads the transcript once and walks it in slices (yielding between them),
+   * keeping only the newest `maxText` characters, then writes them as a staged
+   * FTS generation and swaps it in with one short statement. Any failure leaves
+   * the previous index text intact.
+   *
+   * One read, not pages: the SDK reads and parses the whole file on every
+   * `getSessionMessages` call and only then applies `limit`/`offset`, so paging
+   * would parse a long transcript once per page (quadratic in its length).
    */
   private async indexText(info: SDKSessionInfo): Promise<void> {
     const id = info.sessionId;
     const parts: string[] = [];
     let total = 0;
-    for (let offset = 0; ; offset += PAGE) {
-      const page = await this.adapter.getSessionMessages(id, { limit: PAGE, offset });
-      if (page.length === 0) break;
-      const text = extractText(page);
+    const messages = await this.adapter.getSessionMessages(id);
+    for (let start = 0; start < messages.length; start += SLICE) {
+      this.check();
+      const text = extractText(messages.slice(start, start + SLICE));
       if (text.length > 0) {
         parts.push(text);
         total += text.length;
@@ -186,17 +253,20 @@ export class Indexer {
           }
         }
       }
-      if (page.length < PAGE) break;
       await yieldLoop();
     }
+    this.check();
     const stage = this.db.stageFts(id);
     try {
       for (const chunk of chunkText(parts.join('\n'))) {
+        this.check();
         this.db.addFtsChunk(stage.key, chunk);
         await yieldLoop();
       }
       this.db.commitFts(id, stage.gen);
     } catch (e) {
+      // Shutting down: stray staged rows are dropped when this session is indexed next.
+      if (e instanceof Stopped) throw e;
       try {
         await this.dropStale(id);
       } catch (cleanup) {
@@ -210,6 +280,7 @@ export class Indexer {
   private async dropStale(sessionId: string): Promise<void> {
     const rowids = this.db.staleFtsRowids(sessionId);
     for (let i = 0; i < rowids.length; i += DELETE_BATCH) {
+      this.check();
       this.db.deleteFtsRowids(rowids.slice(i, i + DELETE_BATCH));
       await yieldLoop();
     }

@@ -125,6 +125,73 @@ describe('Indexer', () => {
     expect(db.searchFts('headmarkerxyz', 5)).toEqual([]);
   });
 
+  it('reads each transcript once per index pass, however long it is', async () => {
+    // The SDK parses the whole file on every call, so paging it would be quadratic.
+    const adapter = generateCorpus({ sessions: 2, projects: 1, bigSessionMessages: 1000 });
+    const spy = vi.spyOn(adapter, 'getSessionMessages');
+    const db = openDb(':memory:');
+    await new Indexer(adapter, db, () => {}, {
+      platform: 'linux',
+      gitCommonDir: () => null,
+    }).fullSync();
+    const perSession = new Map<string, number>();
+    for (const [id] of spy.mock.calls) perSession.set(id, (perSession.get(id) ?? 0) + 1);
+    expect(perSession.get('session-big')).toBe(1);
+    expect([...perSession.values()].every((n) => n === 1)).toBe(true);
+    expect(spy.mock.calls.every((c) => c[1] === undefined)).toBe(true);
+    expect(db.searchFts('parity', 5).map((h) => h.sessionId)).toContain('session-big');
+  });
+
+  it('defers refreshes of busy (streaming) sessions until they settle', async () => {
+    const { adapter, db, events } = setup(3);
+    const busy = new Set(['session-1']);
+    const indexer = new Indexer(adapter, db, (e) => events.push(e), {
+      platform: 'linux',
+      gitCommonDir: () => null,
+      deferWhile: (id) => busy.has(id),
+    });
+    await indexer.fullSync();
+    const spy = vi.spyOn(adapter, 'getSessionMessages');
+    for (const id of ['session-0', 'session-1']) {
+      const s = adapter.sessions.get(id)!;
+      s.info = { ...s.info, lastModified: s.info.lastModified + 1000 };
+      s.messages.push(sm('user', { role: 'user', content: `appended${id.slice(-1)}marker` }));
+    }
+    await indexer.refresh(['session-0', 'session-1']);
+    expect(spy.mock.calls.map((c) => c[0])).toEqual(['session-0']);
+    expect(db.searchFts('appended1marker', 5)).toEqual([]);
+    // Still busy: nothing to do yet.
+    await indexer.resumeDeferred();
+    expect(spy).toHaveBeenCalledTimes(1);
+    busy.delete('session-1');
+    await indexer.resumeDeferred();
+    expect(spy.mock.calls.map((c) => c[0])).toEqual(['session-0', 'session-1']);
+    expect(db.searchFts('appended1marker', 5).map((h) => h.sessionId)).toEqual(['session-1']);
+    // Once indexed, it is no longer pending.
+    await indexer.resumeDeferred();
+    expect(spy).toHaveBeenCalledTimes(2);
+  });
+
+  it('stop() ends a running sync early and resolves once it has stopped', async () => {
+    const { adapter, db, indexer } = setup(45);
+    const real = adapter.getSessionMessages.bind(adapter);
+    let stopping: Promise<void> | undefined;
+    const spy = vi.spyOn(adapter, 'getSessionMessages').mockImplementation(async (id, o) => {
+      stopping ??= indexer.stop(); // shutdown arrives while the first transcript is read
+      return real(id, o);
+    });
+    await indexer.fullSync(); // resolves: a stop is not a failure
+    await stopping;
+    const calls = spy.mock.calls.length;
+    expect(calls).toBe(1);
+    expect(db.searchFts('parity', 50)).toEqual([]);
+    // Nothing runs after stop.
+    await indexer.refresh(['session-44']);
+    await indexer.fullSync().catch(() => {});
+    expect(spy.mock.calls.length).toBe(calls);
+    db.close();
+  });
+
   it('removes vanished sessions and empty projects but keeps live sessions and pinned projects', async () => {
     const { adapter, db, indexer, events } = setup(6); // 3 projects x 2 sessions
     await indexer.fullSync();
