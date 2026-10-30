@@ -59,10 +59,22 @@ window never stops a running agent.
 checks that its pid is alive and that `hello` answers on the advertised port,
 and otherwise starts the service detached (Windows: a new process group with
 no console, breaking away from the app's job object when allowed; Unix: a new
-session via `setsid`; stdio to the null device) and waits up to 5 s for a
-fresh `service.json`. The service takes a lock file in the data dir, so only
-one runs per data dir. The UI then connects with the token from
-`service.json`.
+session via `setsid`; stdio to the null device) and waits up to 15 s for a
+live `service.json` whose service answers. The service takes a lock file in
+the data dir, so only one runs per data dir; it listens and writes
+`service.json` first and looks for Claude Code (`claude --version`, which can
+take seconds) in the background, so the UI can connect at once — requests
+that need Claude Code (`system.status`, starting or resuming a chat, resume
+checks) wait for that answer. A recorded service that is alive but slow to
+answer is not a failure: the extra service started meanwhile exits on the
+lock, and the recorded one is used once it answers. If no service answers in
+time, the window shows the error with **Retry**. The UI then connects with
+the token from `service.json`.
+
+**Crash safety.** The service logs an unhandled rejection or uncaught
+exception and keeps running (one stray error must not end every agent); only
+a burst of more than 10 uncaught exceptions in a minute ends the process.
+Shutdown runs every step even if one fails, and always releases the lock.
 
 **Versions.** `hello` exchanges the protocol version and the service version.
 A different protocol version is incompatible: the UI shows a blocking screen
@@ -214,8 +226,10 @@ fork is indexed at once so it can be opened.
   user's data dir. Every connection must present it.
 - **Content Security Policy:** `default-src 'self'`; `connect-src` only the
   Tauri IPC origins and `ws://127.0.0.1:*`; `img-src 'self' data: blob:`, so
-  remote images in model output are never fetched (no tracking pixels); no
-  objects, no forms, `base-uri 'self'`.
+  remote images in model output are never fetched (no tracking pixels);
+  `style-src 'self' 'unsafe-inline'` (Svelte and the UI components set inline
+  styles; model output never carries `style` attributes, see the sanitizer
+  below); no objects, no forms, `base-uri 'self'`.
 - **Markdown sanitizer.** Model output is rendered with `marked` and sanitized
   by a dedicated DOMPurify instance with an allow-list of plain document
   markup: no scripts, styles, forms, iframes, event handlers or `style`/`class`
@@ -266,11 +280,11 @@ CI runs them with `PAHUB_PERF_SLACK=3`. Measured on the development machine
 
 | What | Budget | Measured |
 | --- | --- | --- |
-| Full-text search over 1,000 sessions | 150 ms | max 17.9 ms |
+| Full-text search over 1,000 sessions | 150 ms | max 15.7 ms |
 | Quick switcher query (service side) | 50 ms | max 10.4 ms |
 | `@` suggestions over 200k files | 50 ms | max 17.3 ms |
 | Event-loop delay while building a 200k-file index | 50 ms | max 15.0 ms |
-| Event-loop delay while indexing a 20 MB session | 50 ms | max 7.9 ms (181 ms total) |
+| Event-loop delay while indexing a 20 MB session | 50 ms | max 9.2 ms (221 ms total) |
 | Service idle memory after indexing 1,000 sessions | 150 MB | 101.6 MB RSS |
 | Switching to an open tab | 50 ms | median 9.5 ms |
 | Opening a history chat | 150 ms | median 22.0 ms |
@@ -279,9 +293,17 @@ CI runs them with `PAHUB_PERF_SLACK=3`. Measured on the development machine
 
 UI timings run from the input event to the DOM showing the result plus a
 forced layout. Against a real history of about 500 sessions, the bundled
-service settled at about 70 MB after its first full index; that first index
-peaked at about 470 MB while it read large transcripts through the SDK, and
-took 1–1.5 minutes. App launch times (§8: 800 ms warm, 2 s cold) are not
+service settled at about 70 MB after its first full index. The first full
+index reads each transcript once through the SDK (`getSessionMessages`
+parses the whole file on every call, so paging it, as the first versions did,
+was quadratic in transcript length). Re-measured on 2026-10-30 against the
+same real history (512 sessions; the indexer alone, run in-process into a
+temporary data dir, `~/.claude` only read): 77 s with one read per session
+(512 SDK reads), against 108 s for the paged version (718 SDK reads). The
+peak memory stayed about the same (558 MB vs 552 MB): it is set by the SDK
+holding the largest transcript fully parsed, which one read per session
+cannot avoid. pahub's own chats are not re-indexed while a turn streams; they
+are indexed once the turn ends. App launch times (§8: 800 ms warm, 2 s cold) are not
 measured automatically; the release checklist covers them by hand.
 
 ## Authentication
@@ -395,9 +417,13 @@ Windows 11, signed in with a subscription. What it established:
   `<bash-input>` / `<bash-stdout>` / `<bash-stderr>`. The normalizer renders
   these as the typed command, a system line, and a compaction divider (see
   `cliUserMessage` in `src/chat/normalize.ts`), as the terminal shows them.
-  Still rendered as raw user text: `<task-notification>` entries (background
-  task results) and meta "agent message" entries (subagent hand-backs) that
-  the CLI adds to history.
+  Entries the CLI injects as user turns (Ruling R27) — `<task-notification>`
+  (background task results), `<agent-message>` (subagent hand-backs),
+  `<teammate-message>`, `<cross-session-message>` and `<coordinator-relay>` —
+  become one collapsed system notice with a short label (the task summary,
+  or "Report from a subagent", …) and the full text on demand; the
+  `<local-command-caveat>` entry is hidden, as in the terminal. The list is
+  closed: any other tag still renders as the user's text.
 - **Read-only.** All 1,794 files under the real `projects/` dir (except the
   temp repo's own project dir) and `settings.json` were hashed before the
   service started and after it shut down, around indexing the whole history,
@@ -405,7 +431,9 @@ Windows 11, signed in with a subscription. What it established:
   operations above. Nothing changed except two transcripts of other Claude
   Code sessions running at the time, which only grew.
 - **Indexing** the real history (about 500 sessions) from an empty data dir
-  took 92 s, and 135 s in a run alongside a release build.
+  took 92 s, and 135 s in a run alongside a release build. Those runs paged
+  each transcript; with one read per transcript the indexer alone now takes
+  77 s for the same history (see Performance).
 
 `test/real/smoke.real.test.ts` covers the lower-level facts recorded under
 [Authentication](#authentication) (session id, no echo of sent messages,
@@ -474,8 +502,19 @@ Decisions made during the build that change behaviour described in the design:
   the same protocol shows a thin bar with **Restart service**.
 - **Where authentication and the Claude Code version show:** in the chat
   header, not a separate status bar.
-- **No API-key-only build switch yet** (§5.5 asks for one before sharing).
-  Today the settings always allow inheriting Claude Code's authentication.
+- **API-key-only build** (§5.5): `PAHUB_API_KEY_ONLY=1` at build time
+  (Vite `define` in the UI, esbuild `define` in the service bundle) hides the
+  inherit option; the service refuses to start or resume a chat without an
+  API key (`API_KEY_REQUIRED`).
+- **Restored tabs** are not all loaded at launch: the active tab's chat is
+  opened, the others show a title and status from `sessions.summaries` and
+  load their history when first shown (a full transcript read each).
+- **Indexing defers pahub's own streaming chats.** A transcript that grows
+  with every streamed message is re-indexed once its turn ends, not on every
+  watcher event.
+- **Paused chats and external sessions.** Only a *live* pahub chat (one with
+  a process) counts as pahub's own: when a paused or failed chat is running in
+  a terminal, it is listed as that external session and resume is blocked.
 - **Release configuration.** Bundling the sidecar and the service is in a
   separate `tauri.bundle.conf.json` passed with `--config`, because Tauri
   checks at compile time that sidecar binaries exist, which would break

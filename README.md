@@ -108,6 +108,8 @@ Set `PAHUB_DATA_DIR` to use another directory. It holds `pahub.db` (SQLite: a fu
 
 pahub has no login of its own. By default every session it starts uses whatever authentication your installed Claude Code already uses (a Claude subscription login, an API key in the environment, or a configured third-party provider). If you set an Anthropic API key in pahub's settings, pahub passes it to the sessions it starts as `ANTHROPIC_API_KEY`, and they use the key instead; removing it returns to the inherited authentication. The chat header shows which authentication a session reports, so you can see whether it runs on a subscription or on API billing. What was verified about this is in [docs/architecture.md](docs/architecture.md#authentication).
 
+**API-key-only build.** To ship pahub without the option of inheriting Claude Code's own sign-in (spec §5.5), build it with `PAHUB_API_KEY_ONLY=1` set, for example `PAHUB_API_KEY_ONLY=1 pnpm --filter desktop tauri build`. The flag is baked into both the UI and the bundled service at build time (it cannot be switched on or off by the environment of an installed app). In such a build, chats start or continue only once an Anthropic API key is set in Settings: the service refuses `chat.create` and resuming a chat without one (`API_KEY_REQUIRED`), the settings and new-chat dialogs say that a key is required, and history stays browsable without a key.
+
 You are responsible for complying with Anthropic's terms for the authentication you use. For reference, the Agent SDK documentation states that, unless previously approved, Anthropic does not allow third-party developers to offer claude.ai login or rate limits for their products, including agents built on the Claude Agent SDK, and points to API key authentication instead; use of the SDK is governed by Anthropic's Commercial Terms. Read the current documentation and terms yourself; this section is not legal advice.
 
 ## Known limitations (v1)
@@ -120,10 +122,9 @@ You are responsible for complying with Anthropic's terms for the authentication 
 - Sessions running in other processes are shown, not driven: pahub offers hand-off commands, and continues them only once they have stopped.
 - New files appear in `@` suggestions up to 30 seconds after they are created.
 - After Claude Code compacts a conversation, reopening it from history shows it from the compaction onward: the Agent SDK returns only the compacted conversation.
-- In history, background-task notifications and subagent hand-back messages that Claude Code records still show as raw text.
+- Background-task notifications and subagent hand-backs that Claude Code records as user turns show as one-line notices (the full text on demand), as the terminal shows them; other tagged entries Claude Code may add in later versions show as raw text until pahub learns them.
 - macOS and Linux builds are built and tested in CI but have not been tried by hand.
 - Builds are unsigned, and there is no auto-update.
-- There is no API-key-only build option yet (see [Authentication and terms](#authentication-and-terms)).
 
 ## License
 
