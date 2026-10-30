@@ -9,9 +9,10 @@
   import StatusIcon, { statusLabel } from './StatusIcon.svelte';
 
   /**
-   * Bottom strip (spec §6.1): every running agent from every project, needs-you
-   * first. Clicking one opens (or focuses) its tab. "Stop all work" sits behind a
-   * confirmation.
+   * Bottom strip (spec §6.1, Ruling R21): every live pahub chat and every active
+   * external session from every project, needs-you → working → idle. Clicking one
+   * opens (or focuses) its tab. "Stop all work" (enabled while any pahub chat is
+   * live; it closes idle ones too) sits behind a confirmation.
    */
   const { agents, tabs, places } = useApp();
 

@@ -46,6 +46,12 @@
     }
   });
 
+  /** Jumps to the top (e.g. when the list's contents are replaced). */
+  export const scrollToTop = (): void => {
+    if (viewport) viewport.scrollTop = 0;
+    scrollTop = 0;
+  };
+
   /** Scrolls the least distance that brings row `index` fully into view. */
   export const scrollToIndex = (index: number): void => {
     if (!viewport) return;

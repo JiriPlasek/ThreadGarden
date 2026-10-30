@@ -19,14 +19,47 @@ export class SessionsState {
     this.api = api;
     this.places = places;
     places.subscribe(() => quietly(this.reload()));
-    const refetch = () => quietly(this.reload(true));
+    const refetch = () => quietly(this.refetch());
     api.on('sessions.changed', refetch);
     api.on('external.changed', refetch);
-    api.on('chat.status', (e) =>
-      this.patch(e.sessionId, { status: e.status, waitingFor: e.waitingFor }),
-    );
+    api.on('chat.status', (e) => {
+      const cur = this.items.find((s) => s.sessionId === e.sessionId);
+      if (cur) {
+        // Header-only events (cost, model, …) change nothing the list shows.
+        if (cur.status === e.status && cur.waitingFor === e.waitingFor) return;
+        this.patch(e.sessionId, { status: e.status, waitingFor: e.waitingFor });
+      } else {
+        const kind = places.selected.kind;
+        if (kind !== 'needsYou' && kind !== 'running') return;
+      }
+      // The service sends only chat.status for live changes: re-fetch so the chat
+      // enters or leaves "Needs you"/"Running" and the status order is restored.
+      refetch();
+    });
     api.onOpen(() => this.reload(true));
     if (api.status === 'open') refetch();
+  };
+
+  private refetching: Promise<void> | null = null;
+  private refetchAgain = false;
+
+  /** `reload(true)`; overlapping calls coalesce into one trailing reload. */
+  refetch = (): Promise<void> => {
+    if (this.refetching) {
+      this.refetchAgain = true;
+      return this.refetching;
+    }
+    this.refetching = (async () => {
+      try {
+        do {
+          this.refetchAgain = false;
+          await this.reload(true);
+        } while (this.refetchAgain);
+      } finally {
+        this.refetching = null;
+      }
+    })();
+    return this.refetching;
   };
 
   /** Pins or unpins a chat (pahub metadata only), then refreshes the list. */

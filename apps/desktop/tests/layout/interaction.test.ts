@@ -1,9 +1,12 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
+import ConfirmDialog from '../../src/lib/components/ConfirmDialog.svelte';
 import AppShell from '../../src/lib/components/layout/AppShell.svelte';
 import ChatList from '../../src/lib/components/layout/ChatList.svelte';
+import TabsBar from '../../src/lib/components/layout/TabsBar.svelte';
 import { mergeAgents } from '../../src/lib/state/agents.svelte';
+import { PAGE_SIZE } from '../../src/lib/state/sessions.svelte';
 import { COLUMNS_SAVE_DELAY_MS } from '../../src/lib/state/settings.svelte';
 import { setup, summary } from './harness';
 
@@ -93,6 +96,131 @@ describe('chat list interaction', () => {
   });
 });
 
+describe('live status changes', () => {
+  const settle = () => new Promise((r) => setTimeout(r, 20));
+
+  it('moves chats into and out of Needs you as their status changes', async () => {
+    const status = new Map<string, string>([['a', 'working']]);
+    const { server, app, context } = await setup((server) => {
+      server.handlers['sessions.list'] = (p) => {
+        const { place } = p as ListParams;
+        const all = [...status].map(([id, s]) =>
+          summary(id, {
+            status: s as never,
+            live: true,
+            title: `chat ${id}`,
+            ...(s === 'needsYou' ? { waitingFor: 'permission: Bash(npm test)' } : {}),
+          }),
+        );
+        return {
+          items: place.kind === 'needsYou' ? all.filter((c) => c.status === 'needsYou') : all,
+        };
+      };
+    });
+    app.places.select({ kind: 'needsYou' });
+    render(ChatList, { context });
+    await settle();
+    expect(screen.queryAllByRole('option')).toHaveLength(0);
+
+    // The chat starts waiting on a permission: the service only emits chat.status.
+    status.set('a', 'needsYou');
+    server.push('chat.status', {
+      sessionId: 'a',
+      seq: 1,
+      status: 'needsYou',
+      waitingFor: 'permission: Bash(npm test)',
+    });
+    await waitFor(() => expect(screen.getAllByRole('option')).toHaveLength(1));
+    expect(screen.getByRole('option').textContent).toContain('permission: Bash(npm test)');
+
+    // Answered: it leaves the Needs you list.
+    status.set('a', 'working');
+    server.push('chat.status', { sessionId: 'a', seq: 2, status: 'working' });
+    await waitFor(() => expect(screen.queryAllByRole('option')).toHaveLength(0));
+  });
+
+  it('re-sorts the list when a listed chat changes status', async () => {
+    const status = new Map<string, string>([
+      ['a', 'idle'],
+      ['b', 'idle'],
+    ]);
+    const rank = (s: string) => (s === 'needsYou' ? 0 : s === 'working' ? 1 : 2);
+    const { server, context } = await setup((server) => {
+      server.handlers['sessions.list'] = () => ({
+        items: [...status]
+          .map(([id, s]) => summary(id, { status: s as never, live: true, title: `chat ${id}` }))
+          .sort((x, y) => rank(x.status) - rank(y.status)),
+      });
+    });
+    render(ChatList, { context });
+    await waitFor(() => expect(screen.getAllByRole('option')).toHaveLength(2));
+    expect(screen.getAllByRole('option')[0]!.textContent).toContain('chat a');
+
+    status.set('b', 'needsYou');
+    server.push('chat.status', { sessionId: 'b', seq: 1, status: 'needsYou' });
+    await waitFor(() => expect(screen.getAllByRole('option')[0]!.textContent).toContain('chat b'));
+  });
+
+  it('does not refetch the list for header-only status events', async () => {
+    const { server, context } = await setup((server) => {
+      server.handlers['sessions.list'] = () => ({
+        items: [summary('a', { status: 'working', live: true })],
+      });
+    });
+    render(ChatList, { context });
+    await waitFor(() => expect(screen.getAllByRole('option')).toHaveLength(1));
+    await settle();
+    const listCalls = () =>
+      server.calls('sessions.list').filter((c) => (c.params as ListParams).limit === PAGE_SIZE)
+        .length;
+    const before = listCalls();
+    server.push('chat.status', {
+      sessionId: 'a',
+      seq: 1,
+      status: 'working',
+      header: { costUsd: 0.42 },
+    });
+    await settle();
+    expect(listCalls()).toBe(before);
+  });
+});
+
+describe('shortcuts and scrolling', () => {
+  it('Ctrl+W does not close a tab while a dialog is open', async () => {
+    const { app, context } = await setup();
+    app.tabs.openTab('s1');
+    render(TabsBar, { context });
+    render(ConfirmDialog, { props: { open: true, title: 'Sure?', onConfirm: () => {} } });
+    await screen.findByRole('alertdialog');
+    await fireEvent.keyDown(window, { key: 'w', ctrlKey: true });
+    expect(app.tabs.open).toEqual(['s1']);
+  });
+
+  it('resets the scroll position when the place changes', async () => {
+    const many = Array.from({ length: 300 }, (_, i) => summary(`s${i}`, { title: `chat ${i}` }));
+    const { app, context } = await setup((server) => {
+      server.handlers['sessions.list'] = () => ({ items: many });
+    });
+    render(ChatList, { context });
+    const list = screen.getByRole('listbox');
+    await waitFor(() => expect(screen.getAllByRole('option').length).toBeGreaterThan(0));
+    // jsdom does not scroll: make scrollTop writable for this element.
+    let top = 0;
+    Object.defineProperty(list, 'scrollTop', {
+      configurable: true,
+      get: () => top,
+      set: (v: number) => (top = v),
+    });
+    top = 200 * 52;
+    await fireEvent.scroll(list);
+    await waitFor(() => expect(screen.queryByText('chat 0')).toBeNull());
+
+    app.places.select({ kind: 'running' });
+    await waitFor(() => expect(screen.getByText('chat 0')).toBeTruthy());
+    expect(top).toBe(0);
+  });
+});
+
 describe('app shell', () => {
   it('shows the empty state without tabs and resizes columns with the keyboard', async () => {
     const { server, app, context } = await setup();
@@ -125,15 +253,20 @@ describe('app shell', () => {
 });
 
 describe('mergeAgents', () => {
-  it('puts needs-you first and lists each chat once', () => {
-    const merged = mergeAgents(
-      [summary('n1', { status: 'needsYou' })],
-      [
-        summary('w1', { status: 'working' }),
-        summary('n2', { status: 'needsYou' }),
-        summary('n1', { status: 'needsYou' }),
-      ],
-    );
-    expect(merged.map((s) => s.sessionId)).toEqual(['n1', 'n2', 'w1']);
+  it('lists live chats and active external sessions once, needs-you → working → idle', () => {
+    const ext = { kind: 'interactive' };
+    const merged = mergeAgents([
+      summary('n1', { status: 'needsYou', live: true }),
+      summary('w1', { status: 'working', live: true }),
+      summary('i1', { status: 'idle', live: true }),
+      summary('xw', { status: 'working', external: ext }),
+      summary('xi', { status: 'idle', external: ext }),
+      summary('n2', { status: 'needsYou', external: ext }),
+      summary('n1', { status: 'needsYou', live: true }),
+      summary('pz', { status: 'paused' }),
+      summary('fl', { status: 'failed', live: true }),
+      summary('hi', { status: 'history' }),
+    ]);
+    expect(merged.map((s) => s.sessionId)).toEqual(['n1', 'n2', 'w1', 'xw', 'i1']);
   });
 });

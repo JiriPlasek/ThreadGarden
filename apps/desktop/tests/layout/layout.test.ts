@@ -85,18 +85,52 @@ describe('agents strip', () => {
         if (place.kind === 'needsYou') {
           return { items: [summary('n1', { status: 'needsYou', title: 'needs one', live: true })] };
         }
-        return { items: [] };
+        // "All chats" starts with every live and external session, then history.
+        return {
+          items: [
+            summary('n1', { status: 'needsYou', title: 'needs one', live: true }),
+            summary('i1', { status: 'idle', title: 'idle one', live: true }),
+            summary('x1', {
+              status: 'idle',
+              title: 'external idle',
+              external: { kind: 'interactive', status: 'idle' },
+            }),
+            summary('p1', { status: 'paused', title: 'paused one' }),
+            summary('h1', { status: 'history', title: 'history one' }),
+          ],
+        };
       };
     });
     render(AgentsStrip, { context });
     const strip = await screen.findByRole('list', { name: /running agents/i });
-    await waitFor(() => expect(within(strip).getAllByRole('listitem')).toHaveLength(3));
+    await waitFor(() => expect(within(strip).getAllByRole('listitem')).toHaveLength(4));
     const titles = within(strip)
       .getAllByRole('listitem')
       .map((li) => li.textContent ?? '');
     expect(titles[0]).toContain('needs one');
     expect(titles[1]).toContain('working one');
     expect(titles[2]).toContain('working two');
+    expect(titles[3]).toContain('idle one');
+  });
+
+  it('stop all is enabled for an idle pahub chat but not for external sessions only', async () => {
+    let items = [summary('i1', { status: 'idle', live: true })];
+    const { app, context } = await setup((server) => {
+      server.handlers['sessions.list'] = (p) =>
+        (p as ListParams).place.kind === 'all' ? { items } : { items: [] };
+    });
+    render(AgentsStrip, { context });
+    const stop = await screen.findByRole('button', { name: /stop all work/i });
+    await waitFor(() => expect((stop as HTMLButtonElement).disabled).toBe(false));
+
+    items = [
+      summary('x1', {
+        status: 'working',
+        external: { kind: 'bg', status: 'busy' },
+      }),
+    ];
+    await app.agents.refresh();
+    await waitFor(() => expect((stop as HTMLButtonElement).disabled).toBe(true));
   });
 
   it('stop all asks for confirmation then calls work.stopAll', async () => {

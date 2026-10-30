@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { ChatSummary } from '@pahub/protocol';
+  import { untrack } from 'svelte';
   import PanelLeftCloseIcon from '@lucide/svelte/icons/panel-left-close';
   import SearchIcon from '@lucide/svelte/icons/search';
   import { useApp } from '#lib/state/context.js';
@@ -32,6 +33,13 @@
       clearInterval(t);
       clearTimeout(searchTimer);
     };
+  });
+
+  // A different place or query is a different list: start at its top.
+  $effect(() => {
+    void places.selected;
+    void sessions.query;
+    untrack(() => list?.scrollToTop());
   });
 
   /** The keyboard cursor follows the active tab until the user moves it. */

@@ -59,7 +59,9 @@
 
   const onWindowKey = (e: KeyboardEvent): void => {
     const mod = e.ctrlKey || e.metaKey;
-    if (!mod || e.altKey) return;
+    if (!mod || e.altKey || e.defaultPrevented) return;
+    // A modal dialog (rename, confirmation) owns the keyboard while it is open.
+    if (document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
     if (e.key.toLowerCase() === 'w' && !e.shiftKey && tabs.active) {
       e.preventDefault();
       tabs.close(tabs.active);
