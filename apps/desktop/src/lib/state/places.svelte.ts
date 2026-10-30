@@ -23,8 +23,9 @@ export class PlacesState {
     api.on('projects.changed', refresh);
     api.on('sessions.changed', refresh);
     api.on('external.changed', refresh);
-    api.onReconnect(() => this.refresh());
-    refresh();
+    // Fetch on every successful hello, including the first one (init may run before connect).
+    api.onOpen(() => this.refresh());
+    if (api.status === 'open') refresh();
   };
 
   /** Called after the selected place changes. */

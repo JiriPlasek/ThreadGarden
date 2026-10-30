@@ -30,8 +30,8 @@ export class SessionsState {
       next[i] = { ...cur, status: e.status, waitingFor: e.waitingFor };
       this.items = next;
     });
-    api.onReconnect(() => this.reload(true));
-    refetch();
+    api.onOpen(() => this.reload(true));
+    if (api.status === 'open') refetch();
   };
 
   setQuery = (query: string): Promise<void> => {

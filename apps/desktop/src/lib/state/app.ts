@@ -13,7 +13,12 @@ import { tabs } from './tabs.svelte';
 
 export const client = new ServiceClient();
 
-export const startApp = async (): Promise<void> => {
+let started: Promise<void> | null = null;
+
+/** Idempotent: later calls return the first call's promise. */
+export const startApp = (): Promise<void> => (started ??= run());
+
+const run = async (): Promise<void> => {
   const conn = await serviceConnection();
   connection.init(client, conn);
   places.init(client);

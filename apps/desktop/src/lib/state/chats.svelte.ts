@@ -43,6 +43,8 @@ export class ChatState {
   seq = $state(0);
   hasMore = $state(false);
   loaded = $state(false);
+  /** True while `chat.since` is in flight: live events are buffered until it is merged. */
+  resyncing = false;
   loadingOlder = $state(false);
   error = $state<string | null>(null);
 
@@ -154,17 +156,31 @@ export class ChatsState {
     await Promise.all(
       [...this.byId.values()].map(async (chat) => {
         if (!chat.loaded) return this.open(chat.sessionId);
+        chat.resyncing = true;
         try {
           const r = await api.request('chat.since', { sessionId: chat.sessionId, seq: chat.seq });
           if (this.byId.get(chat.sessionId) !== chat) return;
-          for (const e of [...r.events].sort((a, b) => a.seq - b.seq)) this.dispatch(chat, e);
-          this.flush();
+          for (const e of [...r.events].sort((a, b) => a.seq - b.seq)) this.apply(chat, e);
           chat.seq = Math.max(chat.seq, r.seq);
+          // Live events that arrived meanwhile follow the merged history.
+          chat.resyncing = false;
+          const buffered = chat.buffered.sort((a, b) => a.seq - b.seq);
+          chat.buffered = [];
+          for (const e of buffered) this.dispatch(chat, e);
+          this.flush();
         } catch (err) {
-          if (err instanceof RequestError && err.code === 'DISCONNECTED') return;
-          // GAP (or anything unexpected): the log cannot help, start over from the tail.
+          chat.resyncing = false;
+          if (err instanceof RequestError && err.code === 'DISCONNECTED') {
+            // The next reconnect resyncs from chat.seq; buffered events would leave a hole.
+            chat.buffered = [];
+            return;
+          }
+          // GAP (or anything unexpected): the log cannot help, start over from the tail
+          // (open() merges the buffered live events above its snapshot).
           chat.loaded = false;
           await this.open(chat.sessionId);
+        } finally {
+          chat.resyncing = false;
         }
       }),
     );
@@ -182,10 +198,14 @@ export class ChatsState {
 
   /** Routes one event; events at or below the chat's seq are duplicates and ignored. */
   private dispatch = (chat: ChatState, e: ChatEvent): void => {
-    if (!chat.loaded) {
+    if (!chat.loaded || chat.resyncing) {
       chat.buffered.push(e);
       return;
     }
+    this.apply(chat, e);
+  };
+
+  private apply = (chat: ChatState, e: ChatEvent): void => {
     if (e.seq <= chat.seq) return;
     chat.seq = e.seq;
     if ('items' in e) {

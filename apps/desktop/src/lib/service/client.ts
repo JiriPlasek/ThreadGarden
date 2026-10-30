@@ -56,6 +56,7 @@ export class ServiceClient {
   private readonly pending = new Map<number, Pending>();
   private readonly listeners = new Map<string, Set<(data: never) => void>>();
   private readonly statusListeners = new Set<(s: ClientStatus) => void>();
+  private readonly openListeners = new Set<() => void | Promise<void>>();
   private readonly reconnectListeners = new Set<() => void | Promise<void>>();
   private firstConnect: { resolve: () => void; reject: (e: Error) => void } | null = null;
 
@@ -116,6 +117,12 @@ export class ServiceClient {
     return () => this.reconnectListeners.delete(cb);
   };
 
+  /** Called after every successful `hello`, including the first connect. */
+  onOpen = (cb: () => void | Promise<void>): (() => void) => {
+    this.openListeners.add(cb);
+    return () => this.openListeners.delete(cb);
+  };
+
   private setStatus = (s: ClientStatus): void => {
     if (this.status === s) return;
     this.status = s;
@@ -173,15 +180,17 @@ export class ServiceClient {
           this.setStatus('open');
           this.firstConnect?.resolve();
           this.firstConnect = null;
+          for (const cb of this.openListeners) void Promise.resolve(cb()).catch(() => {});
           if (reconnect) {
             for (const cb of this.reconnectListeners) void Promise.resolve(cb()).catch(() => {});
           }
         },
         (e: unknown) => {
           // A service that refuses our protocol version answers hello with an error.
-          if (this.ws === ws && e instanceof RequestError && e.code !== 'DISCONNECTED') {
-            this.fail(ws);
-          }
+          if (this.ws !== ws || !(e instanceof RequestError)) return;
+          if (e.code === 'DISCONNECTED') return; // onclose schedules the retry
+          if (e.code === 'TIMEOUT') return ws.close(); // unresponsive: drop it and retry with backoff
+          this.fail(ws);
         },
       );
     };
