@@ -22,6 +22,20 @@ export const ExternalInfoSchema = z.object({
 });
 export type ExternalInfo = z.infer<typeof ExternalInfoSchema>;
 
+// ── v1.2 B1: buckets ──────────────────────────────────────────────────────────
+
+/**
+ * v1.2: every chat is in exactly one bucket — pahub's own metadata, never
+ * written into Claude Code's data. `active` is the default.
+ */
+export const BucketSchema = z.enum(['active', 'onHold', 'archived']);
+export type Bucket = z.infer<typeof BucketSchema>;
+
+/** Most characters of an on-hold note ("waiting for review from Petr"). */
+export const HOLD_NOTE_MAX = 200;
+
+// ──────────────────────────────────────────────────────────────────────────────
+
 export const ChatSummarySchema = z.object({
   sessionId: z.string(),
   title: z.string(),
@@ -45,6 +59,20 @@ export const ChatSummarySchema = z.object({
    * is idle (its status stays idle).
    */
   runningTasks: z.number().int().nonnegative().optional(),
+  // ── v1.2 B1: buckets ──
+  /** The chat's bucket; a value this version does not know reads as `active`. */
+  bucket: BucketSchema.default('active').catch('active'),
+  /** On hold until this time (epoch ms); absent when on hold indefinitely or not on hold. */
+  holdUntil: z.number().optional(),
+  /** The on-hold note; absent when none or not on hold. */
+  holdNote: z.string().optional(),
+  /**
+   * The hold timer ran out: the chat is back in Active and listed under Needs
+   * you (after the chats waiting on the user, alongside unread ones) until it
+   * is seen (`chat.markSeen`) or sent a message. Like `unread`, false while the
+   * chat waits on the user or works.
+   */
+  backFromHold: z.boolean().default(false),
 });
 export type ChatSummary = z.infer<typeof ChatSummarySchema>;
 
@@ -61,11 +89,28 @@ export const ProjectSchema = z.object({
 });
 export type Project = z.infer<typeof ProjectSchema>;
 
+/**
+ * A place in the left column. v1.2: `active`, `onHold` and `archived` list
+ * the chats of one bucket (hidden projects left out, like `all` was). `all`
+ * stays accepted as an alias of `active`, so stored UI state and older UIs
+ * keep working. A project lists its active chats; `include` adds the chats of
+ * other buckets. Needs you and Running span every bucket.
+ */
 export const PlaceSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('needsYou') }),
   z.object({ kind: z.literal('running') }),
+  /** Alias of `active` (v1.2). */
   z.object({ kind: z.literal('all') }),
-  z.object({ kind: z.literal('project'), projectId: z.string() }),
+  z.object({
+    kind: z.literal('project'),
+    projectId: z.string(),
+    /** v1.2: other buckets to list too (default: active chats only). */
+    include: z.array(z.enum(['onHold', 'archived'])).optional(),
+  }),
+  // ── v1.2 B1: buckets ──
+  z.object({ kind: z.literal('active') }),
+  z.object({ kind: z.literal('onHold') }),
+  z.object({ kind: z.literal('archived') }),
 ]);
 export type Place = z.infer<typeof PlaceSchema>;
 

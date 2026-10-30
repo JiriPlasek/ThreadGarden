@@ -11,6 +11,7 @@ import { resolveClaudeConfigDir } from './config.js';
 import { acquireInstanceLock, removeDiscovery, writeDiscovery } from './discovery.js';
 import { FileIndex } from './files/file-index.js';
 import { ExternalPoller, makeClaudeRunner, type ExternalSession } from './external/poller.js';
+import { Buckets } from './history/buckets.js';
 import { Catalog, titleFor, type LiveChat } from './history/catalog.js';
 import { openDb, type Db } from './history/db.js';
 import { Indexer } from './history/indexer.js';
@@ -29,6 +30,7 @@ import { Router } from './server/router.js';
 import { startWsServer } from './server/ws-server.js';
 
 export const IDLE_EXIT_MS = 30 * 60_000;
+/** The idle check; it also ends on-hold chats' holds whose time ran out (v1.2, ≤ 60 s late). */
 const IDLE_CHECK_MS = 60_000;
 /** pahub-db key of the last chat seq epoch (see `nextSeqEpoch`). */
 const SEQ_EPOCH_KEY = 'service:seqEpoch';
@@ -139,6 +141,8 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   }));
 
   const broadcastRef: { fn: (e: EventMsg) => void } = { fn: () => {} };
+  /** v1.2: runs once the catalog exists (the poller is created before it). */
+  const bucketsRef: { onExternals: () => void } = { onExternals: () => {} };
   const claude: { current: ClaudeStatus | undefined } = { current: opts.claude };
   /** pahub's optional API key (§5.5): in memory only, never logged or stored. */
   let apiKey: string | null = null;
@@ -150,6 +154,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   let server: Awaited<ReturnType<typeof startWsServer>> | undefined;
   let poller: ExternalPoller | undefined;
   let projectOrder: ProjectOrderNotifier | undefined;
+  let buckets: Buckets | undefined;
   let startSync: (() => void) | undefined;
   const live = (): { list(): LiveChat[] } | undefined => opts.live ?? host;
   const claudeRunner = opts.claudeRunner ?? makeClaudeRunner;
@@ -216,7 +221,17 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         // Only *live* pahub chats are pahub's own processes. A paused or failed
         // chat has none, so one that is running now runs in a terminal (§4.4).
         () => new Set((live()?.list() ?? []).filter((c) => c.live).map((c) => c.sessionId)),
-        (e) => broadcastRef.fn(e),
+        (e) => {
+          // v1.2: archived chats running elsewhere return to Active first.
+          if (e.event === 'external.changed') {
+            try {
+              bucketsRef.onExternals();
+            } catch (err) {
+              log.error(`auto-unarchive: ${errorText(err)}`);
+            }
+          }
+          broadcastRef.fn(e);
+        },
         {
           enabled: () => externalUsable() && (db?.getSettings().externalPolling ?? true),
           onError: (err) => log.error(`external poller: ${String(err)}`),
@@ -323,6 +338,15 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         folderExists: (p) => folders.exists(p),
       });
       catalogRef.current = cat;
+      const bucketList = new Buckets({
+        db: opened,
+        catalog: cat,
+        emit: (e) => broadcastRef.fn(e),
+        now: clock,
+      });
+      buckets = bucketList;
+      const externalsNow = opts.externals ?? (() => poller?.snapshot() ?? []);
+      bucketsRef.onExternals = () => bucketList.unarchiveRunning(externalsNow());
       projectOrder = new ProjectOrderNotifier({
         changed: () => cat.projectOrderChanged(),
         emit: projectsChanged,
@@ -335,6 +359,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         db: opened,
         catalog: cat,
         quickSearch: createQuickSearch(opened, cat),
+        buckets: bucketList,
         onSettingsChanged: (patch) => {
           if (patch.claudePath !== undefined && opts.locateClaude) relocate();
         },
@@ -424,6 +449,16 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   const liveCount = opts.liveCount ?? (() => host?.liveCount() ?? 0);
   // Chats that were live when the service last stopped show as interrupted (§4.2).
   host?.recoverAfterRestart();
+  /** Ends the holds whose time ran out (v1.2); a failure is logged, never fatal. */
+  const sweepHolds = (): void => {
+    try {
+      buckets?.sweepHolds();
+    } catch (err) {
+      log.error(`hold timer: ${errorText(err)}`);
+    }
+  };
+  // Holds that ran out while the service was not running end now.
+  sweepHolds();
   host?.start();
   startSync?.();
   poller?.start();
@@ -472,6 +507,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   };
 
   const timer = setTimer(() => {
+    sweepHolds();
     if (liveCount() > 0 || clientCount > 0) lastActive = clock();
     else if (clock() - lastActive >= IDLE_EXIT_MS) {
       log.info('idle for 30 minutes, exiting');

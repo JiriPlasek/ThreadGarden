@@ -27,6 +27,8 @@ export const summary = (
   live: false,
   external: null,
   unread: false,
+  bucket: 'active',
+  backFromHold: false,
   ...over,
 });
 

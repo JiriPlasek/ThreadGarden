@@ -85,7 +85,9 @@
     const p = places.selected;
     if (p.kind === 'needsYou') return 'Needs you';
     if (p.kind === 'running') return 'Running';
-    if (p.kind === 'all') return 'All chats';
+    if (p.kind === 'all' || p.kind === 'active') return 'All chats';
+    if (p.kind === 'onHold') return 'On hold';
+    if (p.kind === 'archived') return 'Archived';
     return names.get(p.projectId) ?? 'Project';
   });
   const emptyText = $derived.by(() => {

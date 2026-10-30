@@ -1,7 +1,14 @@
-import type { ChatStatus, ChatSummary, ExternalInfo, Place, Project } from '@pahub/protocol';
+import type {
+  Bucket,
+  ChatStatus,
+  ChatSummary,
+  ExternalInfo,
+  Place,
+  Project,
+} from '@pahub/protocol';
 import type { ExternalSession } from '../external/poller.js';
 import { externalStatus } from '../external/resume-safety.js';
-import type { Db, SessionFilter, SessionRow } from './db.js';
+import type { BucketState, Db, SessionFilter, SessionRow } from './db.js';
 import { defaultGitCommonDir, projectIdFor, type GitCommonDir } from './projects.js';
 
 /** Title selection (spec §5.3). pahub never writes titles back to Claude Code. */
@@ -131,6 +138,54 @@ type Turns = Map<string, number>;
 const isUnread = (s: ChatSummary, turns: Turns): boolean =>
   turns.has(s.sessionId) && !BUSY.has(s.status);
 
+// ── v1.2 B1: buckets ──────────────────────────────────────────────────────────
+
+/** The buckets a place lists; undefined for Needs you and Running (every bucket). */
+const bucketsOf = (place: Place): readonly Bucket[] | undefined => {
+  switch (place.kind) {
+    case 'all': // alias of active (v1.2)
+    case 'active':
+      return ['active'];
+    case 'onHold':
+      return ['onHold'];
+    case 'archived':
+      return ['archived'];
+    case 'project':
+      return ['active', ...(place.include ?? [])];
+    default:
+      return undefined;
+  }
+};
+
+/** A summary's bucket fields; the hold details only when set. */
+const bucketFields = (
+  b: BucketState,
+): Pick<ChatSummary, 'bucket' | 'holdUntil' | 'holdNote' | 'backFromHold'> => ({
+  bucket: b.bucket,
+  ...(b.holdUntil === null ? {} : { holdUntil: b.holdUntil }),
+  ...(b.holdNote === null ? {} : { holdNote: b.holdNote }),
+  backFromHold: b.backAt !== null,
+});
+
+/**
+ * Sets an overlay summary's `unread` and (v1.2) `backFromHold` for its
+ * status: like unread, "back from hold" yields while the chat waits on the
+ * user (it is under Needs you anyway) or works.
+ */
+const flag = (s: ChatSummary, turns: Turns): void => {
+  s.unread = isUnread(s, turns);
+  s.backFromHold = s.backFromHold && !BUSY.has(s.status);
+};
+
+/**
+ * A chat in use right now — pahub runs it, it has a live process elsewhere,
+ * or it waits or works — which a bulk archive leaves alone.
+ */
+export const isActiveNow = (s: ChatSummary): boolean =>
+  s.live || s.external?.pid !== undefined || BUSY.has(s.status);
+
+// ──────────────────────────────────────────────────────────────────────────────
+
 /**
  * The Running place, its count and the projects' running counts: a working
  * chat, or (Ruling R29) a live pahub chat with running background tasks even
@@ -161,6 +216,7 @@ const fromRow = (r: SessionRow, unread = false): ChatSummary => ({
   live: false,
   external: null,
   unread,
+  ...bucketFields(r),
 });
 
 /** One row of the quick-search corpus. */
@@ -170,6 +226,8 @@ export type CorpusRow = {
   projectId: string;
   projectName: string;
   lastActivity: number;
+  /** v1.2: archived chats are searched too, flagged (`search.quick`). */
+  bucket: Bucket;
 };
 
 /**
@@ -206,6 +264,16 @@ export class Catalog {
   }
 
   /**
+   * v1.2: `sessionIds` moved to `bucket`. Updates the cached corpus in place
+   * (cheaper than `invalidate`, which rebuilds it from every row).
+   */
+  bucketChanged(sessionIds: readonly string[], bucket: Bucket): void {
+    if (!this.cache) return;
+    const ids = new Set(sessionIds);
+    for (const r of this.cache.rows) if (ids.has(r.sessionId)) r.bucket = bucket;
+  }
+
+  /**
    * One page of a place. The first page (no cursor) starts with the whole
    * live/external overlay; later pages are DB rows only, keyset-paged and
    * excluding the overlay ids captured in the cursor (Ruling R15), so a status
@@ -225,12 +293,7 @@ export class Catalog {
 
     const page = decodeCursor(cursor, 'd');
     const excluded = first ? [...overlay.keys()] : page.ids;
-    const filter: SessionFilter = {
-      ...(place.kind === 'project' ? { projectId: place.projectId } : {}),
-      ...(place.kind === 'all' ? { excludeProjectIds: snap.hidden } : {}),
-      excludeIds: excluded,
-    };
-    const rows = this.db.listSessions(filter, limit, page.key);
+    const rows = this.db.listSessions(this.dbFilter(place, excluded, snap.hidden), limit, page.key);
     const items = [...over, ...rows.items.map((r) => fromRow(r, turns.has(r.sessionId)))];
     return rows.nextCursor
       ? { items, nextCursor: encodeCursor('d', excluded, rows.nextCursor) }
@@ -254,19 +317,36 @@ export class Catalog {
     });
   }
 
-  /** `needsYou` counts the chats waiting on the user and the unread ones (v1.1). */
-  counts(): { needsYou: number; running: number; all: number } {
+  /**
+   * `needsYou` counts the chats waiting on the user, the unread ones (v1.1)
+   * and those back from hold (v1.2); the buckets count what their places
+   * list (hidden projects left out); `all` is `active` for older UIs.
+   */
+  counts(): {
+    needsYou: number;
+    running: number;
+    all: number;
+    active: number;
+    onHold: number;
+    archived: number;
+  } {
     const { hidden } = this.snapshot();
     const turns = this.db.unreadTurns();
     const overlay = this.overlay(turns);
     let running = 0;
-    let extra = 0;
+    const buckets = this.db.countBuckets(hidden);
     for (const e of overlay.values()) {
       if (isRunning(e.summary)) running++;
-      if (!e.indexed && !hidden.includes(e.summary.projectId)) extra++;
+      // Indexed chats are counted by the query, with the same bucket.
+      if (!e.indexed && !hidden.includes(e.summary.projectId)) buckets[e.summary.bucket]++;
     }
     const needsYou = this.needsYouList(overlay, turns).length;
-    return { needsYou, running, all: this.db.countSessions(hidden) + extra };
+    return { needsYou, running, all: buckets.active, ...buckets };
+  }
+
+  /** The live and external chats right now (see `overlay`). */
+  overlaySummaries(): ChatSummary[] {
+    return [...this.overlay(this.db.unreadTurns()).values()].map((e) => e.summary);
   }
 
   /**
@@ -340,6 +420,7 @@ export class Catalog {
         projectId: s.projectId,
         projectName: snap.names.get(s.projectId) ?? baseName(s.cwd),
         lastActivity: s.lastActivity,
+        bucket: s.bucket,
       });
     }
     return extra.length ? [...extra, ...snap.rows] : snap.rows;
@@ -357,6 +438,7 @@ export class Catalog {
       projectId: r.projectId,
       projectName: names.get(r.projectId) ?? baseName(r.cwd ?? r.projectId),
       lastActivity: r.lastModified,
+      bucket: r.bucket,
     }));
     this.cache = {
       names,
@@ -410,7 +492,7 @@ export class Catalog {
         // Only a chat with a process has tasks.
         ...(l.live && (l.runningTasks ?? 0) > 0 ? { runningTasks: l.runningTasks } : {}),
       };
-      summary.unread = isUnread(summary, turns);
+      flag(summary, turns);
       out.set(l.sessionId, { indexed: row !== undefined, summary });
     }
     for (const e of ext) {
@@ -423,7 +505,7 @@ export class Catalog {
         lastActivity: Math.max(row?.lastModified ?? 0, e.startedAt) || base.lastActivity,
         ...(e.waitingFor === undefined ? {} : { waitingFor: e.waitingFor }),
       };
-      summary.unread = isUnread(summary, turns);
+      flag(summary, turns);
       out.set(e.sessionId, { indexed: row !== undefined, summary });
     }
     return out;
@@ -436,6 +518,7 @@ export class Catalog {
     title: string | undefined,
   ): ChatSummary {
     if (row) return fromRow(row);
+    const { pinned, ...bucket } = this.db.metaOf(sessionId);
     return {
       sessionId,
       title: titleFor({ sdkTitle: title }),
@@ -444,25 +527,30 @@ export class Catalog {
       status: 'unknown',
       preview: '',
       lastActivity: this.now(),
-      pinned: this.db.isSessionPinned(sessionId),
+      pinned,
       live: false,
       external: null,
       unread: false,
+      ...bucketFields(bucket),
     };
   }
 
   /**
    * The Needs you place (v1.1): chats waiting on the user (display order),
-   * then unread chats by most recent turn end. Unread chats the host and the
-   * poller do not hold come from the index; unknown ids are left out.
+   * then unread chats and (v1.2) chats back from hold, most recent turn end
+   * or return first. Such chats the host and the poller do not hold come from
+   * the index; unknown ids are left out. Every bucket counts.
    */
   private needsYouList(overlay: Map<string, Entry>, turns: Turns): ChatSummary[] {
     const waiting = [...overlay.values()]
       .map((e) => e.summary)
       .filter((s) => s.status === 'needsYou')
       .sort(byOrder);
-    if (turns.size === 0) return waiting;
-    const missing = [...turns.keys()].filter((id) => !overlay.has(id));
+    const backs = this.db.backFromHold();
+    if (turns.size === 0 && backs.size === 0) return waiting;
+    const since = new Map(turns);
+    for (const [id, at] of backs) since.set(id, Math.max(at, since.get(id) ?? at));
+    const missing = [...since.keys()].filter((id) => !overlay.has(id));
     const rows = new Map(
       missing.length === 0
         ? []
@@ -470,13 +558,14 @@ export class Catalog {
             .listSessions({ ids: missing }, missing.length, undefined)
             .items.map((r) => [r.sessionId, r]),
     );
-    const unread = [...turns.keys()].flatMap((id) => {
+    const order = [...since].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+    const flagged = order.flatMap(([id]) => {
       const o = overlay.get(id);
-      if (o) return o.summary.unread ? [o.summary] : [];
+      if (o) return o.summary.unread || o.summary.backFromHold ? [o.summary] : [];
       const row = rows.get(id);
-      return row ? [fromRow(row, true)] : [];
+      return row ? [fromRow(row, turns.has(id))] : [];
     });
-    return [...waiting, ...unread];
+    return [...waiting, ...flagged];
   }
 
   /** The overlay rows that belong to `place`, in display order. */
@@ -489,20 +578,32 @@ export class Catalog {
             return s.status === 'needsYou';
           case 'running':
             return isRunning(s);
-          case 'project':
-            return s.projectId === place.projectId;
-          case 'all':
-            return !hidden.includes(s.projectId);
+          default:
+            return this.inPlace(place, s.projectId, s.bucket, hidden);
         }
       });
     return picked.sort(byOrder);
   }
 
-  private dbFilter(place: Place, overlay: Map<string, Entry>, hidden: string[]): SessionFilter {
+  /**
+   * Whether a chat of `projectId` in `bucket` belongs to a bucket place or a
+   * project (the same rule `dbFilter` puts in SQL).
+   */
+  private inPlace(place: Place, projectId: string, bucket: Bucket, hidden: string[]): boolean {
+    if (place.kind === 'project' && projectId !== place.projectId) return false;
+    if (place.kind !== 'project' && hidden.includes(projectId)) return false;
+    return bucketsOf(place)?.includes(bucket) ?? true;
+  }
+
+  /** The index rows of a project or bucket place, except the overlay's `excludeIds`. */
+  private dbFilter(place: Place, excludeIds: string[], hidden: string[]): SessionFilter {
+    const buckets = bucketsOf(place);
     return {
-      ...(place.kind === 'project' ? { projectId: place.projectId } : {}),
-      ...(place.kind === 'all' ? { excludeProjectIds: hidden } : {}),
-      excludeIds: [...overlay.keys()],
+      ...(place.kind === 'project'
+        ? { projectId: place.projectId }
+        : { excludeProjectIds: hidden }),
+      ...(buckets ? { buckets } : {}),
+      excludeIds,
     };
   }
 
@@ -553,11 +654,8 @@ export class Catalog {
         continue;
       }
       if (excluded.has(r.sessionId)) continue;
-      const inPlace =
-        place.kind === 'project'
-          ? r.projectId === place.projectId
-          : !snap.hidden.includes(r.projectId);
-      if (!inPlace || !keep(r.sessionId, r.title, r.projectId)) continue;
+      if (!this.inPlace(place, r.projectId, r.bucket, snap.hidden)) continue;
+      if (!keep(r.sessionId, r.title, r.projectId)) continue;
       if (ids.length === limit) {
         more = true;
         break;

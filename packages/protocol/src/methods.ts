@@ -1,6 +1,8 @@
 import { z } from 'zod';
 import {
+  BucketSchema,
   ChatHeaderInfoSchema,
+  HOLD_NOTE_MAX,
   ChatSummarySchema,
   PlaceSchema,
   ProjectSchema,
@@ -26,9 +28,17 @@ export const methods = {
     z.object({ protocolVersion: z.number(), client: z.string() }),
     z.object({ serviceVersion: z.string(), protocolVersion: z.number() }),
   ),
+  /** v1.2: `active`, `onHold`, `archived` per bucket; `all` (= `active`) stays for older UIs. */
   'places.counts': def(
     empty,
-    z.object({ needsYou: z.number(), running: z.number(), all: z.number() }),
+    z.object({
+      needsYou: z.number(),
+      running: z.number(),
+      all: z.number(),
+      active: z.number(),
+      onHold: z.number(),
+      archived: z.number(),
+    }),
   ),
   'projects.list': def(empty, z.array(ProjectSchema)),
   'projects.update': def(
@@ -63,6 +73,12 @@ export const methods = {
           projectName: z.string(),
           snippet: z.string().optional(),
           score: z.number(),
+          /**
+           * v1.2: an archived chat. Archived matches come after every other
+           * match and only fill the slots those leave (the UI groups them
+           * last); absent for the others.
+           */
+          archived: z.boolean().optional(),
         }),
       ),
     }),
@@ -198,6 +214,44 @@ export const methods = {
   // ── v1.1 T2: "Your turn" ──────────────────────────────────────────────────
   /** The user has seen the chat's latest turn (idempotent); clears `unread`. */
   'chat.markSeen': def(sessionIdOnly, empty),
+  // ── v1.2 B1: buckets ──────────────────────────────────────────────────────
+  /**
+   * Moves chats into a bucket (bulk). `holdUntil` (epoch ms) and `holdNote`
+   * apply to `onHold` and replace the previous ones; other buckets clear
+   * them, and every move clears `backFromHold`. Archiving also marks the
+   * chats seen (Ruling R32: they leave Needs you unless they wait on the
+   * user); a hold keeps them unread. Refused per chat, listed in
+   * `skipped`: `NOT_FOUND` (unknown chat), `LIVE` (archiving a chat pahub is
+   * running — the UI asks to end it first, then retries), `RUNNING`
+   * (archiving a chat that runs outside pahub; it would come right back).
+   */
+  'chat.setBucket': def(
+    z.object({
+      sessionIds: z.array(z.string()),
+      bucket: BucketSchema,
+      holdUntil: z.number().optional(),
+      holdNote: z.string().max(HOLD_NOTE_MAX).optional(),
+    }),
+    z.object({
+      updated: z.number(),
+      skipped: z.array(z.object({ sessionId: z.string(), reason: z.string() })),
+    }),
+  ),
+  /**
+   * Archives the active chats whose last activity is older than
+   * `olderThanDays` days (one project, or the Active place: hidden projects
+   * left out), in one transaction. Chats that run, wait on the user, are
+   * unread or back from hold are skipped. `dryRun` only counts them (for the
+   * confirmation).
+   */
+  'chat.archiveOlder': def(
+    z.object({
+      projectId: z.string().optional(),
+      olderThanDays: z.number().nonnegative(),
+      dryRun: z.boolean().optional(),
+    }),
+    z.object({ archived: z.number() }),
+  ),
 } as const;
 
 export type MethodName = keyof typeof methods;
