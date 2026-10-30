@@ -38,6 +38,7 @@ type Entry = FileSuggestion & {
   prepared: ReturnType<typeof fuzzysort.prepare>;
   lower: string;
   nameAt: number;
+  mask: number;
 };
 type Listing = { at: number; entries: Entry[]; browse: FileSuggestion[] };
 
