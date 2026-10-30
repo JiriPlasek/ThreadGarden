@@ -16,8 +16,80 @@ pahub works with Claude Code; it is not affiliated with or endorsed by Anthropic
 - **Composer** with `@` file mentions (fuzzy, respecting `.gitignore`), slash commands from the running Claude Code, pasted or dropped images, queued messages while Claude works, and drafts that survive restarts.
 - **Resume, fork and end** any chat. Idle chats release their process after 15 minutes (configurable) and resume transparently on the next message.
 - **External sessions** from `claude agents --json`, with copyable `claude --resume` / `claude attach` commands. Background sessions that Claude Code's own background service runs (`claude --bg`) can be stopped from pahub (it runs `claude stop <id>` after a confirmation); sessions open in a terminal are stopped there. pahub refuses to resume a session that is still running in another process.
-- **Ctrl/Cmd+K quick switcher** over titles, projects and full text, plus commands such as "New chat in…" and "Stop all work".
+- **Ctrl/Cmd+K quick switcher** over titles, projects and full text, plus commands such as "New chat in…" and "Stop all work"; every action has a [keyboard shortcut](#keyboard-shortcuts), listed in the app with Ctrl/Cmd+/.
+- **Adjustable interface size** (Ctrl/Cmd with =, - and 0, or in Settings).
 - Windows, macOS and Linux; light and dark themes.
+
+## Keyboard shortcuts
+
+Press **Ctrl+/** (**⌘/** on macOS), or **?** outside a text field, to see this list in the app; the quick switcher's "Keyboard shortcuts" command and the settings dialog open it too. "Ctrl" below is **⌘** on macOS, except in Ctrl+Tab, which is Control on every platform. The list is kept in `apps/desktop/src/lib/shortcuts.ts`; a test checks this section names every entry.
+
+**Global**
+
+| Keys        | Action                                                           |
+| ----------- | ---------------------------------------------------------------- |
+| Ctrl+K      | Open the quick switcher (chats, projects, messages and commands) |
+| Ctrl+/ or ? | Show keyboard shortcuts                                          |
+| Ctrl+N      | Start a new chat (in the selected project)                       |
+| Esc         | Close a dialog or menu                                           |
+
+**Tabs**
+
+| Keys           | Action                                |
+| -------------- | ------------------------------------- |
+| Ctrl+W         | Close the active tab                  |
+| Middle-click   | Close the tab under the pointer       |
+| Ctrl+Tab       | Next tab                              |
+| Ctrl+Shift+Tab | Previous tab                          |
+| ← or →         | Previous or next tab (focus on a tab) |
+| Home or End    | First or last tab (focus on a tab)    |
+| Delete         | Close the focused tab                 |
+
+**Chat list**
+
+| Keys                 | Action                                |
+| -------------------- | ------------------------------------- |
+| ↑ or ↓               | Move through the chats                |
+| Page Up or Page Down | Move a page of chats at a time        |
+| Home or End          | First or last chat                    |
+| Enter or Space       | Open the selected chat                |
+| ↓                    | From the search field, go to the list |
+| Esc                  | Clear the search                      |
+
+**Composer**
+
+| Keys                                                           | Action                                                       |
+| -------------------------------------------------------------- | ------------------------------------------------------------ |
+| Enter (Ctrl+Enter when "Enter sends the message" is off)       | Send the message (queued while Claude works)                 |
+| Shift+Enter (also Enter when "Enter sends the message" is off) | New line                                                     |
+| Esc                                                            | Stop Claude while it is working                              |
+| @                                                              | Mention a file or folder                                     |
+| /                                                              | Slash commands (at the start of the message)                 |
+| Ctrl+V                                                         | Paste images, or a file path as a mention                    |
+| Esc                                                            | Close the "Deny with feedback" field of a permission request |
+
+**Pickers** (the `@` and `/` suggestions, and the quick switcher)
+
+| Keys         | Action                                           |
+| ------------ | ------------------------------------------------ |
+| ↑ or ↓       | Move through the suggestions                     |
+| Enter or Tab | Insert the selected file or command              |
+| Esc          | Close the suggestions                            |
+| ↑ or ↓       | Quick switcher: move through the results         |
+| Enter        | Quick switcher: open the chat or run the command |
+
+**Interface**
+
+| Keys             | Action                                                                      |
+| ---------------- | --------------------------------------------------------------------------- |
+| Ctrl+= or Ctrl++ | Larger interface                                                            |
+| Ctrl+-           | Smaller interface                                                           |
+| Ctrl+0           | Default interface size                                                      |
+| ← or →           | Narrow or widen a column (focus on its divider; with Shift in bigger steps) |
+| Home or End      | Narrowest or widest column (focus on its divider)                           |
+| Double-click     | Reset a column's width (on its divider)                                     |
+
+The interface size (80 % to 150 % in 10 % steps) is also in Settings, and pahub remembers it.
 
 ## Requirements
 

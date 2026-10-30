@@ -44,7 +44,7 @@
       </div>
       {#if showRaw}
         <pre
-          class="bg-muted mt-1.5 max-h-80 overflow-auto rounded p-2 font-mono text-[11px] leading-snug">{prettyJson(
+          class="bg-muted mt-1.5 max-h-80 overflow-auto rounded p-2 font-mono text-[0.6875rem] leading-snug">{prettyJson(
             item,
           )}</pre>
       {/if}

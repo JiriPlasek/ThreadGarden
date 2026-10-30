@@ -49,7 +49,7 @@
       title="Fork from this message"
       onclick={() => actions.fork?.(item.id)}
     >
-      <GitForkIcon class="size-3.5" aria-hidden="true" />
+      <GitForkIcon class="size-4" aria-hidden="true" />
     </button>
   {/if}
 </div>

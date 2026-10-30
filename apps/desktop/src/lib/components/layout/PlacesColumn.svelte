@@ -41,7 +41,7 @@
 
   const itemClass = (selected: boolean): string =>
     cn(
-      'flex h-7 w-full min-w-0 items-center gap-2 rounded-md px-2 text-left text-[13px] outline-none',
+      'flex h-7 w-full min-w-0 items-center gap-2 rounded-md px-2 text-left text-[0.8125rem] outline-none',
       'hover:bg-sidebar-accent/70 focus-visible:ring-ring/50 focus-visible:ring-2',
       selected && 'bg-sidebar-accent text-sidebar-accent-foreground font-medium',
     );
@@ -51,7 +51,7 @@
   {#if count > 0}
     <span
       class={cn(
-        'ml-auto shrink-0 rounded-full px-1.5 text-[11px] leading-4 font-medium tabular-nums',
+        'ml-auto shrink-0 rounded-full px-1.5 text-[0.6875rem] leading-4 font-medium tabular-nums',
         tone === 'amber' && 'bg-amber-500/20 text-amber-800 dark:text-amber-300',
         tone === 'green' && 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300',
         tone === 'muted' && 'text-muted-foreground font-normal',
@@ -76,9 +76,9 @@
             onclick={() => select(place)}
           >
             {#if project.pinned}
-              <PinIcon class="text-muted-foreground size-3.5 shrink-0" aria-hidden="true" />
+              <PinIcon class="text-muted-foreground size-4 shrink-0" aria-hidden="true" />
             {:else}
-              <FolderIcon class="text-muted-foreground size-3.5 shrink-0" aria-hidden="true" />
+              <FolderIcon class="text-muted-foreground size-4 shrink-0" aria-hidden="true" />
             {/if}
             <span class="min-w-0 truncate">{project.displayName}</span>
             {#if project.counts.needsYou > 0}
@@ -151,7 +151,7 @@
           aria-current={isSelected({ kind: 'all' }) ? 'true' : undefined}
           onclick={() => select({ kind: 'all' })}
         >
-          <InboxIcon class="text-muted-foreground size-3.5 shrink-0" aria-hidden="true" />
+          <InboxIcon class="text-muted-foreground size-4 shrink-0" aria-hidden="true" />
           <span class="truncate">All chats</span>
           {@render badge(places.counts.all, 'muted', 'All chats')}
         </button>
@@ -159,7 +159,7 @@
     </ul>
 
     <h3
-      class="text-muted-foreground px-2 pt-4 pb-1 text-[11px] font-medium tracking-wide uppercase"
+      class="text-muted-foreground px-2 pt-4 pb-1 text-[0.6875rem] font-medium tracking-wide uppercase"
       id="places-projects"
     >
       Projects
@@ -176,12 +176,12 @@
     {#if hidden.length > 0}
       <button
         type="button"
-        class="text-muted-foreground hover:text-foreground mt-3 flex h-6 items-center gap-1 px-2 text-[11px]"
+        class="text-muted-foreground hover:text-foreground mt-3 flex h-6 items-center gap-1 px-2 text-[0.6875rem]"
         aria-expanded={showHidden}
         onclick={() => (showHidden = !showHidden)}
       >
         <ChevronRightIcon
-          class={cn('size-3 transition-transform', showHidden && 'rotate-90')}
+          class={cn('size-3.5 transition-transform', showHidden && 'rotate-90')}
           aria-hidden="true"
         />
         Hidden projects ({hidden.length})

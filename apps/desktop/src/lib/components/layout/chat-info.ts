@@ -17,9 +17,5 @@ export const baseName = (path: string): string =>
 export const externalLabel = (s: Pick<ChatSummary, 'external'>): string =>
   s.external ? `Running outside pahub (${s.external.kind})` : '';
 
-/** The shortcut hint for the quick switcher, by platform. */
-export const modKey = (): string =>
-  typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl+';
-
 /** DOM id of a chat's tab (the chat panel is labelled by it). */
 export const tabId = (sessionId: string): string => `tab-${sessionId}`;

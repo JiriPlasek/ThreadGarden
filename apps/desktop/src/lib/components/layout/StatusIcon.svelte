@@ -46,7 +46,7 @@
 
 {#if kind === 'history'}
   <span
-    class={cn('inline-block size-3 shrink-0', className)}
+    class={cn('inline-block size-3.5 shrink-0', className)}
     data-status="history"
     aria-hidden="true"
   ></span>
@@ -58,7 +58,7 @@
     title={decorative ? undefined : label}
     data-status={kind}
     class={cn(
-      'inline-flex size-3 shrink-0 items-center justify-center',
+      'inline-flex size-3.5 shrink-0 items-center justify-center',
       kind === 'needsYou' && 'text-amber-500 dark:text-amber-400',
       kind === 'working' && 'text-emerald-500 dark:text-emerald-400',
       (kind === 'idle' || kind === 'paused' || kind === 'unknown') && 'text-muted-foreground',
@@ -67,7 +67,7 @@
       className,
     )}
   >
-    <svg viewBox="0 0 12 12" class="size-3" aria-hidden="true">
+    <svg viewBox="0 0 12 12" class="size-3.5" aria-hidden="true">
       {#if kind === 'needsYou'}
         <circle cx="6" cy="6" r="4.5" fill="none" stroke="currentColor" stroke-width="1.5" />
         <path d="M6 1.5 A4.5 4.5 0 0 1 6 10.5 Z" fill="currentColor" />

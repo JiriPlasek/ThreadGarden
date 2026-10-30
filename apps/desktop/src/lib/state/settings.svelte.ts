@@ -1,4 +1,12 @@
 import { settingsDefaults, type Settings, type SettingsPatch } from '@pahub/protocol';
+import {
+  SCALE_KEY,
+  SCALE_STEP,
+  applyScale,
+  cacheScale,
+  clampScale,
+  readCachedScale,
+} from '../interface-scale';
 import { apiKey } from '../native';
 import { quietly, type Api } from './api';
 
@@ -22,6 +30,11 @@ export class SettingsState {
   columnWidths = $state<ColumnWidths>({});
   /** Persisted collapsed flags by column name. */
   collapsed = $state<CollapsedColumns>({});
+  /**
+   * Interface size on top of the 17 px base (`uiState` key `interface.scale`).
+   * Starts from the copy this webview remembers, so the first paint has it.
+   */
+  scale = $state(readCachedScale());
 
   /** An API key is stored (spec §5.5); the key itself never leaves the credential store and the service. */
   hasApiKey = $state(false);
@@ -101,6 +114,34 @@ export class SettingsState {
       // Expanded is fine.
     }
   };
+
+  /** Loads the persisted interface size (the local copy stays when there is none). */
+  restoreScale = async (): Promise<void> => {
+    if (!this.api) return;
+    try {
+      const { value } = await this.api.request('uiState.get', { key: SCALE_KEY });
+      if (typeof value === 'number' && Number.isFinite(value)) {
+        this.scale = clampScale(value);
+        applyScale(this.scale);
+        cacheScale(this.scale);
+      }
+    } catch {
+      // The local copy (or 100 %) is fine.
+    }
+  };
+
+  /** Sets the interface size (clamped to 80 %–150 %), applies it and persists it. */
+  setScale = (scale: number): void => {
+    const next = clampScale(scale);
+    applyScale(next);
+    if (next === this.scale) return;
+    this.scale = next;
+    cacheScale(next);
+    if (this.api) quietly(this.api.request('uiState.set', { key: SCALE_KEY, value: next }));
+  };
+
+  /** One 10 % step larger (`1`) or smaller (`-1`). */
+  stepScale = (direction: 1 | -1): void => this.setScale(this.scale + direction * SCALE_STEP);
 
   /** Updates a width immediately; the write to the service is debounced. */
   setColumnWidth = (name: string, px: number): void => {

@@ -50,7 +50,7 @@
             <span class="text-muted-foreground max-w-24 shrink-0 truncate">{project}</span>
             {#if agent.external}
               <span role="img" aria-label={externalLabel(agent)} class="text-muted-foreground">
-                <SquareTerminalIcon class="size-3" aria-hidden="true" />
+                <SquareTerminalIcon class="size-3.5" aria-hidden="true" />
               </span>
             {/if}
           </button>

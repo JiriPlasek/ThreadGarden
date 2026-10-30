@@ -104,7 +104,7 @@ describe('quick switcher', () => {
     expect(screen.getByRole('option', { name: /result for ab/i })).toBeTruthy();
   });
 
-  it('hosts commands: New chat in…, Stop all work, Settings', async () => {
+  it('hosts commands: New chat in…, Stop all work, Settings, Keyboard shortcuts', async () => {
     const { app, context } = await setup();
     render(QuickSwitcher, { context });
 
@@ -113,15 +113,15 @@ describe('quick switcher', () => {
     expect(
       within(list)
         .getAllByRole('option')
-        .map((o) => o.textContent?.trim()),
-    ).toEqual(['New chat in…', 'Stop all work', 'Settings']);
+        .map((o) => o.querySelector('[data-label]')?.textContent?.trim()),
+    ).toEqual(['New chat in…', 'Stop all work', 'Settings', 'Keyboard shortcuts']);
 
     await userEvent.keyboard('sett');
     await waitFor(() =>
       expect(
         within(list)
           .getAllByRole('option')
-          .map((o) => o.textContent?.trim()),
+          .map((o) => o.querySelector('[data-label]')?.textContent?.trim()),
       ).toEqual(['Settings']),
     );
     await userEvent.keyboard('{Enter}');

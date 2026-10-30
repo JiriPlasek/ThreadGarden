@@ -39,9 +39,7 @@
       onclick={() => (open = !open)}
     >
       <ChevronRightIcon
-        class="text-muted-foreground size-3.5 shrink-0 transition-transform {open
-          ? 'rotate-90'
-          : ''}"
+        class="text-muted-foreground size-4 shrink-0 transition-transform {open ? 'rotate-90' : ''}"
         aria-hidden="true"
       />
       <ToolStatus status={item.status} />
@@ -74,14 +72,14 @@
             <div class="text-muted-foreground">{str(input.description)}</div>
           {/if}
           <pre
-            class="bg-muted overflow-x-auto rounded p-2 font-mono text-[11px] leading-snug whitespace-pre-wrap">$ {str(
+            class="bg-muted overflow-x-auto rounded p-2 font-mono text-[0.6875rem] leading-snug whitespace-pre-wrap">$ {str(
               input.command,
             )}</pre>
         {:else}
           <div>
             <div class="text-muted-foreground mb-0.5">Input</div>
             <pre
-              class="bg-muted max-h-60 overflow-auto rounded p-2 font-mono text-[11px] leading-snug">{prettyJson(
+              class="bg-muted max-h-60 overflow-auto rounded p-2 font-mono text-[0.6875rem] leading-snug">{prettyJson(
                 item.input,
               )}</pre>
           </div>
@@ -93,7 +91,7 @@
               {item.status === 'error' ? 'Error' : 'Output'}
             </div>
             <pre
-              class="bg-muted max-h-80 overflow-auto rounded p-2 font-mono text-[11px] leading-snug whitespace-pre-wrap {item.status ===
+              class="bg-muted max-h-80 overflow-auto rounded p-2 font-mono text-[0.6875rem] leading-snug whitespace-pre-wrap {item.status ===
               'error'
                 ? 'text-destructive'
                 : ''}">{item.resultText}</pre>

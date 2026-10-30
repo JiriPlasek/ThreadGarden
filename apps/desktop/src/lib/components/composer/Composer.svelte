@@ -5,6 +5,7 @@
   import SquareIcon from '@lucide/svelte/icons/square';
   import { onDestroy, onMount, tick, untrack } from 'svelte';
   import { readDroppedImage } from '#lib/native.js';
+  import { ariaKeyShortcuts, formatCombos, shortcut } from '#lib/shortcuts.js';
   import { useApp } from '#lib/state/context.js';
   import type { FileSuggestion, SlashCommand } from '#lib/state/interaction.svelte.js';
   import Attachments from './Attachments.svelte';
@@ -448,6 +449,11 @@
     interaction.flushDraft(draftKey);
   });
 
+  const stopKeys = shortcut('composer-stop').combos;
+  const sendKeys = $derived(
+    shortcut(settings.value.enterToSend ? 'composer-send' : 'composer-send-mod').combos,
+  );
+
   const hint = $derived(
     working && text.trim()
       ? 'Claude is working: this message will be queued and sent when the current turn ends.'
@@ -545,7 +551,7 @@
       aria-hidden="true"
       onchange={onPickFiles}
     />
-    <div class="text-muted-foreground min-w-0 flex-1 truncate px-1 text-[11px]" role="status">
+    <div class="text-muted-foreground min-w-0 flex-1 truncate px-1 text-[0.6875rem]" role="status">
       {#if queued > 0}
         <span class="rounded bg-amber-500/15 px-1.5 py-px text-amber-900 dark:text-amber-200"
           >{queued} message{queued === 1 ? '' : 's'} queued</span
@@ -558,17 +564,19 @@
       <button
         type="button"
         class="hover:bg-muted flex h-7 items-center gap-1 rounded-md border px-2 text-xs"
-        title="Stop (Esc)"
+        title="Stop Claude · {formatCombos(stopKeys).join(' or ')}"
+        aria-keyshortcuts={ariaKeyShortcuts(stopKeys)}
         onclick={onInterrupt}
       >
-        <SquareIcon class="size-3 fill-current" aria-hidden="true" /> Stop
+        <SquareIcon class="size-3.5 fill-current" aria-hidden="true" /> Stop
       </button>
     {/if}
     <button
       type="button"
       class="bg-primary text-primary-foreground flex size-7 items-center justify-center rounded-md disabled:opacity-40"
       aria-label={working ? 'Queue message' : 'Send'}
-      title={settings.value.enterToSend ? 'Send (Enter)' : 'Send (Ctrl+Enter)'}
+      title="{working ? 'Queue message' : 'Send'} · {formatCombos(sendKeys).join(' or ')}"
+      aria-keyshortcuts={ariaKeyShortcuts(sendKeys)}
       disabled={sending || (!text.trim() && images.length === 0)}
       onclick={() => void submit()}
     >

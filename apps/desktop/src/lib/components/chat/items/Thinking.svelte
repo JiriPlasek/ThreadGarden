@@ -19,7 +19,7 @@
     onclick={() => (open = !open)}
   >
     <ChevronRightIcon
-      class="size-3.5 shrink-0 transition-transform {open ? 'rotate-90' : ''}"
+      class="size-4 shrink-0 transition-transform {open ? 'rotate-90' : ''}"
       aria-hidden="true"
     />
     <span class="font-medium">Thinking</span>

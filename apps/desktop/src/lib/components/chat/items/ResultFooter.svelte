@@ -29,7 +29,7 @@
 </script>
 
 <div
-  class="flex items-center gap-2 text-[11px] {item.isError
+  class="flex items-center gap-2 text-[0.6875rem] {item.isError
     ? 'text-destructive'
     : 'text-muted-foreground'}"
 >

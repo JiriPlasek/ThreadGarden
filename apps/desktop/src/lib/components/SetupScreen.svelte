@@ -92,8 +92,8 @@
             aria-label="Copy {s.command}"
             onclick={() => copy(s.command)}
           >
-            {#if copied === s.command}<CheckIcon class="size-3.5" />{:else}<CopyIcon
-                class="size-3.5"
+            {#if copied === s.command}<CheckIcon class="size-4" />{:else}<CopyIcon
+                class="size-4"
               />{/if}
           </button>
         </div>

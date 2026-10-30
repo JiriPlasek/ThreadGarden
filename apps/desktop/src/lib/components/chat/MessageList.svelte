@@ -307,7 +307,7 @@
       class="bg-background text-muted-foreground hover:text-foreground absolute right-4 bottom-3 flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs shadow-sm"
       onclick={scrollToBottom}
     >
-      <ArrowDownIcon class="size-3.5" aria-hidden="true" /> Jump to latest
+      <ArrowDownIcon class="size-4" aria-hidden="true" /> Jump to latest
     </button>
   {/if}
 </div>

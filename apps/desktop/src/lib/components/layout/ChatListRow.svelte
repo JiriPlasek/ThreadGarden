@@ -68,19 +68,21 @@
       >
         <div class="flex min-w-0 items-center gap-2">
           <StatusIcon status={chat.status} raw={rawStatus(chat)} />
-          <span class="min-w-0 truncate text-[13px] leading-5 font-medium">{chat.title}</span>
+          <span class="min-w-0 truncate text-[0.8125rem] leading-5 font-medium">{chat.title}</span>
           {#if chat.pinned}
-            <PinIcon class="text-muted-foreground size-3 shrink-0" aria-label="Pinned" />
+            <PinIcon class="text-muted-foreground size-3.5 shrink-0" aria-label="Pinned" />
           {/if}
           <time
-            class="text-muted-foreground ml-auto shrink-0 text-[11px] tabular-nums"
+            class="text-muted-foreground ml-auto shrink-0 text-[0.6875rem] tabular-nums"
             datetime={chat.lastActivity > 0 ? new Date(chat.lastActivity).toISOString() : undefined}
             title={fullTime(chat.lastActivity)}>{relativeTime(chat.lastActivity, now)}</time
           >
         </div>
-        <div class="text-muted-foreground flex min-w-0 items-center gap-1.5 pl-5 text-xs leading-4">
+        <div
+          class="text-muted-foreground flex min-w-0 items-center gap-1.5 pl-5.5 text-xs leading-4"
+        >
           {#if projectName}
-            <span class="bg-muted max-w-[45%] shrink-0 truncate rounded px-1 text-[11px]"
+            <span class="bg-muted max-w-[45%] shrink-0 truncate rounded px-1 text-[0.6875rem]"
               >{projectName}</span
             >
           {/if}
@@ -94,7 +96,7 @@
               aria-label={externalLabel(chat)}
               title={externalLabel(chat)}
             >
-              <SquareTerminalIcon class="size-3" aria-hidden="true" />
+              <SquareTerminalIcon class="size-3.5" aria-hidden="true" />
             </span>
           {/if}
         </div>

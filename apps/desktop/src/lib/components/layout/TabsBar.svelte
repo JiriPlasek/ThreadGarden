@@ -3,12 +3,14 @@
   import XIcon from '@lucide/svelte/icons/x';
   import { useApp } from '#lib/state/context.js';
   import { cn } from '#lib/utils.js';
+  import { shortcut } from '#lib/shortcuts.js';
   import { rawStatus, tabId } from './chat-info';
+  import IconButton from './IconButton.svelte';
   import StatusIcon from './StatusIcon.svelte';
 
   /**
    * One tab per open chat (spec §6.1). Middle-click, the × button or Ctrl/Cmd+W
-   * close a tab; closing only drops the view, the session keeps running.
+   * close a tab (every key is listed in `shortcuts.ts`); closing only drops the view, the session keeps running.
    * "+" (Ctrl/Cmd+N) starts a new chat, in the selected project if there is one.
    */
   const { tabs, chats, sessions, places, interaction } = useApp();
@@ -134,30 +136,25 @@
           <StatusIcon status={t.status} raw={t.raw} />
           <span class="truncate">{t.title}</span>
         </button>
-        <button
-          type="button"
-          tabindex="-1"
-          aria-label="Close {t.title}"
-          title="Close (middle-click)"
+        <IconButton
+          label="Close {t.title}"
+          shortcut={active ? shortcut('tab-close').combos[0] : undefined}
+          tabindex={-1}
           class={cn(
-            'hover:bg-muted mr-1 flex size-5 shrink-0 items-center justify-center rounded opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
+            'mr-1 size-5 opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
             active && 'opacity-60',
           )}
           onclick={() => tabs.close(sessionId)}
           onauxclick={(e) => onAux(e, sessionId)}
         >
-          <XIcon class="size-3" aria-hidden="true" />
-        </button>
+          <XIcon class="size-3.5" aria-hidden="true" />
+        </IconButton>
       </div>
     {/each}
   </div>
-  <button
-    type="button"
-    aria-label="New chat"
-    title="New chat (Ctrl/Cmd+N)"
-    class="text-muted-foreground hover:text-foreground hover:bg-background/60 flex w-8 shrink-0 items-center justify-center"
-    onclick={newChat}
-  >
-    <PlusIcon class="size-4" aria-hidden="true" />
-  </button>
+  <div class="flex w-9 shrink-0 items-center justify-center">
+    <IconButton label="New chat" shortcut={shortcut('new-chat').combos[0]} onclick={newChat}>
+      <PlusIcon />
+    </IconButton>
+  </div>
 </div>

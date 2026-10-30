@@ -10,11 +10,13 @@
 <script lang="ts">
   import PanelLeftOpenIcon from '@lucide/svelte/icons/panel-left-open';
   import SettingsIcon from '@lucide/svelte/icons/settings';
+  import KeyboardShortcutsDialog from '#lib/components/KeyboardShortcutsDialog.svelte';
   import NewChatDialog from '#lib/components/NewChatDialog.svelte';
   import QuickSwitcher from '#lib/components/QuickSwitcher.svelte';
   import ServiceBanner from '#lib/components/ServiceBanner.svelte';
   import SettingsDialog from '#lib/components/SettingsDialog.svelte';
   import SetupScreen from '#lib/components/SetupScreen.svelte';
+  import { scaleKeyAction } from '#lib/interface-scale.js';
   import { useApp } from '#lib/state/context.js';
   import AgentsStrip from './AgentsStrip.svelte';
   import ChatList from './ChatList.svelte';
@@ -29,7 +31,9 @@
    * running-agents strip along the bottom. The first two columns resize and collapse.
    * Without a usable Claude Code the setup screen comes first (spec §6.4); the
    * user can still browse history without it. Ctrl/Cmd+K opens the quick
-   * switcher from anywhere; an older service shows the restart banner.
+   * switcher from anywhere, Ctrl/Cmd+/ the keyboard shortcuts, and Ctrl/Cmd
+   * with = + - 0 changes the interface size; an older service shows the
+   * restart banner.
    */
   const { settings, connection, places, interaction } = useApp();
 
@@ -52,6 +56,15 @@
     if (isFileDrag(e)) e.preventDefault();
   };
 
+  /** Interface size keys; the webview's own zoom must not react as well. */
+  const onWindowKey = (e: KeyboardEvent): void => {
+    const action = scaleKeyAction(e);
+    if (!action) return;
+    e.preventDefault();
+    if (action === 'reset') settings.setScale(1);
+    else settings.stepScale(action === 'up' ? 1 : -1);
+  };
+
   const width = (c: Column): number => {
     const { initial, min, max } = COLUMNS[c];
     const w = settings.columnWidths[c] ?? initial;
@@ -60,7 +73,7 @@
   const collapsed = (c: Column): boolean => settings.collapsed[c] === true;
 </script>
 
-<svelte:window ondragover={cancelFileDrag} ondrop={cancelFileDrag} />
+<svelte:window ondragover={cancelFileDrag} ondrop={cancelFileDrag} onkeydown={onWindowKey} />
 
 <div class="bg-background text-foreground flex h-screen flex-col overflow-hidden">
   {#if connection.status === 'reconnecting'}
@@ -105,7 +118,7 @@
           {#if places.counts.needsYou > 0}
             <button
               type="button"
-              class="rounded-full bg-amber-500/20 px-1.5 text-[11px] leading-4 font-medium text-amber-800 tabular-nums dark:text-amber-300"
+              class="rounded-full bg-amber-500/20 px-1.5 text-[0.6875rem] leading-4 font-medium text-amber-800 tabular-nums dark:text-amber-300"
               title="Needs you"
               aria-label="Needs you: {places.counts.needsYou}"
               onclick={() => places.select({ kind: 'needsYou' })}>{places.counts.needsYou}</button
@@ -162,3 +175,4 @@
 <NewChatDialog />
 <QuickSwitcher />
 <SettingsDialog />
+<KeyboardShortcutsDialog />

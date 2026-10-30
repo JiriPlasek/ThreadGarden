@@ -1,11 +1,14 @@
 <script lang="ts">
   import type { Settings, SettingsPatch } from '@pahub/protocol';
   import FileSearchIcon from '@lucide/svelte/icons/file-search';
+  import KeyboardIcon from '@lucide/svelte/icons/keyboard';
   import { buildFlags } from '#lib/build-flags.js';
   import { Button } from '#lib/components/ui/button/index.js';
   import * as Dialog from '#lib/components/ui/dialog/index.js';
   import { isTauri, pickFile, setAutostart } from '#lib/native.js';
   import { useApp } from '#lib/state/context.js';
+  import { SCALES } from '#lib/interface-scale.js';
+  import { formatShortcut, shortcut } from '#lib/shortcuts.js';
   import { IDLE_MINUTES_MAX } from '#lib/state/settings.svelte.js';
 
   /**
@@ -57,6 +60,15 @@
   const close = (): void => {
     interaction.settingsOpen = false;
   };
+
+  /** The shortcuts dialog replaces this one (one modal at a time). */
+  const showShortcuts = (): void => {
+    close();
+    interaction.shortcutsOpen = true;
+  };
+
+  const scaleUp = formatShortcut(shortcut('scale-up').combos[0]!);
+  const scaleDown = formatShortcut(shortcut('scale-down').combos[0]!);
 
   const save = async (): Promise<void> => {
     if (idle === null) return;
@@ -179,6 +191,22 @@
         </select>
       </div>
 
+      <div class="grid gap-1">
+        <label for="settings-scale" class="text-muted-foreground text-xs"
+          >Interface size (applies at once; also {scaleUp} and {scaleDown})</label
+        >
+        <select
+          id="settings-scale"
+          class="{fieldClass} w-40"
+          value={String(settings.scale)}
+          onchange={(e) => settings.setScale(Number(e.currentTarget.value))}
+        >
+          {#each SCALES as s (s)}
+            <option value={String(s)}>{Math.round(s * 100)} %{s === 1 ? ' (default)' : ''}</option>
+          {/each}
+        </select>
+      </div>
+
       <label class={checkClass}>
         <input type="checkbox" bind:checked={form.notifications} /> Notifications when a chat needs you
       </label>
@@ -271,9 +299,16 @@
       <p class="text-destructive text-xs" role="alert">{error}</p>
     {/if}
 
-    <Dialog.Footer>
-      <Button variant="outline" size="sm" onclick={close}>Cancel</Button>
-      <Button size="sm" disabled={saving || idle === null} onclick={() => void save()}>Save</Button>
+    <Dialog.Footer class="sm:justify-between">
+      <Button variant="ghost" size="sm" class="text-muted-foreground" onclick={showShortcuts}>
+        <KeyboardIcon aria-hidden="true" /> Keyboard shortcuts…
+      </Button>
+      <div class="flex flex-col-reverse gap-2 sm:flex-row">
+        <Button variant="outline" size="sm" onclick={close}>Cancel</Button>
+        <Button size="sm" disabled={saving || idle === null} onclick={() => void save()}
+          >Save</Button
+        >
+      </div>
     </Dialog.Footer>
   </Dialog.Content>
 </Dialog.Root>

@@ -163,7 +163,7 @@
           title={isTauri ? 'Choose any folder' : 'The folder picker needs the desktop app'}
           onclick={() => void chooseFolder()}
         >
-          <FolderOpenIcon class="size-3.5" aria-hidden="true" /> Choose folder…
+          <FolderOpenIcon class="size-4" aria-hidden="true" /> Choose folder…
         </button>
       </div>
 
@@ -184,7 +184,9 @@
     </div>
 
     {#if cwd}
-      <p class="text-muted-foreground -mt-1 truncate font-mono text-[11px]" title={cwd}>{cwd}</p>
+      <p class="text-muted-foreground -mt-1 truncate font-mono text-[0.6875rem]" title={cwd}>
+        {cwd}
+      </p>
     {/if}
 
     {#if buildFlags.apiKeyOnly && !settings.hasApiKey}

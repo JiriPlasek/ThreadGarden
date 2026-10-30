@@ -57,7 +57,12 @@ const connectTo = async (conn: ServiceConnection): Promise<void> => {
   connection.setVersions(conn);
   await client.connect(`ws://127.0.0.1:${conn.port}`, conn.token);
   if (loaded) return;
-  await Promise.all([settings.load(), settings.restoreColumns(), tabs.restore()]);
+  await Promise.all([
+    settings.load(),
+    settings.restoreColumns(),
+    settings.restoreScale(),
+    tabs.restore(),
+  ]);
   loaded = true;
 };
 

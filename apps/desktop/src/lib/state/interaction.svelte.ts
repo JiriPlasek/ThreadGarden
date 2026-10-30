@@ -26,6 +26,8 @@ export class InteractionState {
   switcherOpen = $state(false);
   /** pahub's settings dialog (spec §6.5). */
   settingsOpen = $state(false);
+  /** The keyboard shortcuts dialog (Ctrl/Cmd+/ or ?). */
+  shortcutsOpen = $state(false);
   /** The user chose to browse history although Claude Code is missing. */
   setupDismissed = $state(false);
   /** A chat whose composer takes focus when it opens (a chat just created). */

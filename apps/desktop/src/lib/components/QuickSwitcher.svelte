@@ -6,12 +6,14 @@
 <script lang="ts">
   import MessageSquareIcon from '@lucide/svelte/icons/message-square';
   import CircleStopIcon from '@lucide/svelte/icons/circle-stop';
+  import KeyboardIcon from '@lucide/svelte/icons/keyboard';
   import PlusIcon from '@lucide/svelte/icons/plus';
   import SearchIcon from '@lucide/svelte/icons/search';
   import SettingsIcon from '@lucide/svelte/icons/settings';
   import type { Component } from 'svelte';
   import * as Dialog from '#lib/components/ui/dialog/index.js';
   import { useApp } from '#lib/state/context.js';
+  import { formatShortcut, shortcut, type Combo } from '#lib/shortcuts.js';
   import type { QuickHit } from '#lib/state/sessions.svelte.js';
   import { cn } from '#lib/utils.js';
 
@@ -20,11 +22,18 @@
    * full text across all projects with one `search.quick` per keystroke (the
    * service answers within its 50 ms budget; an answer overtaken by a newer
    * query is dropped). Enter opens the chat or focuses its tab. Also hosts
-   * commands: "New chat in…", "Stop all work", "Settings".
+   * commands: "New chat in…", "Stop all work", "Settings", "Keyboard shortcuts".
    */
   const { interaction, sessions, tabs, lifecycle } = useApp();
 
-  type Command = { id: string; label: string; icon: Component; run: () => void };
+  type Command = {
+    id: string;
+    label: string;
+    icon: Component;
+    run: () => void;
+    /** Shown at the end of the row: the key that does the same from anywhere. */
+    keys?: Combo;
+  };
   type Row = { key: string; hit: QuickHit; command?: never } | { key: string; command: Command };
 
   const COMMANDS: Command[] = [
@@ -40,6 +49,13 @@
       label: 'Settings',
       icon: SettingsIcon,
       run: () => (interaction.settingsOpen = true),
+    },
+    {
+      id: 'shortcuts',
+      label: 'Keyboard shortcuts',
+      icon: KeyboardIcon,
+      run: () => (interaction.shortcutsOpen = true),
+      keys: shortcut('shortcuts').combos[0],
     },
   ];
 
@@ -190,7 +206,13 @@
           {#if row.command}
             {@const Icon = row.command.icon}
             <Icon class="text-muted-foreground mt-0.5 size-4 shrink-0" aria-hidden="true" />
-            <span class="truncate">{row.command.label}</span>
+            <span class="truncate" data-label>{row.command.label}</span>
+            {#if row.command.keys}
+              <kbd
+                class="bg-muted text-muted-foreground ml-auto shrink-0 rounded border px-1.5 font-sans text-xs leading-5"
+                >{formatShortcut(row.command.keys)}</kbd
+              >
+            {/if}
           {:else}
             <MessageSquareIcon
               class="text-muted-foreground mt-0.5 size-4 shrink-0"

@@ -125,6 +125,9 @@
   }
   html {
     @apply font-sans;
+    /* 17 px base: Tailwind sizes are rem, so text, spacing and icons scale together. The
+       interface size setting (src/lib/interface-scale.ts) scales this on <html>. */
+    font-size: 106.25%;
   }
   /* Tailwind 4's preflight resets buttons to the default cursor; anything clickable gets a pointer. */
   button:not(:disabled),

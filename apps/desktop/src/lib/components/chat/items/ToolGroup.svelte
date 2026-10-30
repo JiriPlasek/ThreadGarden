@@ -37,7 +37,7 @@
     onclick={() => (open = !open)}
   >
     <ChevronRightIcon
-      class="text-muted-foreground size-3.5 shrink-0 transition-transform {open ? 'rotate-90' : ''}"
+      class="text-muted-foreground size-4 shrink-0 transition-transform {open ? 'rotate-90' : ''}"
       aria-hidden="true"
     />
     <ToolStatus {status} />
@@ -47,7 +47,7 @@
     {/if}
   </button>
   {#if open}
-    <div class="mt-0.5 flex flex-col pl-5">
+    <div class="mt-0.5 flex flex-col pl-5.5">
       {#each items as it (it.id)}
         <ItemBoundary item={it}>
           <ToolCallRow item={it} />

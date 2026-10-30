@@ -324,7 +324,7 @@
         <div
           class="flex items-center gap-2 rounded-md bg-amber-500/10 px-3 py-1 text-xs text-amber-900 dark:text-amber-200"
         >
-          <HandIcon class="size-3.5 shrink-0" aria-hidden="true" />
+          <HandIcon class="size-4 shrink-0" aria-hidden="true" />
           <span class="flex-1"
             >Claude is waiting for you{pending.length > 1
               ? ` (${pending.length} requests)`
@@ -351,7 +351,7 @@
               type="button"
               class="text-muted-foreground hover:text-foreground shrink-0"
               aria-label="Dismiss"
-              onclick={() => (blocked = null)}><XIcon class="size-3.5" aria-hidden="true" /></button
+              onclick={() => (blocked = null)}><XIcon class="size-4" aria-hidden="true" /></button
             >
           </div>
           <div class="mt-1.5 flex flex-wrap items-center gap-2">
@@ -360,7 +360,7 @@
               class="bg-background hover:bg-muted inline-flex h-6 items-center gap-1 rounded border px-2"
               onclick={() => void copyResume()}
             >
-              {#if blocked.copied}<CheckIcon class="size-3" aria-hidden="true" />{/if}
+              {#if blocked.copied}<CheckIcon class="size-3.5" aria-hidden="true" />{/if}
               Copy resume command
             </button>
             {#if blocked.command}

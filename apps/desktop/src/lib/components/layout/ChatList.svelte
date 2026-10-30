@@ -3,6 +3,7 @@
   import { untrack } from 'svelte';
   import PanelLeftCloseIcon from '@lucide/svelte/icons/panel-left-close';
   import SearchIcon from '@lucide/svelte/icons/search';
+  import { rowPx } from '#lib/interface-scale.js';
   import { useApp } from '#lib/state/context.js';
   import { baseName } from './chat-info';
   import ChatListRow from './ChatListRow.svelte';
@@ -13,9 +14,14 @@
   /** Middle column (spec §6.1): searchable, status-sorted chats of the selected place. */
   let { onCollapse }: { onCollapse?: () => void } = $props();
 
-  const { sessions, places, tabs, agents } = useApp();
+  const { sessions, places, tabs, agents, settings } = useApp();
 
-  const ROW_HEIGHT = 52;
+  /**
+   * Fixed row height of the virtual list, in rem so it follows the interface
+   * size: 3.25rem = 55 px at the 17 px base (a row's two lines take 2.375rem).
+   */
+  const ROW_REM = 3.25;
+  const rowHeight = $derived(rowPx(ROW_REM, settings.scale));
   const PAGE_ROWS = 10;
   const SEARCH_DELAY_MS = 150;
   const CLOCK_MS = 30_000;
@@ -151,7 +157,7 @@
     <label class="relative block">
       <span class="sr-only">Search chats</span>
       <SearchIcon
-        class="text-muted-foreground pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2"
+        class="text-muted-foreground pointer-events-none absolute top-1/2 left-2 size-4 -translate-y-1/2"
         aria-hidden="true"
       />
       <input
@@ -175,7 +181,7 @@
     bind:this={list}
     bind:viewport
     items={sessions.items}
-    rowHeight={ROW_HEIGHT}
+    {rowHeight}
     key={(c) => c.sessionId}
     onEndReached={() => void sessions.loadMore()}
     role="listbox"
