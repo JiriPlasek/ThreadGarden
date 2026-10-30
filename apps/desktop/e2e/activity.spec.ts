@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import { openApp, resetTabs } from './helpers';
+import { chatRow, openApp, resetTabs } from './helpers';
 
 test.beforeEach(resetTabs);
 
@@ -8,7 +8,7 @@ test('activity panel: a subagent runs and ends, a dev server runs and is stopped
 }) => {
   await openApp(page);
   const list = page.getByRole('region', { name: 'Chat list' });
-  await list.locator('[role="option"][data-session-id="session-979"]').click();
+  await (await chatRow(page, 'session-979')).click();
   await expect(page.getByRole('tab', { selected: true })).toHaveAttribute(
     'data-tab',
     'session-979',

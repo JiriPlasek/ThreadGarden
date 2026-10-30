@@ -9,24 +9,41 @@
   import ChatListRow from './ChatListRow.svelte';
   import IconButton from './IconButton.svelte';
   import RenameDialog from './RenameDialog.svelte';
+  import { groupChats, SECTION_LABELS, type HeaderRow, type ListRow } from './sections';
   import VirtualList from './VirtualList.svelte';
 
-  /** Middle column (spec §6.1): searchable, status-sorted chats of the selected place. */
+  /**
+   * Middle column (spec §6.1): searchable chats of the selected place, in
+   * recency sections with sticky headers (v1.2 §2): "Now" (needs you, your
+   * turn, running) in the service's order, then Last 24 hours, Last 7 days,
+   * Last 30 days and Older.
+   *
+   * Accessibility: the listbox holds the chats only. Section headers are
+   * visual rows (`role="presentation"`, hidden from assistive technology);
+   * each option names its section through `aria-describedby`, pointing at
+   * per-section labels that are always in the DOM (a header row may be
+   * virtualized away, a listbox group cannot span virtual rows).
+   */
   let { onCollapse }: { onCollapse?: () => void } = $props();
 
   const { sessions, places, tabs, agents, settings, chats } = useApp();
 
   /**
-   * Fixed row height of the virtual list, in rem so it follows the interface
-   * size: 3.25rem = 55 px at the 17 px base (a row's two lines take 2.375rem).
+   * Fixed row heights of the virtual list, in rem so they follow the interface
+   * size: 3.25rem = 55 px at the 17 px base (a row's two lines take 2.375rem);
+   * section headers 1.75rem = 30 px.
    */
   const ROW_REM = 3.25;
+  const HEADER_REM = 1.75;
   const rowHeight = $derived(rowPx(ROW_REM, settings.scale));
+  const headerHeight = $derived(rowPx(HEADER_REM, settings.scale));
+  const heightOf = $derived((r: ListRow) => (r.kind === 'header' ? headerHeight : rowHeight));
   const PAGE_ROWS = 10;
   const SEARCH_DELAY_MS = 150;
   const CLOCK_MS = 30_000;
+  const MINUTE_MS = 60_000;
 
-  let list = $state<ReturnType<typeof VirtualList<ChatSummary>> | null>(null);
+  let list = $state<ReturnType<typeof VirtualList<ListRow>> | null>(null);
   let viewport = $state<HTMLDivElement | null>(null);
   let search = $state(sessions.query);
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
@@ -48,11 +65,19 @@
     untrack(() => list?.scrollToTop());
   });
 
+  /** Sections move with the clock once a minute, not on every render or tick. */
+  const minute = $derived(Math.floor(now / MINUTE_MS) * MINUTE_MS);
+  const grouped = $derived(
+    groupChats(sessions.items, minute, {
+      // Every chat of these places is a "now" chat, whatever its status says by now.
+      allNow: places.selected.kind === 'needsYou' || places.selected.kind === 'running',
+      hasMore: sessions.nextCursor !== undefined,
+    }),
+  );
+
   /** The keyboard cursor follows the active tab until the user moves it. */
   let cursor = $derived<string | null>(tabs.active);
-  const cursorIndex = $derived(
-    cursor === null ? -1 : sessions.items.findIndex((s) => s.sessionId === cursor),
-  );
+  const cursorIndex = $derived(cursor === null ? -1 : (grouped.indexOf.get(cursor) ?? -1));
 
   const names = $derived(new Map(places.projects.map((p) => [p.projectId, p.displayName])));
   const spansProjects = $derived(places.selected.kind !== 'project');
@@ -72,6 +97,10 @@
   });
 
   const rowId = (sessionId: string): string => `chat-row-${sessionId}`;
+  const sectionId = (section: string): string => `chat-section-${section}`;
+  const headerSections = $derived(
+    grouped.rows.filter((r): r is HeaderRow => r.kind === 'header').map((r) => r.section),
+  );
 
   const onSearch = (value: string): void => {
     search = value;
@@ -84,12 +113,13 @@
     tabs.openTab(chat.sessionId);
   };
 
+  /** Moves the cursor to the `index`-th chat (headers are not stops). */
   const moveTo = (index: number): void => {
-    const n = sessions.items.length;
+    const n = grouped.chats.length;
     if (n === 0) return;
     const i = Math.max(0, Math.min(n - 1, index));
-    cursor = sessions.items[i]!.sessionId;
-    list?.scrollToIndex(i);
+    cursor = grouped.chats[i]!.sessionId;
+    list?.scrollToIndex(grouped.rowOf[i]!);
   };
 
   const onListKey = (e: KeyboardEvent): void => {
@@ -111,11 +141,11 @@
         moveTo(0);
         break;
       case 'End':
-        moveTo(sessions.items.length - 1);
+        moveTo(grouped.chats.length - 1);
         break;
       case 'Enter':
       case ' ': {
-        const chat = sessions.items[i];
+        const chat = grouped.chats[i];
         if (chat) open(chat);
         break;
       }
@@ -177,12 +207,33 @@
     </p>
   {/if}
 
+  {#snippet header(h: HeaderRow, pinned: boolean)}
+    <div
+      role="presentation"
+      aria-hidden="true"
+      data-section-header={h.section}
+      data-sticky={pinned || undefined}
+      class="bg-background text-muted-foreground flex h-full items-end gap-1.5 px-3.5 pb-1 text-[0.6875rem] leading-4 font-medium tracking-wide uppercase select-none"
+    >
+      <span class="min-w-0 truncate">{h.label}</span>
+      <span class="shrink-0 font-normal tabular-nums">{h.count}{h.more ? '+' : ''}</span>
+    </div>
+  {/snippet}
+
+  <!-- What each option's aria-describedby names: always present, unlike header rows. -->
+  <div hidden>
+    {#each headerSections as section (section)}
+      <span id={sectionId(section)}>{SECTION_LABELS[section]}</span>
+    {/each}
+  </div>
+
   <VirtualList
     bind:this={list}
     bind:viewport
-    items={sessions.items}
-    {rowHeight}
-    key={(c) => c.sessionId}
+    items={grouped.rows}
+    rowHeight={heightOf}
+    key={(r) => r.key}
+    isSticky={(r) => r.kind === 'header'}
     onEndReached={() => void sessions.loadMore()}
     role="listbox"
     aria-label="{placeTitle} chats"
@@ -192,21 +243,34 @@
     onkeydown={onListKey}
     class="focus-visible:ring-ring/50 min-h-0 flex-1 overflow-y-auto pb-1 outline-none [scrollbar-width:thin] focus-visible:ring-2 focus-visible:ring-inset"
   >
-    {#snippet row(chat, i)}
-      <ChatListRow
-        {chat}
-        id={rowId(chat.sessionId)}
-        index={i}
-        setSize={sessions.items.length}
-        selected={chat.sessionId === cursor}
-        active={chat.sessionId === tabs.active}
-        projectName={spansProjects ? (names.get(chat.projectId) ?? baseName(chat.cwd)) : undefined}
-        {now}
-        running={chats.get(chat.sessionId)?.running ?? chat.runningTasks ?? 0}
-        onOpen={open}
-        onRename={(c) => (renaming = c)}
-        onTogglePin={togglePin}
-      />
+    {#snippet row(r)}
+      {#if r.kind === 'header'}
+        {@render header(r, false)}
+      {:else}
+        {@const chat = r.chat}
+        <ChatListRow
+          {chat}
+          id={rowId(chat.sessionId)}
+          index={r.index}
+          setSize={grouped.chats.length}
+          describedBy={sectionId(r.section)}
+          selected={chat.sessionId === cursor}
+          active={chat.sessionId === tabs.active}
+          projectName={spansProjects
+            ? (names.get(chat.projectId) ?? baseName(chat.cwd))
+            : undefined}
+          {now}
+          running={chats.get(chat.sessionId)?.running ?? chat.runningTasks ?? 0}
+          onOpen={open}
+          onRename={(c) => (renaming = c)}
+          onTogglePin={togglePin}
+        />
+      {/if}
+    {/snippet}
+    {#snippet sticky(r)}
+      {#if r.kind === 'header'}
+        {@render header(r, true)}
+      {/if}
     {/snippet}
   </VirtualList>
 

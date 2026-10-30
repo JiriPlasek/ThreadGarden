@@ -1,4 +1,4 @@
-import { expect, type Page } from '@playwright/test';
+import { expect, type Locator, type Page } from '@playwright/test';
 import { MOCK_PORT, MOCK_TOKEN } from './env';
 
 /** Chats in the mock's history: 1,000 generated sessions plus one big one. */
@@ -148,3 +148,27 @@ export const median = (xs: number[]): number => {
 };
 
 export const fmt = (xs: number[]): string => xs.map((x) => x.toFixed(1)).join(', ');
+
+/**
+ * The chat list row of `sessionId`, scrolled into the DOM first: the list is
+ * virtual (and has section headers), so a row further down is not rendered
+ * until the list scrolls near it. Scrolls down a viewport at a time.
+ */
+export const chatRow = async (page: Page, sessionId: string): Promise<Locator> => {
+  const list = page.getByRole('region', { name: 'Chat list' });
+  const row = list.locator(`[role="option"][data-session-id="${sessionId}"]`);
+  const box = list.getByRole('listbox');
+  await expect(box).toBeVisible();
+  await expect
+    .poll(
+      async () => {
+        if ((await row.count()) > 0) return true;
+        await box.evaluate((el) => (el.scrollTop += el.clientHeight * 0.8));
+        return false;
+      },
+      { message: `chat list row ${sessionId}`, intervals: [50] },
+    )
+    .toBe(true);
+  await row.scrollIntoViewIfNeeded();
+  return row;
+};

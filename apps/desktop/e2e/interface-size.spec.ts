@@ -36,6 +36,9 @@ const measure = (page: Page) =>
     };
     const rows = document.querySelectorAll('[aria-label="Chat list"] [role="option"]');
     rows.forEach((r, i) => i < 5 && add(`chat list row ${i}`, r));
+    document
+      .querySelectorAll('[aria-label="Chat list"] [data-section-header]')
+      .forEach((r, i) => i < 3 && add(`chat list section header ${i}`, r));
     add('tabs bar', document.querySelector('[role="tablist"]')?.parentElement ?? null);
     document
       .querySelectorAll('#chat-panel header > div')

@@ -16,6 +16,7 @@
     id,
     index,
     setSize,
+    describedBy,
     selected,
     active,
     projectName,
@@ -30,6 +31,8 @@
     id: string;
     index: number;
     setSize: number;
+    /** Id of the element naming the row's section (v1.2 §2). */
+    describedBy?: string;
     /** The keyboard cursor. */
     selected: boolean;
     /** Open in the active tab. */
@@ -59,6 +62,7 @@
         aria-selected={selected}
         aria-setsize={setSize}
         aria-posinset={index + 1}
+        aria-describedby={describedBy}
         data-session-id={chat.sessionId}
         data-active={active || undefined}
         tabindex="-1"

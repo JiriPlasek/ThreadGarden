@@ -189,7 +189,8 @@ right now: a project rises as soon as a chat in it is active, and
 `projects.changed` (at most once a second) tells clients when live activity
 changed the order. Each project says whether its folder still `exists`
 (a `stat`, cached per folder, refreshed at most every 60 s and after a sync);
-the UI groups the missing ones under Missing folders. At most two checks run
+the UI groups the missing ones under Missing folders (with "Hide all missing",
+which hides each through `projects.update`). At most two checks run
 at once and one per volume, so a hung network share delays only its own
 folders.
 
@@ -301,7 +302,7 @@ The budgets in §8 are requirements. The techniques that meet them:
 - Lists and search come from SQLite (WAL); the SDK is asked only about
   sessions that changed.
 - Indexing runs in the background, incrementally, and yields between pages.
-- Chat lists and message views are virtualised (fixed-height rows in the
+- Chat lists and message views are virtualised (fixed-height rows and section headers in the
   chat list; measured rows in the message view).
 - Streaming is coalesced to one update per 33 ms; markdown rendering is cached
   per item.

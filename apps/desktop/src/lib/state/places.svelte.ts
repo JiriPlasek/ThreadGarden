@@ -113,6 +113,27 @@ export class PlacesState {
     }
     await this.refresh();
   };
+
+  /**
+   * Hides several projects ("Hide all missing", v1.2 §4) through the same
+   * per-project hide, one request each, then refreshes once. If one fails,
+   * the ones already hidden stay hidden and the error is rethrown.
+   */
+  hideProjects = async (projectIds: readonly string[]): Promise<void> => {
+    const done = new Set<string>();
+    try {
+      for (const projectId of projectIds) {
+        await this.api!.request('projects.update', { projectId, hidden: true });
+        done.add(projectId);
+      }
+    } finally {
+      const sel = this.selected;
+      if (sel.kind === 'project' && done.has(sel.projectId)) this.select({ kind: 'all' });
+      else if (done.size > 0) for (const cb of this.subscribers) cb();
+      // A failed refresh must not mask a failed hide (the next event refreshes anyway).
+      await this.refresh().catch(() => {});
+    }
+  };
 }
 
 export const places = new PlacesState();

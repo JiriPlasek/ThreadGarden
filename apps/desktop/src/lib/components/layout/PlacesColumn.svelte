@@ -10,7 +10,9 @@
   import PinIcon from '@lucide/svelte/icons/pin';
   import PinOffIcon from '@lucide/svelte/icons/pin-off';
   import SettingsIcon from '@lucide/svelte/icons/settings';
+  import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
   import * as ContextMenu from '#lib/components/ui/context-menu/index.js';
+  import * as Tooltip from '#lib/components/ui/tooltip/index.js';
   import { samePlace } from '#lib/state/places.svelte.js';
   import { useApp } from '#lib/state/context.js';
   import { cn } from '#lib/utils.js';
@@ -27,6 +29,10 @@
   const { places, interaction } = useApp();
 
   let showHidden = $state(false);
+  /** The "Hide all missing" confirmation is open (v1.2 §4). */
+  let hidingMissing = $state(false);
+
+  const MISSING_WHY = 'Claude Code still has these chats, but their folders were deleted.';
 
   /** `exists` is optional for a service without it: such folders count as present. */
   const isMissing = (p: Project): boolean => p.exists === false;
@@ -181,18 +187,38 @@
     </ul>
 
     {#if missing.length > 0}
-      <button
-        type="button"
-        class="text-muted-foreground hover:text-foreground mt-3 flex h-6 items-center gap-1 px-2 text-[0.6875rem]"
-        aria-expanded={places.missingOpen}
-        onclick={() => places.setMissingOpen(!places.missingOpen)}
-      >
-        <ChevronRightIcon
-          class={cn('size-3.5 transition-transform', places.missingOpen && 'rotate-90')}
-          aria-hidden="true"
-        />
-        Missing folders ({missing.length})
-      </button>
+      <div class="mt-3 flex items-center gap-1 pr-1">
+        <Tooltip.Provider delayDuration={400}>
+          <Tooltip.Root>
+            <Tooltip.Trigger>
+              {#snippet child({ props })}
+                <button
+                  {...props}
+                  type="button"
+                  class="text-muted-foreground hover:text-foreground flex h-6 min-w-0 flex-1 items-center gap-1 px-2 text-left text-[0.6875rem]"
+                  aria-expanded={places.missingOpen}
+                  aria-describedby="places-missing-why"
+                  onclick={() => places.setMissingOpen(!places.missingOpen)}
+                >
+                  <ChevronRightIcon
+                    class={cn(
+                      'size-3.5 shrink-0 transition-transform',
+                      places.missingOpen && 'rotate-90',
+                    )}
+                    aria-hidden="true"
+                  />
+                  <span class="truncate">Missing folders ({missing.length})</span>
+                </button>
+              {/snippet}
+            </Tooltip.Trigger>
+            <Tooltip.Content side="right" class="max-w-60 px-2 py-1">{MISSING_WHY}</Tooltip.Content>
+          </Tooltip.Root>
+        </Tooltip.Provider>
+        <span id="places-missing-why" hidden>{MISSING_WHY}</span>
+        <IconButton label="Hide all missing" side="right" onclick={() => (hidingMissing = true)}>
+          <EyeOffIcon />
+        </IconButton>
+      </div>
       {#if places.missingOpen}
         <ul class="space-y-px opacity-80" aria-label="Missing folders">
           {#each missing as project (project.projectId)}
@@ -225,3 +251,13 @@
     {/if}
   </div>
 </nav>
+
+<ConfirmDialog
+  bind:open={hidingMissing}
+  title="Hide all missing folders?"
+  description="{missing.length === 1
+    ? '1 project'
+    : `${missing.length} projects`} whose folder was deleted will move to Hidden projects. Their chats stay in Claude Code, and you can show the projects again from there."
+  confirmLabel={missing.length === 1 ? 'Hide 1 project' : `Hide ${missing.length} projects`}
+  onConfirm={() => places.hideProjects(missing.map((p) => p.projectId))}
+/>
