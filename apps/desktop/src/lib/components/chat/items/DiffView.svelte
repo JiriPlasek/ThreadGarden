@@ -1,23 +1,20 @@
 <script lang="ts">
-  import { computeDiff, toSplit } from '../diff';
+  import { toSplit, type Diff } from '../diff';
 
   /**
    * A file edit as a diff (spec §6.4): unified by default, side by side on
    * request, with line numbers. Long diffs show their first rows until expanded.
    */
-  let { oldText, newText }: { oldText: string; newText: string } = $props();
+  let { diff }: { diff: Diff } = $props();
 
   const LIMIT = 300;
   let mode = $state<'unified' | 'split'>('unified');
   let showAll = $state(false);
 
-  const diff = $derived(computeDiff(oldText, newText));
   const unified = $derived(showAll ? diff.rows : diff.rows.slice(0, LIMIT));
-  const split = $derived.by(() => {
-    const rows = toSplit(diff.rows);
-    return showAll ? rows : rows.slice(0, LIMIT);
-  });
-  const total = $derived(mode === 'unified' ? diff.rows.length : toSplit(diff.rows).length);
+  const splitRows = $derived(mode === 'split' ? toSplit(diff.rows) : []);
+  const split = $derived(showAll ? splitRows : splitRows.slice(0, LIMIT));
+  const total = $derived(mode === 'unified' ? diff.rows.length : splitRows.length);
 
   const tone = (type: string): string =>
     type === 'add'

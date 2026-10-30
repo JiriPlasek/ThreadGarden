@@ -77,14 +77,33 @@ export const copyText = async (s: string): Promise<void> => {
   }
 };
 
+/** The normalised URL when `url` is an absolute http(s) URL with a host, else null. */
+const httpUrl = (url: string): string | null => {
+  if (!/^https?:\/\//i.test(url.trim())) return null;
+  try {
+    const u = new URL(url.trim());
+    return (u.protocol === 'http:' || u.protocol === 'https:') && u.hostname ? u.href : null;
+  } catch {
+    return null;
+  }
+};
+
 /**
- * Opens an http(s)/mailto link outside pahub. No opener plugin is wired into the
- * shell yet, so this asks the webview for a new browsing context without an
- * opener in both the desktop app and a browser.
+ * Opens a link in the system browser (ruling R23): http(s) only, through the
+ * opener plugin (whose capability is scoped to `http(s)://*`); anything else is
+ * ignored. In a plain browser (UI development) it opens a new tab instead.
+ * Resolves to whether the URL was handed on.
  */
-export const openExternal = (url: string): void => {
-  if (!/^(https?:|mailto:)/i.test(url)) return;
-  window.open(url, '_blank', 'noopener,noreferrer');
+export const openExternal = async (url: string): Promise<boolean> => {
+  const href = httpUrl(url);
+  if (!href) return false;
+  if (isTauri) {
+    const { openUrl } = await import('@tauri-apps/plugin-opener');
+    await openUrl(href);
+  } else {
+    window.open(href, '_blank', 'noopener,noreferrer');
+  }
+  return true;
 };
 
 /** Asks the user for a folder; null when cancelled (always null in a browser). */

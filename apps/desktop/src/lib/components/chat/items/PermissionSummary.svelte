@@ -14,15 +14,18 @@
   const what = $derived.by(() => {
     if (item.variant === 'question') return 'a question';
     if (item.variant === 'plan') return 'plan approval';
-    const s = summarize({
-      kind: 'toolCall',
-      id: item.id,
-      toolUseId: item.requestId,
-      name: item.toolName,
-      input: item.input,
-      status: 'running',
-      parentToolUseId: null,
-    });
+    const s = summarize(
+      {
+        kind: 'toolCall',
+        id: item.id,
+        toolUseId: item.requestId,
+        name: item.toolName,
+        input: item.input,
+        status: 'running',
+        parentToolUseId: null,
+      },
+      { stats: false },
+    );
     return s.target ? `${item.toolName} · ${s.target}` : item.toolName;
   });
   const label = $derived(

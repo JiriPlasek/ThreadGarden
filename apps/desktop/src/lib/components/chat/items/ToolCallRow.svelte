@@ -2,7 +2,7 @@
   import type { ChatItem } from '@pahub/protocol';
   import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
   import { SUBAGENT_TOOLS, type ToolCallItem } from '../rows';
-  import { editPairs, prettyJson, str, summarize } from '../tools';
+  import { editDiffs, prettyJson, str, summarize } from '../tools';
   import DiffView from './DiffView.svelte';
   import SubagentGroup from './SubagentGroup.svelte';
   import ToolStatus from './ToolStatus.svelte';
@@ -16,7 +16,7 @@
 
   let open = $state(false);
   const summary = $derived(summarize(item));
-  const pairs = $derived(editPairs(item));
+  const pairs = $derived(editDiffs(item));
   const input = $derived(
     typeof item.input === 'object' && item.input !== null
       ? (item.input as Record<string, unknown>)
@@ -67,7 +67,7 @@
       <div class="mt-1 mb-1.5 flex flex-col gap-1.5 pl-6">
         {#if pairs}
           {#each pairs as pair, i (i)}
-            <DiffView oldText={pair.oldText} newText={pair.newText} />
+            <DiffView diff={pair.diff} />
           {/each}
         {:else if item.name === 'Bash'}
           {#if str(input.description)}

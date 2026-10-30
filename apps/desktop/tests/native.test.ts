@@ -54,3 +54,16 @@ describe('native (browser stubs)', () => {
     await expect(native.quitApp()).resolves.toBeUndefined();
   });
 });
+
+describe('openExternal (browser dev fallback)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('opens http(s) in a new browsing context and ignores other targets', async () => {
+    const native = await load();
+    const open = vi.spyOn(window, 'open').mockImplementation(() => null);
+    await expect(native.openExternal('https://example.com')).resolves.toBe(true);
+    await expect(native.openExternal('mailto:a@b.example')).resolves.toBe(false);
+    await expect(native.openExternal('javascript:alert(1)')).resolves.toBe(false);
+    expect(open.mock.calls).toEqual([['https://example.com/', '_blank', 'noopener,noreferrer']]);
+  });
+});

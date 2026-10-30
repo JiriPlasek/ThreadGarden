@@ -1,4 +1,4 @@
-import { computeDiff } from './diff';
+import { computeDiff, type Diff } from './diff';
 import type { ToolCallItem } from './rows';
 
 type Rec = Record<string, unknown>;
@@ -64,6 +64,33 @@ export const editPairs = (item: ToolCallItem): EditPair[] | null => {
   return null;
 };
 
+export type EditDiff = EditPair & { diff: Diff };
+
+const DIFF_CACHE_SIZE = 200;
+/** Last computed diffs per item id; reused while the item's edit text is unchanged. */
+const diffCache = new Map<string, EditDiff[]>();
+
+const samePairs = (a: readonly EditPair[], b: readonly EditPair[]): boolean =>
+  a.length === b.length &&
+  a.every((p, i) => p.oldText === b[i]!.oldText && p.newText === b[i]!.newText);
+
+/**
+ * The diffs of an editing tool call, computed once per item id and content
+ * (the collapsed row's stats and the expanded DiffView share them).
+ */
+export const editDiffs = (item: ToolCallItem): EditDiff[] | null => {
+  const pairs = editPairs(item);
+  if (!pairs) return null;
+  const key = `${item.name}:${item.id}`;
+  const hit = diffCache.get(key);
+  if (hit && samePairs(hit, pairs)) return hit;
+  const diffs = pairs.map((p) => ({ ...p, diff: computeDiff(p.oldText, p.newText) }));
+  diffCache.delete(key);
+  diffCache.set(key, diffs);
+  if (diffCache.size > DIFF_CACHE_SIZE) diffCache.delete(diffCache.keys().next().value as string);
+  return diffs;
+};
+
 export type ToolSummary = {
   /** The tool name as shown. */
   verb: string;
@@ -84,8 +111,11 @@ const exitStatus = (item: ToolCallItem, input: Rec): string | undefined => {
   return input.run_in_background === true ? 'in background' : 'exit 0';
 };
 
-/** The collapsed one-liner for a tool call (spec §6.4: "Bash · npm test · exit 0"). */
-export const summarize = (item: ToolCallItem): ToolSummary => {
+/**
+ * The collapsed one-liner for a tool call (spec §6.4: "Bash · npm test · exit 0").
+ * `stats: false` skips diffing edits (previews that only need the target).
+ */
+export const summarize = (item: ToolCallItem, opts: { stats?: boolean } = {}): ToolSummary => {
   const input = rec(item.input);
   switch (item.name) {
     case 'Read': {
@@ -98,15 +128,15 @@ export const summarize = (item: ToolCallItem): ToolSummary => {
     case 'Edit':
     case 'MultiEdit':
     case 'Write': {
-      const pairs = editPairs(item) ?? [];
+      const target = str(input.file_path);
+      if (opts.stats === false) return { verb: item.name, target };
       let added = 0;
       let removed = 0;
-      for (const p of pairs) {
-        const d = computeDiff(p.oldText, p.newText);
-        added += d.added;
-        removed += d.removed;
+      for (const { diff } of editDiffs(item) ?? []) {
+        added += diff.added;
+        removed += diff.removed;
       }
-      return { verb: item.name, target: str(input.file_path), stats: { added, removed } };
+      return { verb: item.name, target, stats: { added, removed } };
     }
     case 'NotebookEdit':
       return { verb: 'NotebookEdit', target: str(input.notebook_path) };

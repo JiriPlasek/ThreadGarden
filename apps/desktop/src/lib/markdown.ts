@@ -1,8 +1,16 @@
 /**
- * Markdown for chat messages: `marked` (GFM) → DOMPurify. Code blocks render as
- * plain text first; `highlightMarkdown` re-renders them with shiki, which is
- * loaded on first use (JavaScript regex engine, no WASM) with each language
- * fetched on demand. Huge blocks are never highlighted.
+ * Markdown for chat messages: `marked` (GFM) → a dedicated, restrictive
+ * DOMPurify instance. Model output may only produce plain document markup: no
+ * styles, classes, ids, forms, buttons, frames or scripts; links keep http(s)
+ * targets only (pahub opens them, ruling R23); remote images become links and
+ * only small raster `data:` images stay inline (ruling R22).
+ *
+ * Code blocks never pass through the model-facing sanitizer as markup: the
+ * parser leaves an unguessable placeholder, and after sanitizing pahub inserts
+ * its own block (escaped code or shiki output, a language label and a Copy
+ * button). `highlightMarkdown` highlights with shiki, loaded on first use
+ * (JavaScript regex engine, no WASM) with each language fetched on demand;
+ * huge blocks are never highlighted.
  */
 import DOMPurify from 'dompurify';
 import { Marked, type Tokens } from 'marked';
@@ -10,6 +18,8 @@ import type { HighlighterCore } from 'shiki/core';
 
 /** Blocks longer than this stay plain text (highlighting them would stall the UI). */
 export const HIGHLIGHT_MAX_LINES = 2000;
+/** Inline `data:` images longer than this (characters) are not rendered. */
+export const MAX_DATA_IMAGE_CHARS = 2_000_000;
 const CACHE_SIZE = 400;
 
 const escapeHtml = (s: string): string =>
@@ -31,49 +41,199 @@ export const hashText = (s: string): string => {
   return `${s.length.toString(36)}.${(h >>> 0).toString(36)}`;
 };
 
-/** Highlighted code per (lang, code) for the parse in progress (parsing is synchronous). */
-let highlights: Map<string, string> | null = null;
 const codeKey = (lang: string, code: string): string => `${lang}\u0000${code}`;
+
+/** True for absolute http(s) URLs: the only link targets pahub keeps. */
+const isHttpUrl = (url: string): boolean => /^https?:\/\/[^/\s]/i.test(url.trim());
+
+const DATA_IMAGE = /^data:image\/(png|jpe?g|gif|webp);base64,[a-z0-9+/=\s]+$/i;
+/** Small raster `data:` images are the only images rendered inline (R22). */
+const isInlineImage = (src: string): boolean =>
+  src.length <= MAX_DATA_IMAGE_CHARS && DATA_IMAGE.test(src);
+
+// ---- parsing ---------------------------------------------------------------------
+
+type CodeBlock = { text: string; lang: string };
+
+/** Code blocks of the parse in progress (parsing is synchronous). */
+let blocks: CodeBlock[] = [];
+
+const randomHex = (): string => {
+  const a = new Uint32Array(2);
+  crypto.getRandomValues(a);
+  return [...a].map((n) => n.toString(16).padStart(8, '0')).join('');
+};
+/** Model output cannot know this, so it cannot forge a code-block placeholder. */
+const NONCE = randomHex();
+const PLACEHOLDER = new RegExp(`<pre>PAHUB-CODE-${NONCE}-(\\d+)</pre>`, 'g');
 
 const marked = new Marked({ gfm: true, breaks: false, async: false });
 marked.use({
   renderer: {
     code({ text, lang }: Tokens.Code): string {
-      const name = langOf(lang);
-      const body =
-        (name && highlights?.get(codeKey(name, text))) ||
-        `<pre><code>${escapeHtml(text)}</code></pre>`;
-      const label = name ? `<span class="code-lang">${escapeHtml(name)}</span>` : '<span></span>';
-      return (
-        `<div class="code-block" data-lang="${escapeHtml(name)}"><div class="code-head">${label}` +
-        `<button type="button" class="code-copy" data-copy-code aria-label="Copy code">Copy</button>` +
-        `</div>${body}</div>`
-      );
+      const i = blocks.push({ text, lang: langOf(lang) }) - 1;
+      return `<pre>PAHUB-CODE-${NONCE}-${i}</pre>\n`;
+    },
+    image({ href, title, text }: Tokens.Image): string {
+      if (isInlineImage(href)) {
+        const t = title ? ` title="${escapeHtml(title)}"` : '';
+        return `<img src="${escapeHtml(href)}" alt="${escapeHtml(text)}"${t}>`;
+      }
+      if (href.startsWith('data:')) return escapeHtml(`[image: ${text || 'not shown'}]`);
+      // Remote images are never loaded: the alt text (or the URL) links to them.
+      const label = escapeHtml(text || href);
+      return isHttpUrl(href) ? `<a href="${escapeHtml(href)}">${label}</a>` : label;
     },
   },
 });
 
-let hooked = false;
-const sanitize = (html: string): string => {
-  if (!hooked) {
-    hooked = true;
-    DOMPurify.addHook('afterSanitizeAttributes', (node) => {
-      if (node.tagName === 'A' && node.hasAttribute('href')) {
-        node.setAttribute('target', '_blank');
-        node.setAttribute('rel', 'noopener noreferrer');
-      }
-    });
-  }
-  return DOMPurify.sanitize(html);
+// ---- sanitizing ------------------------------------------------------------------
+
+type Purifier = ReturnType<typeof DOMPurify>;
+let markdownPurifier: Purifier | null = null;
+let codePurifier: Purifier | null = null;
+
+/** What model-written markdown (and the HTML inside it) may produce. */
+const MARKDOWN_CONFIG = {
+  ALLOWED_TAGS: [
+    'p',
+    'br',
+    'hr',
+    'h1',
+    'h2',
+    'h3',
+    'h4',
+    'h5',
+    'h6',
+    'ul',
+    'ol',
+    'li',
+    'blockquote',
+    'pre',
+    'code',
+    'strong',
+    'em',
+    'b',
+    'i',
+    'del',
+    's',
+    'a',
+    'table',
+    'thead',
+    'tbody',
+    'tfoot',
+    'tr',
+    'th',
+    'td',
+    'img',
+    'input',
+    'kbd',
+    'sup',
+    'sub',
+    'details',
+    'summary',
+  ],
+  ALLOWED_ATTR: [
+    'href',
+    'title',
+    'alt',
+    'src',
+    'type',
+    'checked',
+    'disabled',
+    'start',
+    'align',
+    'colspan',
+    'rowspan',
+  ],
+  FORBID_TAGS: [
+    'style',
+    'link',
+    'meta',
+    'base',
+    'form',
+    'button',
+    'textarea',
+    'select',
+    'option',
+    'iframe',
+    'frame',
+    'frameset',
+    'object',
+    'embed',
+    'script',
+    'template',
+    'svg',
+    'math',
+    'video',
+    'audio',
+    'source',
+  ],
+  FORBID_ATTR: ['style', 'class', 'id', 'action', 'formaction', 'target'],
+  ALLOW_DATA_ATTR: false,
+  ALLOW_ARIA_ATTR: false,
+  RETURN_DOM_FRAGMENT: true as const,
 };
 
-const render = (md: string): string => sanitize(marked.parse(md) as string);
+/** Shiki's output: generated by pahub from escaped code, checked anyway. */
+const CODE_CONFIG = {
+  ALLOWED_TAGS: ['pre', 'code', 'span'],
+  ALLOWED_ATTR: ['class', 'style', 'tabindex'],
+};
+
+const sanitizeMarkdown = (html: string): string => {
+  markdownPurifier ??= DOMPurify(window);
+  const fragment = markdownPurifier.sanitize(html, MARKDOWN_CONFIG);
+  // Rules the tag/attribute lists cannot express.
+  for (const a of fragment.querySelectorAll('a')) {
+    const href = a.getAttribute('href');
+    if (href !== null && !isHttpUrl(href)) a.removeAttribute('href');
+    if (a.hasAttribute('href')) a.setAttribute('rel', 'noopener noreferrer');
+  }
+  for (const img of fragment.querySelectorAll('img')) {
+    const src = img.getAttribute('src') ?? '';
+    if (!isInlineImage(src)) img.replaceWith(img.getAttribute('alt') ?? '');
+  }
+  for (const input of fragment.querySelectorAll('input')) {
+    if (input.getAttribute('type') === 'checkbox') input.setAttribute('disabled', '');
+    else input.remove();
+  }
+  const box = document.createElement('div');
+  box.append(fragment);
+  return box.innerHTML;
+};
+
+const sanitizeCode = (html: string): string => {
+  codePurifier ??= DOMPurify(window);
+  return codePurifier.sanitize(html, CODE_CONFIG);
+};
+
+/** pahub's own code block markup, inserted after sanitizing. */
+const codeBlockHtml = (b: CodeBlock, highlighted: string | undefined): string => {
+  const body = highlighted
+    ? sanitizeCode(highlighted)
+    : `<pre><code>${escapeHtml(b.text)}</code></pre>`;
+  const label = b.lang ? `<span class="code-lang">${escapeHtml(b.lang)}</span>` : '<span></span>';
+  return (
+    `<div class="code-block" data-lang="${escapeHtml(b.lang)}"><div class="code-head">${label}` +
+    `<button type="button" class="code-copy" data-copy-code aria-label="Copy code">Copy</button>` +
+    `</div>${body}</div>`
+  );
+};
+
+const render = (md: string, highlights?: Map<string, string>): string => {
+  blocks = [];
+  const raw = marked.parse(md) as string;
+  const found = blocks;
+  blocks = [];
+  return sanitizeMarkdown(raw).replace(PLACEHOLDER, (_m, i: string) => {
+    const b = found[Number(i)];
+    return b ? codeBlockHtml(b, highlights?.get(codeKey(b.lang, b.text))) : '';
+  });
+};
 
 /** Markdown → sanitized HTML, code blocks as plain text. */
-export const renderMarkdown = (md: string): string => {
-  highlights = null;
-  return render(md);
-};
+export const renderMarkdown = (md: string): string => render(md);
 
 // ---- shiki, loaded lazily ----------------------------------------------------
 
@@ -151,12 +311,7 @@ export const highlightMarkdown = async (md: string): Promise<string> => {
     if (html) done.set(codeKey(b.lang, b.text), html);
     await yieldToUi();
   }
-  highlights = done;
-  try {
-    return render(md);
-  } finally {
-    highlights = null;
-  }
+  return render(md, done);
 };
 
 // ---- per-item cache ------------------------------------------------------------

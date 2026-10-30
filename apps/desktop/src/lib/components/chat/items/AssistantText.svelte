@@ -78,17 +78,26 @@
       });
       return;
     }
-    const link = target?.closest('a[href]');
-    if (link) {
-      e.preventDefault();
-      openExternal(link.getAttribute('href') ?? '');
-    }
+    followLink(e, true);
+  };
+
+  /** Middle-click opens like a click; no mouse button ever navigates the webview (R23). */
+  const onauxclick = (e: MouseEvent): void => {
+    followLink(e, e.button === 1);
+  };
+
+  const followLink = (e: MouseEvent, open: boolean): void => {
+    const link = (e.target as Element | null)?.closest('a');
+    if (!link) return;
+    e.preventDefault();
+    const href = link.getAttribute('href');
+    if (open && href) openExternal(href).catch(() => {});
   };
 </script>
 
 <!-- Clicks are delegated from the rendered links and buttons, which handle the keyboard themselves. -->
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-<div class="md text-sm" class:streaming={item.streaming} {onclick}>
+<div class="md text-sm" class:streaming={item.streaming} {onclick} {onauxclick}>
   <!-- Sanitized by DOMPurify (markdown.ts). -->
   {@html html}
 </div>
