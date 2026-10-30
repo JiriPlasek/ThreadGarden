@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { ImageRef, Project } from '@pahub/protocol';
   import FolderOpenIcon from '@lucide/svelte/icons/folder-open';
+  import { buildFlags } from '#lib/build-flags.js';
   import Composer from '#lib/components/composer/Composer.svelte';
   import * as Dialog from '#lib/components/ui/dialog/index.js';
   import { isTauri, pickFolder } from '#lib/native.js';
@@ -15,7 +16,7 @@
    * composer (`@` files of the chosen folder, `/` commands, images); its draft
    * is kept per folder (`new:<cwd>`).
    */
-  const { interaction, places, chats, tabs } = useApp();
+  const { interaction, places, chats, tabs, settings } = useApp();
 
   /** Ruling R11: pahub never offers bypassPermissions. */
   const PERMISSION_MODES = [
@@ -184,6 +185,17 @@
 
     {#if cwd}
       <p class="text-muted-foreground -mt-1 truncate font-mono text-[11px]" title={cwd}>{cwd}</p>
+    {/if}
+
+    {#if buildFlags.apiKeyOnly && !settings.hasApiKey}
+      <p role="note" class="rounded-md bg-amber-500/15 px-2 py-1.5 text-xs">
+        This build of pahub runs chats only on an Anthropic API key. Add your key first.
+        <button
+          type="button"
+          class="underline underline-offset-2"
+          onclick={() => (interaction.settingsOpen = true)}>Open settings</button
+        >
+      </p>
     {/if}
 
     {#if error}

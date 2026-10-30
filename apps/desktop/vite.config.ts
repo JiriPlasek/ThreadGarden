@@ -24,6 +24,10 @@ export default defineConfig({
       }),
     }),
   ],
+  // Build flags (see src/lib/build-flags.ts): baked in at build time.
+  define: {
+    __PAHUB_API_KEY_ONLY__: JSON.stringify(process.env.PAHUB_API_KEY_ONLY === '1'),
+  },
   clearScreen: false,
   server: {
     host: '127.0.0.1',

@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Settings, SettingsPatch } from '@pahub/protocol';
   import FileSearchIcon from '@lucide/svelte/icons/file-search';
+  import { buildFlags } from '#lib/build-flags.js';
   import { Button } from '#lib/components/ui/button/index.js';
   import * as Dialog from '#lib/components/ui/dialog/index.js';
   import { isTauri, pickFile, setAutostart } from '#lib/native.js';
@@ -222,6 +223,9 @@
       <p class="text-muted-foreground text-xs">
         {#if settings.hasApiKey}
           A key is stored in the OS credential store; chats pahub starts use API billing.
+        {:else if buildFlags.apiKeyOnly}
+          This build of pahub runs chats only on an Anthropic API key (API billing). Add your key to
+          start or continue chats; history stays browsable without one.
         {:else}
           No key: chats use the sign-in of your Claude Code installation.
         {/if}
