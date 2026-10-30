@@ -804,3 +804,80 @@ describe('deriveStatus', () => {
     expect(deriveStatus(assistant('a', [{ type: 'text', text: 'x' }]), 'working')).toBe('working');
   });
 });
+
+// Shapes observed from Claude Code 2.1.314 (live stream and getSessionMessages history).
+describe('Normalizer: user messages the CLI writes itself', () => {
+  const special = (uuid: string, content: unknown, extra: Record<string, unknown> = {}) =>
+    sdk({ ...(user(uuid, content) as unknown as Record<string, unknown>), ...extra });
+  const boundary = (uuid: string) =>
+    sdk({ type: 'system', subtype: 'compact_boundary', uuid, session_id: 's' });
+  const summary = 'This session is being continued from a previous conversation…';
+
+  it('shows a live compaction as one boundary, without the summary message', () => {
+    const items = run(new Normalizer(), [
+      boundary('b1'),
+      special('s1', summary, { isSynthetic: true, isReplay: false }),
+      special('o1', '<local-command-stdout>Compacted </local-command-stdout>', { isReplay: true }),
+      sdk({ type: 'result', subtype: 'success', uuid: 'r1', session_id: 's' }),
+    ]);
+    expect(items.map((i) => i.kind)).toEqual(['compactBoundary', 'system', 'result']);
+    expect(items[1]).toEqual({ kind: 'system', id: 'o1', level: 'info', text: 'Compacted' });
+  });
+
+  it('turns a history compaction summary (no boundary message) into the boundary', () => {
+    const items = run(new Normalizer(), [
+      special('s1', summary, { isCompactSummary: true, is_meta: true }),
+    ]);
+    expect(items).toEqual([{ kind: 'compactBoundary', id: 's1' }]);
+  });
+
+  it('keeps synthetic user messages that do not follow a boundary', () => {
+    const items = run(new Normalizer(), [special('x1', 'injected', { isSynthetic: true })]);
+    expect(items).toMatchObject([{ kind: 'user', id: 'x1', text: 'injected' }]);
+  });
+
+  it('renders slash command entries as the command the user typed', () => {
+    const items = run(new Normalizer(), [
+      special(
+        'c1',
+        '<command-name>/compact</command-name>\n            <command-message>compact</command-message>\n            <command-args></command-args>',
+        { isCompletedLocalCommand: true },
+      ),
+      special('c2', [
+        {
+          type: 'text',
+          text: '<command-message>work</command-message>\n<command-name>/work</command-name>\n<command-args>fix the build</command-args>',
+        },
+      ]),
+      special('c3', '<command-name>model</command-name><command-args>opus</command-args>'),
+    ]);
+    expect(items.map((i) => (i.kind === 'user' ? [i.id, i.text] : i.kind))).toEqual([
+      ['c1', '/compact'],
+      ['c2', '/work fix the build'],
+      ['c3', '/model opus'],
+    ]);
+  });
+
+  it('renders shell input and command output like the terminal', () => {
+    const items = run(new Normalizer(), [
+      special('i1', '<bash-input>git status</bash-input>'),
+      special(
+        'o1',
+        '<bash-stdout>\u001b[32mclean\u001b[0m</bash-stdout><bash-stderr></bash-stderr>',
+      ),
+      special('o2', '<bash-stdout></bash-stdout><bash-stderr>fatal: no repo</bash-stderr>'),
+      special('o3', '<local-command-stdout></local-command-stdout>'),
+    ]);
+    expect(items).toEqual([
+      expect.objectContaining({ kind: 'user', id: 'i1', text: '! git status' }),
+      { kind: 'system', id: 'o1', level: 'info', text: 'clean' },
+      { kind: 'system', id: 'o2', level: 'warning', text: 'fatal: no repo' },
+    ]);
+  });
+
+  it('leaves ordinary text that merely contains such tags alone', () => {
+    const text = 'Why does <local-command-stdout>x</local-command-stdout> show up?';
+    const items = run(new Normalizer(), [special('u1', text)]);
+    expect(items).toMatchObject([{ kind: 'user', id: 'u1', text }]);
+  });
+});

@@ -78,6 +78,8 @@ export class Normalizer {
   private readonly aliases = new Map<string, string>();
   /** Every item id emitted so far. */
   private readonly known = new Set<string>();
+  /** A `compact_boundary` was shown and its summary message has not arrived yet. */
+  private compactPending = false;
 
   constructor(opts: NormalizerOptions = {}) {
     this.now = opts.now ?? Date.now;
@@ -139,6 +141,7 @@ export class Normalizer {
       case 'user':
         return this.onUser(m);
       case 'result':
+        this.compactPending = false;
         return this.withClosed(this.closeStreams(), this.result(m));
       case 'system':
         return this.onSystem(m);
@@ -179,6 +182,7 @@ export class Normalizer {
     this.streamMessageId.clear();
     this.streaming.clear();
     this.blockCursor.clear();
+    this.compactPending = false;
   }
 
   // ── stream_event partials ───────────────────────────────────────────────
@@ -302,6 +306,8 @@ export class Normalizer {
     if (!isRec(msg)) return this.unknown(m, 'user');
     const base = str(m.uuid) ?? this.localId();
     const content = msg.content;
+    const cli = this.cliUserMessage(m, base, onlyText(content));
+    if (cli) return cli;
     if (typeof content === 'string') return this.one(this.userItem(m, base, content, []));
     if (!Array.isArray(content)) return this.unknown(m, 'user');
 
@@ -332,6 +338,42 @@ export class Normalizer {
       items.unshift(this.userItem(m, base, texts.join('\n'), images));
     }
     return { items, replace };
+  }
+
+  /**
+   * User-role messages the CLI writes itself, rendered the way the terminal
+   * shows them rather than as raw markup (verified against Claude Code
+   * 2.1.314 with the real suite):
+   * - the compaction summary (`isSynthetic` live, right after the
+   *   `compact_boundary`; `isCompactSummary` in history, which has no
+   *   boundary message) → the boundary divider, shown once;
+   * - a slash command entry (`<command-name>/x</command-name>…<command-args>`)
+   *   → the user's `/x args`;
+   * - `<bash-input>` (a `!` shell command) → `! command`;
+   * - local command and `!` shell output (`<local-command-stdout>`,
+   *   `<bash-stderr>`, …) → a system line, or nothing when empty.
+   * Anything else returns undefined and renders as a normal user message.
+   */
+  private cliUserMessage(m: Rec, id: string, text: string | undefined): PushResult | undefined {
+    if (m.isCompactSummary === true || (m.isSynthetic === true && this.compactPending)) {
+      const shown = this.compactPending;
+      this.compactPending = false;
+      return shown ? NONE : this.one({ kind: 'compactBoundary', id });
+    }
+    if (text === undefined) return undefined;
+    const command = parseCommand(text);
+    if (command !== undefined) return this.one(this.userItem(m, id, command, []));
+    const shell = /^\s*<bash-input>([\s\S]*)<\/bash-input>\s*$/.exec(text);
+    if (shell) return this.one(this.userItem(m, id, `! ${shell[1]!.trim()}`, []));
+    const output = parseCommandOutput(text);
+    if (output === undefined) return undefined;
+    if (output.text === '') return NONE;
+    return this.one({
+      kind: 'system',
+      id,
+      level: output.error ? 'warning' : 'info',
+      text: output.text,
+    });
   }
 
   private userItem(m: Rec, id: string, text: string, images: ImageRef[]): Item<'user'> {
@@ -376,6 +418,7 @@ export class Normalizer {
     if (!subtype) return this.unknown(m, 'system'); // e.g. a history SessionMessage system entry
     if (NON_VISUAL_SYSTEM_SUBTYPES.has(subtype)) return NONE;
     if (subtype === 'compact_boundary') {
+      this.compactPending = true; // the summary that follows is not shown again
       return this.one({ kind: 'compactBoundary', id: str(m.uuid) ?? this.localId() });
     }
     const line = systemLine(subtype, m);
@@ -436,6 +479,55 @@ const parseImage = (source: unknown): ImageRef | undefined => {
   const mediaType = str(source.media_type);
   const data = str(source.data);
   return mediaType && data !== undefined ? { mediaType, data } : undefined;
+};
+
+/** The text of a user message made only of text (a string, or text blocks); else undefined. */
+const onlyText = (content: unknown): string | undefined => {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content) || content.length === 0) return undefined;
+  const parts: string[] = [];
+  for (const b of content as unknown[]) {
+    if (!isRec(b) || b.type !== 'text' || typeof b.text !== 'string') return undefined;
+    parts.push(b.text);
+  }
+  return parts.join('\n');
+};
+
+const tag = (text: string, name: string): string | undefined =>
+  new RegExp(`<${name}>([\\s\\S]*?)</${name}>`).exec(text)?.[1];
+
+/** `<command-name>/x</command-name>…<command-args>a</command-args>` → `/x a`; else undefined. */
+const parseCommand = (text: string): string | undefined => {
+  if (!/^\s*<command-(name|message)>/.test(text)) return undefined;
+  const name = tag(text, 'command-name')?.trim();
+  if (!name) return undefined;
+  const args = tag(text, 'command-args')?.trim() ?? '';
+  const command = name.startsWith('/') ? name : `/${name}`;
+  return args ? `${command} ${args}` : command;
+};
+
+const OUTPUT_BLOCK = /<(local-command|bash)-(stdout|stderr)>([\s\S]*?)<\/\1-\2>/g;
+// eslint-disable-next-line no-control-regex
+const ANSI = /\u001b\[[0-9;]*[A-Za-z]/g;
+
+/**
+ * Text made only of local-command / shell output blocks → their joined content
+ * (ANSI colours removed) and whether a stderr block has text; else undefined.
+ */
+const parseCommandOutput = (text: string): { text: string; error: boolean } | undefined => {
+  const blocks = [...text.matchAll(OUTPUT_BLOCK)];
+  if (blocks.length === 0 || text.replace(OUTPUT_BLOCK, '').trim() !== '') return undefined;
+  const parts = blocks.map((b) => ({
+    error: b[2] === 'stderr',
+    text: (b[3] ?? '').replace(ANSI, '').trim(),
+  }));
+  return {
+    text: parts
+      .filter((p) => p.text)
+      .map((p) => p.text)
+      .join('\n'),
+    error: parts.some((p) => p.error && p.text),
+  };
 };
 
 const resultText = (content: unknown): string => {
