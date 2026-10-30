@@ -80,6 +80,8 @@ export type StartOptions = {
   sessionEnv?: NodeJS.ProcessEnv;
   /** Timers for the session host (coalescing, idle reclaim); default Node timers. */
   sessionTimers?: Timers;
+  /** Whether a project folder exists (v1.1 §4); default one `fs.stat` per folder. */
+  folderStat?: (path: string) => Promise<boolean>;
   /** Fixed port and token (mock service, UI tests); default a random port and a fresh token. */
   port?: number;
   token?: string;
@@ -238,7 +240,11 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       const onError = (err: unknown, context: string) => log.error(`${context}: ${errorText(err)}`);
       const projectsChanged = () => broadcastRef.fn({ event: 'projects.changed', data: {} });
       // v1.1 §4: project folders that no longer exist (stat only, cached).
-      const folders = new FolderCheck({ onChange: projectsChanged, onError });
+      const folders = new FolderCheck({
+        onChange: projectsChanged,
+        onError,
+        ...(opts.folderStat ? { stat: opts.folderStat } : {}),
+      });
       const projectOrderRef: { current?: ProjectOrderNotifier } = {};
       const sessionHost = new SessionHost({
         adapter,

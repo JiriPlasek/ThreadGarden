@@ -51,6 +51,13 @@ describe('mock service', () => {
     const c = (client = await TestClient.connect(port, 'mock-token'));
     await eventually(async () => (await c.call<{ all: number }>('places.counts', {})).all === 21);
 
+    // The corpus's folders (/work/proj-N) are not on disk, yet no project counts as missing.
+    await c.call('projects.list', {});
+    await new Promise((r) => setTimeout(r, 300));
+    const projects = await c.call<{ exists: boolean }[]>('projects.list', {});
+    expect(projects).toHaveLength(3);
+    expect(projects.every((p) => p.exists)).toBe(true);
+
     // Plain reply: streamed text, then idle.
     const plain = await c.call<{ sessionId: string }>('chat.create', { cwd: '/work', text: 'hi' });
     await c.waitFor(chatStatus(plain.sessionId, 'idle'), 10_000);

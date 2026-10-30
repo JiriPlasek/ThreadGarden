@@ -537,6 +537,8 @@ export const startMockService = async (o: MockOptions = {}): Promise<MockService
       adapter,
       claude: { path: 'mock-claude', version: MOCK_VERSION },
       externalRun: async () => JSON.stringify(externals),
+      // The corpus's project folders (/work/proj-N) are not on disk: none is missing.
+      folderStat: async () => true,
       ...(o.port === undefined ? {} : { port: o.port }),
       ...(o.token === undefined ? {} : { token: o.token }),
       installSignalHandlers: o.installSignalHandlers ?? true,
