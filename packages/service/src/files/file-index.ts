@@ -29,18 +29,24 @@ export type FileIndexOptions = {
   now?: () => number;
   ttlMs?: number;
   maxCwds?: number;
+  /** Global budget of entries across all cached cwds (LRU eviction). */
+  maxTotalEntries?: number;
 };
 
 export const MAX_ENTRIES = 200_000;
 const ALWAYS_SKIP = new Set(['.git', 'node_modules']);
 
-type Entry = FileSuggestion & {
-  prepared: ReturnType<typeof fuzzysort.prepare>;
-  lower: string;
-  nameAt: number;
-  mask: number;
-};
+/** Slim per-entry record: `lower`/`nameAt`/`mask` make the ranking pass allocation-free. */
+type Entry = { path: string; dir: boolean; lower: string; nameAt: number; mask: number };
 type Listing = { at: number; entries: Entry[]; browse: FileSuggestion[] };
+
+/** Normalises a cwd into a cache key (Windows: drive-letter case, separators, trailing separator). */
+export const cacheKey = (cwd: string, platform: string = process.platform): string => {
+  if (platform !== 'win32') return cwd;
+  let k = cwd.replaceAll('/', '\\');
+  if (k.length > 3) k = k.replace(/\\+$/, '');
+  return k.replace(/^[a-z]:/i, (d) => d.toLowerCase());
+};
 
 const gitList = (cwd: string): Promise<string[] | null> =>
   new Promise((resolve) => {
@@ -115,33 +121,61 @@ const defaultLister: Lister = async (cwd) => {
   return (await gitList(cwd)) ?? (await walkList(cwd));
 };
 
-const build = (files: string[], at: number): Listing => {
+const BROWSE_LIMIT = 500;
+const yieldToLoop = (): Promise<void> => new Promise((r) => setImmediate(r));
+
+/**
+ * Builds the listing in slices of ~8 ms, yielding to the event loop between
+ * them so a 200k-entry build never blocks keystrokes or pings.
+ */
+const build = async (files: string[], at: number): Promise<Listing> => {
   const seen = new Set<string>();
-  const items: FileSuggestion[] = [];
-  for (const f of files.slice(0, MAX_ENTRIES)) {
-    const parts = f.split('/');
-    for (let i = 1; i < parts.length; i++) {
-      const d = parts.slice(0, i).join('/');
+  const entries: Entry[] = [];
+  // Browse list (empty query): shallow first, then by code unit; bounded top-N.
+  const browse: { depth: number; path: string; dir: boolean }[] = [];
+  const consider = (path: string, depth: number, dir: boolean): void => {
+    const worst = browse[BROWSE_LIMIT - 1];
+    if (worst && (depth > worst.depth || (depth === worst.depth && path >= worst.path))) return;
+    let i = browse.length === BROWSE_LIMIT ? BROWSE_LIMIT - 1 : browse.length;
+    while (i > 0) {
+      const prev = browse[i - 1]!;
+      if (prev.depth < depth || (prev.depth === depth && prev.path < path)) break;
+      browse[i] = prev;
+      i--;
+    }
+    browse[i] = { depth, path, dir };
+  };
+  const add = (path: string, depth: number, dir: boolean): void => {
+    const lower = path.toLowerCase();
+    entries.push({ path, dir, lower, nameAt: path.lastIndexOf('/') + 1, mask: charMask(lower) });
+    consider(path, depth, dir);
+  };
+  let sliceStart = performance.now();
+  const n = Math.min(files.length, MAX_ENTRIES);
+  for (let k = 0; k < n; k++) {
+    const f = files[k]!;
+    let slash = f.indexOf('/');
+    let depth = 1;
+    while (slash >= 0) {
+      const d = f.slice(0, slash);
       if (!seen.has(d)) {
         seen.add(d);
-        items.push({ path: d, kind: 'dir' });
+        add(d, depth, true);
       }
+      depth++;
+      slash = f.indexOf('/', slash + 1);
     }
-    items.push({ path: f, kind: 'file' });
+    add(f, depth, false);
+    if ((k & 255) === 255 && performance.now() - sliceStart > 8) {
+      await yieldToLoop();
+      sliceStart = performance.now();
+    }
   }
-  const depth = (p: string): number => p.split('/').length;
-  // Browse order (empty query): shallow first, then alphabetical.
-  const browse = [...items]
-    .sort((a, b) => depth(a.path) - depth(b.path) || a.path.localeCompare(b.path))
-    .slice(0, 500);
-  const entries = items.map((i) => ({
-    ...i,
-    prepared: fuzzysort.prepare(i.path),
-    lower: i.path.toLowerCase(),
-    nameAt: i.path.lastIndexOf('/') + 1,
-    mask: charMask(i.path.toLowerCase()),
-  }));
-  return { at, entries, browse };
+  return {
+    at,
+    entries,
+    browse: browse.map((b) => ({ path: b.path, kind: b.dir ? 'dir' : 'file' })),
+  };
 };
 
 /** Bit set of (char code mod 32) present in `s`; a query char absent here cannot match. */
@@ -182,6 +216,8 @@ const insertBounded = (list: Scored[], max: number, key: number, e: Entry): void
   list[i] = { key, e };
 };
 
+const toSuggestion = (e: Entry): FileSuggestion => ({ path: e.path, kind: e.dir ? 'dir' : 'file' });
+
 const rank = (entries: Entry[], q: string, limit: number): FileSuggestion[] => {
   const literal = !/\s/.test(q);
   const ql = q.toLowerCase().replaceAll(' ', '');
@@ -196,11 +232,25 @@ const rank = (entries: Entry[], q: string, limit: number): FileSuggestion[] => {
     if ((e.mask & qMask) !== qMask) continue;
     const at = literal ? e.lower.indexOf(ql) : -1;
     if (at >= 0) {
-      const tier = at === e.nameAt ? 0 : at > e.nameAt ? 1 : 2;
+      // Prefer an occurrence inside the basename over an earlier one in a directory.
+      const inName = at >= e.nameAt ? at : e.lower.indexOf(ql, e.nameAt);
+      let tier = 3; // only inside a directory segment
+      if (inName >= 0) {
+        tier = inName > e.nameAt ? 2 : 1; // inside the name / name prefix
+        if (inName === e.nameAt) {
+          const end = e.nameAt + ql.length;
+          // exact basename, with or without a single extension
+          if (end === e.lower.length || (e.lower[end] === '.' && e.lower.indexOf('.', end + 1) < 0))
+            tier = 0;
+        }
+      }
       insertBounded(
         best,
         limit,
-        tier * 1e6 + (e.lower.length - e.nameAt) * 1000 + Math.min(e.lower.length, 999),
+        tier * 1e6 +
+          (e.dir ? 300_000 : 0) +
+          Math.min(e.lower.length - e.nameAt, 255) * 1000 +
+          Math.min(e.lower.length, 999),
         e,
       );
     } else if (best.length < limit) {
@@ -216,7 +266,7 @@ const rank = (entries: Entry[], q: string, limit: number): FileSuggestion[] => {
       }
     }
   }
-  const out: FileSuggestion[] = best.map(({ e }) => ({ path: e.path, kind: e.kind }));
+  const out: FileSuggestion[] = best.map(({ e }) => toSuggestion(e));
   if (out.length < limit) {
     // fuzzysort ranks only the compact candidates, never all 200k entries.
     const hit = new Set(best.map((b) => b.e));
@@ -225,8 +275,9 @@ const rank = (entries: Entry[], q: string, limit: number): FileSuggestion[] => {
       .slice(0, keep)
       .map((c) => c.e)
       .filter((e) => !hit.has(e));
-    for (const r of fuzzysort.go(q, pool, { key: 'prepared', limit: limit - out.length })) {
-      out.push({ path: r.obj.path, kind: r.obj.kind });
+    // Targets are prepared lazily, for this small pool only.
+    for (const r of fuzzysort.go(q, pool, { key: 'path', limit: limit - out.length })) {
+      out.push(toSuggestion(r.obj));
     }
   }
   return out;
@@ -237,6 +288,7 @@ export class FileIndex {
   private readonly now: () => number;
   private readonly ttlMs: number;
   private readonly maxCwds: number;
+  private readonly maxTotal: number;
   private readonly cache = new Map<string, Listing>();
   private readonly inflight = new Map<string, Promise<Listing | null>>();
 
@@ -245,11 +297,13 @@ export class FileIndex {
     this.now = opts.now ?? Date.now;
     this.ttlMs = opts.ttlMs ?? 30_000;
     this.maxCwds = opts.maxCwds ?? 20;
+    this.maxTotal = opts.maxTotalEntries ?? 400_000;
   }
 
   invalidate(cwd: string): void {
-    this.cache.delete(cwd);
-    this.inflight.delete(cwd);
+    const key = cacheKey(cwd);
+    this.cache.delete(key);
+    this.inflight.delete(key);
   }
 
   async suggest(cwd: string, query: string, limit: number): Promise<FileSuggestion[]> {
@@ -261,35 +315,52 @@ export class FileIndex {
   }
 
   private async listing(cwd: string): Promise<Listing | null> {
-    const hit = this.cache.get(cwd);
-    if (hit && this.now() - hit.at < this.ttlMs) {
-      this.cache.delete(cwd); // refresh LRU position
-      this.cache.set(cwd, hit);
+    const key = cacheKey(cwd);
+    const hit = this.cache.get(key);
+    if (hit) {
+      this.cache.delete(key); // refresh LRU position
+      this.cache.set(key, hit);
+      // Stale-while-revalidate: an expired listing is served now and refreshed behind.
+      if (this.now() - hit.at >= this.ttlMs) void this.refresh(cwd, key).catch(() => {});
       return hit;
     }
-    const pending = this.inflight.get(cwd);
+    return this.refresh(cwd, key);
+  }
+
+  private refresh(cwd: string, key: string): Promise<Listing | null> {
+    const pending = this.inflight.get(key);
     if (pending) return pending;
     const slot: { p?: Promise<Listing | null> } = {}; // the body reads it only after an await
     const p = (slot.p = (async () => {
       try {
         const files = await this.lister(cwd);
-        if (!files) return null;
-        const l = build(files, this.now());
-        if (this.inflight.get(cwd) === slot.p) {
-          this.cache.delete(cwd);
-          this.cache.set(cwd, l);
-          while (this.cache.size > this.maxCwds) {
-            const oldest = this.cache.keys().next().value;
-            if (oldest === undefined) break;
-            this.cache.delete(oldest);
-          }
+        if (!files) {
+          if (this.inflight.get(key) === slot.p) this.cache.delete(key); // cwd vanished
+          return null;
         }
+        const l = await build(files, this.now());
+        if (this.inflight.get(key) === slot.p) this.store(key, l);
         return l;
       } finally {
-        if (this.inflight.get(cwd) === slot.p) this.inflight.delete(cwd);
+        if (this.inflight.get(key) === slot.p) this.inflight.delete(key);
       }
     })());
-    this.inflight.set(cwd, p);
+    this.inflight.set(key, p);
     return p;
+  }
+
+  /** Inserts as most-recent, then evicts least-recent cwds beyond the count and entry budgets. */
+  private store(key: string, l: Listing): void {
+    this.cache.delete(key);
+    this.cache.set(key, l);
+    let total = 0;
+    for (const v of this.cache.values()) total += v.entries.length;
+    for (const k of this.cache.keys()) {
+      if ((this.cache.size <= this.maxCwds && total <= this.maxTotal) || this.cache.size <= 1)
+        break;
+      if (k === key) continue;
+      total -= this.cache.get(k)!.entries.length;
+      this.cache.delete(k);
+    }
   }
 }
