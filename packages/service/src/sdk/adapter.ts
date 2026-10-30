@@ -39,6 +39,12 @@ export type Effort = EffortLevel;
 
 export type StartOptions = {
   cwd: string;
+  /**
+   * Session id for a new chat (a UUID chosen by pahub, maps to the SDK's
+   * `sessionId` option), so the id is known before the CLI's `system/init`
+   * arrives. Never combined with `resume`.
+   */
+  sessionId?: string;
   resume?: string;
   model?: string;
   effort?: Effort;

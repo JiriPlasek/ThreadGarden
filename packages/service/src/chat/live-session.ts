@@ -1,0 +1,715 @@
+/**
+ * One pahub chat while its Claude Code process exists (§4.3): sends and
+ * queues user input, runs the permission / question / plan flow through the
+ * SDK's `canUseTool`, derives the chat status (§6.2) and header, and emits
+ * sequenced `chat.items` / `chat.status` events through a per-session
+ * `EventLog` so reconnecting clients can replay (§4.5).
+ *
+ * Session id: `create` picks a UUID and passes it to the SDK (`sessionId`
+ * start option), so the id is known synchronously, before `system/init`.
+ *
+ * Error boundary (§7): the message pump catches everything; a crashed or
+ * vanished process marks only this chat `failed`.
+ *
+ * Streaming coalescing: the normalizer re-emits the whole accumulated text on
+ * every delta, so `chat.items` emission is throttled per session to at most
+ * one event per `ITEMS_COALESCE_MS` (leading + trailing edge). Buffered items
+ * are merged by id (latest version wins) and flushed before any `chat.status`
+ * event, snapshot or replay, so event order is preserved. Each emitted batch
+ * is exactly what the log stores, so `since(seq)` replays without gaps or
+ * duplicates.
+ */
+import { randomUUID } from 'node:crypto';
+import { basename } from 'node:path';
+import type { ChatHeaderInfo, ChatItem, ChatStatus, EventMsg } from '@pahub/protocol';
+import type {
+  AgentAdapter,
+  AgentSession,
+  CanUseTool,
+  Effort,
+  PermissionMode,
+  PermissionResult,
+  PermissionUpdate,
+  SDKMessage,
+  SDKUserMessage,
+  StartOptions,
+} from '../sdk/adapter.js';
+import { EventLog, type ChatEvent, type ChatEventDraft } from './event-log.js';
+import { Normalizer, deriveStatus } from './normalize.js';
+
+/** pahub's record of which sessions have a live process (Task 6 backs it with the db). */
+export interface LiveRegistry {
+  markLive(sessionId: string, cwd: string): void;
+  markEnded(sessionId: string): void;
+  listLive(): { sessionId: string; cwd: string }[];
+}
+
+/** Injected timer functions so throttling and reclaim are testable without real waits. */
+export type Timers = {
+  setTimeout(fn: () => void, ms: number): unknown;
+  clearTimeout(handle: unknown): void;
+  setInterval(fn: () => void, ms: number): unknown;
+  clearInterval(handle: unknown): void;
+};
+
+/** Node timers; intervals are unref'd (housekeeping never keeps the process alive). */
+export const realTimers: Timers = {
+  setTimeout: (fn, ms) => setTimeout(fn, ms),
+  clearTimeout: (h) => clearTimeout(h as NodeJS.Timeout),
+  setInterval: (fn, ms) => setInterval(fn, ms).unref(),
+  clearInterval: (h) => clearInterval(h as NodeJS.Timeout),
+};
+
+export type UserInput = {
+  text: string;
+  images?: { mediaType: string; dataBase64: string }[];
+};
+
+export type PermissionDecision = {
+  decision: 'allow' | 'allowAlways' | 'deny';
+  reason?: string;
+  suggestionIndex?: number;
+  /** Replaces the tool input (e.g. AskUserQuestion answers); passed through as-is. */
+  updatedInput?: unknown;
+};
+
+/** What the user chose for this chat; carried over when the host resumes it. */
+export type SessionChoices = {
+  model?: string;
+  effort?: Effort;
+  permissionMode?: PermissionMode;
+};
+
+export type LiveSessionDeps = {
+  adapter: AgentAdapter;
+  registry: LiveRegistry;
+  claudePath: string;
+  env: Record<string, string | undefined>;
+  /** Event sink (the WebSocket broadcast). Must not throw; a throw is ignored. */
+  emit(e: EventMsg): void;
+  now(): number;
+  timers?: Timers;
+  /** Title and project name for the `needsYou` notification; defaults to first message / cwd basename. */
+  describe?: (sessionId: string, cwd: string) => { title?: string; projectName?: string };
+};
+
+export type LiveSessionOptions = LiveSessionDeps &
+  SessionChoices & {
+    /** For `create`: the new session's id (default: a random UUID). */
+    sessionId?: string;
+    /** An earlier instance's log, so sequence numbers continue across a resume. */
+    log?: EventLog;
+  };
+
+export type LiveSnapshot = {
+  items: ChatItem[];
+  hasMore: boolean;
+  seq: number;
+  status: ChatStatus;
+  header: ChatHeaderInfo;
+  waitingFor?: string;
+};
+
+export const ITEMS_COALESCE_MS = 33;
+export const DEFAULT_DENY_MESSAGE = 'Denied by user in pahub';
+
+type PermissionItem = Extract<ChatItem, { kind: 'permissionRequest' }>;
+type Pending = {
+  item: PermissionItem;
+  suggestions: PermissionUpdate[];
+  what: string;
+  settle(r: PermissionResult): void;
+};
+type Rec = Record<string, unknown>;
+
+const isRec = (v: unknown): v is Rec => typeof v === 'object' && v !== null && !Array.isArray(v);
+const str = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined);
+const num = (v: unknown): number | undefined =>
+  typeof v === 'number' && Number.isFinite(v) ? v : undefined;
+const errorText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+
+/** A turn is (or may be) in progress: new input is queued rather than starting a turn. */
+const BUSY: ReadonlySet<ChatStatus> = new Set(['working', 'needsYou', 'unknown']);
+
+export class LiveSession {
+  private id = '';
+  private dir = '';
+  private session: AgentSession | null = null;
+  private normalizer: Normalizer;
+  private readonly log: EventLog;
+  private readonly timers: Timers;
+  private readonly chosen: SessionChoices;
+  /** Every item published by this instance, by id, in first-seen order. */
+  private readonly items = new Map<string, ChatItem>();
+  private readonly pending = new Map<string, Pending>();
+  private statusValue: ChatStatus = 'history';
+  private headerValue: ChatHeaderInfo = {};
+  private idleSinceValue: number | null = null;
+  private published = '';
+  private firstText: string | undefined;
+  private contextUsed: number | undefined;
+  private ended: Promise<void> = Promise.resolve();
+  // chat.items coalescing
+  private readonly buffered = new Map<string, ChatItem>();
+  private bufferedReplace = false;
+  private flushTimer: unknown = undefined;
+  private lastFlushAt = Number.NEGATIVE_INFINITY;
+
+  constructor(private readonly deps: LiveSessionOptions) {
+    this.log = deps.log ?? new EventLog();
+    this.timers = deps.timers ?? realTimers;
+    this.normalizer = new Normalizer({ now: deps.now });
+    this.chosen = {
+      ...(deps.model === undefined ? {} : { model: deps.model }),
+      ...(deps.effort === undefined ? {} : { effort: deps.effort }),
+      ...(deps.permissionMode === undefined ? {} : { permissionMode: deps.permissionMode }),
+    };
+    if (deps.effort !== undefined) this.headerValue.effort = deps.effort;
+  }
+
+  /** Starts a new chat (new SDK session) and sends its first message. */
+  static create(cwd: string, firstMessage: UserInput, opts: LiveSessionOptions): LiveSession {
+    const s = new LiveSession(opts);
+    s.id = opts.sessionId ?? randomUUID();
+    s.dir = cwd;
+    s.startProcess({ sessionId: s.id });
+    s.send(firstMessage);
+    return s;
+  }
+
+  /** Continues an existing session (SDK `resume`, same id); idle until a message is sent. */
+  static resume(sessionId: string, cwd: string, opts: LiveSessionOptions): LiveSession {
+    const s = new LiveSession(opts);
+    s.id = sessionId;
+    s.dir = cwd;
+    s.startProcess({ resume: sessionId });
+    s.setStatus('idle');
+    return s;
+  }
+
+  /** A chat with no process, in `status`, optionally with one system line (crash recovery). */
+  static restore(
+    sessionId: string,
+    cwd: string,
+    status: ChatStatus,
+    opts: LiveSessionOptions,
+    note?: { level: 'info' | 'warning' | 'error'; text: string },
+  ): LiveSession {
+    const s = new LiveSession(opts);
+    s.id = sessionId;
+    s.dir = cwd;
+    if (note) s.pushItems([{ kind: 'system', id: `local:${randomUUID()}`, ...note }], false);
+    s.setStatus(status);
+    return s;
+  }
+
+  // ── state ───────────────────────────────────────────────────────────────
+
+  get sessionId(): string {
+    return this.id;
+  }
+
+  get cwd(): string {
+    return this.dir;
+  }
+
+  get status(): ChatStatus {
+    return this.statusValue;
+  }
+
+  /** When the chat last became idle (no turn, nothing pending); null while not idle. */
+  get idleSince(): number | null {
+    return this.idleSinceValue;
+  }
+
+  /** True while the Claude Code process exists. */
+  get live(): boolean {
+    return this.session !== null;
+  }
+
+  get header(): ChatHeaderInfo {
+    return { ...this.headerValue };
+  }
+
+  get seq(): number {
+    return this.log.seq;
+  }
+
+  /** The event log, so a resumed instance continues its sequence numbers. */
+  get eventLog(): EventLog {
+    return this.log;
+  }
+
+  get choices(): SessionChoices {
+    return { ...this.chosen };
+  }
+
+  pendingRequests(): ChatItem[] {
+    return [...this.pending.values()].map((p) => p.item);
+  }
+
+  /** Resolves when the message pump has stopped (process gone). */
+  whenEnded(): Promise<void> {
+    return this.ended;
+  }
+
+  snapshot(tail: number): LiveSnapshot {
+    this.flush();
+    const all = [...this.items.values()];
+    const n = Math.max(0, Math.floor(tail));
+    const waitingFor = this.waitingFor();
+    return {
+      items: n === 0 ? [] : all.slice(-n),
+      hasMore: all.length > n,
+      seq: this.log.seq,
+      status: this.statusValue,
+      header: this.header,
+      ...(waitingFor === undefined ? {} : { waitingFor }),
+    };
+  }
+
+  since(seq: number): ChatEvent[] | 'gap' {
+    this.flush();
+    return this.log.since(seq);
+  }
+
+  // ── input and controls ──────────────────────────────────────────────────
+
+  /** Sends user input; while a turn is in progress it is queued (`priority: 'next'`). */
+  send(input: UserInput): { queued: boolean } {
+    const session = this.requireLive();
+    const queued = BUSY.has(this.statusValue);
+    const uuid = randomUUID();
+    session.send(toUserMessage(input, uuid, queued));
+    this.firstText ??= input.text;
+    const images = (input.images ?? []).map((i) => ({
+      mediaType: i.mediaType,
+      data: i.dataBase64,
+    }));
+    // Shown at once under the uuid sent to the SDK, so an echoed copy upserts instead of duplicating.
+    this.pushItems(
+      [
+        {
+          kind: 'user',
+          id: uuid,
+          text: input.text,
+          ...(images.length > 0 ? { images } : {}),
+          ts: this.deps.now(),
+        },
+      ],
+      false,
+    );
+    if (!queued) this.setStatus('working');
+    return { queued };
+  }
+
+  async interrupt(): Promise<void> {
+    const session = this.session;
+    if (session) await session.interrupt();
+  }
+
+  /** Closes the process; the chat returns to history (§4.3 End session). */
+  end(): void {
+    this.stop('history');
+  }
+
+  /** Closes the process after idle reclaim; the next message resumes it. */
+  pause(): void {
+    this.stop('paused');
+  }
+
+  respond(requestId: string, d: PermissionDecision): void {
+    const p = this.pending.get(requestId);
+    if (!p) throw new Error(`No pending request ${requestId}`);
+    if (d.decision === 'deny') {
+      const message = d.reason?.trim() ? d.reason : DEFAULT_DENY_MESSAGE;
+      this.finish(requestId, 'denied', { behavior: 'deny', message });
+      return;
+    }
+    const r: PermissionResult = { behavior: 'allow' };
+    if (isRec(d.updatedInput)) r.updatedInput = d.updatedInput;
+    if (d.decision === 'allowAlways') {
+      const chosen = p.suggestions[d.suggestionIndex ?? 0];
+      if (chosen) r.updatedPermissions = [chosen];
+    }
+    this.finish(requestId, 'allowed', r);
+  }
+
+  async setModel(value: string): Promise<void> {
+    await this.requireLive().setModel(value);
+    this.chosen.model = value;
+    this.headerValue.model = value;
+    this.publishStatus();
+  }
+
+  async setPermissionMode(value: string): Promise<void> {
+    const mode = value as PermissionMode;
+    await this.requireLive().setPermissionMode(mode);
+    this.chosen.permissionMode = mode;
+    this.headerValue.permissionMode = value;
+    this.publishStatus();
+  }
+
+  /** Effort has no SDK control call; it is set with the `/effort` command, like the CLI. */
+  async setEffort(value: string): Promise<void> {
+    const session = this.requireLive();
+    session.send(toUserMessage({ text: `/effort ${value}` }, randomUUID(), BUSY.has(this.status)));
+    this.chosen.effort = value as Effort;
+    this.headerValue.effort = value;
+    this.publishStatus();
+  }
+
+  /** Auth label for the header (resolved by the service, not by the session). */
+  setAuth(auth: ChatHeaderInfo['auth']): void {
+    if (auth === undefined) delete this.headerValue.auth;
+    else this.headerValue.auth = auth;
+    this.publishStatus();
+  }
+
+  // ── process ─────────────────────────────────────────────────────────────
+
+  private startProcess(extra: Pick<StartOptions, 'sessionId' | 'resume'>): void {
+    const { adapter, claudePath, env } = this.deps;
+    const session = adapter.start({
+      cwd: this.dir,
+      env,
+      claudePath,
+      canUseTool: this.canUseTool,
+      ...this.chosen,
+      ...extra,
+    });
+    this.session = session;
+    this.normalizer = new Normalizer({ now: this.deps.now });
+    this.deps.registry.markLive(this.id, this.dir);
+    this.ended = this.pump(session);
+  }
+
+  private async pump(session: AgentSession): Promise<void> {
+    let error: unknown;
+    let failed = false;
+    try {
+      for await (const m of session.messages) {
+        if (this.session !== session) break;
+        this.handle(m);
+      }
+    } catch (err) {
+      error = err;
+      failed = true;
+    }
+    if (this.session !== session) return; // closed on purpose (end / pause / stop all)
+    this.session = null;
+    this.cancelAllPending();
+    this.deps.registry.markEnded(this.id);
+    const text = failed
+      ? `Session failed: ${errorText(error)}`
+      : 'The session process ended unexpectedly';
+    this.pushItems([{ kind: 'system', id: `local:${randomUUID()}`, level: 'error', text }], false);
+    this.setStatus('failed');
+  }
+
+  private stop(final: ChatStatus): void {
+    const session = this.session;
+    if (session) {
+      this.session = null;
+      this.cancelAllPending();
+      try {
+        session.close();
+      } catch {
+        // The process is going away either way.
+      }
+      this.deps.registry.markEnded(this.id);
+    }
+    this.setStatus(final);
+  }
+
+  private requireLive(): AgentSession {
+    if (!this.session) throw new Error(`Session ${this.id} is not live`);
+    return this.session;
+  }
+
+  private handle(m: SDKMessage): void {
+    try {
+      this.updateHeader(m);
+      const r = this.normalizer.push(m);
+      if (r.items.length > 0) this.pushItems(r.items, r.replace);
+      this.setStatus(this.nextStatus(m));
+    } catch (err) {
+      // Defensive: one odd message must not take the chat down.
+      this.pushItems(
+        [
+          {
+            kind: 'system',
+            id: `local:${randomUUID()}`,
+            level: 'warning',
+            text: `A message could not be processed: ${errorText(err)}`,
+          },
+        ],
+        false,
+      );
+    }
+  }
+
+  private nextStatus(m: SDKMessage): ChatStatus {
+    if (this.pending.size > 0) return 'needsYou'; // an open request wins over stream activity
+    const next = deriveStatus(m, this.statusValue);
+    // Output while idle means a turn started (e.g. a queued message picked up after `result`).
+    if (next === 'idle' && this.statusValue === 'idle') {
+      const type = (m as { type?: unknown }).type;
+      if (type === 'assistant' || type === 'stream_event') return 'working';
+    }
+    return next;
+  }
+
+  // ── header ──────────────────────────────────────────────────────────────
+
+  private updateHeader(m: SDKMessage): void {
+    const x: unknown = m;
+    if (!isRec(x)) return;
+    const h = this.headerValue;
+    if (x.type === 'system' && x.subtype === 'init') {
+      const model = str(x.model);
+      const mode = str(x.permissionMode);
+      const version = str(x.claude_code_version);
+      if (model !== undefined) h.model = model;
+      if (mode !== undefined) h.permissionMode = mode;
+      if (version !== undefined) h.claudeVersion = version;
+    } else if (x.type === 'system' && x.subtype === 'status') {
+      const mode = str(x.permissionMode);
+      if (mode !== undefined) h.permissionMode = mode;
+    } else if (x.type === 'assistant' && !x.parent_tool_use_id) {
+      const usage = isRec(x.message) ? x.message.usage : undefined;
+      if (isRec(usage)) {
+        const parts = [
+          usage.input_tokens,
+          usage.cache_creation_input_tokens,
+          usage.cache_read_input_tokens,
+          usage.output_tokens,
+        ].map(num);
+        if (parts.some((p) => p !== undefined)) {
+          this.contextUsed = parts.reduce<number>((a, b) => a + (b ?? 0), 0);
+        }
+      }
+    } else if (x.type === 'result') {
+      const cost = num(x.total_cost_usd);
+      if (cost !== undefined) h.costUsd = cost;
+      const max = contextWindow(x.modelUsage, h.model);
+      if (max !== undefined && this.contextUsed !== undefined) {
+        h.contextUsage = { used: this.contextUsed, max };
+      }
+    }
+  }
+
+  // ── permissions ─────────────────────────────────────────────────────────
+
+  private readonly canUseTool: CanUseTool = (toolName, input, options) => {
+    const { requestId, signal } = options;
+    const cancelled: PermissionResult = { behavior: 'deny', message: 'Request cancelled' };
+    if (!this.session || signal.aborted) return Promise.resolve(cancelled);
+    // A repeated request id supersedes the earlier one.
+    this.finish(requestId, 'cancelled', cancelled);
+
+    const variant =
+      toolName === 'AskUserQuestion' ? 'question' : toolName === 'ExitPlanMode' ? 'plan' : 'tool';
+    const suggestions = options.suggestions ?? [];
+    const item: PermissionItem = {
+      kind: 'permissionRequest',
+      id: `permission:${requestId}`,
+      requestId,
+      toolName,
+      input,
+      ...(options.title === undefined ? {} : { title: options.title }),
+      ...(options.decisionReason === undefined ? {} : { decisionReason: options.decisionReason }),
+      suggestions,
+      state: 'pending',
+      variant,
+    };
+    const what = describeRequest(variant, toolName, input, options.title, options.displayName);
+
+    return new Promise<PermissionResult>((resolve) => {
+      const onAbort = () => this.finish(requestId, 'cancelled', cancelled);
+      this.pending.set(requestId, {
+        item,
+        suggestions,
+        what,
+        settle: (r) => {
+          signal.removeEventListener('abort', onAbort);
+          resolve(r);
+        },
+      });
+      signal.addEventListener('abort', onAbort, { once: true });
+      this.pushItems([item], false);
+      this.setStatus('needsYou');
+      const d = this.deps.describe?.(this.id, this.dir) ?? {};
+      this.out({
+        event: 'needsYou',
+        data: {
+          sessionId: this.id,
+          title: d.title ?? titleFrom(this.firstText),
+          projectName: d.projectName ?? (basename(this.dir) || this.dir),
+          what,
+        },
+      });
+    });
+  };
+
+  private finish(requestId: string, state: PermissionItem['state'], r: PermissionResult): void {
+    const p = this.pending.get(requestId);
+    if (!p) return;
+    this.pending.delete(requestId);
+    this.pushItems([{ ...p.item, state }], true);
+    p.settle(r);
+    if (this.pending.size === 0 && this.statusValue === 'needsYou' && this.session) {
+      this.setStatus('working');
+    } else {
+      this.publishStatus(); // waitingFor may have moved to the next request
+    }
+  }
+
+  private cancelAllPending(): void {
+    for (const id of [...this.pending.keys()]) {
+      this.finish(id, 'cancelled', {
+        behavior: 'deny',
+        message: 'Session closed',
+        interrupt: true,
+      });
+    }
+  }
+
+  private waitingFor(): string | undefined {
+    if (this.statusValue !== 'needsYou') return undefined;
+    return this.pending.values().next().value?.what;
+  }
+
+  // ── events ──────────────────────────────────────────────────────────────
+
+  private setStatus(next: ChatStatus): void {
+    if (next === 'idle') this.idleSinceValue ??= this.deps.now();
+    else this.idleSinceValue = null;
+    this.statusValue = next;
+    this.publishStatus();
+  }
+
+  /** Emits `chat.status` when status, waitingFor or header changed since the last one. */
+  private publishStatus(): void {
+    const waitingFor = this.waitingFor();
+    const key = JSON.stringify([this.statusValue, waitingFor, this.headerValue]);
+    if (key === this.published) return;
+    this.published = key;
+    this.flush(); // items emitted before this status stay before it
+    this.record({
+      event: 'chat.status',
+      data: {
+        sessionId: this.id,
+        status: this.statusValue,
+        header: this.header,
+        ...(waitingFor === undefined ? {} : { waitingFor }),
+      },
+    });
+  }
+
+  private pushItems(items: ChatItem[], replace: boolean): void {
+    for (const item of items) {
+      if (replace || this.items.has(item.id)) this.bufferedReplace = true;
+      this.buffered.set(item.id, item);
+    }
+    if (this.flushTimer !== undefined) return;
+    const wait = this.lastFlushAt + ITEMS_COALESCE_MS - this.deps.now();
+    if (wait <= 0) {
+      this.flush();
+    } else {
+      this.flushTimer = this.timers.setTimeout(() => {
+        this.flushTimer = undefined;
+        this.flush();
+      }, wait);
+    }
+  }
+
+  private flush(): void {
+    if (this.flushTimer !== undefined) {
+      this.timers.clearTimeout(this.flushTimer);
+      this.flushTimer = undefined;
+    }
+    if (this.buffered.size === 0) return;
+    const items = [...this.buffered.values()];
+    const replace = this.bufferedReplace;
+    this.buffered.clear();
+    this.bufferedReplace = false;
+    for (const item of items) this.items.set(item.id, item);
+    this.lastFlushAt = this.deps.now();
+    this.record({
+      event: 'chat.items',
+      data: { sessionId: this.id, items, ...(replace ? { replace: true } : {}) },
+    });
+  }
+
+  private record(e: ChatEventDraft): void {
+    const seq = this.log.append(e);
+    const stamped = this.log.get(seq);
+    if (stamped) this.out(stamped);
+  }
+
+  private out(e: EventMsg): void {
+    try {
+      this.deps.emit(e);
+    } catch {
+      // A failing consumer must not break the chat; replay recovers the event.
+    }
+  }
+}
+
+const toUserMessage = (input: UserInput, uuid: SDKUserMessage['uuid'], queued: boolean) => {
+  const content: unknown[] = [];
+  if (input.text.length > 0) content.push({ type: 'text', text: input.text });
+  for (const img of input.images ?? []) {
+    content.push({
+      type: 'image',
+      source: { type: 'base64', media_type: img.mediaType, data: img.dataBase64 },
+    });
+  }
+  // Never `client_composed`: `@path` mentions and `/commands` must behave as in the CLI.
+  const m: SDKUserMessage = {
+    type: 'user',
+    message: { role: 'user', content } as SDKUserMessage['message'],
+    parent_tool_use_id: null,
+    uuid,
+  };
+  if (queued) m.priority = 'next';
+  return m;
+};
+
+const describeRequest = (
+  variant: PermissionItem['variant'],
+  toolName: string,
+  input: Rec,
+  title: string | undefined,
+  displayName: string | undefined,
+): string => {
+  if (variant === 'plan') return 'Approve a plan';
+  if (variant === 'question') {
+    const first = Array.isArray(input.questions) ? input.questions[0] : undefined;
+    const q = isRec(first) ? str(first.question) : undefined;
+    return q ? `Answer a question: ${q}` : 'Answer a question';
+  }
+  return title ?? `Allow ${displayName ?? toolName}`;
+};
+
+const titleFrom = (text: string | undefined): string => {
+  const line = text
+    ?.split('\n')
+    .find((l) => l.trim())
+    ?.trim();
+  if (!line) return 'Chat';
+  return line.length > 80 ? `${line.slice(0, 79)}…` : line;
+};
+
+/** Context window from a result's `modelUsage`: the header model's entry, else the largest. */
+const contextWindow = (modelUsage: unknown, model: string | undefined): number | undefined => {
+  if (!isRec(modelUsage)) return undefined;
+  const own = model === undefined ? undefined : modelUsage[model];
+  const fromOwn = isRec(own) ? num(own.contextWindow) : undefined;
+  if (fromOwn !== undefined) return fromOwn;
+  const all = Object.values(modelUsage)
+    .map((u) => (isRec(u) ? num(u.contextWindow) : undefined))
+    .filter((n): n is number => n !== undefined);
+  return all.length > 0 ? Math.max(...all) : undefined;
+};

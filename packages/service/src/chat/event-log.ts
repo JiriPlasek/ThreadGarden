@@ -1,0 +1,66 @@
+/**
+ * Per-session replay buffer for the sequenced chat events (§4.5). Every
+ * `chat.items` / `chat.status` event a live session emits is appended here and
+ * stamped with the next sequence number; a reconnecting client asks for
+ * "everything after N" via `since(N)`. The buffer keeps the last `capacity`
+ * events; asking for anything older (or for a seq this log never issued, e.g.
+ * one from before a service restart) returns `'gap'` and the client reloads
+ * the chat with `chat.open`.
+ */
+import type { ChatItemsEvent, ChatStatusEvent } from '@pahub/protocol';
+
+export type ChatEvent =
+  { event: 'chat.items'; data: ChatItemsEvent } | { event: 'chat.status'; data: ChatStatusEvent };
+
+type WithoutSeq<T> = Omit<T, 'seq'> & { seq?: number };
+
+/** A `ChatEvent` before `append` stamps its seq (any seq passed in is overwritten). */
+export type ChatEventDraft =
+  | { event: 'chat.items'; data: WithoutSeq<ChatItemsEvent> }
+  | { event: 'chat.status'; data: WithoutSeq<ChatStatusEvent> };
+
+export const EVENT_LOG_CAPACITY = 5_000;
+
+export class EventLog {
+  private readonly buf: (ChatEvent | undefined)[];
+  private last = 0;
+
+  constructor(private readonly capacity = EVENT_LOG_CAPACITY) {
+    if (!Number.isInteger(capacity) || capacity < 1)
+      throw new Error('EventLog capacity must be ≥ 1');
+    this.buf = new Array<ChatEvent | undefined>(capacity);
+  }
+
+  /** Seq of the newest event (0 when empty). */
+  get seq(): number {
+    return this.last;
+  }
+
+  /** Stores the event stamped with the next seq and returns that seq. */
+  append(e: ChatEventDraft): number {
+    const seq = ++this.last;
+    this.buf[(seq - 1) % this.capacity] = { event: e.event, data: { ...e.data, seq } } as ChatEvent;
+    return seq;
+  }
+
+  /** The stamped event with this seq, if still buffered. */
+  get(seq: number): ChatEvent | undefined {
+    return seq >= this.oldest() && seq <= this.last
+      ? this.buf[(seq - 1) % this.capacity]
+      : undefined;
+  }
+
+  /** Events with seq > `seq`, in order; `'gap'` if some of them were evicted or never existed here. */
+  since(seq: number): ChatEvent[] | 'gap' {
+    if (!Number.isInteger(seq) || seq < 0 || seq > this.last || seq < this.oldest() - 1) {
+      return 'gap';
+    }
+    const out: ChatEvent[] = [];
+    for (let s = seq + 1; s <= this.last; s++) out.push(this.buf[(s - 1) % this.capacity]!);
+    return out;
+  }
+
+  private oldest(): number {
+    return Math.max(1, this.last - this.capacity + 1);
+  }
+}
