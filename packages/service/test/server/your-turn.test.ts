@@ -11,7 +11,7 @@ import { startService, type ServiceHandle, type StartOptions } from '../../src/m
 import type { SessionMessage } from '../../src/sdk/adapter.js';
 import { FakeAdapter } from '../../src/testing/fake-adapter.js';
 import { result } from '../chat/live-helpers.js';
-import { TestClient, eventually } from '../e2e/ws-client.js';
+import { TestClient, chatStatus, eventually } from '../e2e/ws-client.js';
 
 let dir: string;
 let svc: ServiceHandle | undefined;
@@ -139,6 +139,29 @@ describe('your turn (service)', () => {
     await c.call('chat.send', { sessionId: 'h1', text: 'two' });
     await c.call('chat.end', { sessionId: 'h1' });
     expect(await summary()).toMatchObject({ status: 'history', unread: false });
+  });
+
+  it('a result with a queued follow-up neither announces nor marks unread (R28)', async () => {
+    const adapter = new FakeAdapter();
+    const c = await start(adapter);
+    const { sessionId } = await c.call<{ sessionId: string }>('chat.create', {
+      cwd: dir,
+      text: 'one',
+    });
+    expect(await c.call('chat.send', { sessionId, text: 'two' })).toEqual({ queued: true });
+    const fake = adapter.lastSession();
+    fake.emit(result('r1'));
+    await c.waitFor(chatStatus(sessionId, 'idle'));
+    expect(count(c.events, finishedFor(sessionId))).toBe(0);
+    const summary = async () =>
+      (await c.call<Any>('sessions.summaries', { sessionIds: [sessionId] })).items[0];
+    expect(await summary()).toMatchObject({ unread: false });
+    expect((await c.call<Any>('places.counts', {})).needsYou).toBe(0);
+
+    fake.emit(result('r2')); // the turn that answered "two" leaves the chat waiting
+    await c.waitFor(finishedFor(sessionId));
+    expect(await summary()).toMatchObject({ status: 'idle', unread: true });
+    expect(count(c.events, finishedFor(sessionId))).toBe(1);
   });
 
   it('unread state survives a service restart', async () => {

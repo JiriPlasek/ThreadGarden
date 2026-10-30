@@ -104,7 +104,8 @@ export type LiveSessionDeps = {
   onError?: (err: unknown, context: string) => void;
   // ── v1.1 T2 ──
   /**
-   * A turn ended (a `result` that is not a startup failure), at `at`; called
+   * A turn ended (a `result` that is not a startup failure and leaves no
+   * queued user input, Ruling R28), at `at`; called
    * after the status changed and before `chatFinished` is emitted. A throw is
    * reported through `onError`.
    */
@@ -230,6 +231,8 @@ export class LiveSession {
   private headerValue: ChatHeaderInfo = {};
   private idleSinceValue: number | null = null;
   private lastActivityValue: number | null = null;
+  /** User inputs sent with `priority: 'next'` since the last `result` (Ruling R28). */
+  private queuedInputs = 0;
   private published = '';
   private firstText: string | undefined;
   private contextUsed: number | undefined;
@@ -380,6 +383,7 @@ export class LiveSession {
     const queued = BUSY.has(this.statusValue);
     const uuid = randomUUID();
     session.send(toUserMessage(input, uuid, queued));
+    if (queued) this.queuedInputs++;
     this.firstText ??= input.text;
     const images = (input.images ?? []).map((i) => ({
       mediaType: i.mediaType,
@@ -577,7 +581,7 @@ export class LiveSession {
         this.setStatus('failed');
       } else {
         this.setStatus(this.nextStatus(m));
-        if ((m as { type?: unknown }).type === 'result') this.turnEnded();
+        if ((m as { type?: unknown }).type === 'result') this.resultArrived();
       }
     } catch (err) {
       // Defensive: one odd message must not take the chat down.
@@ -748,6 +752,20 @@ export class LiveSession {
   private noteActivity(): void {
     this.lastActivityValue = this.deps.now();
     if (this.deps.onActivity) this.guard('onActivity', () => this.deps.onActivity?.(this.id));
+  }
+
+  /**
+   * Ruling R28: a `result` while queued user input is pending is not a
+   * finished turn: Claude goes straight on to that input, so the chat is not
+   * waiting for the user. The CLI takes up everything queued at that turn
+   * boundary, so the count restarts there and the next `result` decides.
+   */
+  private resultArrived(): void {
+    if (this.queuedInputs > 0) {
+      this.queuedInputs = 0;
+      return;
+    }
+    this.turnEnded();
   }
 
   /** A turn ended: `onTurnEnded` (pahub's unread state), then `chatFinished` for the UI. */

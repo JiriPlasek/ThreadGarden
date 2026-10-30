@@ -182,7 +182,9 @@ right now: a project rises as soon as a chat in it is active, and
 `projects.changed` (at most once a second) tells clients when live activity
 changed the order. Each project says whether its folder still `exists`
 (a `stat`, cached per folder, refreshed at most every 60 s and after a sync);
-the UI groups the missing ones under Missing folders.
+the UI groups the missing ones under Missing folders. At most two checks run
+at once and one per volume, so a hung network share delays only its own
+folders.
 
 **Catalog and paging.** Lists combine three sources: index rows, pahub's own
 live chats (status, what they wait for) and external sessions. The live and
@@ -194,7 +196,8 @@ a chat changes status. Hidden projects stay visible in Needs you and Running
 Titles follow pahub custom title → SDK title → summary → first prompt; all
 but a custom title are cut to 80 characters.
 
-**Your turn.** When a pahub chat's turn ends (a `result`), the service stores
+**Your turn.** When a pahub chat's turn ends (a `result` that leaves it
+waiting for the user, not one followed by queued input), the service stores
 the time in `pahub.db` (`turn_state`, pahub's own table) and emits
 `chatFinished`. A chat is `unread` while its last turn ended after it was last
 seen (`chat.markSeen`, also implied by `chat.send` and `chat.create`) and it is

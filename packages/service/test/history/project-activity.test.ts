@@ -9,6 +9,7 @@ import {
   PROJECT_ORDER_THROTTLE_MS,
   ProjectOrderNotifier,
   folderExists,
+  volumeOf,
 } from '../../src/history/project-activity.js';
 import { ManualTimers, settle } from '../chat/live-helpers.js';
 
@@ -142,6 +143,83 @@ describe('FolderCheck', () => {
     expect(f.onChange).toHaveBeenCalledTimes(1);
     await f.check.refresh(['/a', '/b']); // nothing changed: no notification
     expect(f.onChange).toHaveBeenCalledTimes(1);
+  });
+
+  /** A stat whose answers the test gives by hand; tracks how many run at once. */
+  const slowStat = () => {
+    const answer = new Map<string, (exists: boolean) => void>();
+    const stats = { running: 0, peak: 0, started: [] as string[] };
+    const stat = (p: string) =>
+      new Promise<boolean>((resolve) => {
+        stats.running++;
+        stats.peak = Math.max(stats.peak, stats.running);
+        stats.started.push(p);
+        answer.set(p, (exists) => {
+          stats.running--;
+          resolve(exists);
+        });
+      });
+    return { stat, answer, stats };
+  };
+
+  it('runs at most 2 checks at a time and caches each answer as it arrives', async () => {
+    const s = slowStat();
+    const onChange = vi.fn();
+    const check = new FolderCheck({ stat: s.stat, onChange });
+    for (const p of ['C:\\a', 'D:\\b', 'E:\\c', 'F:\\d']) check.exists(p);
+    await settle();
+    expect(s.stats.started).toEqual(['C:\\a', 'D:\\b']);
+
+    s.answer.get('D:\\b')!(false); // C:\a is still out
+    await settle();
+    expect(check.exists('D:\\b')).toBe(false);
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(s.stats.started).toEqual(['C:\\a', 'D:\\b', 'E:\\c']);
+    s.answer.get('E:\\c')!(true);
+    await settle();
+    s.answer.get('F:\\d')!(false);
+    await settle();
+    expect(check.exists('F:\\d')).toBe(false);
+    expect(onChange).toHaveBeenCalledTimes(2);
+    expect(s.stats.peak).toBe(2);
+    // The slow path is never stat-ed twice at once.
+    check.exists('C:\\a');
+    await settle();
+    expect(s.stats.started.filter((p) => p === 'C:\\a')).toHaveLength(1);
+  });
+
+  it('a hung network share holds only its own volume', async () => {
+    const s = slowStat();
+    const check = new FolderCheck({ stat: s.stat, onChange: () => {} });
+    const share = ['\\\\nas\\work\\a', '\\\\nas\\work\\b', '\\\\nas\\work\\c'];
+    const local = ['C:\\x', 'C:\\y', '/home/me/z'];
+    for (const p of [...share, ...local]) check.exists(p);
+    await settle();
+    // One stat on the share at a time; the other slot serves the local folders.
+    expect(s.stats.started).toEqual([share[0], local[0]]);
+    s.answer.get(local[0]!)!(false);
+    await settle();
+    s.answer.get(local[1]!)!(true);
+    await settle();
+    s.answer.get(local[2]!)!(false);
+    await settle();
+    expect(local.map((p) => check.exists(p))).toEqual([false, true, false]);
+    expect(s.stats.started.filter((p) => p.startsWith('\\\\nas'))).toEqual([share[0]]);
+    // Paths on the hung share keep their (default) answer meanwhile.
+    expect(share.map((p) => check.exists(p))).toEqual([true, true, true]);
+    expect(s.stats.peak).toBe(2);
+    // When the share answers, its other folders are checked in turn.
+    s.answer.get(share[0]!)!(false);
+    await settle();
+    expect(s.stats.started.at(-1)).toBe(share[1]);
+  });
+
+  it('volumeOf names drive letters, UNC shares and POSIX mount points', () => {
+    expect(volumeOf('C:\\work\\pahub')).toBe('c:');
+    expect(volumeOf('\\\\NAS\\Work\\repo')).toBe('//nas/work');
+    expect(volumeOf('//nas/work/repo')).toBe('//nas/work');
+    expect(volumeOf('/mnt/nas/repo')).toBe('/mnt/nas');
+    expect(volumeOf('/work')).toBe('/work');
   });
 
   it('a failing stat keeps the folder listed as existing', async () => {

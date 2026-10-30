@@ -327,13 +327,15 @@ export class Db implements LiveRegistry {
   }
 
   /**
-   * Removes a session's row and index text. `meta` and `drafts` are kept on
-   * purpose (cheap, and a pahub title survives a transcript that reappears).
+   * Removes a session's row, index text and "Your turn" state. `meta` and
+   * `drafts` are kept on purpose (cheap, and a pahub title survives a
+   * transcript that reappears).
    */
   deleteSession(sessionId: string): void {
     this.raw.exec('BEGIN');
     try {
       this.raw.prepare('DELETE FROM sessions WHERE session_id = ?').run(sessionId);
+      this.raw.prepare('DELETE FROM turn_state WHERE session_id = ?').run(sessionId);
       this.raw.prepare('DELETE FROM fts_gen WHERE session_id = ?').run(sessionId);
       this.deleteFtsRowids(this.ftsRows(sessionId).map((r) => r.rowid));
       this.raw.exec('COMMIT');

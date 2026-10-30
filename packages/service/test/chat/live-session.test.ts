@@ -917,6 +917,43 @@ describe('LiveSession turn ends and activity (v1.1)', () => {
     expect(finished(ctx.events)).toHaveLength(2);
   });
 
+  it('a result with a queued follow-up is not a finished turn (R28); the last result is', async () => {
+    const turns: string[] = [];
+    const ctx = setup({ onTurnEnded: (id) => turns.push(id) });
+    const s = LiveSession.create('/p', { text: 'first' }, ctx.opts);
+    const fake = ctx.adapter.lastSession();
+    expect(s.send({ text: 'second' })).toEqual({ queued: true });
+    fake.emit(result('r1')); // Claude goes straight on to "second"
+    await settle();
+    expect(turns).toEqual([]);
+    expect(finished(ctx.events)).toEqual([]);
+
+    fake.emit(assistantText('a2', 'answering second'));
+    fake.emit(result('r2'));
+    await settle();
+    expect(turns).toEqual([s.sessionId]);
+    expect(finished(ctx.events)).toHaveLength(1);
+  });
+
+  it('follow-ups queued during one turn are picked up together by the next (R28)', async () => {
+    const ctx = setup();
+    const s = LiveSession.create('/p', { text: 'first' }, ctx.opts);
+    const fake = ctx.adapter.lastSession();
+    s.send({ text: 'second' });
+    s.send({ text: 'third' });
+    fake.emit(result('r1'));
+    await settle();
+    expect(finished(ctx.events)).toEqual([]);
+    fake.emit(result('r2')); // the turn that answered both
+    await settle();
+    expect(finished(ctx.events)).toHaveLength(1);
+    // The next turn starts with an empty queue: its end is reported.
+    s.send({ text: 'fourth' });
+    fake.emit(result('r3'));
+    await settle();
+    expect(finished(ctx.events)).toHaveLength(2);
+  });
+
   it('names the chat with describe when it can', async () => {
     const ctx = setup({ describe: () => ({ title: 'Indexed title', projectName: 'pahub' }) });
     const s = LiveSession.create('/work/proj', { text: 'hi' }, ctx.opts);
