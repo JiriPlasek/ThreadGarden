@@ -10,7 +10,7 @@ pub mod tray;
 
 use std::path::PathBuf;
 
-use tauri::{AppHandle, DragDropEvent, Manager, WindowEvent};
+use tauri::{AppHandle, DragDropEvent, Manager, RunEvent, WindowEvent};
 use tokio::sync::Mutex;
 
 /// Serialises `service_connection` so concurrent calls never start two services.
@@ -62,6 +62,16 @@ async fn connect_service(app: &AppHandle) -> Result<service::Connection, String>
 #[tauri::command]
 async fn service_connection(app: AppHandle) -> Result<service::Connection, String> {
     connect_service(&app).await
+}
+
+/// "Restart service" (spec §4.2): stops the recorded service with all its work
+/// and waits for its process to exit; the UI then calls `service_connection`,
+/// which starts a fresh one. Works for an incompatible service too.
+#[tauri::command]
+async fn service_stop(app: AppHandle) -> Result<(), String> {
+    let _guard = CONNECT.lock().await;
+    let dir = data_dir(&app)?;
+    service::stop(&dir, service::STOP_TIMEOUT, discovery::pid_alive).await
 }
 
 async fn blocking<T: Send + 'static>(
@@ -125,6 +135,7 @@ pub fn run() {
         .plugin(tauri_plugin_autostart::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             service_connection,
+            service_stop,
             api_key_get,
             api_key_set,
             api_key_clear,
@@ -156,6 +167,20 @@ pub fn run() {
                 _ => {}
             }
         })
-        .run(tauri::generate_context!())
-        .expect("error while running pahub");
+        .build(tauri::generate_context!())
+        .expect("error while building pahub")
+        .run(on_run_event);
+}
+
+/// macOS: clicking the Dock icon while the window is hidden in the tray
+/// (`Reopen`) shows it again. Windows and Linux have no such event: the tray
+/// icon and a second launch (single-instance) bring the window back there.
+fn on_run_event(app: &AppHandle, event: RunEvent) {
+    match event {
+        #[cfg(target_os = "macos")]
+        RunEvent::Reopen { .. } => tray::show_main_window(app),
+        _ => {
+            let _ = app;
+        }
+    }
 }

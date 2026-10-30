@@ -194,32 +194,36 @@ pub fn check_protocol(hello: &HelloResult) -> Result<(), String> {
 
 /// Sends `hello` over the service's WebSocket (token as the `pahub.<token>` subprotocol).
 pub async fn hello(port: u16, token: &str, timeout: Duration) -> Result<HelloResult, String> {
-    tokio::time::timeout(timeout, hello_inner(port, token))
+    let params =
+        serde_json::json!({ "protocolVersion": PROTOCOL_VERSION, "client": "pahub-desktop" });
+    let result = tokio::time::timeout(timeout, request(port, token, "hello", params))
         .await
-        .map_err(|_| "hello-timeout".to_string())?
+        .map_err(|_| "hello-timeout".to_string())??;
+    serde_json::from_value(result).map_err(|e| format!("hello-failed: {e}"))
 }
 
-async fn hello_inner(port: u16, token: &str) -> Result<HelloResult, String> {
+/// One request over a fresh connection to the service; resolves to its `result`.
+/// Errors read `<method>-failed: …`.
+async fn request(
+    port: u16,
+    token: &str,
+    method: &str,
+    params: serde_json::Value,
+) -> Result<serde_json::Value, String> {
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest, http::HeaderValue};
 
-    let err = |e: &dyn std::fmt::Display| format!("hello-failed: {e}");
-    let mut request = format!("ws://127.0.0.1:{port}")
+    let err = |e: &dyn std::fmt::Display| format!("{method}-failed: {e}");
+    let mut req = format!("ws://127.0.0.1:{port}")
         .into_client_request()
         .map_err(|e| err(&e))?;
     let protocol = HeaderValue::from_str(&format!("pahub.{token}")).map_err(|e| err(&e))?;
-    request
-        .headers_mut()
-        .insert("Sec-WebSocket-Protocol", protocol);
-    let (mut ws, _) = tokio_tungstenite::connect_async(request)
+    req.headers_mut().insert("Sec-WebSocket-Protocol", protocol);
+    let (mut ws, _) = tokio_tungstenite::connect_async(req)
         .await
         .map_err(|e| err(&e))?;
-    let req = serde_json::json!({
-        "id": 1,
-        "method": "hello",
-        "params": { "protocolVersion": PROTOCOL_VERSION, "client": "pahub-desktop" },
-    });
-    ws.send(Message::text(req.to_string()))
+    let msg = serde_json::json!({ "id": 1, "method": method, "params": params });
+    ws.send(Message::text(msg.to_string()))
         .await
         .map_err(|e| err(&e))?;
     while let Some(msg) = ws.next().await {
@@ -233,11 +237,49 @@ async fn hello_inner(port: u16, token: &str) -> Result<HelloResult, String> {
         }
         let _ = ws.close(None).await;
         if let Some(e) = reply.get("error") {
-            return Err(format!("hello-failed: {e}"));
+            return Err(format!("{method}-failed: {e}"));
         }
-        return serde_json::from_value(reply["result"].clone()).map_err(|e| err(&e));
+        return Ok(reply["result"].clone());
     }
-    Err("hello-failed: connection closed".into())
+    Err(format!("{method}-failed: connection closed"))
+}
+
+/// How long `stop` waits for the old service's process to exit.
+pub const STOP_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Stops the recorded service ("Restart service", spec §4.2): asks it to shut
+/// down with all its work (`service.shutdown {stopAll: true}`, a method every
+/// protocol version has, so this also works for an incompatible service) and
+/// resolves once its process has exited, so a new service can take over the
+/// data dir. Nothing recorded, or the process already gone, is success; a
+/// refused request is fine too (the UI may have asked it first, and it is
+/// already closing).
+pub async fn stop(
+    data_dir: &Path,
+    timeout: Duration,
+    is_alive: impl Fn(u32) -> bool,
+) -> Result<(), String> {
+    let Some(d) = discovery::read_discovery(data_dir).filter(|d| is_alive(d.pid)) else {
+        return Ok(());
+    };
+    let params = serde_json::json!({ "stopAll": true });
+    let _ = tokio::time::timeout(
+        HELLO_TIMEOUT,
+        request(d.port, &d.token, "service.shutdown", params),
+    )
+    .await;
+    let deadline = tokio::time::Instant::now() + timeout;
+    while is_alive(d.pid) {
+        if tokio::time::Instant::now() >= deadline {
+            return Err(format!(
+                "service-stop-timeout: the pahub service (pid {}) did not exit within {} s",
+                d.pid,
+                timeout.as_secs_f32()
+            ));
+        }
+        tokio::time::sleep(POLL_INTERVAL).await;
+    }
+    Ok(())
 }
 
 fn connection(d: &Discovery, hello: &HelloResult, app_version: &str) -> Connection {
@@ -353,6 +395,41 @@ mod tests {
             }
         });
         port
+    }
+
+    /// A stand-in service that answers every request with `{}`, records each
+    /// request, and "exits" (clears `alive`) once asked to shut down.
+    async fn shutdown_service(
+        token: &'static str,
+        alive: Arc<AtomicBool>,
+    ) -> (u16, Arc<std::sync::Mutex<Vec<serde_json::Value>>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let log = seen.clone();
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                let (log, alive) = (log.clone(), alive.clone());
+                tokio::spawn(async move {
+                    let check = RequireToken(format!("pahub.{token}"));
+                    let Ok(mut ws) = tokio_tungstenite::accept_hdr_async(stream, check).await
+                    else {
+                        return;
+                    };
+                    while let Some(Ok(msg)) = ws.next().await {
+                        let Ok(text) = msg.to_text() else { continue };
+                        let req: serde_json::Value = serde_json::from_str(text).unwrap();
+                        let reply = serde_json::json!({ "id": req["id"], "result": {} });
+                        let _ = ws.send(Message::text(reply.to_string())).await;
+                        if req["method"] == "service.shutdown" {
+                            alive.store(false, Ordering::SeqCst);
+                        }
+                        log.lock().unwrap().push(req);
+                    }
+                });
+            }
+        });
+        (port, seen)
     }
 
     fn write_discovery(dir: &Path, port: u16, token: &str, started_at: u64) {
@@ -585,5 +662,50 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(err, "service-runtime-missing: x");
+    }
+
+    #[tokio::test]
+    async fn stop_asks_the_service_to_shut_down_and_waits_for_its_exit() {
+        let dir = tempfile::tempdir().unwrap();
+        let alive = Arc::new(AtomicBool::new(true));
+        let (port, seen) = shutdown_service("tok", alive.clone()).await;
+        write_discovery(dir.path(), port, "tok", 1);
+        let flag = alive.clone();
+        stop(dir.path(), Duration::from_secs(3), move |_| {
+            flag.load(Ordering::SeqCst)
+        })
+        .await
+        .unwrap();
+        assert!(!alive.load(Ordering::SeqCst));
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0]["method"], "service.shutdown");
+        assert_eq!(seen[0]["params"], serde_json::json!({ "stopAll": true }));
+    }
+
+    #[tokio::test]
+    async fn stop_without_a_live_service_is_a_no_op() {
+        let dir = tempfile::tempdir().unwrap();
+        stop(dir.path(), Duration::from_millis(100), |_| true)
+            .await
+            .unwrap();
+        write_discovery(dir.path(), 1, "tok", 1);
+        stop(dir.path(), Duration::from_millis(100), |_| false)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn stop_gives_up_when_the_process_does_not_exit() {
+        let dir = tempfile::tempdir().unwrap();
+        // Nothing listens on the recorded port; the process stays alive.
+        let gone = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = gone.local_addr().unwrap().port();
+        drop(gone);
+        write_discovery(dir.path(), port, "tok", 1);
+        let err = stop(dir.path(), Duration::from_millis(300), |_| true)
+            .await
+            .unwrap_err();
+        assert!(err.starts_with("service-stop-timeout"), "{err}");
     }
 }
