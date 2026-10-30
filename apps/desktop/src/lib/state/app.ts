@@ -4,6 +4,7 @@
  */
 import { serviceConnection } from '../native';
 import { ServiceClient } from '../service/client';
+import { agents } from './agents.svelte';
 import { chats } from './chats.svelte';
 import { connection } from './connection.svelte';
 import { places } from './places.svelte';
@@ -26,6 +27,7 @@ const run = async (): Promise<void> => {
   chats.init(client);
   tabs.init(client);
   settings.init(client);
+  agents.init(client);
   tabs.subscribe(() => chats.sync(tabs.open));
   await client.connect(`ws://127.0.0.1:${conn.port}`, conn.token);
   await Promise.all([settings.load(), settings.restoreColumns(), tabs.restore()]);

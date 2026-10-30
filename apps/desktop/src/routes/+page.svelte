@@ -1,4 +1,5 @@
 <script lang="ts">
+  import AppShell from '#lib/components/layout/AppShell.svelte';
   import { startApp } from '#lib/state/app.js';
   import { connection } from '#lib/state/connection.svelte.js';
 
@@ -14,22 +15,25 @@
   $effect(() => {
     startApp().catch((err: unknown) => (failure = describe(err)));
   });
+
+  /** After the first successful connection the layout stays up; drops show a banner. */
+  const ready = $derived(connection.status === 'open' || connection.status === 'reconnecting');
 </script>
 
-<main class="flex min-h-screen items-center justify-center p-8">
-  {#if failure}
-    <p class="text-destructive" data-testid="status">{failure}</p>
-  {:else if connection.status === 'open'}
-    <p data-testid="status">
-      pahub service {connection.serviceVersion}{connection.restartNeeded
-        ? ' (restart the pahub service to update)'
-        : ''}
+{#if failure}
+  <main class="flex min-h-screen items-center justify-center p-8">
+    <p class="text-destructive text-sm" data-testid="status">{failure}</p>
+  </main>
+{:else if connection.status === 'incompatible'}
+  <main class="flex min-h-screen items-center justify-center p-8">
+    <p class="text-destructive text-sm" data-testid="status">
+      Restart the pahub service to update.
     </p>
-  {:else if connection.status === 'incompatible'}
-    <p class="text-destructive" data-testid="status">Restart the pahub service to update.</p>
-  {:else}
-    <p class="text-muted-foreground" data-testid="status">
-      {connection.status === 'reconnecting' ? 'Reconnecting…' : 'Connecting…'}
-    </p>
-  {/if}
-</main>
+  </main>
+{:else if ready}
+  <AppShell />
+{:else}
+  <main class="flex min-h-screen items-center justify-center p-8">
+    <p class="text-muted-foreground text-sm" data-testid="status">Connecting…</p>
+  </main>
+{/if}

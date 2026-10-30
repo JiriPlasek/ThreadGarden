@@ -5,7 +5,7 @@ import { ChatsState } from '../../src/lib/state/chats.svelte';
 import { ConnectionState } from '../../src/lib/state/connection.svelte';
 import { PlacesState } from '../../src/lib/state/places.svelte';
 import { SessionsState } from '../../src/lib/state/sessions.svelte';
-import { SettingsState } from '../../src/lib/state/settings.svelte';
+import { COLUMNS_SAVE_DELAY_MS, SettingsState } from '../../src/lib/state/settings.svelte';
 import { TabsState } from '../../src/lib/state/tabs.svelte';
 import { FakeServer } from '../service/fake-ws';
 
@@ -258,16 +258,26 @@ describe('tabs', () => {
     expect(t.active).toBe('x');
   });
 
-  it('column widths persist through uiState', async () => {
+  it('column widths persist through uiState, debounced', async () => {
     const s = new SettingsState();
     s.init(client);
+    s.setColumnWidth('places', 200);
     s.setColumnWidth('places', 211.4);
     await flushAsync();
+    expect(s.columnWidths).toEqual({ places: 211 });
+    expect(store.has('columns')).toBe(false);
+    await vi.advanceTimersByTimeAsync(COLUMNS_SAVE_DELAY_MS);
     expect(store.get('columns')).toEqual({ places: 211 });
+    expect(
+      server.calls('uiState.set').filter((c) => (c.params as { key: string }).key === 'columns'),
+    ).toHaveLength(1);
+    s.setCollapsed('list', true);
+    await flushAsync();
     const s2 = new SettingsState();
     s2.init(client);
     await s2.restoreColumns();
     expect(s2.columnWidths).toEqual({ places: 211 });
+    expect(s2.collapsed).toEqual({ list: true });
   });
 });
 

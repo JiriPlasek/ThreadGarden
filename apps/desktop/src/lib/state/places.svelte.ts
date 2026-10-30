@@ -23,6 +23,8 @@ export class PlacesState {
     api.on('projects.changed', refresh);
     api.on('sessions.changed', refresh);
     api.on('external.changed', refresh);
+    // Live status changes move chats in and out of "Needs you" / "Running".
+    api.on('chat.status', refresh);
     // Fetch on every successful hello, including the first one (init may run before connect).
     api.onOpen(() => this.refresh());
     if (api.status === 'open') refresh();
@@ -66,11 +68,22 @@ export class PlacesState {
     return this.inflight;
   };
 
-  pinProject = (projectId: string, pinned: boolean): Promise<unknown> =>
-    this.api!.request('projects.update', { projectId, pinned });
+  /** The service emits no event for its own metadata changes, so the lists are re-fetched here. */
+  pinProject = async (projectId: string, pinned: boolean): Promise<void> => {
+    await this.api!.request('projects.update', { projectId, pinned });
+    await this.refresh();
+  };
 
-  hideProject = (projectId: string, hidden: boolean): Promise<unknown> =>
-    this.api!.request('projects.update', { projectId, hidden });
+  /** Hiding the selected project moves the selection to "All chats". */
+  hideProject = async (projectId: string, hidden: boolean): Promise<void> => {
+    await this.api!.request('projects.update', { projectId, hidden });
+    if (hidden && this.selected.kind === 'project' && this.selected.projectId === projectId) {
+      this.select({ kind: 'all' });
+    } else {
+      for (const cb of this.subscribers) cb();
+    }
+    await this.refresh();
+  };
 }
 
 export const places = new PlacesState();

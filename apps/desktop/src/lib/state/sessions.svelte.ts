@@ -22,16 +22,37 @@ export class SessionsState {
     const refetch = () => quietly(this.reload(true));
     api.on('sessions.changed', refetch);
     api.on('external.changed', refetch);
-    api.on('chat.status', (e) => {
-      const i = this.items.findIndex((s) => s.sessionId === e.sessionId);
-      const cur = this.items[i];
-      if (!cur) return;
-      const next = this.items.slice();
-      next[i] = { ...cur, status: e.status, waitingFor: e.waitingFor };
-      this.items = next;
-    });
+    api.on('chat.status', (e) =>
+      this.patch(e.sessionId, { status: e.status, waitingFor: e.waitingFor }),
+    );
     api.onOpen(() => this.reload(true));
     if (api.status === 'open') refetch();
+  };
+
+  /** Pins or unpins a chat (pahub metadata only), then refreshes the list. */
+  setPinned = async (sessionId: string, pinned: boolean): Promise<void> => {
+    if (!this.api) return;
+    await this.api.request('meta.update', { sessionId, pinned });
+    this.patch(sessionId, { pinned });
+    await this.reload(true);
+  };
+
+  /** Sets pahub's own title for a chat; `null` or blank restores the original title (spec §5.3). */
+  rename = async (sessionId: string, title: string | null): Promise<void> => {
+    if (!this.api) return;
+    const customTitle = title?.trim() ? title.trim() : null;
+    await this.api.request('meta.update', { sessionId, customTitle });
+    if (customTitle) this.patch(sessionId, { title: customTitle });
+    await this.reload(true);
+  };
+
+  private patch = (sessionId: string, change: Partial<ChatSummary>): void => {
+    const i = this.items.findIndex((s) => s.sessionId === sessionId);
+    const cur = this.items[i];
+    if (!cur) return;
+    const next = this.items.slice();
+    next[i] = { ...cur, ...change };
+    this.items = next;
   };
 
   setQuery = (query: string): Promise<void> => {
