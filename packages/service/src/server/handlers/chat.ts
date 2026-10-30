@@ -38,8 +38,12 @@ export const PERMISSION_MODES: readonly PermissionMode[] = [
 ];
 export const EFFORT_LEVELS: readonly Effort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 
-/** Normalized SDK history kept for this many recently opened history-only chats. */
-export const HISTORY_CACHE_SIZE = 8;
+/**
+ * Approximate budget (characters of item text) of the normalized-history
+ * cache; least recently used chats are dropped beyond it (the most recent
+ * one is always kept).
+ */
+export const HISTORY_CACHE_CHARS = 32 * 1024 * 1024;
 
 export type ChatHandlerDeps = {
   host: SessionHost;
@@ -52,6 +56,33 @@ export type ChatHandlerDeps = {
   indexNow: (sessionIds: string[]) => Promise<void>;
   emit: (e: EventMsg) => void;
   onError: (err: unknown, context: string) => void;
+  /** Overrides `HISTORY_CACHE_CHARS`. */
+  historyCacheChars?: number;
+};
+
+/** Rough memory weight of an item: its text plus a fixed overhead. */
+const itemChars = (i: ChatItem): number => {
+  switch (i.kind) {
+    case 'user':
+    case 'thinking':
+    case 'system':
+      return 100 + i.text.length;
+    case 'assistantText':
+      return 100 + i.markdown.length;
+    case 'toolCall':
+      return 300 + (i.resultText?.length ?? 0);
+    default:
+      return 300;
+  }
+};
+
+type CacheEntry = {
+  /** The host's session object when read while pahub held the chat, else undefined. */
+  owner: LiveSession | undefined;
+  /** For history-only chats: the indexed `lastModified:fileSize` at read time. */
+  key: string | undefined;
+  items: ChatItem[];
+  chars: number;
 };
 
 type Command = { name: string; description: string; argumentHint: string };
@@ -114,7 +145,15 @@ const toModel = (m: ModelInfo): Model => ({
 
 export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): void => {
   const { host, adapter, db, catalog } = deps;
-  const historyCache = new Map<string, { key: string; items: ChatItem[] }>();
+  const historyCache = new Map<string, CacheEntry>();
+  const cacheBudget = deps.historyCacheChars ?? HISTORY_CACHE_CHARS;
+  let cachedChars = 0;
+  const forget = (sessionId: string): void => {
+    const e = historyCache.get(sessionId);
+    if (!e) return;
+    cachedChars -= e.chars;
+    historyCache.delete(sessionId);
+  };
   const commandsByCwd = new Map<string, Command[]>();
   let lastCommands: Command[] | undefined;
   let lastModels: Model[] | undefined;
@@ -136,14 +175,24 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): voi
 
   /**
    * The chat's SDK history as items (upserted by id, so tool results update
-   * their calls). History-only chats are cached by the indexed
-   * `lastModified`/`fileSize`; chats the host holds are always read fresh.
+   * their calls), read and normalized at most once per validity window:
+   * - while the host holds the chat (live, paused or failed), for the life of
+   *   that session object. Resume safety (§4.4) means nothing but this process
+   *   writes the transcript meanwhile, and everything the process produced
+   *   after the read is in its snapshot. End, stop-all and resume replace or
+   *   drop the object, so the next open reads again;
+   * - for a history-only chat, while its indexed `lastModified`/`fileSize`
+   *   stay the same.
    */
-  const historyItems = async (sessionId: string, cacheable: boolean): Promise<ChatItem[]> => {
-    const row = cacheable ? db.getSession(sessionId) : undefined;
+  const historyItems = async (sessionId: string): Promise<ChatItem[]> => {
+    const owner = host.get(sessionId);
+    const row = owner ? undefined : db.getSession(sessionId);
     const key = row ? `${row.lastModified}:${row.fileSize}` : undefined;
     const hit = historyCache.get(sessionId);
-    if (key !== undefined && hit?.key === key) {
+    const valid = owner
+      ? hit?.owner === owner
+      : hit?.owner === undefined && key !== undefined && hit?.key === key;
+    if (hit && valid) {
       historyCache.delete(sessionId); // most recently used last
       historyCache.set(sessionId, hit);
       return hit.items;
@@ -153,12 +202,16 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): voi
     const byId = new Map<string, ChatItem>();
     for (const m of messages) for (const item of normalizer.push(m).items) byId.set(item.id, item);
     const items = [...byId.values()];
-    historyCache.delete(sessionId);
-    if (key !== undefined) {
-      historyCache.set(sessionId, { key, items });
+    forget(sessionId);
+    // Only cache what has a validity window; and only if the chat was not
+    // taken over or released while the read ran.
+    if ((owner && host.get(sessionId) === owner) || (!owner && key !== undefined)) {
+      const chars = items.reduce((n, i) => n + itemChars(i), 0);
+      historyCache.set(sessionId, { owner, key, items, chars });
+      cachedChars += chars;
       for (const old of historyCache.keys()) {
-        if (historyCache.size <= HISTORY_CACHE_SIZE) break;
-        historyCache.delete(old);
+        if (cachedChars <= cacheBudget || old === sessionId) break;
+        forget(old);
       }
     }
     return items;
@@ -176,7 +229,7 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): voi
   ): Promise<{ items: ChatItem[]; seq: number; header: ChatHeaderInfo }> => {
     let history: ChatItem[];
     try {
-      history = await historyItems(sessionId, host.get(sessionId) === undefined);
+      history = await historyItems(sessionId);
     } catch (err) {
       // A chat pahub runs may not have a transcript yet; a history-only chat needs one.
       if (!host.get(sessionId)) throw err;
@@ -256,6 +309,7 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): voi
       // is allowed; the UI asked the user to confirm before sending.
       const check = await deps.resumeCheck(p.sessionId);
       if (check.status === 'blocked') throw new ServiceError('RESUME_BLOCKED', check.reason);
+      forget(p.sessionId); // the resumed process's view starts from a fresh read
       s = host.ensureLive(p.sessionId, cwd);
       changed([p.sessionId]);
     }
@@ -270,6 +324,7 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): voi
 
   router.register('chat.end', async (p) => {
     if (host.get(p.sessionId)) {
+      forget(p.sessionId); // the transcript now holds the live turns
       host.end(p.sessionId);
       changed([p.sessionId]);
     }

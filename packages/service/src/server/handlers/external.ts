@@ -5,8 +5,14 @@ import type { ClaudeFound, ClaudeProblem } from '../../sdk/claude-path.js';
 import type { Router } from '../router.js';
 
 export type ExternalHandlerDeps = {
-  /** Absent when `claude` is not available; resume checks then answer `unverified`. */
+  /** Absent when `claude` cannot be run; resume checks then answer `unverified`. */
   poller?: ExternalPoller;
+  /**
+   * Whether `claude agents` can be run right now (e.g. `claude` has been
+   * located). While false, resume checks answer `unverified` without trying.
+   * Default: always.
+   */
+  externalUsable?: () => boolean;
   /** `SDKSessionInfo.lastModified` from the history index; never a transcript stat. */
   lastModifiedOf: (sessionId: string) => number | undefined;
   /** Where `claude` was found, or why not; undefined while unknown. */
@@ -21,11 +27,12 @@ export type ExternalHandlerDeps = {
  * Shared by `chat.resumeCheck` and the server-side gate in `chat.send`.
  */
 export const makeResumeChecker =
-  (deps: Pick<ExternalHandlerDeps, 'poller' | 'lastModifiedOf' | 'now'>) =>
+  (deps: Pick<ExternalHandlerDeps, 'poller' | 'externalUsable' | 'lastModifiedOf' | 'now'>) =>
   async (sessionId: string): Promise<ResumeCheck> =>
     checkResume({
       sessionId,
-      external: deps.poller ? await deps.poller.current() : null,
+      external:
+        deps.poller && (deps.externalUsable?.() ?? true) ? await deps.poller.current() : null,
       lastModified: deps.lastModifiedOf(sessionId) ?? 0,
       now: (deps.now ?? Date.now)(),
     });

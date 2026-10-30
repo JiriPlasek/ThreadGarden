@@ -72,6 +72,10 @@ export type StartOptions = {
    * the located `claude` when it was found at start; without either there is no poller.
    */
   externalRun?: (args: string[]) => Promise<string>;
+  /** Builds the `claude agents` runner for a located `claude` (default: spawn it). */
+  claudeRunner?: (claudePath: string) => (args: string[]) => Promise<string>;
+  /** Approximate size budget (characters) of the chat history cache; see `registerChatHandlers`. */
+  historyCacheChars?: number;
   /** Base environment of session processes (default `process.env`); the API key is added on top. */
   sessionEnv?: NodeJS.ProcessEnv;
   /** Timers for the session host (coalescing, idle reclaim); default Node timers. */
@@ -127,6 +131,12 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   let poller: ExternalPoller | undefined;
   let startSync: (() => void) | undefined;
   const live = (): { list(): LiveChat[] } | undefined => opts.live ?? host;
+  const claudeRunner = opts.claudeRunner ?? makeClaudeRunner;
+  /** `claude agents` can run now: an injected runner, or a located `claude`. */
+  const externalUsable = (): boolean => {
+    const c = claude.current;
+    return opts.externalRun !== undefined || (c !== undefined && 'path' in c);
+  };
 
   const locate = async (settingPath: string | null): Promise<ClaudeStatus | undefined> => {
     if (!opts.locateClaude) return claude.current;
@@ -147,6 +157,8 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       if (ticket !== locating) return;
       claude.current = found;
       noteProblem(found);
+      // External sessions show up now rather than at the next poll.
+      if (found && 'path' in found) void poller?.refresh();
     });
   };
 
@@ -156,13 +168,15 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     const found = claude.current;
     noteProblem(found);
 
+    // A poller exists whenever `claude` can be (re)located or was found: the
+    // runner follows the current `claude`, and polling pauses while it is missing.
     const run =
       opts.externalRun ??
-      (found && 'path' in found
+      (opts.locateClaude || (found && 'path' in found)
         ? (args: string[]) => {
-            const c = claude.current; // follows a changed Claude path setting
+            const c = claude.current;
             return c && 'path' in c
-              ? makeClaudeRunner(c.path)(args)
+              ? claudeRunner(c.path)(args)
               : Promise.reject(new Error('Claude Code is not available'));
           }
         : undefined);
@@ -172,13 +186,14 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         () => new Set((live()?.list() ?? []).map((c) => c.sessionId)),
         (e) => broadcastRef.fn(e),
         {
-          enabled: () => db?.getSettings().externalPolling ?? true,
+          enabled: () => externalUsable() && (db?.getSettings().externalPolling ?? true),
           onError: (err) => log.error(`external poller: ${String(err)}`),
         },
       );
     }
     const resumeCheck = makeResumeChecker({
       ...(poller ? { poller } : {}),
+      externalUsable,
       lastModifiedOf: (id) => db?.getSession(id)?.lastModified,
       now: clock,
     });
@@ -252,6 +267,9 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         claude: () => claude.current,
         resumeCheck,
         indexNow: (ids) => indexer.refresh(ids),
+        ...(opts.historyCacheChars === undefined
+          ? {}
+          : { historyCacheChars: opts.historyCacheChars }),
         emit: (e) => broadcastRef.fn(e),
         onError,
       });
@@ -268,6 +286,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     registerFileHandlers(router, { index: new FileIndex() });
     registerExternalHandlers(router, {
       ...(poller ? { poller } : {}),
+      externalUsable,
       lastModifiedOf: (id) => db?.getSession(id)?.lastModified,
       claude: () => claude.current,
       indexing: () => indexing,

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ChatItem } from '@pahub/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Logger } from '../../src/logger.js';
 import { startService, type ServiceHandle, type StartOptions } from '../../src/main.js';
 import type { PermissionUpdate, SessionMessage } from '../../src/sdk/adapter.js';
 import { FakeAdapter } from '../../src/testing/fake-adapter.js';
@@ -439,5 +440,119 @@ describe('chat handlers', () => {
   it('chat.since for a seq this service never issued is a GAP', async () => {
     await start(new FakeAdapter());
     expect(await code('chat.since', { sessionId: 'whatever', seq: 3 })).toBe('GAP');
+  });
+
+  it('polls external sessions once claude is found after startup, without error noise before', async () => {
+    const adapter = new FakeAdapter();
+    addHistory(adapter, 'held', 1);
+    const errors: string[] = [];
+    const logger: Logger = {
+      debug: () => {},
+      info: () => {},
+      warn: () => {},
+      error: (m) => void errors.push(m),
+      flush: async () => {},
+    };
+    const runs: string[] = [];
+    const claudeRunner = (claudePath: string) => async () => {
+      runs.push(claudePath);
+      return JSON.stringify([
+        { pid: 7, cwd: dir, kind: 'interactive', startedAt: 1, sessionId: 'held', status: 'busy' },
+        { pid: 8, cwd: dir, kind: 'interactive', startedAt: 2, sessionId: 'ext-only' },
+      ]);
+    };
+    const locateClaude = async (p: string | null) =>
+      p ? { path: p, version: '2.2.0' } : { problem: 'missing' as const, detail: 'not found' };
+    await start(adapter, {
+      claude: undefined,
+      externalRun: undefined,
+      locateClaude,
+      claudeRunner,
+      logger,
+    });
+
+    // Not found yet: unverified, unavailable, and `claude agents` is never attempted.
+    expect((await ok<{ status: string }>('chat.resumeCheck', { sessionId: 'held' })).status).toBe(
+      'unverified',
+    );
+    await new Promise((r) => setTimeout(r, 30));
+    expect(await ok('system.status', {})).toMatchObject({ externalAvailable: false });
+    expect(runs).toEqual([]);
+    expect(errors).toEqual([]);
+
+    await ok('settings.set', { claudePath: '/opt/claude/claude' });
+    await eventually(async () => {
+      const r = await ok<{ status: string }>('chat.resumeCheck', { sessionId: 'held' });
+      return r.status === 'blocked';
+    });
+    expect(runs.every((p) => p === '/opt/claude/claude')).toBe(true);
+    await eventually(
+      async () => (await ok<{ externalAvailable: boolean }>('system.status', {})).externalAvailable,
+    );
+    const list = await ok<{ items: { sessionId: string; external: unknown }[] }>('sessions.list', {
+      place: { kind: 'all' },
+      limit: 50,
+    });
+    expect(list.items.find((i) => i.sessionId === 'ext-only')?.external).toMatchObject({
+      kind: 'interactive',
+    });
+    expect(await code('chat.send', { sessionId: 'held', text: 'hi' })).toBe('RESUME_BLOCKED');
+    expect(errors).toEqual([]);
+  });
+
+  it('reads a held chat’s history once for as long as pahub holds it', async () => {
+    const adapter = new FakeAdapter();
+    addHistory(adapter, 'h1', 5);
+    await start(adapter);
+    await ok('chat.send', { sessionId: 'h1', text: 'resume' });
+    const reads = vi.spyOn(adapter, 'getSessionMessages');
+
+    const first = await ok<Opened>('chat.open', { sessionId: 'h1', tail: 3 });
+    await ok('chat.open', { sessionId: 'h1', tail: 3 });
+    let before = first.items[0]!.id;
+    for (let i = 0; i < 3; i++) {
+      const page = await ok<{ items: ChatItem[] }>('chat.older', {
+        sessionId: 'h1',
+        beforeItemId: before,
+        limit: 2,
+      });
+      before = page.items[0]!.id;
+    }
+    expect(reads).toHaveBeenCalledTimes(1);
+
+    // Items the live process adds after the read still show (from the snapshot).
+    adapter.lastSession().emit(result('r-live'));
+    await settle();
+    const after = await ok<Opened>('chat.open', { sessionId: 'h1', tail: 1 });
+    expect(ids(after.items)).toEqual(['r-live']);
+    expect(reads).toHaveBeenCalledTimes(1);
+
+    // Ending releases the chat: the transcript is read again (it now holds the live turns).
+    await ok('chat.end', { sessionId: 'h1' });
+    await ok('chat.open', { sessionId: 'h1', tail: 3 });
+    expect(reads).toHaveBeenCalledTimes(2);
+    // A resume is a new process: its view starts from a fresh read too.
+    await ok('chat.send', { sessionId: 'h1', text: 'again' });
+    await ok('chat.open', { sessionId: 'h1', tail: 3 });
+    expect(reads).toHaveBeenCalledTimes(3);
+    // So does a stop-all followed by an open.
+    await ok('work.stopAll', {});
+    await ok('chat.open', { sessionId: 'h1', tail: 3 });
+    expect(reads).toHaveBeenCalledTimes(4);
+  });
+
+  it('bounds the history cache by size', async () => {
+    const adapter = new FakeAdapter();
+    addHistory(adapter, 'a', 3);
+    addHistory(adapter, 'b', 3);
+    // Each chat is 6 items of ~10 chars: room for one, not two.
+    await start(adapter, { historyCacheChars: 100 });
+    const reads = vi.spyOn(adapter, 'getSessionMessages');
+    await ok('chat.open', { sessionId: 'a', tail: 1 });
+    await ok('chat.open', { sessionId: 'a', tail: 1 });
+    expect(reads).toHaveBeenCalledTimes(1);
+    await ok('chat.open', { sessionId: 'b', tail: 1 });
+    await ok('chat.open', { sessionId: 'a', tail: 1 }); // evicted by b
+    expect(reads).toHaveBeenCalledTimes(3);
   });
 });
