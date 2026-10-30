@@ -7,13 +7,16 @@ import { PROTOCOL_VERSION, type EventMsg } from '@pahub/protocol';
 import pkg from '../package.json' with { type: 'json' };
 import { resolveDataDir } from './config.js';
 import { acquireInstanceLock, removeDiscovery, writeDiscovery } from './discovery.js';
-import { Catalog, type ExternalSession, type LiveChat } from './history/catalog.js';
+import { ExternalPoller, makeClaudeRunner, type ExternalSession } from './external/poller.js';
+import { Catalog, type LiveChat } from './history/catalog.js';
 import { openDb, type Db } from './history/db.js';
 import { Indexer } from './history/indexer.js';
 import { createQuickSearch } from './history/search.js';
 import { watchProjects } from './history/watcher.js';
 import { createLogger, type Logger } from './logger.js';
 import type { AgentAdapter } from './sdk/adapter.js';
+import type { ClaudeFound, ClaudeProblem } from './sdk/claude-path.js';
+import { registerExternalHandlers } from './server/handlers/external.js';
 import { registerHistoryHandlers } from './server/handlers/history.js';
 import { Router } from './server/router.js';
 import { startWsServer } from './server/ws-server.js';
@@ -39,8 +42,18 @@ export type StartOptions = {
   claudeConfigDir?: string;
   /** Chats owned by the session host (Task 10 passes `host`). */
   live?: { list(): LiveChat[] };
-  /** External sessions snapshot (Task 8). */
+  /**
+   * External sessions snapshot. Overrides the built-in poller's (tests, or a
+   * caller that polls itself); the poller still serves resume checks.
+   */
   externals?: () => ExternalSession[];
+  /** Where `claude` was found (or why not), as `findInstalledClaude` reports it. */
+  claude?: ClaudeFound | ClaudeProblem;
+  /**
+   * Runs `claude <args>` for the external-session poller. Defaults to spawning
+   * `claude.path` when `claude` was found; without either there is no poller.
+   */
+  externalRun?: (args: string[]) => Promise<string>;
 };
 
 export type ServiceHandle = {
@@ -78,10 +91,23 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
 
   const broadcastRef: { fn: (e: EventMsg) => void } = { fn: () => {} };
   let db: Db | undefined;
+  let indexing = { done: 0, total: 0 };
   let watcher: { close(): void } | undefined;
   let server: Awaited<ReturnType<typeof startWsServer>> | undefined;
+  let poller: ExternalPoller | undefined;
   let startSync: (() => void) | undefined;
   try {
+    const run =
+      opts.externalRun ??
+      (opts.claude && 'path' in opts.claude ? makeClaudeRunner(opts.claude.path) : undefined);
+    if (run) {
+      poller = new ExternalPoller(
+        run,
+        () => new Set((opts.live?.list() ?? []).map((c) => c.sessionId)),
+        (e) => broadcastRef.fn(e),
+        { enabled: () => db?.getSettings().externalPolling ?? true },
+      );
+    }
     if (opts.adapter) {
       const claudeDir =
         opts.claudeConfigDir ?? process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), '.claude');
@@ -95,6 +121,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
           if (e.event === 'sessions.changed' || e.event === 'projects.changed') {
             catalogRef.current?.invalidate();
           }
+          if (e.event === 'index.progress') indexing = e.data as typeof indexing;
           broadcastRef.fn(e);
         },
         { onError: (err, ctx) => log.error(`indexer ${JSON.stringify(ctx)}: ${String(err)}`) },
@@ -102,7 +129,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       const cat = new Catalog({
         db: opened,
         ...(opts.live ? { live: opts.live } : {}),
-        ...(opts.externals ? { externals: opts.externals } : {}),
+        externals: opts.externals ?? (() => poller?.snapshot() ?? []),
       });
       catalogRef.current = cat;
       registerHistoryHandlers(router, {
@@ -119,6 +146,14 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       startSync = () =>
         void indexer.fullSync().catch((err: unknown) => log.error(`full sync: ${String(err)}`));
     }
+
+    registerExternalHandlers(router, {
+      ...(poller ? { poller } : {}),
+      lastModifiedOf: (id) => db?.getSession(id)?.lastModified,
+      claude: () => opts.claude,
+      indexing: () => indexing,
+      now: clock,
+    });
 
     server = await startWsServer({
       token,
@@ -138,6 +173,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       startedAt: clock(),
     });
   } catch (err) {
+    poller?.stop();
     watcher?.close();
     await server?.close().catch(() => {});
     db?.close();
@@ -146,10 +182,12 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   }
   const wsServer = server;
   startSync?.();
+  poller?.start();
 
   const close = (): Promise<void> => {
     closing ??= (async () => {
       clearTimer(timer);
+      poller?.stop();
       watcher?.close();
       await wsServer.close();
       await removeDiscovery(dataDir);

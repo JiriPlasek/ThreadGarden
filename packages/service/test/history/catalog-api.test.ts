@@ -209,18 +209,30 @@ describe('catalog and places API', () => {
       {
         sessionId: 'ext-1',
         cwd: '/work/proj-0',
-        status: 'needsYou',
-        waitingFor: 'Bash',
-        external: { kind: 'interactive', pid: 4 },
+        kind: 'interactive',
+        startedAt: 1,
+        status: 'waiting',
+        waitingFor: 'permission prompt',
+        pid: 4,
+        raw: {},
       },
+      // No session id yet: cannot be listed or opened, so the catalog skips it.
+      { cwd: '/work/proj-0', kind: 'interactive', startedAt: 1, status: 'busy', pid: 5, raw: {} },
     ]);
     const all = await t.call('sessions.list', { place: { kind: 'all' }, limit: 50 });
     expect(all.items.map((i: Any) => i.sessionId)).toEqual(
       expect.arrayContaining(['fresh-live', 'ext-1']),
     );
     const ext = all.items.find((i: Any) => i.sessionId === 'ext-1');
-    expect(ext.external).toMatchObject({ kind: 'interactive' });
+    expect(ext.external).toEqual({
+      kind: 'interactive',
+      status: 'waiting',
+      waitingFor: 'permission prompt',
+      pid: 4,
+    });
+    expect(ext).toMatchObject({ status: 'needsYou', waitingFor: 'permission prompt' });
     expect(ext.live).toBe(false);
+    expect(all.items).toHaveLength(3 + 2);
     expect((await t.call('places.counts')).needsYou).toBe(1);
     const projects = (await t.call('projects.list')) as unknown as Any[];
     expect(projects.find((p) => p.projectId === '/work/proj-0')?.counts.needsYou).toBe(1);

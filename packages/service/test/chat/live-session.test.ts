@@ -419,6 +419,32 @@ describe('LiveSession', () => {
     expect(errors[0]).toMatchObject({ text: expect.stringContaining('minimum version 2.1.0') });
   });
 
+  it('resume of a session held by a background process fails with an explanation', async () => {
+    const { adapter, events, opts } = setup();
+    const s = LiveSession.resume('held-id', '/p', opts);
+    adapter.lastSession().emit(
+      result('r-held', {
+        subtype: 'error_during_execution',
+        is_error: true,
+        total_cost_usd: 0,
+        errors: ['session is running as a background session'],
+        startup_failure_reason: 'session_held_by_background',
+      }),
+    );
+    adapter.lastSession().end(new Error('Claude Code process exited with code 1'));
+    await s.whenEnded();
+
+    expect(s.status).toBe('failed');
+    expect(s.startupFailure).toMatchObject({
+      reason: 'session_held_by_background',
+      title: 'Chat is running in the background',
+      setup: false,
+    });
+    const errors = itemsOf(events).filter((i) => i.kind === 'system' && i.level === 'error');
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatchObject({ text: expect.stringContaining('background session') });
+  });
+
   it('shows the raw reason for a startup failure this pahub does not know', async () => {
     const { adapter, events, opts } = setup();
     const s = LiveSession.create('/p', { text: 'go' }, opts);

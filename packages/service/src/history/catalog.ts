@@ -1,4 +1,6 @@
 import type { ChatStatus, ChatSummary, ExternalInfo, Place, Project } from '@pahub/protocol';
+import type { ExternalSession } from '../external/poller.js';
+import { externalStatus } from '../external/resume-safety.js';
 import type { Db, SessionFilter, SessionRow } from './db.js';
 import { defaultGitCommonDir, projectIdFor, type GitCommonDir } from './projects.js';
 
@@ -41,19 +43,15 @@ export type LiveChat = {
   waitingFor?: string;
 };
 
-/**
- * A Claude Code session running outside pahub. Task 8 (the poller) owns the
- * real producer; this is the shape the catalog needs from it.
- */
-export type ExternalSession = {
-  sessionId: string;
-  cwd: string;
-  status: ChatStatus;
-  waitingFor?: string;
-  title?: string;
-  lastActivity?: number;
-  external: ExternalInfo;
-};
+const externalInfo = (e: ExternalSession): ExternalInfo => ({
+  kind: e.kind,
+  ...(e.shortId === undefined ? {} : { shortId: e.shortId }),
+  ...(e.state === undefined ? {} : { state: e.state }),
+  ...(e.status === undefined ? {} : { status: e.status }),
+  ...(e.waitingFor === undefined ? {} : { waitingFor: e.waitingFor }),
+  ...(e.pid === undefined ? {} : { pid: e.pid }),
+  ...(e.name === undefined ? {} : { name: e.name }),
+});
 
 export type CatalogOptions = {
   db: Db;
@@ -308,7 +306,12 @@ export class Catalog {
   private overlay(): Map<string, Entry> {
     const live = this.live.list();
     const liveIds = new Set(live.map((l) => l.sessionId));
-    const ext = this.externals().filter((e) => !liveIds.has(e.sessionId));
+    // Only sessions with an id can be listed (and opened); the rest are visible via the poller.
+    const ext = this.externals().flatMap((e) =>
+      e.sessionId !== undefined && !liveIds.has(e.sessionId)
+        ? [{ ...e, sessionId: e.sessionId }]
+        : [],
+    );
     const out = new Map<string, Entry>();
     const ids = [...live.map((l) => l.sessionId), ...ext.map((e) => e.sessionId)];
     if (ids.length === 0) return out;
@@ -329,14 +332,14 @@ export class Catalog {
     }
     for (const e of ext) {
       const row = rows.get(e.sessionId);
-      const base = this.base(e.sessionId, e.cwd, row, e.title);
+      const base = this.base(e.sessionId, e.cwd, row, e.name);
       out.set(e.sessionId, {
         indexed: row !== undefined,
         summary: {
           ...base,
-          status: e.status,
-          external: e.external,
-          lastActivity: Math.max(row?.lastModified ?? 0, e.lastActivity ?? 0) || base.lastActivity,
+          status: externalStatus(e),
+          external: externalInfo(e),
+          lastActivity: Math.max(row?.lastModified ?? 0, e.startedAt) || base.lastActivity,
           ...(e.waitingFor === undefined ? {} : { waitingFor: e.waitingFor }),
         },
       });

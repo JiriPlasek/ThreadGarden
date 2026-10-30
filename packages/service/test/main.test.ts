@@ -20,9 +20,12 @@ const rpc = (port: number, token: string, method: string, params: unknown) =>
   new Promise<unknown>((resolve, reject) => {
     const ws = new WebSocket(`ws://127.0.0.1:${port}`, `pahub.${token}`);
     ws.once('error', reject);
-    ws.once('message', (d) => {
+    // Skip broadcast events (they carry no id) that can arrive before the response.
+    ws.on('message', (d) => {
+      const m = JSON.parse(String(d)) as { id?: number };
+      if (m.id !== 1) return;
       ws.close();
-      resolve(JSON.parse(String(d)));
+      resolve(m);
     });
     ws.once('open', () => ws.send(JSON.stringify({ id: 1, method, params })));
   });
@@ -64,6 +67,52 @@ describe('startService', () => {
     }
     expect(counts).toMatchObject({ result: { all: 5, needsYou: 0, running: 0 } });
     expect(await readdir(join(dir, 'data'))).toContain('pahub.db');
+    await svc.close();
+  });
+
+  it('polls external sessions, answers resume checks and reports system status', async () => {
+    const adapter = generateCorpus({ sessions: 2, projects: 1, bigSessionMessages: 0 });
+    const run = async () =>
+      JSON.stringify([
+        { pid: 7, cwd: '/x', kind: 'interactive', startedAt: 1, sessionId: 'held', status: 'busy' },
+      ]);
+    const svc = await startService({
+      dataDir: join(dir, 'data'),
+      claudeConfigDir: join(dir, 'claude-missing'),
+      adapter,
+      claude: { path: '/bin/claude', version: '2.1.314' },
+      externalRun: run,
+      installSignalHandlers: false,
+    });
+    const result = async (method: string, params: unknown) =>
+      ((await rpc(svc.port, svc.token, method, params)) as { result: unknown }).result;
+    expect(await result('chat.resumeCheck', { sessionId: 'held' })).toMatchObject({
+      status: 'blocked',
+    });
+    expect(await result('chat.resumeCheck', { sessionId: 'free' })).toMatchObject({ status: 'ok' });
+    expect(await result('system.status', {})).toMatchObject({
+      claude: { found: true, path: '/bin/claude', version: '2.1.314' },
+      externalAvailable: true,
+    });
+    await svc.close();
+  });
+
+  it('without claude there is no poller: resume is unverified and status says why', async () => {
+    const svc = await startService({
+      dataDir: dir,
+      claude: { problem: 'missing', detail: 'Claude Code was not found.' },
+      installSignalHandlers: false,
+    });
+    const result = async (method: string, params: unknown) =>
+      ((await rpc(svc.port, svc.token, method, params)) as { result: unknown }).result;
+    expect(await result('chat.resumeCheck', { sessionId: 's' })).toMatchObject({
+      status: 'unverified',
+    });
+    expect(await result('system.status', {})).toMatchObject({
+      claude: { found: false, problem: 'Claude Code was not found.' },
+      externalAvailable: false,
+    });
+    expect(await result('ui.visibility', { visible: false })).toEqual({});
     await svc.close();
   });
 
