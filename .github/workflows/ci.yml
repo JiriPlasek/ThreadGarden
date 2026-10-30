@@ -39,9 +39,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
+      # Installs the toolchain and components pinned in rust-toolchain.toml.
+      - run: rustup toolchain install
+      - run: rustc --version && cargo clippy --version
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: apps/desktop/src-tauri

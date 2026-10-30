@@ -8,7 +8,7 @@
 
 ## Development
 
-Requires Node 22 and pnpm; the desktop app also needs stable Rust and the Tauri 2 system prerequisites (on Linux: `libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev`).
+Requires Node 22 and pnpm; the desktop app also needs Rust (the version pinned in `rust-toolchain.toml`; rustup installs it) and the Tauri 2 system prerequisites (on Linux: `libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev`).
 
 ```sh
 pnpm install

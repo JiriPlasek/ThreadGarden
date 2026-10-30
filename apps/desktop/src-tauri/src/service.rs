@@ -29,11 +29,15 @@ pub const DETACH_FLAGS: u32 = windows_sys::Win32::System::Threading::DETACHED_PR
     | windows_sys::Win32::System::Threading::CREATE_NEW_PROCESS_GROUP
     | windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
 
-/// What the UI needs to open its WebSocket.
+/// What the UI needs to open its WebSocket. `service_version` may differ from
+/// `app_version` (same protocol): the UI then offers to restart the service (spec §4.2).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Connection {
     pub port: u16,
     pub token: String,
+    pub service_version: String,
+    pub app_version: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -236,17 +240,21 @@ async fn hello_inner(port: u16, token: &str) -> Result<HelloResult, String> {
     Err("hello-failed: connection closed".into())
 }
 
-fn connection(d: &Discovery) -> Connection {
+fn connection(d: &Discovery, hello: &HelloResult, app_version: &str) -> Connection {
     Connection {
         port: d.port,
         token: d.token.clone(),
+        service_version: hello.service_version.clone(),
+        app_version: app_version.to_string(),
     }
 }
 
 /// Connects to the running service, or calls `launch` to start one and waits
 /// up to `start_timeout` for a fresh `service.json` whose service answers `hello`.
+/// Only a different *protocol* is an error; a different service version is reported.
 pub async fn connect(
     data_dir: &Path,
+    app_version: &str,
     start_timeout: Duration,
     launch: impl FnOnce() -> Result<(), String>,
 ) -> Result<Connection, String> {
@@ -256,7 +264,7 @@ pub async fn connect(
         // counts as no service; the new one then replaces it.
         if let Ok(h) = hello(d.port, &d.token, HELLO_TIMEOUT).await {
             check_protocol(&h)?;
-            return Ok(connection(d));
+            return Ok(connection(d, &h, app_version));
         }
     }
 
@@ -273,7 +281,7 @@ pub async fn connect(
             && let Ok(h) = hello(d.port, &d.token, HELLO_TIMEOUT).await
         {
             check_protocol(&h)?;
-            return Ok(connection(&d));
+            return Ok(connection(&d, &h, app_version));
         }
         if tokio::time::Instant::now() >= deadline {
             return Err(format!(
@@ -294,30 +302,41 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use tokio::net::TcpListener;
     use tokio_tungstenite::tungstenite::Message;
-    use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
+    use tokio_tungstenite::tungstenite::handshake::server::{
+        Callback, ErrorResponse, Request, Response,
+    };
+
+    const APP_VERSION: &str = "0.1.0";
+
+    /// The fake service's handshake check: only the `pahub.<token>` subprotocol is
+    /// accepted. A `Callback` impl, because tungstenite fixes the callback's error type.
+    struct RequireToken(String);
+
+    impl Callback for RequireToken {
+        fn on_request(self, req: &Request, mut res: Response) -> Result<Response, ErrorResponse> {
+            match req.headers().get("sec-websocket-protocol").cloned() {
+                Some(p) if p.to_str().ok() == Some(self.0.as_str()) => {
+                    res.headers_mut().insert("sec-websocket-protocol", p);
+                    Ok(res)
+                }
+                _ => Err(Response::builder().status(401).body(None).unwrap()),
+            }
+        }
+    }
 
     /// A stand-in service: checks the token subprotocol, answers `hello`.
-    async fn fake_service(token: &'static str, protocol_version: u32) -> u16 {
+    async fn fake_service(
+        token: &'static str,
+        service_version: &'static str,
+        protocol_version: u32,
+    ) -> u16 {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         tokio::spawn(async move {
             while let Ok((stream, _)) = listener.accept().await {
                 tokio::spawn(async move {
-                    let expected = format!("pahub.{token}");
-                    let ws = tokio_tungstenite::accept_hdr_async(
-                        stream,
-                        |req: &Request, mut res: Response| {
-                            let offered = req.headers().get("sec-websocket-protocol").cloned();
-                            match offered {
-                                Some(p) if p.to_str().ok() == Some(expected.as_str()) => {
-                                    res.headers_mut().insert("sec-websocket-protocol", p);
-                                    Ok(res)
-                                }
-                                _ => Err(Response::builder().status(401).body(None).unwrap()),
-                            }
-                        },
-                    )
-                    .await;
+                    let check = RequireToken(format!("pahub.{token}"));
+                    let ws = tokio_tungstenite::accept_hdr_async(stream, check).await;
                     let Ok(mut ws) = ws else { return };
                     while let Some(Ok(msg)) = ws.next().await {
                         let Ok(text) = msg.to_text() else { continue };
@@ -326,7 +345,7 @@ mod tests {
                         assert_eq!(req["params"]["protocolVersion"], PROTOCOL_VERSION);
                         let reply = serde_json::json!({
                             "id": req["id"],
-                            "result": { "serviceVersion": "9.9.9", "protocolVersion": protocol_version },
+                            "result": { "serviceVersion": service_version, "protocolVersion": protocol_version },
                         });
                         let _ = ws.send(Message::text(reply.to_string())).await;
                     }
@@ -395,10 +414,10 @@ mod tests {
         let pid = spawn_detached(&target, dir.path()).unwrap();
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         let text = loop {
-            if let Ok(t) = std::fs::read_to_string(&out) {
-                if t.ends_with('\n') {
-                    break t;
-                }
+            if let Ok(t) = std::fs::read_to_string(&out)
+                && t.ends_with('\n')
+            {
+                break t;
             }
             assert!(std::time::Instant::now() < deadline, "child never wrote");
             std::thread::sleep(Duration::from_millis(20));
@@ -461,7 +480,7 @@ mod tests {
 
     #[tokio::test]
     async fn hello_authenticates_with_the_token_subprotocol() {
-        let port = fake_service("tok", PROTOCOL_VERSION).await;
+        let port = fake_service("tok", "9.9.9", PROTOCOL_VERSION).await;
         let h = hello(port, "tok", Duration::from_secs(2)).await.unwrap();
         assert_eq!(h.service_version, "9.9.9");
         assert!(hello(port, "wrong", Duration::from_secs(2)).await.is_err());
@@ -470,9 +489,9 @@ mod tests {
     #[tokio::test]
     async fn connects_to_a_running_service_without_launching() {
         let dir = tempfile::tempdir().unwrap();
-        let port = fake_service("tok", PROTOCOL_VERSION).await;
+        let port = fake_service("tok", APP_VERSION, PROTOCOL_VERSION).await;
         write_discovery(dir.path(), port, "tok", 1);
-        let conn = connect(dir.path(), Duration::from_secs(1), || {
+        let conn = connect(dir.path(), APP_VERSION, Duration::from_secs(1), || {
             panic!("must not launch a second service")
         })
         .await
@@ -481,17 +500,38 @@ mod tests {
             conn,
             Connection {
                 port,
-                token: "tok".into()
+                token: "tok".into(),
+                service_version: APP_VERSION.into(),
+                app_version: APP_VERSION.into(),
             }
         );
+    }
+
+    /// Same protocol, another service version (e.g. an older service still
+    /// running after an app update): connect, and report both versions.
+    #[tokio::test]
+    async fn reports_a_different_service_version_with_the_same_protocol() {
+        let dir = tempfile::tempdir().unwrap();
+        let port = fake_service("tok", "0.0.9", PROTOCOL_VERSION).await;
+        write_discovery(dir.path(), port, "tok", 1);
+        let conn = connect(dir.path(), APP_VERSION, Duration::from_secs(1), || {
+            panic!("must not launch over a compatible service")
+        })
+        .await
+        .unwrap();
+        assert_eq!(conn.service_version, "0.0.9");
+        assert_eq!(conn.app_version, APP_VERSION);
+        let json = serde_json::to_value(&conn).unwrap();
+        assert_eq!(json["serviceVersion"], "0.0.9");
+        assert_eq!(json["appVersion"], APP_VERSION);
     }
 
     #[tokio::test]
     async fn connect_rejects_version_mismatch() {
         let dir = tempfile::tempdir().unwrap();
-        let port = fake_service("tok", PROTOCOL_VERSION + 1).await;
+        let port = fake_service("tok", APP_VERSION, PROTOCOL_VERSION + 1).await;
         write_discovery(dir.path(), port, "tok", 1);
-        let err = connect(dir.path(), Duration::from_secs(1), || {
+        let err = connect(dir.path(), APP_VERSION, Duration::from_secs(1), || {
             panic!("must not launch over an incompatible service")
         })
         .await
@@ -507,10 +547,10 @@ mod tests {
         let stale_port = stale.local_addr().unwrap().port();
         drop(stale);
         write_discovery(dir.path(), stale_port, "old", 1);
-        let port = fake_service("new", PROTOCOL_VERSION).await;
+        let port = fake_service("new", APP_VERSION, PROTOCOL_VERSION).await;
         let launched = Arc::new(AtomicBool::new(false));
         let (flag, path) = (launched.clone(), dir.path().to_path_buf());
-        let conn = connect(dir.path(), Duration::from_secs(3), move || {
+        let conn = connect(dir.path(), APP_VERSION, Duration::from_secs(3), move || {
             flag.store(true, Ordering::SeqCst);
             std::thread::spawn(move || {
                 std::thread::sleep(Duration::from_millis(300));
@@ -528,16 +568,18 @@ mod tests {
     #[tokio::test]
     async fn gives_up_when_no_service_appears() {
         let dir = tempfile::tempdir().unwrap();
-        let err = connect(dir.path(), Duration::from_millis(300), || Ok(()))
-            .await
-            .unwrap_err();
+        let err = connect(dir.path(), APP_VERSION, Duration::from_millis(300), || {
+            Ok(())
+        })
+        .await
+        .unwrap_err();
         assert!(err.starts_with("service-start-timeout"), "{err}");
     }
 
     #[tokio::test]
     async fn reports_a_failed_launch() {
         let dir = tempfile::tempdir().unwrap();
-        let err = connect(dir.path(), Duration::from_secs(1), || {
+        let err = connect(dir.path(), APP_VERSION, Duration::from_secs(1), || {
             Err("service-runtime-missing: x".into())
         })
         .await

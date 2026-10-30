@@ -49,7 +49,8 @@ fn launch_target(app: &AppHandle) -> Result<service::LaunchTarget, String> {
 async fn connect_service(app: &AppHandle) -> Result<service::Connection, String> {
     let _guard = CONNECT.lock().await;
     let dir = data_dir(app)?;
-    service::connect(&dir, service::START_TIMEOUT, || {
+    let app_version = app.package_info().version.to_string();
+    service::connect(&dir, &app_version, service::START_TIMEOUT, || {
         let target = launch_target(app)?;
         service::spawn_detached(&target, &dir).map(|_| ())
     })

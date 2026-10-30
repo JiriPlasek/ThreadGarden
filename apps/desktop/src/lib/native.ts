@@ -6,8 +6,20 @@
  */
 import { invoke, isTauri as detectTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import pkg from '../../package.json';
 
-export type ServiceConnection = { port: number; token: string };
+/**
+ * How to reach the service. `serviceVersion` differing from `appVersion` (with a
+ * compatible protocol) means an older or newer service is still running: the UI
+ * offers "Restart the pahub service to update" (spec §4.2). An incompatible
+ * protocol rejects `serviceConnection()` with `service-version-mismatch` instead.
+ */
+export type ServiceConnection = {
+  port: number;
+  token: string;
+  serviceVersion: string;
+  appVersion: string;
+};
 export type TrayEvent = 'stop-all' | 'quit-all';
 
 export const isTauri: boolean = detectTauri();
@@ -23,7 +35,8 @@ const mockConnection = (): ServiceConnection => {
   const port = Number(new URL(url).port);
   if (!Number.isInteger(port) || port <= 0)
     throw new Error(`VITE_PAHUB_MOCK_URL has no port: ${url}`);
-  return { port, token };
+  // The mock service is not paired with an app build: report the app's own version for both.
+  return { port, token, serviceVersion: pkg.version, appVersion: pkg.version };
 };
 
 /** Finds the running service or starts it; rejects with `service-version-mismatch` for an incompatible one. */

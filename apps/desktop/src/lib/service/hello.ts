@@ -8,7 +8,7 @@ import type { ServiceConnection } from '../native';
 export type HelloResult = { serviceVersion: string; protocolVersion: number };
 
 export const fetchHello = (
-  conn: ServiceConnection,
+  conn: Pick<ServiceConnection, 'port' | 'token'>,
   opts: { WebSocketImpl?: typeof WebSocket; timeoutMs?: number } = {},
 ): Promise<HelloResult> =>
   new Promise((resolve, reject) => {

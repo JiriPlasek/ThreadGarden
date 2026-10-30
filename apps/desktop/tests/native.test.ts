@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import pkg from '../package.json';
 
 // Browser mode (no Tauri runtime): native.ts falls back to stubs that read the mock service URL.
 const load = async () => {
@@ -16,7 +17,13 @@ describe('native (browser stubs)', () => {
     vi.stubEnv('VITE_PAHUB_MOCK_TOKEN', 'mock-token');
     const native = await load();
     expect(native.isTauri).toBe(false);
-    await expect(native.serviceConnection()).resolves.toEqual({ port: 7357, token: 'mock-token' });
+    // Mock mode has no app/service version pairing: both report the app's version.
+    await expect(native.serviceConnection()).resolves.toEqual({
+      port: 7357,
+      token: 'mock-token',
+      serviceVersion: pkg.version,
+      appVersion: pkg.version,
+    });
   });
 
   it('rejects with a clear error when no mock service is configured', async () => {
