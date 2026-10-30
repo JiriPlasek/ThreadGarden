@@ -1,6 +1,6 @@
 /** Router handlers for external sessions, resume safety and system status. */
 import type { ExternalPoller } from '../../external/poller.js';
-import { checkResume, resumeCommand } from '../../external/resume-safety.js';
+import { checkResume, resumeCommand, type ResumeCheck } from '../../external/resume-safety.js';
 import type { ClaudeFound, ClaudeProblem } from '../../sdk/claude-path.js';
 import type { Router } from '../router.js';
 
@@ -15,26 +15,31 @@ export type ExternalHandlerDeps = {
   now?: () => number;
 };
 
+/**
+ * Resume safety (§4.4) for `sessionId`, with a fresh `claude agents` answer
+ * (not the up to 10 s old poll); `unverified` when the command is unusable.
+ * Shared by `chat.resumeCheck` and the server-side gate in `chat.send`.
+ */
+export const makeResumeChecker =
+  (deps: Pick<ExternalHandlerDeps, 'poller' | 'lastModifiedOf' | 'now'>) =>
+  async (sessionId: string): Promise<ResumeCheck> =>
+    checkResume({
+      sessionId,
+      external: deps.poller ? await deps.poller.current() : null,
+      lastModified: deps.lastModifiedOf(sessionId) ?? 0,
+      now: (deps.now ?? Date.now)(),
+    });
+
 export const registerExternalHandlers = (router: Router, deps: ExternalHandlerDeps): void => {
   const { poller } = deps;
-  const now = deps.now ?? Date.now;
-
-  /** A fresh answer, so it is not up to 10 s stale; null when `claude agents` is unusable. */
-  const externals = async () => (poller ? poller.current() : null);
+  const resumeCheck = makeResumeChecker(deps);
 
   router.register('ui.visibility', async (p) => {
     poller?.setVisible(p.visible);
     return {};
   });
 
-  router.register('chat.resumeCheck', async (p) =>
-    checkResume({
-      sessionId: p.sessionId,
-      external: await externals(),
-      lastModified: deps.lastModifiedOf(p.sessionId) ?? 0,
-      now: now(),
-    }),
-  );
+  router.register('chat.resumeCheck', async (p) => resumeCheck(p.sessionId));
 
   router.register('chat.resumeCommand', async (p) => ({
     command: resumeCommand(p.sessionId, poller?.available ? poller.snapshot() : null),

@@ -205,6 +205,14 @@ export class Catalog {
       : { items };
   }
 
+  /** One chat's summary (live/external overlay first, else the index); undefined if unknown. */
+  summary(sessionId: string): ChatSummary | undefined {
+    const o = this.overlay().get(sessionId);
+    if (o) return o.summary;
+    const row = this.db.getSession(sessionId);
+    return row ? fromRow(row) : undefined;
+  }
+
   counts(): { needsYou: number; running: number; all: number } {
     const { hidden } = this.snapshot();
     let needsYou = 0;

@@ -16,7 +16,7 @@
  */
 import type { ChatStatus, EventMsg, Settings } from '@pahub/protocol';
 import type { AgentAdapter } from '../sdk/adapter.js';
-import { EventLog } from './event-log.js';
+import { EventLog, type ChatEvent } from './event-log.js';
 import {
   LiveSession,
   defaultOnError,
@@ -51,6 +51,11 @@ export type SessionHostDeps = {
   describe?: LiveSessionDeps['describe'];
   /** Contained failures (see module doc); also handed to every session. Default: `console.error`. */
   onError?: LiveSessionDeps['onError'];
+  /**
+   * Where this service run's chat event numbering starts (`seqBaseForEpoch`);
+   * default 0. A seq from another run is then never valid here (§4.5).
+   */
+  seqBase?: number;
 };
 
 export class SessionHost {
@@ -58,10 +63,12 @@ export class SessionHost {
   /** Last seq of chats ended (forgotten) in this service run, by session id. */
   private readonly seqFloor = new Map<string, number>();
   private readonly timers: Timers;
+  private readonly seqBase: number;
   private reclaimTimer: unknown = undefined;
 
   constructor(private readonly deps: SessionHostDeps) {
     this.timers = deps.timers ?? realTimers;
+    this.seqBase = deps.seqBase ?? 0;
   }
 
   /** Starts the reclaim pass every `RECLAIM_INTERVAL_MS`. */
@@ -218,6 +225,24 @@ export class SessionHost {
     });
   }
 
+  /**
+   * The latest event seq of `sessionId`: its log's, else the last seq of a
+   * chat ended in this run, else the run's base (a chat with no events yet).
+   */
+  seqOf(sessionId: string): number {
+    return this.sessions.get(sessionId)?.seq ?? this.seqFloor.get(sessionId) ?? this.seqBase;
+  }
+
+  /**
+   * Events of `sessionId` after `seq` (§4.5 reconnect). A chat the host does
+   * not hold has no buffered events: only its current seq is valid.
+   */
+  since(sessionId: string, seq: number): ChatEvent[] | 'gap' {
+    const s = this.sessions.get(sessionId);
+    if (s) return s.since(seq);
+    return seq === this.seqOf(sessionId) ? [] : 'gap';
+  }
+
   liveCount(): number {
     let n = 0;
     for (const s of this.sessions.values()) if (s.live) n++;
@@ -250,6 +275,7 @@ export class SessionHost {
       ...(describe ? { describe } : {}),
       ...(onError ? { onError } : {}),
       ...extra,
+      log: extra.log ?? new EventLog(undefined, this.seqBase),
     };
   }
 }

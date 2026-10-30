@@ -21,6 +21,28 @@ export type ChatEventDraft =
 
 export const EVENT_LOG_CAPACITY = 5_000;
 
+/**
+ * Seq epochs: every service start numbers chat events from its own base,
+ * `epoch × 2³²`, with the epoch persisted and advanced at each start. A seq a
+ * client got from an earlier service process therefore lies outside every
+ * log of this process and `since()` answers `'gap'` (→ reload), never events
+ * that merely happen to share its number. 2²⁰ epochs × 2³² events per chat
+ * stay below `Number.MAX_SAFE_INTEGER`.
+ */
+export const MAX_SEQ_EPOCH = 2 ** 20;
+const EPOCH_SPAN = 2 ** 32;
+
+/** The epoch after `previous` (1 when there is none or it is not a valid epoch). */
+export const nextSeqEpoch = (previous: unknown): number =>
+  typeof previous === 'number' &&
+  Number.isInteger(previous) &&
+  previous >= 1 &&
+  previous <= MAX_SEQ_EPOCH
+    ? (previous % MAX_SEQ_EPOCH) + 1
+    : 1;
+
+export const seqBaseForEpoch = (epoch: number): number => epoch * EPOCH_SPAN;
+
 export class EventLog {
   private readonly buf: (ChatEvent | undefined)[];
   private last: number;

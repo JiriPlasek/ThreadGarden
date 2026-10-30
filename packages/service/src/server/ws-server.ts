@@ -16,6 +16,8 @@ const tokenMatches = (offered: string, token: string): boolean => {
 export const startWsServer = async (opts: {
   token: string;
   router: Router;
+  /** Fixed port (mock service); default 0 = a random free port. */
+  port?: number;
   onClientCountChange(n: number): void;
 }): Promise<{
   port: number;
@@ -26,7 +28,7 @@ export const startWsServer = async (opts: {
   const clients = new Set<WebSocket>();
   const wss = new WebSocketServer({
     host: HOST,
-    port: 0,
+    port: opts.port ?? 0,
     maxPayload: 16 * 1024 * 1024,
     // Echo the offered subprotocol so browsers complete the handshake; the token is verified on connection.
     handleProtocols: (protocols) =>

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { settingsDefaults, type ChatItem, type EventMsg, type Settings } from '@pahub/protocol';
+import { MAX_SEQ_EPOCH, nextSeqEpoch, seqBaseForEpoch } from '../../src/chat/event-log.js';
 import { SessionHost, type SessionHostDeps } from '../../src/chat/session-host.js';
 import { FakeAdapter } from '../../src/testing/fake-adapter.js';
 import { ManualTimers, MemoryRegistry, result, settle, statuses } from './live-helpers.js';
@@ -395,5 +396,35 @@ describe('SessionHost', () => {
     expect(errors).toEqual([`stop all (session ${b.sessionId})`]);
     b.end = Object.getPrototypeOf(b).end;
     host.end(b.sessionId);
+  });
+
+  it('numbers every chat from seqBase, so seqs of another service run are a gap', async () => {
+    const base = seqBaseForEpoch(3);
+    const ctx = setup({ seqBase: base });
+    expect(ctx.host.seqOf('never-seen')).toBe(base);
+    expect(ctx.host.since('never-seen', base)).toEqual([]);
+    expect(ctx.host.since('never-seen', 5)).toBe('gap');
+
+    const { s } = await idleChat(ctx);
+    expect(s.seq).toBeGreaterThan(base);
+    const all = ctx.host.since(s.sessionId, base);
+    expect(all).not.toBe('gap');
+    expect((all as { data: { seq: number } }[])[0]?.data.seq).toBe(base + 1);
+    // A seq the previous service run handed out (epoch 2) is never mistaken for one of ours.
+    expect(ctx.host.since(s.sessionId, seqBaseForEpoch(2) + 2)).toBe('gap');
+
+    const last = s.seq;
+    ctx.host.end(s.sessionId);
+    expect(ctx.host.seqOf(s.sessionId)).toBe(last + 1); // the final 'history' status
+    expect(ctx.host.since(s.sessionId, last + 1)).toEqual([]);
+    expect(ctx.host.since(s.sessionId, last)).toBe('gap');
+  });
+
+  it('nextSeqEpoch advances and wraps within the safe-integer range', () => {
+    expect(nextSeqEpoch(undefined)).toBe(1);
+    expect(nextSeqEpoch('junk')).toBe(1);
+    expect(nextSeqEpoch(1)).toBe(2);
+    expect(nextSeqEpoch(MAX_SEQ_EPOCH)).toBe(1);
+    expect(Number.isSafeInteger(seqBaseForEpoch(MAX_SEQ_EPOCH) + 2 ** 32)).toBe(true);
   });
 });

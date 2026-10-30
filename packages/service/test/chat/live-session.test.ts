@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { ChatItem, EventMsg } from '@pahub/protocol';
-import { LiveSession, type LiveSessionOptions } from '../../src/chat/live-session.js';
+import { LiveSession, authLabel, type LiveSessionOptions } from '../../src/chat/live-session.js';
 import { ServiceError } from '../../src/server/router.js';
 import type { PermissionUpdate } from '../../src/sdk/adapter.js';
 import { FakeAdapter } from '../../src/testing/fake-adapter.js';
@@ -631,6 +631,7 @@ describe('LiveSession', () => {
       permissionMode: 'acceptEdits',
       claudeVersion: '2.9.0',
       effort: 'medium',
+      auth: { kind: 'other', label: 'Unknown' }, // FakeSession's empty account info
     });
 
     const before = headers().length;
@@ -749,5 +750,120 @@ describe('LiveSession', () => {
     // Nothing is held back: everything up to snap.seq is in the log.
     expect(s.since(snap.seq)).toEqual([]);
     expect(s.snapshot(10).hasMore).toBe(false);
+  });
+
+  it('sets the header auth from accountInfo once per process, after init', async () => {
+    const { adapter, opts, events } = setup();
+    const s = LiveSession.create('/p', { text: 'go' }, opts);
+    const fake = adapter.lastSession();
+    fake.account = { subscriptionType: 'max', apiProvider: 'firstParty' };
+    const spy = vi.spyOn(fake, 'accountInfo');
+    expect(spy).not.toHaveBeenCalled();
+    fake.emit(init(s.sessionId));
+    fake.emit(init(s.sessionId));
+    await settle();
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(s.header.auth).toEqual({ kind: 'subscription', label: 'Max subscription' });
+    const last = events.filter((e) => e.event === 'chat.status').at(-1);
+    expect(last?.data).toMatchObject({ header: { auth: { kind: 'subscription' } } });
+  });
+
+  it('reports a failing accountInfo without an auth label', async () => {
+    const errors: string[] = [];
+    const { adapter, opts } = setup({ onError: (_e, ctx) => errors.push(ctx) });
+    const s = LiveSession.create('/p', { text: 'go' }, opts);
+    const fake = adapter.lastSession();
+    fake.accountInfo = () => Promise.reject(new Error('no account'));
+    fake.emit(init(s.sessionId));
+    await settle();
+    expect(s.header.auth).toBeUndefined();
+    expect(errors).toEqual([`accountInfo (session ${s.sessionId})`]);
+  });
+
+  it('authLabel: API key wins, then a claude.ai login, then the provider', () => {
+    expect(authLabel({ apiKeySource: 'ANTHROPIC_API_KEY', tokenSource: 'claude.ai' })).toEqual({
+      kind: 'apiKey',
+      label: 'API key',
+    });
+    expect(authLabel({ apiKeySource: 'apiKeyHelper' })).toEqual({
+      kind: 'apiKey',
+      label: 'API key (apiKeyHelper)',
+    });
+    expect(authLabel({ subscriptionType: 'pro' })).toEqual({
+      kind: 'subscription',
+      label: 'Pro subscription',
+    });
+    expect(authLabel({ tokenSource: 'claude.ai' })).toEqual({
+      kind: 'subscription',
+      label: 'Subscription',
+    });
+    expect(authLabel({ apiKeySource: 'none', apiProvider: 'bedrock' })).toEqual({
+      kind: 'other',
+      label: 'Amazon Bedrock',
+    });
+    expect(authLabel({})).toEqual({ kind: 'other', label: 'Unknown' });
+  });
+
+  it('never offers or applies a setMode → bypassPermissions suggestion (R11)', async () => {
+    const { adapter, opts } = setup();
+    const s = LiveSession.create('/p', { text: 'go' }, opts);
+    const fake = adapter.lastSession();
+    const bypass: PermissionUpdate = {
+      type: 'setMode',
+      mode: 'bypassPermissions',
+      destination: 'session',
+    };
+    const rule = suggestion('Bash(ls:*)');
+    const chosen = fake.requestPermission(
+      'Bash',
+      { command: 'ls' },
+      { requestId: 'r1', suggestions: [bypass, rule] },
+    );
+    await settle();
+    expect(s.pendingRequests()[0]).toMatchObject({ suggestions: [rule] });
+    s.respond('r1', { decision: 'allowAlways', suggestionIndex: 0 });
+    await expect(chosen).resolves.toEqual({ behavior: 'allow', updatedPermissions: [rule] });
+  });
+
+  it('rejects allowAlways with a suggestion index that does not exist', async () => {
+    const { adapter, opts } = setup();
+    const s = LiveSession.create('/p', { text: 'go' }, opts);
+    const fake = adapter.lastSession();
+    void fake.requestPermission(
+      'Bash',
+      { command: 'ls' },
+      { requestId: 'r1', suggestions: [suggestion('Bash(ls:*)')] },
+    );
+    await settle();
+    expect(() => s.respond('r1', { decision: 'allowAlways', suggestionIndex: 3 })).toThrow(
+      ServiceError,
+    );
+    expect(s.pendingRequests()).toHaveLength(1);
+  });
+
+  it('maps a streamed item id to its SDK message uuid and back', async () => {
+    const { adapter, opts } = setup();
+    const s = LiveSession.create('/p', { text: 'go' }, opts);
+    const fake = adapter.lastSession();
+    fake.emit(streamEvent('st', { type: 'message_start', message: { id: 'api1' } }));
+    fake.emit(
+      streamEvent('sb', {
+        type: 'content_block_start',
+        index: 0,
+        content_block: { type: 'text', text: '' },
+      }),
+    );
+    fake.emit(
+      sdk({
+        type: 'assistant',
+        uuid: 'final',
+        session_id: 's',
+        parent_tool_use_id: null,
+        message: { id: 'api1', role: 'assistant', content: [{ type: 'text', text: 'hey' }] },
+      }),
+    );
+    await settle();
+    expect(s.messageUuidOf('sb')).toBe('final');
+    expect(s.resolveItemId('final')).toBe('sb');
   });
 });

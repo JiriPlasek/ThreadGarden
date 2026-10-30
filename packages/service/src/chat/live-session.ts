@@ -23,6 +23,7 @@ import { randomUUID } from 'node:crypto';
 import { basename } from 'node:path';
 import type { ChatHeaderInfo, ChatItem, ChatStatus, EventMsg } from '@pahub/protocol';
 import type {
+  AccountInfo,
   AgentAdapter,
   AgentSession,
   CanUseTool,
@@ -30,7 +31,9 @@ import type {
   PermissionMode,
   PermissionResult,
   PermissionUpdate,
+  ModelInfo,
   SDKMessage,
+  SlashCommand,
   SDKUserMessage,
   StartOptions,
 } from '../sdk/adapter.js';
@@ -150,6 +153,47 @@ const rejectBypass = (mode: string | undefined): void => {
   }
 };
 
+/** A suggested rule that would switch the session to bypassPermissions (never offered, R11). */
+const isBypassSuggestion = (u: unknown): boolean =>
+  isRec(u) && u.type === 'setMode' && u.mode === 'bypassPermissions';
+
+const PROVIDERS: Record<string, string> = {
+  bedrock: 'Amazon Bedrock',
+  vertex: 'Google Vertex AI',
+  foundry: 'Microsoft Foundry',
+  gateway: 'Gateway',
+};
+
+/**
+ * The header's authentication label from `accountInfo()` (§5.5; observed
+ * shapes in docs/architecture.md). An API key wins: with `ANTHROPIC_API_KEY`
+ * set the CLI still reports `tokenSource: "claude.ai"` from the stored login,
+ * but the key is what the session runs on. Then a claude.ai login, then a
+ * third-party provider.
+ */
+export const authLabel = (info: AccountInfo): NonNullable<ChatHeaderInfo['auth']> => {
+  const keySource = str(info.apiKeySource);
+  if (keySource && keySource !== 'none') {
+    return {
+      kind: 'apiKey',
+      label: keySource === 'ANTHROPIC_API_KEY' ? 'API key' : `API key (${keySource})`,
+    };
+  }
+  const plan = str(info.subscriptionType)?.trim();
+  if (plan) {
+    return {
+      kind: 'subscription',
+      label: `${plan[0]!.toUpperCase()}${plan.slice(1)} subscription`,
+    };
+  }
+  if (str(info.tokenSource) === 'claude.ai') return { kind: 'subscription', label: 'Subscription' };
+  const provider = str(info.apiProvider);
+  if (provider && provider !== 'firstParty') {
+    return { kind: 'other', label: PROVIDERS[provider] ?? provider };
+  }
+  return { kind: 'other', label: 'Unknown' };
+};
+
 const isRec = (v: unknown): v is Rec => typeof v === 'object' && v !== null && !Array.isArray(v);
 const str = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined);
 const num = (v: unknown): number | undefined =>
@@ -177,6 +221,8 @@ export class LiveSession {
   private firstText: string | undefined;
   private contextUsed: number | undefined;
   private startupFailureValue: StartupFailure | undefined;
+  /** The process whose account info was requested (once per process, after init). */
+  private authAskedOf: AgentSession | null = null;
   private ended: Promise<void> = Promise.resolve();
   // chat.items coalescing
   private readonly buffered = new Map<string, ChatItem>();
@@ -356,6 +402,19 @@ export class LiveSession {
   respond(requestId: string, d: PermissionDecision): void {
     const p = this.pending.get(requestId);
     if (!p) throw new Error(`No pending request ${requestId}`);
+    if (d.decision === 'allowAlways') {
+      const chosen = p.suggestions[d.suggestionIndex ?? 0];
+      if (d.suggestionIndex !== undefined && chosen === undefined) {
+        throw new ServiceError(
+          'INVALID_PARAMS',
+          `No suggestion ${d.suggestionIndex} to allow always`,
+        );
+      }
+      // Defence in depth: bypass suggestions are filtered out when the request arrives.
+      if (isBypassSuggestion(chosen)) {
+        throw new ServiceError('INVALID_PARAMS', 'pahub does not apply bypassPermissions rules');
+      }
+    }
     if (d.decision === 'deny') {
       const message = d.reason?.trim() ? d.reason : DEFAULT_DENY_MESSAGE;
       this.finish(requestId, 'denied', { behavior: 'deny', message });
@@ -395,7 +454,27 @@ export class LiveSession {
     this.publishStatus();
   }
 
-  /** Auth label for the header (resolved by the service, not by the session). */
+  /** Slash commands of the running process (`supportedCommands()`). */
+  supportedCommands(): Promise<SlashCommand[]> {
+    return this.requireLive().supportedCommands();
+  }
+
+  /** Models the running process offers (`supportedModels()`). */
+  supportedModels(): Promise<ModelInfo[]> {
+    return this.requireLive().supportedModels();
+  }
+
+  /** The id of the item rendering SDK message `uuid` in this process, if seen. */
+  resolveItemId(uuid: string): string | undefined {
+    return this.normalizer.resolveItemId(uuid);
+  }
+
+  /** The SDK message uuid behind `itemId` (streamed items map to their final message). */
+  messageUuidOf(itemId: string): string {
+    return this.normalizer.messageUuidOf(itemId);
+  }
+
+  /** Auth label for the header (from the session's account info, see `authLabel`). */
   setAuth(auth: ChatHeaderInfo['auth']): void {
     if (auth === undefined) delete this.headerValue.auth;
     else this.headerValue.auth = auth;
@@ -471,6 +550,7 @@ export class LiveSession {
   private handle(m: SDKMessage): void {
     try {
       this.updateHeader(m);
+      this.requestAuth(m);
       const r = this.normalizer.push(m);
       if (r.items.length > 0) this.pushItems(r.items, r.replace);
       if (this.noteStartupFailure(m)) this.setStatus('failed');
@@ -556,6 +636,28 @@ export class LiveSession {
     }
   }
 
+  /** After the first `system/init` of a process, asks once for its account info (§5.5). */
+  private requestAuth(m: SDKMessage): void {
+    const x: unknown = m;
+    const session = this.session;
+    if (!isRec(x) || x.type !== 'system' || x.subtype !== 'init') return;
+    if (!session || this.authAskedOf === session) return;
+    this.authAskedOf = session;
+    let asked: Promise<AccountInfo>;
+    try {
+      asked = session.accountInfo();
+    } catch (err) {
+      this.report(err, `accountInfo (session ${this.id})`);
+      return;
+    }
+    asked.then(
+      (info) => {
+        if (this.session === session) this.setAuth(authLabel(info));
+      },
+      (err: unknown) => this.report(err, `accountInfo (session ${this.id})`),
+    );
+  }
+
   // ── permissions ─────────────────────────────────────────────────────────
 
   private readonly canUseTool: CanUseTool = (toolName, input, options) => {
@@ -567,7 +669,8 @@ export class LiveSession {
 
     const variant =
       toolName === 'AskUserQuestion' ? 'question' : toolName === 'ExitPlanMode' ? 'plan' : 'tool';
-    const suggestions = options.suggestions ?? [];
+    // R11: a "switch to bypassPermissions" rule is never offered.
+    const suggestions = (options.suggestions ?? []).filter((u) => !isBypassSuggestion(u));
     const item: PermissionItem = {
       kind: 'permissionRequest',
       id: `permission:${requestId}`,

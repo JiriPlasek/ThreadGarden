@@ -693,6 +693,26 @@ describe('Normalizer', () => {
     expect(n.resolveItemId('never')).toBeUndefined();
   });
 
+  it('messageUuidOf maps an item id back to the SDK message uuid (for fork)', () => {
+    const n = new Normalizer();
+    run(n, [
+      streamEvent('e1', { type: 'message_start', message: { id: 'msg_1' } }),
+      streamEvent('e2', {
+        type: 'content_block_start',
+        index: 0,
+        content_block: { type: 'text', text: '' },
+      }),
+      assistant('a1', [{ type: 'text', text: 'Hi' }], { msgId: 'msg_1' }),
+      assistant('a3', [
+        { type: 'thinking', thinking: 't', signature: 's' },
+        { type: 'text', text: 'x' },
+      ]),
+    ]);
+    expect(n.messageUuidOf('e2')).toBe('a1'); // streamed item → its final message
+    expect(n.messageUuidOf('a3:1')).toBe('a3');
+    expect(n.messageUuidOf('u9')).toBe('u9'); // never seen: the id is the uuid
+  });
+
   it('maps user prompts with text and images to one user item', () => {
     const n = new Normalizer({ now: () => 777 });
     expect(n.push(user('u1', 'plain prompt')).items).toEqual([

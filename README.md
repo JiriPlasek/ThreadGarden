@@ -3,7 +3,7 @@
 ## Repository layout
 
 - `packages/protocol` - shared types and zod schemas for the service/UI protocol
-- `packages/service` - long-lived TypeScript service (coming)
+- `packages/service` - long-lived TypeScript service that owns Claude Code sessions, indexes history and serves the UI
 - `apps/desktop` - Tauri shell and SvelteKit UI (coming)
 
 ## Development

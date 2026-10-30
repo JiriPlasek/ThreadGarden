@@ -104,6 +104,21 @@ export class Normalizer {
     return this.aliases.get(sdkUuid) ?? (this.known.has(sdkUuid) ? sdkUuid : undefined);
   }
 
+  /**
+   * The SDK message uuid behind item `itemId` (for `forkSession`'s
+   * `upToMessageId`): a streamed item's final message uuid when it has been
+   * finalised, otherwise the part of the id before `:`.
+   */
+  messageUuidOf(itemId: string): string {
+    let source = itemId;
+    for (const [uuid, target] of this.aliases) {
+      if (target !== itemId) continue;
+      source = uuid;
+      break;
+    }
+    return source.split(':')[0] ?? source;
+  }
+
   private remember(m: unknown, items: ChatItem[]): void {
     for (const item of items) this.known.add(item.id);
     const uuid = isRec(m) ? str(m.uuid) : undefined;

@@ -1,4 +1,5 @@
 /** Router handlers for places, projects, search, chat metadata, drafts and settings. */
+import type { SettingsPatch } from '@pahub/protocol';
 import type { Catalog } from '../../history/catalog.js';
 import type { Db } from '../../history/db.js';
 import type { QuickHit } from '../../history/search.js';
@@ -9,6 +10,8 @@ export type HistoryHandlerDeps = {
   catalog: Catalog;
   quickSearch: (query: string, limit: number) => QuickHit[];
   now?: () => number;
+  /** Called after `settings.set` with the applied patch (e.g. to find `claude` again). */
+  onSettingsChanged?: (patch: SettingsPatch) => void;
 };
 
 /**
@@ -53,5 +56,9 @@ export const registerHistoryHandlers = (router: Router, deps: HistoryHandlerDeps
   });
 
   router.register('settings.get', async () => db.getSettings());
-  router.register('settings.set', async (p) => db.patchSettings(p));
+  router.register('settings.set', async (p) => {
+    const settings = db.patchSettings(p);
+    deps.onSettingsChanged?.(p);
+    return settings;
+  });
 };

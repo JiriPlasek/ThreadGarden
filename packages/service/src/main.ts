@@ -5,19 +5,24 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { PROTOCOL_VERSION, type EventMsg } from '@pahub/protocol';
 import pkg from '../package.json' with { type: 'json' };
-import { resolveDataDir } from './config.js';
+import { nextSeqEpoch, seqBaseForEpoch } from './chat/event-log.js';
+import type { Timers } from './chat/live-session.js';
+import { SessionHost } from './chat/session-host.js';
+import { resolveClaudeConfigDir, resolveDataDir } from './config.js';
 import { acquireInstanceLock, removeDiscovery, writeDiscovery } from './discovery.js';
 import { FileIndex } from './files/file-index.js';
 import { ExternalPoller, makeClaudeRunner, type ExternalSession } from './external/poller.js';
-import { Catalog, type LiveChat } from './history/catalog.js';
+import { Catalog, titleFor, type LiveChat } from './history/catalog.js';
 import { openDb, type Db } from './history/db.js';
 import { Indexer } from './history/indexer.js';
 import { createQuickSearch } from './history/search.js';
 import { watchProjects } from './history/watcher.js';
 import { createLogger, type Logger } from './logger.js';
 import type { AgentAdapter } from './sdk/adapter.js';
-import type { ClaudeFound, ClaudeProblem } from './sdk/claude-path.js';
-import { registerExternalHandlers } from './server/handlers/external.js';
+import { findInstalledClaude, type ClaudeFound, type ClaudeProblem } from './sdk/claude-path.js';
+import { RealAdapter, buildSessionEnv } from './sdk/real-adapter.js';
+import { registerChatHandlers } from './server/handlers/chat.js';
+import { makeResumeChecker, registerExternalHandlers } from './server/handlers/external.js';
 import { registerFileHandlers } from './server/handlers/files.js';
 import { registerHistoryHandlers } from './server/handlers/history.js';
 import { Router } from './server/router.js';
@@ -25,10 +30,15 @@ import { startWsServer } from './server/ws-server.js';
 
 export const IDLE_EXIT_MS = 30 * 60_000;
 const IDLE_CHECK_MS = 60_000;
+/** pahub-db key of the last chat seq epoch (see `nextSeqEpoch`). */
+const SEQ_EPOCH_KEY = 'service:seqEpoch';
+
+type ClaudeStatus = ClaudeFound | ClaudeProblem;
+const errorText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
 export type StartOptions = {
   dataDir: string;
-  /** Number of live sessions; they keep the service alive. Wired up by the session host. */
+  /** Number of live sessions; they keep the service alive. Default: the session host's. */
   liveCount?: () => number;
   clock?: () => number;
   setInterval?: (fn: () => void, ms: number) => NodeJS.Timeout;
@@ -36,13 +46,14 @@ export type StartOptions = {
   installSignalHandlers?: boolean;
   logger?: Logger;
   /**
-   * Enables history: opens `pahub.db`, indexes sessions through this adapter,
-   * watches `<claudeConfigDir>/projects` and serves the places API.
+   * Enables history and chats: opens `pahub.db`, indexes sessions through
+   * this adapter, watches `<claudeConfigDir>/projects`, serves the places API
+   * and runs the session host (every `chat.*` method).
    */
   adapter?: AgentAdapter;
   /** Claude Code's config dir (`CLAUDE_CONFIG_DIR` or `~/.claude`); read-only for pahub. */
   claudeConfigDir?: string;
-  /** Chats owned by the session host (Task 10 passes `host`). */
+  /** Overrides the session host as the source of pahub-owned chats for lists and the poller. */
   live?: { list(): LiveChat[] };
   /**
    * External sessions snapshot. Overrides the built-in poller's (tests, or a
@@ -50,18 +61,32 @@ export type StartOptions = {
    */
   externals?: () => ExternalSession[];
   /** Where `claude` was found (or why not), as `findInstalledClaude` reports it. */
-  claude?: ClaudeFound | ClaudeProblem;
+  claude?: ClaudeStatus;
+  /**
+   * Finds `claude` given pahub's `claudePath` setting, when `claude` is not
+   * passed; run at start and again whenever that setting changes.
+   */
+  locateClaude?: (settingPath: string | null) => Promise<ClaudeStatus>;
   /**
    * Runs `claude <args>` for the external-session poller. Defaults to spawning
-   * `claude.path` when `claude` was found; without either there is no poller.
+   * the located `claude` when it was found at start; without either there is no poller.
    */
   externalRun?: (args: string[]) => Promise<string>;
+  /** Base environment of session processes (default `process.env`); the API key is added on top. */
+  sessionEnv?: NodeJS.ProcessEnv;
+  /** Timers for the session host (coalescing, idle reclaim); default Node timers. */
+  sessionTimers?: Timers;
+  /** Fixed port and token (mock service, UI tests); default a random port and a fresh token. */
+  port?: number;
+  token?: string;
 };
 
 export type ServiceHandle = {
   port: number;
   token: string;
   router: Router;
+  /** The session host (present when an adapter was given). */
+  host?: SessionHost;
   broadcast: (e: { event: string; data: unknown }) => void;
   close(): Promise<void>;
   onClosed(cb: () => void): void;
@@ -69,7 +94,6 @@ export type ServiceHandle = {
 
 export const startService = async (opts: StartOptions): Promise<ServiceHandle> => {
   const { dataDir } = opts;
-  const liveCount = opts.liveCount ?? (() => 0);
   const clock = opts.clock ?? Date.now;
   const setTimer = opts.setInterval ?? ((fn, ms) => setInterval(fn, ms));
   const clearTimer = opts.clearInterval ?? ((t) => clearInterval(t));
@@ -79,7 +103,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   const lock = await acquireInstanceLock(dataDir);
   if (!lock) throw new Error('pahub service is already running for this data directory');
 
-  const token = randomBytes(32).toString('hex');
+  const token = opts.token ?? randomBytes(32).toString('hex');
   const router = new Router(log);
   let clientCount = 0;
   let lastActive = clock();
@@ -92,20 +116,60 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   }));
 
   const broadcastRef: { fn: (e: EventMsg) => void } = { fn: () => {} };
+  const claude: { current: ClaudeStatus | undefined } = { current: opts.claude };
+  /** pahub's optional API key (§5.5): in memory only, never logged or stored. */
+  let apiKey: string | null = null;
   let db: Db | undefined;
+  let host: SessionHost | undefined;
   let indexing = { done: 0, total: 0 };
   let watcher: { close(): void } | undefined;
   let server: Awaited<ReturnType<typeof startWsServer>> | undefined;
   let poller: ExternalPoller | undefined;
   let startSync: (() => void) | undefined;
+  const live = (): { list(): LiveChat[] } | undefined => opts.live ?? host;
+
+  const locate = async (settingPath: string | null): Promise<ClaudeStatus | undefined> => {
+    if (!opts.locateClaude) return claude.current;
+    try {
+      return await opts.locateClaude(settingPath);
+    } catch (err) {
+      return { problem: 'unrunnable', detail: `Locating Claude Code failed: ${errorText(err)}` };
+    }
+  };
+  const noteProblem = (c: ClaudeStatus | undefined): void => {
+    if (c && !('path' in c)) log.warn(`claude: ${c.detail}`);
+  };
+  let locating = 0;
+  /** Finds `claude` again after the path setting changed; the newest request wins. */
+  const relocate = (): void => {
+    const ticket = ++locating;
+    void locate(db?.getSettings().claudePath ?? null).then((found) => {
+      if (ticket !== locating) return;
+      claude.current = found;
+      noteProblem(found);
+    });
+  };
+
   try {
+    if (opts.adapter) db = openDb(path.join(dataDir, 'pahub.db'));
+    if (!claude.current) claude.current = await locate(db?.getSettings().claudePath ?? null);
+    const found = claude.current;
+    noteProblem(found);
+
     const run =
       opts.externalRun ??
-      (opts.claude && 'path' in opts.claude ? makeClaudeRunner(opts.claude.path) : undefined);
+      (found && 'path' in found
+        ? (args: string[]) => {
+            const c = claude.current; // follows a changed Claude path setting
+            return c && 'path' in c
+              ? makeClaudeRunner(c.path)(args)
+              : Promise.reject(new Error('Claude Code is not available'));
+          }
+        : undefined);
     if (run) {
       poller = new ExternalPoller(
         run,
-        () => new Set((opts.live?.list() ?? []).map((c) => c.sessionId)),
+        () => new Set((live()?.list() ?? []).map((c) => c.sessionId)),
         (e) => broadcastRef.fn(e),
         {
           enabled: () => db?.getSettings().externalPolling ?? true,
@@ -113,14 +177,49 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         },
       );
     }
-    if (opts.adapter) {
-      const claudeDir =
-        opts.claudeConfigDir ?? process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), '.claude');
-      const opened = openDb(path.join(dataDir, 'pahub.db'));
-      db = opened;
+    const resumeCheck = makeResumeChecker({
+      ...(poller ? { poller } : {}),
+      lastModifiedOf: (id) => db?.getSession(id)?.lastModified,
+      now: clock,
+    });
+
+    if (opts.adapter && db) {
+      const adapter = opts.adapter;
+      const opened = db;
+      const claudeDir = opts.claudeConfigDir ?? resolveClaudeConfigDir(process.env, os.homedir());
+      const epoch = nextSeqEpoch(opened.getUiState(SEQ_EPOCH_KEY));
+      opened.setUiState(SEQ_EPOCH_KEY, epoch);
+      const onError = (err: unknown, context: string) => log.error(`${context}: ${errorText(err)}`);
+      const sessionHost = new SessionHost({
+        adapter,
+        registry: opened,
+        claudePath: () => {
+          const c = claude.current;
+          return c && 'path' in c ? c.path : '';
+        },
+        env: () => buildSessionEnv(opts.sessionEnv ?? process.env, apiKey),
+        emit: (e) => broadcastRef.fn(e),
+        now: clock,
+        ...(opts.sessionTimers ? { timers: opts.sessionTimers } : {}),
+        isPinned: (id) => opened.isSessionPinned(id),
+        getSettings: () => opened.getSettings(),
+        describe: (id) => {
+          const row = opened.getSession(id);
+          if (!row) return {};
+          const project = opened.listProjects().find((p) => p.projectId === row.projectId);
+          return {
+            title: titleFor(row),
+            ...(project ? { projectName: project.displayName } : {}),
+          };
+        },
+        onError,
+        seqBase: seqBaseForEpoch(epoch),
+      });
+      host = sessionHost;
+
       const catalogRef: { current?: Catalog } = {};
       const indexer = new Indexer(
-        opts.adapter,
+        adapter,
         opened,
         (e) => {
           if (e.event === 'sessions.changed' || e.event === 'projects.changed') {
@@ -133,7 +232,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       );
       const cat = new Catalog({
         db: opened,
-        ...(opts.live ? { live: opts.live } : {}),
+        live: live() ?? sessionHost,
         externals: opts.externals ?? (() => poller?.snapshot() ?? []),
       });
       catalogRef.current = cat;
@@ -141,6 +240,20 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         db: opened,
         catalog: cat,
         quickSearch: createQuickSearch(opened, cat),
+        onSettingsChanged: (patch) => {
+          if (patch.claudePath !== undefined && opts.locateClaude) relocate();
+        },
+      });
+      registerChatHandlers(router, {
+        host: sessionHost,
+        adapter,
+        db: opened,
+        catalog: cat,
+        claude: () => claude.current,
+        resumeCheck,
+        indexNow: (ids) => indexer.refresh(ids),
+        emit: (e) => broadcastRef.fn(e),
+        onError,
       });
       watcher = watchProjects(
         path.join(claudeDir, 'projects'),
@@ -156,14 +269,21 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     registerExternalHandlers(router, {
       ...(poller ? { poller } : {}),
       lastModifiedOf: (id) => db?.getSession(id)?.lastModified,
-      claude: () => opts.claude,
+      claude: () => claude.current,
       indexing: () => indexing,
       now: clock,
     });
 
+    router.register('auth.setApiKey', async (p) => {
+      apiKey = p.key === null || p.key.trim() === '' ? null : p.key.trim();
+      return {};
+    });
+    router.register('work.stopAll', async () => ({ stopped: host?.stopAll() ?? 0 }));
+
     server = await startWsServer({
       token,
       router,
+      ...(opts.port === undefined ? {} : { port: opts.port }),
       onClientCountChange: (n) => {
         clientCount = n;
         lastActive = clock();
@@ -187,12 +307,19 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     throw err;
   }
   const wsServer = server;
+  const liveCount = opts.liveCount ?? (() => host?.liveCount() ?? 0);
+  // Chats that were live when the service last stopped show as interrupted (§4.2).
+  host?.recoverAfterRestart();
+  host?.start();
   startSync?.();
   poller?.start();
 
   const close = (): Promise<void> => {
     closing ??= (async () => {
       clearTimer(timer);
+      // Live sessions end with the process; the registry still lists them,
+      // so the next start shows them as interrupted (§4.2).
+      host?.dispose();
       poller?.stop();
       watcher?.close();
       await wsServer.close();
@@ -214,7 +341,9 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   }, IDLE_CHECK_MS);
   timer.unref?.();
 
+  // Quit pahub completely (§4.2): stop all work, then the service.
   router.register('service.shutdown', async () => {
+    host?.stopAll();
     setImmediate(() => void close());
     return {};
   });
@@ -228,6 +357,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     port: wsServer.port,
     token,
     router,
+    ...(host ? { host } : {}),
     broadcast: wsServer.broadcast,
     close,
     onClosed: (cb) => void closedCallbacks.push(cb),
@@ -238,8 +368,13 @@ const isEntry = (): boolean =>
   process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
 
 if (isEntry()) {
-  const dataDir = resolveDataDir(process.env, process.platform, os.homedir());
-  startService({ dataDir })
+  const home = os.homedir();
+  startService({
+    dataDir: resolveDataDir(process.env, process.platform, home),
+    claudeConfigDir: resolveClaudeConfigDir(process.env, home),
+    adapter: new RealAdapter(),
+    locateClaude: findInstalledClaude,
+  })
     .then((svc) => svc.onClosed(() => process.exit(0)))
     .catch((err: unknown) => {
       process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
