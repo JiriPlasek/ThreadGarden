@@ -68,15 +68,39 @@ export class ServiceClient {
   }
 
   /**
-   * Resolves after the first successful `hello`; rejects with `INCOMPATIBLE` on a
+   * Resolves after the next successful `hello`; rejects with `INCOMPATIBLE` on a
    * protocol mismatch. Keeps retrying (status `connecting`) while the service is unreachable.
+   * Called again (e.g. after "Restart service"), it drops the current socket and
+   * switches to the given service; once connected, `onOpen` and (after an earlier
+   * connection) `onReconnect` listeners run so the state resyncs.
    */
   connect = (url: string, token: string): Promise<void> => {
     this.url = url;
     this.token = token;
     this.closed = false;
+    this.attempt = 0;
+    clearTimeout(this.retryTimer);
+    const old = this.ws;
+    if (old) {
+      this.ws = null;
+      old.close();
+      this.rejectAll('DISCONNECTED', 'Switching to another service');
+    }
+    if (this.status !== 'connecting') {
+      this.setStatus(this.hasBeenOpen ? 'reconnecting' : 'connecting');
+    }
+    const earlier = this.firstConnect;
     return new Promise<void>((resolve, reject) => {
-      this.firstConnect = { resolve, reject };
+      this.firstConnect = {
+        resolve: () => {
+          earlier?.resolve();
+          resolve();
+        },
+        reject: (e) => {
+          earlier?.reject(e);
+          reject(e);
+        },
+      };
       this.open();
     });
   };

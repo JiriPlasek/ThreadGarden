@@ -9,7 +9,11 @@
 
 <script lang="ts">
   import PanelLeftOpenIcon from '@lucide/svelte/icons/panel-left-open';
+  import SettingsIcon from '@lucide/svelte/icons/settings';
   import NewChatDialog from '#lib/components/NewChatDialog.svelte';
+  import QuickSwitcher from '#lib/components/QuickSwitcher.svelte';
+  import ServiceBanner from '#lib/components/ServiceBanner.svelte';
+  import SettingsDialog from '#lib/components/SettingsDialog.svelte';
   import SetupScreen from '#lib/components/SetupScreen.svelte';
   import { useApp } from '#lib/state/context.js';
   import AgentsStrip from './AgentsStrip.svelte';
@@ -24,7 +28,8 @@
    * Main window (spec §6.1): places | chat list | open chat with tabs, and the
    * running-agents strip along the bottom. The first two columns resize and collapse.
    * Without a usable Claude Code the setup screen comes first (spec §6.4); the
-   * user can still browse history without it.
+   * user can still browse history without it. Ctrl/Cmd+K opens the quick
+   * switcher from anywhere; an older service shows the restart banner.
    */
   const { settings, connection, places, interaction } = useApp();
 
@@ -65,11 +70,8 @@
     >
       Reconnecting to the pahub service…
     </div>
-  {:else if connection.restartNeeded}
-    <div role="status" class="bg-muted text-muted-foreground shrink-0 px-3 py-1 text-xs">
-      pahub service {connection.serviceVersion} is running; restart the pahub service to update to
-      {connection.appVersion}.
-    </div>
+  {:else}
+    <ServiceBanner />
   {/if}
 
   {#if interaction.claudeMissing && !interaction.setupDismissed}
@@ -92,6 +94,13 @@
             onclick={() => settings.setCollapsed('places', false)}
           >
             <PanelLeftOpenIcon />
+          </IconButton>
+          <IconButton
+            label="Settings"
+            side="right"
+            onclick={() => (interaction.settingsOpen = true)}
+          >
+            <SettingsIcon />
           </IconButton>
           {#if places.counts.needsYou > 0}
             <button
@@ -151,3 +160,5 @@
 </div>
 
 <NewChatDialog />
+<QuickSwitcher />
+<SettingsDialog />

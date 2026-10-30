@@ -1,8 +1,10 @@
-import type { ChatSummary } from '@pahub/protocol';
+import type { ChatSummary, Result } from '@pahub/protocol';
 import { quietly, type Api } from './api';
 import type { PlacesState } from './places.svelte';
 
 export const PAGE_SIZE = 50;
+
+export type QuickHit = Result<'search.quick'>['items'][number];
 
 export class SessionsState {
   items = $state.raw<ChatSummary[]>([]);
@@ -86,6 +88,12 @@ export class SessionsState {
     const next = this.items.slice();
     next[i] = { ...cur, ...change };
     this.items = next;
+  };
+
+  /** Ctrl/Cmd+K: fuzzy titles and projects plus full text, across all projects (spec §6.1). */
+  quickSearch = async (query: string, limit: number): Promise<QuickHit[]> => {
+    if (!this.api) return [];
+    return (await this.api.request('search.quick', { query, limit })).items;
   };
 
   setQuery = (query: string): Promise<void> => {

@@ -8,6 +8,7 @@
   import PanelLeftCloseIcon from '@lucide/svelte/icons/panel-left-close';
   import PinIcon from '@lucide/svelte/icons/pin';
   import PinOffIcon from '@lucide/svelte/icons/pin-off';
+  import SettingsIcon from '@lucide/svelte/icons/settings';
   import * as ContextMenu from '#lib/components/ui/context-menu/index.js';
   import { samePlace } from '#lib/state/places.svelte.js';
   import { useApp } from '#lib/state/context.js';
@@ -18,7 +19,7 @@
   /** Left column (spec §6.1): smart folders with counts, then projects (pinned, then recent). */
   let { onCollapse }: { onCollapse?: () => void } = $props();
 
-  const { places } = useApp();
+  const { places, interaction } = useApp();
 
   let showHidden = $state(false);
 
@@ -109,6 +110,9 @@
 <nav class="flex h-full min-w-0 flex-col" aria-label="Places">
   <header class="flex h-9 shrink-0 items-center gap-1 pr-1.5 pl-3">
     <span class="flex-1 text-sm font-semibold tracking-tight">pahub</span>
+    <IconButton label="Settings" onclick={() => (interaction.settingsOpen = true)}>
+      <SettingsIcon />
+    </IconButton>
     {#if onCollapse}
       <IconButton label="Hide places" onclick={onCollapse}><PanelLeftCloseIcon /></IconButton>
     {/if}

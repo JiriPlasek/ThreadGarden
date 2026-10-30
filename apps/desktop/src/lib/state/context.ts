@@ -7,6 +7,7 @@ import { agents, type AgentsState } from './agents.svelte';
 import { chats, type ChatsState } from './chats.svelte';
 import { connection, type ConnectionState } from './connection.svelte';
 import { interaction, type InteractionState } from './interaction.svelte';
+import { lifecycle, type LifecycleState } from './lifecycle.svelte';
 import { places, type PlacesState } from './places.svelte';
 import { sessions, type SessionsState } from './sessions.svelte';
 import { settings, type SettingsState } from './settings.svelte';
@@ -21,6 +22,7 @@ export type AppState = {
   settings: SettingsState;
   agents: AgentsState;
   interaction: InteractionState;
+  lifecycle: LifecycleState;
 };
 
 export const APP_CONTEXT = Symbol('pahub.app');
@@ -34,6 +36,7 @@ const singletons: AppState = {
   settings,
   agents,
   interaction,
+  lifecycle,
 };
 
 /** Must be called during component initialisation. */

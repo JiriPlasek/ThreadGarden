@@ -1,4 +1,5 @@
 import { settingsDefaults, type Settings, type SettingsPatch } from '@pahub/protocol';
+import { apiKey } from '../native';
 import { quietly, type Api } from './api';
 
 export const COLUMNS_KEY = 'columns';
@@ -8,6 +9,12 @@ export const COLUMNS_SAVE_DELAY_MS = 300;
 export type ColumnWidths = Record<string, number>;
 export type CollapsedColumns = Record<string, boolean>;
 
+/** Where pahub's optional API key lives (the OS credential store; a fake in tests). */
+export type KeyStore = typeof apiKey;
+
+/** The idle-reclaim setting's range in minutes (0 disables reclaiming). */
+export const IDLE_MINUTES_MAX = 1440;
+
 export class SettingsState {
   value = $state<Settings>({ ...settingsDefaults });
   loaded = $state(false);
@@ -16,12 +23,48 @@ export class SettingsState {
   /** Persisted collapsed flags by column name. */
   collapsed = $state<CollapsedColumns>({});
 
+  /** An API key is stored (spec §5.5); the key itself never leaves the credential store and the service. */
+  hasApiKey = $state(false);
+
   private api: Api | null = null;
+  private keys: KeyStore = apiKey;
   private saveTimer: ReturnType<typeof setTimeout> | undefined;
 
-  init = (api: Api): void => {
+  init = (api: Api, keys: KeyStore = apiKey): void => {
     this.api = api;
+    this.keys = keys;
     api.onReconnect(() => this.load());
+    // The service keeps the key in memory only: hand it over after every hello.
+    api.onOpen(() => this.sendStoredKey());
+    if (api.status === 'open') quietly(this.sendStoredKey());
+  };
+
+  /** Sends the key from the credential store, if any, to the service. */
+  sendStoredKey = async (): Promise<void> => {
+    const key = await this.keys.get();
+    this.hasApiKey = key !== null;
+    if (key !== null && this.api) await this.api.request('auth.setApiKey', { key });
+  };
+
+  /** Refreshes `hasApiKey` from the credential store. */
+  checkApiKey = async (): Promise<void> => {
+    this.hasApiKey = (await this.keys.get()) !== null;
+  };
+
+  /** Stores the key in the OS credential store, then hands it to the service for new sessions. */
+  saveApiKey = async (key: string): Promise<void> => {
+    const k = key.trim();
+    if (!k) throw new Error('Enter an API key.');
+    await this.keys.set(k);
+    this.hasApiKey = true;
+    await this.api?.request('auth.setApiKey', { key: k });
+  };
+
+  /** Removes the key everywhere: new sessions inherit Claude Code's own authentication again. */
+  removeApiKey = async (): Promise<void> => {
+    await this.keys.clear();
+    this.hasApiKey = false;
+    await this.api?.request('auth.setApiKey', { key: null });
   };
 
   load = async (): Promise<void> => {

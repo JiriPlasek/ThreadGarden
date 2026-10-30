@@ -22,6 +22,10 @@ export class InteractionState {
   status = $state.raw<SystemStatus | null>(null);
   /** The new-chat dialog; `cwd` preselects a project folder. */
   newChat = $state<{ open: boolean; cwd: string | null }>({ open: false, cwd: null });
+  /** The Ctrl/Cmd+K quick switcher (spec §6.1). */
+  switcherOpen = $state(false);
+  /** pahub's settings dialog (spec §6.5). */
+  settingsOpen = $state(false);
   /** The user chose to browse history although Claude Code is missing. */
   setupDismissed = $state(false);
   /** A chat whose composer takes focus when it opens (a chat just created). */

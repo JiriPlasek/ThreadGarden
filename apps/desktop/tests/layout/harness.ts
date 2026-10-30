@@ -4,6 +4,7 @@ import { AgentsState } from '../../src/lib/state/agents.svelte';
 import { ChatsState } from '../../src/lib/state/chats.svelte';
 import { ConnectionState } from '../../src/lib/state/connection.svelte';
 import { InteractionState } from '../../src/lib/state/interaction.svelte';
+import { LifecycleState } from '../../src/lib/state/lifecycle.svelte';
 import { APP_CONTEXT, type AppState } from '../../src/lib/state/context';
 import { PlacesState } from '../../src/lib/state/places.svelte';
 import { SessionsState } from '../../src/lib/state/sessions.svelte';
@@ -76,6 +77,7 @@ export const setup = async (configure?: (server: FakeServer) => void) => {
     settings: new SettingsState(),
     agents: new AgentsState(),
     interaction: new InteractionState(),
+    lifecycle: new LifecycleState(),
   };
   app.connection.init(client);
   app.places.init(client);
@@ -85,6 +87,11 @@ export const setup = async (configure?: (server: FakeServer) => void) => {
   app.settings.init(client);
   app.agents.init(client);
   app.interaction.init(client);
+  // "Restart service" reconnects to whatever the (fake) service connection reports.
+  app.lifecycle.init(client, app.agents, app.connection, async (conn) => {
+    app.connection.setVersions(conn);
+    await client.connect(`ws://fake:${conn.port}`, conn.token);
+  });
   app.tabs.subscribe(() => app.chats.sync(app.tabs.open));
 
   const context = new Map<unknown, unknown>([[APP_CONTEXT, app]]);

@@ -44,6 +44,16 @@ const mockConnection = (): ServiceConnection => {
 export const serviceConnection = async (): Promise<ServiceConnection> =>
   isTauri ? invoke<ServiceConnection>('service_connection') : mockConnection();
 
+/**
+ * Stops the running service with all its work and resolves once its process
+ * has exited ("Restart service", spec §4.2); `serviceConnection()` then starts
+ * a fresh one. Works for a service of another protocol version too. A no-op in
+ * a browser (the mock service is not restarted).
+ */
+export const stopService = async (): Promise<void> => {
+  if (isTauri) await invoke('service_stop');
+};
+
 let browserApiKey: string | null = null;
 
 /** pahub's optional Anthropic API key, kept in the OS credential store (in memory in a browser). */
@@ -60,7 +70,11 @@ export const apiKey = {
   },
 };
 
-/** Shows an OS notification; `sessionId` travels along so a click can open that chat. */
+/**
+ * Shows an OS notification. The notification plugin cannot report clicks back
+ * (ruling R26): `sessionId` rides along in `extra` for platforms that might, and
+ * `notifications.ts` opens the chat when the window gains focus soon after.
+ */
 export const notify = async (title: string, body: string, sessionId: string): Promise<void> => {
   if (!isTauri) return;
   const n = await import('@tauri-apps/plugin-notification');
@@ -112,6 +126,14 @@ export const pickFolder = async (): Promise<string | null> => {
   if (!isTauri) return null;
   const { open } = await import('@tauri-apps/plugin-dialog');
   const picked = await open({ directory: true, multiple: false });
+  return typeof picked === 'string' ? picked : null;
+};
+
+/** Asks the user for a file (e.g. the Claude Code executable); null when cancelled (always null in a browser). */
+export const pickFile = async (): Promise<string | null> => {
+  if (!isTauri) return null;
+  const { open } = await import('@tauri-apps/plugin-dialog');
+  const picked = await open({ directory: false, multiple: false });
   return typeof picked === 'string' ? picked : null;
 };
 

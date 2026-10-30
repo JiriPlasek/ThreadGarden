@@ -1,9 +1,11 @@
 <script lang="ts">
+  import type { Snippet } from 'svelte';
   import * as AlertDialog from '#lib/components/ui/alert-dialog/index.js';
 
   /**
    * A yes/no confirmation. `onConfirm` may be async: the dialog stays open (buttons
    * disabled) until it settles, then closes; a thrown error is shown in the dialog.
+   * `children` adds content below the description (e.g. the agents an action stops).
    */
   let {
     open = $bindable(false),
@@ -13,6 +15,7 @@
     cancelLabel = 'Cancel',
     destructive = false,
     onConfirm,
+    children,
   }: {
     open?: boolean;
     title: string;
@@ -21,6 +24,7 @@
     cancelLabel?: string;
     destructive?: boolean;
     onConfirm: () => void | Promise<void>;
+    children?: Snippet;
   } = $props();
 
   let busy = $state(false);
@@ -53,6 +57,7 @@
         <AlertDialog.Description class="text-sm">{description}</AlertDialog.Description>
       {/if}
     </AlertDialog.Header>
+    {@render children?.()}
     {#if error}
       <p class="text-destructive text-sm" role="alert">{error}</p>
     {/if}

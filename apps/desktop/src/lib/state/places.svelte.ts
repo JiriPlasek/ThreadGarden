@@ -14,6 +14,7 @@ export class PlacesState {
 
   private api: Api | null = null;
   private readonly subscribers = new Set<() => void>();
+  private readonly countWatchers = new Set<(counts: PlaceCounts) => void>();
   private inflight: Promise<void> | null = null;
   private again = false;
 
@@ -34,6 +35,12 @@ export class PlacesState {
   subscribe = (cb: () => void): (() => void) => {
     this.subscribers.add(cb);
     return () => this.subscribers.delete(cb);
+  };
+
+  /** Called after every counts fetch (e.g. for the tray badge). */
+  subscribeCounts = (cb: (counts: PlaceCounts) => void): (() => void) => {
+    this.countWatchers.add(cb);
+    return () => this.countWatchers.delete(cb);
   };
 
   select = (place: Place): void => {
@@ -60,6 +67,7 @@ export class PlacesState {
           ]);
           this.counts = counts;
           this.projects = projects;
+          for (const cb of this.countWatchers) cb(counts);
         } while (this.again);
       } finally {
         this.inflight = null;
