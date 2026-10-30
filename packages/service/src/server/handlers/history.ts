@@ -39,6 +39,10 @@ export const registerHistoryHandlers = (router: Router, deps: HistoryHandlerDeps
     catalog.list(p.place, p.query, Math.max(1, Math.floor(p.limit)), p.cursor),
   );
 
+  router.register('sessions.summaries', async (p) => ({
+    items: catalog.summaries(p.sessionIds),
+  }));
+
   router.register('search.quick', async (p) => ({ items: quickSearch(p.query, p.limit) }));
 
   router.register('meta.update', async (p) => {

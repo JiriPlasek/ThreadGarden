@@ -6,7 +6,11 @@
  * files beside its module at run time, because pahub always passes
  * `pathToClaudeCodeExecutable` (its bundled-CLI lookup is never reached).
  * `require` is provided for the CommonJS dependencies (ws).
+ *
+ * `PAHUB_API_KEY_ONLY=1` at build time makes an API-key-only build (spec §5.5):
+ * the value is substituted into the bundle, not read when the service runs.
  */
+import process from 'node:process';
 import { build } from 'esbuild';
 
 await build({
@@ -16,6 +20,11 @@ await build({
   platform: 'node',
   format: 'esm',
   target: 'node22',
+  define: {
+    'process.env.PAHUB_API_KEY_ONLY': JSON.stringify(
+      process.env.PAHUB_API_KEY_ONLY === '1' ? '1' : '',
+    ),
+  },
   banner: {
     js: "import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);",
   },

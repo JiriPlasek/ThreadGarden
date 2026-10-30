@@ -1,5 +1,5 @@
 /** The chat.* / auth.* router methods against the real service wiring and a fake adapter. */
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ChatItem } from '@pahub/protocol';
@@ -539,6 +539,46 @@ describe('chat handlers', () => {
     await ok('work.stopAll', {});
     await ok('chat.open', { sessionId: 'h1', tail: 3 });
     expect(reads).toHaveBeenCalledTimes(4);
+  });
+
+  it('does not re-index a chat while its turn streams; indexes it once the turn ends', async () => {
+    const adapter = new FakeAdapter();
+    // A stand-in Claude config dir (temporary): the watcher reports transcript appends.
+    const project = join(dir, 'claude', 'projects', 'p');
+    await mkdir(project, { recursive: true });
+    await start(adapter);
+    const { sessionId } = await ok<{ sessionId: string }>('chat.create', { cwd: dir, text: 'hi' });
+    const reads = vi.spyOn(adapter, 'getSessionInfo');
+    const indexedNow = () => reads.mock.calls.some((c) => c[0] === sessionId);
+    // Claude Code appends to the transcript while the turn streams.
+    await writeFile(join(project, `${sessionId}.jsonl`), '{}');
+    await new Promise((r) => setTimeout(r, 400));
+    await writeFile(join(project, `${sessionId}.jsonl`), '{}{}');
+    await new Promise((r) => setTimeout(r, 900)); // past the watcher's 500 ms debounce
+    expect(indexedNow()).toBe(false);
+    adapter.lastSession().emit(result('r1')); // the turn ends: the chat is idle
+    await eventually(indexedNow);
+  });
+
+  it('API-key-only build: chats start and resume only with an API key set', async () => {
+    const adapter = new FakeAdapter();
+    addHistory(adapter, 'h1', 1);
+    await start(adapter, { apiKeyOnly: true });
+    const created = await call('chat.create', { cwd: dir, text: 'x' });
+    expect(created.error?.code).toBe('API_KEY_REQUIRED');
+    expect(created.error?.message).toMatch(/API key/);
+    expect(await code('chat.send', { sessionId: 'h1', text: 'x' })).toBe('API_KEY_REQUIRED');
+    expect(adapter.started).toHaveLength(0);
+    // History still works without a key.
+    expect(ids((await ok<Opened>('chat.open', { sessionId: 'h1', tail: 5 })).items)).toHaveLength(
+      2,
+    );
+
+    await ok('auth.setApiKey', { key: 'sk-ant-test' });
+    await ok('chat.create', { cwd: dir, text: 'x' });
+    expect(adapter.lastSession().options.env?.ANTHROPIC_API_KEY).toBe('sk-ant-test');
+    await ok('auth.setApiKey', { key: null });
+    expect(await code('chat.send', { sessionId: 'h1', text: 'x' })).toBe('API_KEY_REQUIRED');
   });
 
   it('bounds the history cache by size', async () => {

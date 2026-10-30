@@ -82,7 +82,16 @@ export type StartOptions = {
   /** Fixed port and token (mock service, UI tests); default a random port and a fresh token. */
   port?: number;
   token?: string;
+  /**
+   * API-key-only configuration (spec §5.5; build flag `PAHUB_API_KEY_ONLY`):
+   * chats start or resume only with an API key set (`auth.setApiKey`), never
+   * on the installed Claude Code's own sign-in.
+   */
+  apiKeyOnly?: boolean;
 };
+
+/** How long shutdown waits for a running index pass to reach a stopping point. */
+const INDEXER_STOP_MS = 5_000;
 
 export type ServiceHandle = {
   port: number;
@@ -112,6 +121,14 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   let lastActive = clock();
   let closing: Promise<void> | null = null;
   const closedCallbacks: (() => void)[] = [];
+  /** One shutdown step; a failure is logged and the shutdown carries on. */
+  const step = async (name: string, fn: () => unknown): Promise<void> => {
+    try {
+      await fn();
+    } catch (err) {
+      log.error(`shutdown (${name}): ${errorText(err)}`);
+    }
+  };
 
   router.register('hello', async () => ({
     serviceVersion: pkg.version,
@@ -125,6 +142,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   let db: Db | undefined;
   let host: SessionHost | undefined;
   let indexing = { done: 0, total: 0 };
+  let indexer: Indexer | undefined;
   let watcher: { close(): void } | undefined;
   let server: Awaited<ReturnType<typeof startWsServer>> | undefined;
   let poller: ExternalPoller | undefined;
@@ -149,21 +167,30 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     if (c && !('path' in c)) log.warn(`claude: ${c.detail}`);
   };
   let locating = 0;
-  /** Finds `claude` again after the path setting changed; the newest request wins. */
-  const relocate = (): void => {
+  /** Settles when the newest search for `claude` has (see `relocate`). */
+  let located: Promise<void> = Promise.resolve();
+  /**
+   * Finds `claude` (at start, and again after the path setting changed); the
+   * newest request wins. It runs in the background: `claude --version` can
+   * take seconds (an npm install on Windows, a cold disk), and the UI must be
+   * able to connect meanwhile. Requests that need the answer wait for it.
+   */
+  const relocate = (): Promise<void> => {
     const ticket = ++locating;
-    void locate(db?.getSettings().claudePath ?? null).then((found) => {
+    located = locate(db?.getSettings().claudePath ?? null).then((found) => {
       if (ticket !== locating) return;
       claude.current = found;
       noteProblem(found);
       // External sessions show up now rather than at the next poll.
       if (found && 'path' in found) void poller?.refresh();
     });
+    return located;
   };
+  /** Waits for the search for `claude` in progress, if any. */
+  const whenLocated = (): Promise<void> => located;
 
   try {
     if (opts.adapter) db = openDb(path.join(dataDir, 'pahub.db'));
-    if (!claude.current) claude.current = await locate(db?.getSettings().claudePath ?? null);
     const found = claude.current;
     noteProblem(found);
 
@@ -182,7 +209,9 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     if (run) {
       poller = new ExternalPoller(
         run,
-        () => new Set((live()?.list() ?? []).map((c) => c.sessionId)),
+        // Only *live* pahub chats are pahub's own processes. A paused or failed
+        // chat has none, so one that is running now runs in a terminal (§4.4).
+        () => new Set((live()?.list() ?? []).filter((c) => c.live).map((c) => c.sessionId)),
         (e) => broadcastRef.fn(e),
         {
           enabled: () => externalUsable() && (db?.getSettings().externalPolling ?? true),
@@ -192,6 +221,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     }
     const resumeCheck = makeResumeChecker({
       ...(poller ? { poller } : {}),
+      located: whenLocated,
       externalUsable,
       lastModifiedOf: (id) => db?.getSession(id)?.lastModified,
       now: clock,
@@ -212,7 +242,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
           return c && 'path' in c ? c.path : '';
         },
         env: () => buildSessionEnv(opts.sessionEnv ?? process.env, apiKey),
-        emit: (e) => broadcastRef.fn(e),
+        emit: (e) => emitChat(e),
         now: clock,
         ...(opts.sessionTimers ? { timers: opts.sessionTimers } : {}),
         isPinned: (id) => opened.isSessionPinned(id),
@@ -232,7 +262,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       host = sessionHost;
 
       const catalogRef: { current?: Catalog } = {};
-      const indexer = new Indexer(
+      const index = new Indexer(
         adapter,
         opened,
         (e) => {
@@ -242,8 +272,29 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
           if (e.event === 'index.progress') indexing = e.data as typeof indexing;
           broadcastRef.fn(e);
         },
-        { onError: (err, ctx) => log.error(`indexer ${JSON.stringify(ctx)}: ${String(err)}`) },
+        {
+          onError: (err, ctx) => log.error(`indexer ${JSON.stringify(ctx)}: ${String(err)}`),
+          // A turn in progress appends to its transcript all the time: index it
+          // once the turn is over, not on every watcher event (the chat view
+          // reads the SDK, never the index).
+          deferWhile: (id) => {
+            const s = sessionHost.get(id);
+            return s !== undefined && s.live && s.status !== 'idle';
+          },
+        },
       );
+      indexer = index;
+      /** Chat events go to clients; a turn that ended lets deferred indexing run. */
+      const emitChat = (e: EventMsg): void => {
+        broadcastRef.fn(e);
+        if (e.event !== 'chat.status' && e.event !== 'sessions.changed') return;
+        // After the host has finished the transition that emitted this.
+        setImmediate(() => {
+          void index
+            .resumeDeferred()
+            .catch((err: unknown) => log.error(`deferred index: ${errorText(err)}`));
+        });
+      };
       const cat = new Catalog({
         db: opened,
         live: live() ?? sessionHost,
@@ -264,27 +315,30 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         db: opened,
         catalog: cat,
         claude: () => claude.current,
+        located: whenLocated,
+        apiKeyMissing: () => opts.apiKeyOnly === true && apiKey === null,
         resumeCheck,
-        indexNow: (ids) => indexer.refresh(ids),
+        indexNow: (ids) => index.refresh(ids),
         ...(opts.historyCacheChars === undefined
           ? {}
           : { historyCacheChars: opts.historyCacheChars }),
-        emit: (e) => broadcastRef.fn(e),
+        emit: (e) => emitChat(e),
         onError,
       });
       watcher = watchProjects(
         path.join(claudeDir, 'projects'),
         (ids) =>
-          void indexer.refresh(ids).catch((err: unknown) => log.error(`refresh: ${String(err)}`)),
+          void index.refresh(ids).catch((err: unknown) => log.error(`refresh: ${String(err)}`)),
         { onError: (err) => log.error(`watcher: ${String(err)}`) },
       );
       startSync = () =>
-        void indexer.fullSync().catch((err: unknown) => log.error(`full sync: ${String(err)}`));
+        void index.fullSync().catch((err: unknown) => log.error(`full sync: ${String(err)}`));
     }
 
     registerFileHandlers(router, { index: new FileIndex() });
     registerExternalHandlers(router, {
       ...(poller ? { poller } : {}),
+      located: whenLocated,
       externalUsable,
       lastModifiedOf: (id) => db?.getSession(id)?.lastModified,
       claude: () => claude.current,
@@ -306,6 +360,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         clientCount = n;
         lastActive = clock();
       },
+      onError: (err) => log.error(`ws server: ${errorText(err)}`),
     });
     broadcastRef.fn = server.broadcast;
     await writeDiscovery(dataDir, {
@@ -316,12 +371,15 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       protocolVersion: PROTOCOL_VERSION,
       startedAt: clock(),
     });
+    // Clients can connect now; `claude` is found in the background (§8 cold start).
+    if (!claude.current && opts.locateClaude) void relocate();
   } catch (err) {
-    poller?.stop();
-    watcher?.close();
-    await server?.close().catch(() => {});
-    db?.close();
-    await lock.release();
+    await step('poller', () => poller?.stop());
+    await step('watcher', () => watcher?.close());
+    await step('indexer', () => indexer?.stop());
+    await step('server', () => server?.close());
+    await step('database', () => db?.close());
+    await step('lock', () => lock.release());
     throw err;
   }
   const wsServer = server;
@@ -332,20 +390,44 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   startSync?.();
   poller?.start();
 
+  /** Waits for a running index pass to stop, but not forever. */
+  const stopIndexer = async (): Promise<void> => {
+    if (!indexer) return;
+    let timeout: NodeJS.Timeout | undefined;
+    await Promise.race([
+      indexer.stop(),
+      new Promise<void>((resolve) => {
+        timeout = setTimeout(resolve, INDEXER_STOP_MS);
+        timeout.unref?.();
+      }),
+    ]);
+    clearTimeout(timeout);
+  };
+
+  /**
+   * Stops everything. Every step runs even if an earlier one throws, and the
+   * lock release, the log flush and the closed callbacks (the process exit)
+   * always follow: a half-closed service must never keep the data dir locked.
+   */
   const close = (): Promise<void> => {
     closing ??= (async () => {
-      clearTimer(timer);
-      // Live sessions end with the process; the registry still lists them,
-      // so the next start shows them as interrupted (§4.2).
-      host?.dispose();
-      poller?.stop();
-      watcher?.close();
-      await wsServer.close();
-      await removeDiscovery(dataDir);
-      db?.close();
-      await lock.release();
-      await log.flush();
-      for (const cb of closedCallbacks) cb();
+      try {
+        clearTimer(timer);
+        // Live sessions end with the process; the registry still lists them,
+        // so the next start shows them as interrupted (§4.2).
+        await step('sessions', () => host?.dispose());
+        await step('poller', () => poller?.stop());
+        await step('watcher', () => watcher?.close());
+        // No index write may race the database close below.
+        await step('indexer', stopIndexer);
+        await step('server', () => wsServer.close());
+        await step('discovery', () => removeDiscovery(dataDir));
+        await step('database', () => db?.close());
+      } finally {
+        await step('lock', () => lock.release());
+        await step('log', () => log.flush());
+        for (const cb of closedCallbacks) await step('closed callback', cb);
+      }
     })();
     return closing;
   };

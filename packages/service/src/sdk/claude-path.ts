@@ -142,9 +142,11 @@ export const findClaude = async (o: FindClaudeOptions): Promise<ClaudeFound | Cl
       continue;
     }
     try {
-      // Run the version check the way the SDK will start it.
+      // Run the version check the way the SDK will start it: a script with
+      // this process's own Node (the bundled sidecar in release builds), never
+      // a `node` from PATH, which a macOS GUI launch may not have.
       const out = isScript(target)
-        ? await o.run('node', [target, '--version'])
+        ? await o.run(process.execPath, [target, '--version'])
         : await o.run(target, ['--version']);
       return { path: target, version: parseClaudeVersion(out) };
     } catch (err) {
@@ -167,10 +169,16 @@ const isFile = (p: string): boolean => {
   }
 };
 
+/** Per candidate; a hung `claude --version` must not stall locating for long (candidates run in turn). */
+const VERSION_TIMEOUT_MS = 5_000;
+
 const runCommand = (cmd: string, args: string[]): Promise<string> =>
   new Promise((resolve, reject) => {
-    execFile(cmd, args, { timeout: 15_000, windowsHide: true, encoding: 'utf8' }, (err, stdout) =>
-      err ? reject(err) : resolve(stdout),
+    execFile(
+      cmd,
+      args,
+      { timeout: VERSION_TIMEOUT_MS, windowsHide: true, encoding: 'utf8' },
+      (err, stdout) => (err ? reject(err) : resolve(stdout)),
     );
   });
 

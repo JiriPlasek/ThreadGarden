@@ -17,6 +17,8 @@ export type ExternalHandlerDeps = {
   lastModifiedOf: (sessionId: string) => number | undefined;
   /** Where `claude` was found, or why not; undefined while unknown. */
   claude: () => ClaudeFound | ClaudeProblem | undefined;
+  /** Settles once a search for `claude` in progress has finished (answers wait for it). */
+  located?: () => Promise<void>;
   indexing: () => { done: number; total: number };
   now?: () => number;
 };
@@ -27,15 +29,22 @@ export type ExternalHandlerDeps = {
  * Shared by `chat.resumeCheck` and the server-side gate in `chat.send`.
  */
 export const makeResumeChecker =
-  (deps: Pick<ExternalHandlerDeps, 'poller' | 'externalUsable' | 'lastModifiedOf' | 'now'>) =>
-  async (sessionId: string): Promise<ResumeCheck> =>
-    checkResume({
+  (
+    deps: Pick<
+      ExternalHandlerDeps,
+      'poller' | 'externalUsable' | 'lastModifiedOf' | 'now' | 'located'
+    >,
+  ) =>
+  async (sessionId: string): Promise<ResumeCheck> => {
+    await deps.located?.();
+    return checkResume({
       sessionId,
       external:
         deps.poller && (deps.externalUsable?.() ?? true) ? await deps.poller.current() : null,
       lastModified: deps.lastModifiedOf(sessionId) ?? 0,
       now: (deps.now ?? Date.now)(),
     });
+  };
 
 export const registerExternalHandlers = (router: Router, deps: ExternalHandlerDeps): void => {
   const { poller } = deps;
@@ -53,6 +62,8 @@ export const registerExternalHandlers = (router: Router, deps: ExternalHandlerDe
   }));
 
   router.register('system.status', async () => {
+    // Not "missing" while still looking: the setup screen must not flash at start.
+    await deps.located?.();
     const c = deps.claude();
     const claude =
       c === undefined

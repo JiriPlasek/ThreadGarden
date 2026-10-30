@@ -47,6 +47,11 @@ export const methods = {
     }),
     z.object({ items: z.array(ChatSummarySchema), nextCursor: z.string().optional() }),
   ),
+  /** Summaries of the named chats (e.g. restored tabs), unknown ids left out; no history is read. */
+  'sessions.summaries': def(
+    z.object({ sessionIds: z.array(z.string()) }),
+    z.object({ items: z.array(ChatSummarySchema) }),
+  ),
   'search.quick': def(
     z.object({ query: z.string(), limit: z.number() }),
     z.object({

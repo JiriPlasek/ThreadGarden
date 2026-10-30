@@ -207,10 +207,18 @@ export class Catalog {
 
   /** One chat's summary (live/external overlay first, else the index); undefined if unknown. */
   summary(sessionId: string): ChatSummary | undefined {
-    const o = this.overlay().get(sessionId);
-    if (o) return o.summary;
-    const row = this.db.getSession(sessionId);
-    return row ? fromRow(row) : undefined;
+    return this.summaries([sessionId])[0];
+  }
+
+  /** The summaries of `sessionIds` in that order (see `summary`); unknown ids are left out. */
+  summaries(sessionIds: readonly string[]): ChatSummary[] {
+    const overlay = this.overlay();
+    return sessionIds.flatMap((id) => {
+      const o = overlay.get(id);
+      if (o) return [o.summary];
+      const row = this.db.getSession(id);
+      return row ? [fromRow(row)] : [];
+    });
   }
 
   counts(): { needsYou: number; running: number; all: number } {
@@ -310,16 +318,22 @@ export class Catalog {
     return id;
   }
 
-  /** Live and external sessions by id (a pahub-owned chat wins over an external one). */
+  /**
+   * Live and external sessions by id. A live pahub chat wins over an external
+   * entry (that is pahub's own process); an external entry wins over a paused
+   * or failed pahub chat, which has no process — it is running in a terminal.
+   */
   private overlay(): Map<string, Entry> {
-    const live = this.live.list();
-    const liveIds = new Set(live.map((l) => l.sessionId));
+    const owned = this.live.list();
+    const liveIds = new Set(owned.filter((l) => l.live).map((l) => l.sessionId));
     // Only sessions with an id can be listed (and opened); the rest are visible via the poller.
     const ext = this.externals().flatMap((e) =>
       e.sessionId !== undefined && !liveIds.has(e.sessionId)
         ? [{ ...e, sessionId: e.sessionId }]
         : [],
     );
+    const extIds = new Set(ext.map((e) => e.sessionId));
+    const live = owned.filter((l) => !extIds.has(l.sessionId));
     const out = new Map<string, Entry>();
     const ids = [...live.map((l) => l.sessionId), ...ext.map((e) => e.sessionId)];
     if (ids.length === 0) return out;

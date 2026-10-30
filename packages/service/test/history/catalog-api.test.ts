@@ -238,6 +238,44 @@ describe('catalog and places API', () => {
     expect(projects.find((p) => p.projectId === '/work/proj-0')?.counts.needsYou).toBe(1);
   });
 
+  it('an external session wins over a non-live (paused/failed) pahub chat with the same id', async () => {
+    const t = await setup(3, 1);
+    t.setLive([
+      lc('session-0', '/work/proj-0', 'paused'),
+      { sessionId: 'session-1', cwd: '/work/proj-0', status: 'failed', live: false },
+      lc('session-2', '/work/proj-0', 'working'),
+    ]);
+    const ext = (sessionId: string, pid: number) => ({
+      sessionId,
+      cwd: '/work/proj-0',
+      kind: 'interactive',
+      startedAt: 1,
+      status: 'busy',
+      pid,
+      raw: {},
+    });
+    t.setExternals([ext('session-0', 4), ext('session-1', 5), ext('session-2', 6)]);
+    const run = await t.call('sessions.list', { place: { kind: 'running' }, limit: 50 });
+    const byId = new Map<string, Any>(run.items.map((i: Any) => [i.sessionId, i]));
+    expect(byId.get('session-0')).toMatchObject({ status: 'working', live: false });
+    expect(byId.get('session-0')?.external).toMatchObject({ pid: 4 });
+    expect(byId.get('session-1')?.external).toMatchObject({ pid: 5 });
+    // A live pahub chat stays pahub's own.
+    expect(byId.get('session-2')).toMatchObject({ live: true, external: null });
+  });
+
+  it('sessions.summaries answers the named chats (live overlay first), skipping unknown ids', async () => {
+    const t = await setup(3, 1);
+    t.setLive([lc('session-1', '/work/proj-0', 'working')]);
+    const r = await t.call('sessions.summaries', {
+      sessionIds: ['session-2', 'nope', 'session-1'],
+    });
+    expect(r.items.map((i: Any) => [i.sessionId, i.status])).toEqual([
+      ['session-2', 'history'],
+      ['session-1', 'working'],
+    ]);
+  });
+
   it('drafts and settings round-trip', async () => {
     const t = await setup(1, 1);
     expect(await t.call('drafts.get', { key: 'k' })).toEqual({ text: '' });

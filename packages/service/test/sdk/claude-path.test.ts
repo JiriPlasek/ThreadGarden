@@ -122,7 +122,7 @@ describe('findClaude', () => {
     });
   });
 
-  it('resolves an npm claude.cmd to the cli.js it starts and checks it with node', async () => {
+  it('resolves an npm claude.cmd to the cli.js it starts and checks it with this Node', async () => {
     const cli = 'C:\\npm\\node_modules\\@anthropic-ai\\claude-code\\cli.js';
     const { o, runs } = opts({
       platform: 'win32',
@@ -133,7 +133,9 @@ describe('findClaude', () => {
       shims: { 'C:\\npm\\claude.cmd': NPM_JS_SHIM },
     });
     await expect(findClaude(o)).resolves.toEqual({ path: cli, version: '2.1.314' });
-    expect(runs).toEqual([{ cmd: 'node', args: [cli, '--version'] }]);
+    // The service's own Node (the bundled sidecar in release builds), as the SDK
+    // runs it: `node` need not be on PATH (a macOS GUI launch has a minimal PATH).
+    expect(runs).toEqual([{ cmd: process.execPath, args: [cli, '--version'] }]);
   });
 
   it('resolves a pnpm-style claude.cmd that starts a native exe', async () => {

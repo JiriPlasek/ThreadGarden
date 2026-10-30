@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it } from 'vitest';
-import { WebSocket } from 'ws';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { WebSocket, WebSocketServer } from 'ws';
 import { Router, ServiceError } from '../src/server/router.js';
 import { startWsServer } from '../src/server/ws-server.js';
 
@@ -14,11 +14,16 @@ const makeRouter = () => {
   router.register('hello', async () => ({ serviceVersion: 't', protocolVersion: 1 }));
   return router;
 };
-const start = async (router = makeRouter(), counts: number[] = []) => {
+const start = async (
+  router = makeRouter(),
+  counts: number[] = [],
+  onError?: (err: unknown) => void,
+) => {
   const s = await startWsServer({
     token: 'tok',
     router,
     onClientCountChange: (n) => counts.push(n),
+    ...(onError ? { onError } : {}),
   });
   servers.push(s);
   return s;
@@ -75,6 +80,51 @@ describe('ws server', () => {
     const reply = nextMessage(ws);
     ws.send('not json');
     expect(await reply).toMatchObject({ error: { code: 'INVALID_PARAMS' } });
+    ws.close();
+  });
+  it('a dispatch that rejects is answered INTERNAL and reported, never an unhandled rejection', async () => {
+    const errors: unknown[] = [];
+    const router = makeRouter();
+    vi.spyOn(router, 'dispatch').mockRejectedValue(new Error('router exploded'));
+    const s = await start(router, [], (e) => errors.push(e));
+    const ws = await open(s.port, 'pahub.tok');
+    const reply = nextMessage(ws);
+    ws.send(JSON.stringify({ id: 7, method: 'hello', params: {} }));
+    expect(await reply).toEqual({
+      id: 7,
+      error: { code: 'INTERNAL', message: 'Internal error' },
+    });
+    expect(String(errors[0])).toContain('router exploded');
+    ws.close();
+  });
+  it('a server error after listening is reported, not thrown', async () => {
+    const errors: unknown[] = [];
+    const servers: WebSocketServer[] = [];
+    const address = WebSocketServer.prototype.address;
+    const spy = vi.spyOn(WebSocketServer.prototype, 'address').mockImplementation(function (
+      this: WebSocketServer,
+    ) {
+      servers.push(this);
+      return address.call(this);
+    });
+    const s = await start(makeRouter(), [], (e) => errors.push(e));
+    spy.mockRestore();
+    expect(() => servers[0]!.emit('error', new Error('late failure'))).not.toThrow();
+    expect(String(errors[0])).toContain('late failure');
+    // Still serving.
+    const ws = await open(s.port, 'pahub.tok');
+    ws.close();
+  });
+  it('accepts a message as large as the documented image limits allow', async () => {
+    const router = makeRouter();
+    router.register('ui.visibility', async () => ({}));
+    const s = await start(router);
+    const ws = await open(s.port, 'pahub.tok');
+    const reply = nextMessage(ws);
+    // 20 MiB of images (the composer's per-message cap) as base64, plus the envelope.
+    const data = 'A'.repeat(Math.ceil((20 * 1024 * 1024 * 4) / 3));
+    ws.send(JSON.stringify({ id: 9, method: 'ui.visibility', params: { visible: true, data } }));
+    expect(await reply).toMatchObject({ id: 9 });
     ws.close();
   });
   it('binds only 127.0.0.1', async () => {

@@ -77,6 +77,7 @@ describe('protocol schemas', () => {
       'projects.list',
       'projects.update',
       'sessions.list',
+      'sessions.summaries',
       'search.quick',
       'chat.open',
       'chat.older',

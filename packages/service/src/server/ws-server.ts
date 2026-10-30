@@ -1,6 +1,12 @@
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { WebSocketServer, type WebSocket } from 'ws';
-import { RequestSchema, type EventMsg, type Request, type Response } from '@pahub/protocol';
+import {
+  MAX_REQUEST_BYTES,
+  RequestSchema,
+  type EventMsg,
+  type Request,
+  type Response,
+} from '@pahub/protocol';
 import type { Router } from './router.js';
 
 const HOST = '127.0.0.1';
@@ -19,6 +25,8 @@ export const startWsServer = async (opts: {
   /** Fixed port (mock service); default 0 = a random free port. */
   port?: number;
   onClientCountChange(n: number): void;
+  /** A server or dispatch failure after startup; the server keeps serving. */
+  onError?: (err: unknown) => void;
 }): Promise<{
   port: number;
   address: string;
@@ -29,15 +37,28 @@ export const startWsServer = async (opts: {
   const wss = new WebSocketServer({
     host: HOST,
     port: opts.port ?? 0,
-    maxPayload: 16 * 1024 * 1024,
+    maxPayload: MAX_REQUEST_BYTES,
     // Echo the offered subprotocol so browsers complete the handshake; the token is verified on connection.
     handleProtocols: (protocols) =>
       [...protocols].find((p) => p.startsWith(PROTOCOL_PREFIX)) ?? false,
   });
   await new Promise<void>((resolve, reject) => {
-    wss.once('listening', resolve);
-    wss.once('error', reject);
+    const failed = (err: unknown): void => reject(err);
+    wss.once('error', failed);
+    wss.once('listening', () => {
+      wss.off('error', failed);
+      resolve();
+    });
   });
+  const report = (err: unknown): void => {
+    try {
+      opts.onError?.(err);
+    } catch {
+      // Nothing left to tell.
+    }
+  };
+  // An 'error' event without a listener throws; after listening, errors are reported.
+  wss.on('error', report);
 
   const send = (ws: WebSocket, msg: Response | EventMsg) => {
     if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg));
@@ -62,7 +83,15 @@ export const startWsServer = async (opts: {
         send(ws, { id: 0, error: { code: 'INVALID_PARAMS', message: 'Malformed request' } });
         return;
       }
-      void opts.router.dispatch(req, { clientId }).then((res) => send(ws, res));
+      const { id } = req;
+      void opts.router
+        .dispatch(req, { clientId })
+        .catch((err: unknown): Response => {
+          report(err);
+          return { id, error: { code: 'INTERNAL', message: 'Internal error' } };
+        })
+        .then((res) => send(ws, res))
+        .catch(report);
     });
     ws.on('close', () => {
       clients.delete(ws);

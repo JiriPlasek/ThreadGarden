@@ -51,6 +51,13 @@ export type ChatHandlerDeps = {
   db: Db;
   catalog: Catalog;
   claude: () => ClaudeFound | ClaudeProblem | undefined;
+  /** Settles once a search for `claude` in progress has finished. */
+  located?: () => Promise<void>;
+  /**
+   * True when this build runs chats only on an API key (spec §5.5) and none
+   * is set: starting or resuming a chat is refused.
+   */
+  apiKeyMissing?: () => boolean;
   resumeCheck: (sessionId: string) => Promise<ResumeCheck>;
   /** Indexes sessions that pahub just caused to exist (a fork), so they can be opened at once. */
   indexNow: (sessionIds: string[]) => Promise<void>;
@@ -161,7 +168,15 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): voi
   const changed = (sessionIds: string[]) =>
     deps.emit({ event: 'sessions.changed', data: { sessionIds } });
 
-  const requireClaude = (): void => {
+  /** A Claude Code process may be started: `claude` is found and the auth policy is met. */
+  const requireRunnable = async (): Promise<void> => {
+    if (deps.apiKeyMissing?.()) {
+      throw new ServiceError(
+        'API_KEY_REQUIRED',
+        'This build of pahub runs chats only on an Anthropic API key. Add your key in Settings to start or continue a chat.',
+      );
+    }
+    await deps.located?.();
     const c = deps.claude();
     if (c && 'path' in c) return;
     throw new ServiceError('CLAUDE_MISSING', c?.detail ?? 'Claude Code has not been located yet.');
@@ -289,7 +304,7 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): voi
         : { permissionMode: permissionMode(p.permissionMode) }),
       ...(p.effort === undefined ? {} : { effort: effort(p.effort) }),
     };
-    requireClaude();
+    await requireRunnable();
     const s = host.create(p.cwd, toInput(p), choices);
     changed([s.sessionId]);
     return { sessionId: s.sessionId };
@@ -299,7 +314,7 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): voi
     const input = toInput(p);
     let s = host.get(p.sessionId);
     if (!s?.live) {
-      requireClaude();
+      await requireRunnable();
       const cwd =
         s?.cwd ??
         db.getSession(p.sessionId)?.cwd ??

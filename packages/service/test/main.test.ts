@@ -1,11 +1,13 @@
 import { mkdir, mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WebSocket } from 'ws';
 import { readDiscovery } from '../src/discovery.js';
 import { createLogger } from '../src/logger.js';
+import { SessionHost } from '../src/chat/session-host.js';
 import { startService } from '../src/main.js';
+import type { ClaudeFound } from '../src/sdk/claude-path.js';
 import { generateCorpus } from '../src/testing/corpus.js';
 
 let dir: string;
@@ -95,6 +97,131 @@ describe('startService', () => {
       externalAvailable: true,
     });
     await svc.close();
+  });
+
+  it('a paused or failed pahub chat now running in a terminal is external: resume is blocked', async () => {
+    const adapter = generateCorpus({ sessions: 1, projects: 1, bigSessionMessages: 0 });
+    const run = async () =>
+      JSON.stringify([
+        {
+          pid: 7,
+          cwd: '/x',
+          kind: 'interactive',
+          startedAt: 1,
+          sessionId: 'paused',
+          status: 'busy',
+        },
+        {
+          pid: 8,
+          cwd: '/x',
+          kind: 'interactive',
+          startedAt: 1,
+          sessionId: 'failed',
+          status: 'busy',
+        },
+        { pid: 9, cwd: '/x', kind: 'interactive', startedAt: 1, sessionId: 'mine', status: 'busy' },
+      ]);
+    const svc = await startService({
+      dataDir: join(dir, 'data'),
+      claudeConfigDir: join(dir, 'claude-missing'),
+      adapter,
+      claude: { path: '/bin/claude', version: '2.1.314' },
+      externalRun: run,
+      live: {
+        list: () => [
+          { sessionId: 'paused', cwd: '/x', status: 'paused', live: false },
+          { sessionId: 'failed', cwd: '/x', status: 'failed', live: false },
+          { sessionId: 'mine', cwd: '/x', status: 'working', live: true },
+        ],
+      },
+      installSignalHandlers: false,
+    });
+    const result = async (method: string, params: unknown) =>
+      ((await rpc(svc.port, svc.token, method, params)) as { result: unknown }).result;
+    expect(await result('chat.resumeCheck', { sessionId: 'paused' })).toMatchObject({
+      status: 'blocked',
+    });
+    expect(await result('chat.resumeCheck', { sessionId: 'failed' })).toMatchObject({
+      status: 'blocked',
+    });
+    // A live pahub chat is pahub's own process, never "running elsewhere".
+    expect(await result('chat.resumeCheck', { sessionId: 'mine' })).toMatchObject({ status: 'ok' });
+    await svc.close();
+  });
+
+  it('listens and writes discovery before Claude Code is located; status waits for it', async () => {
+    let found!: (c: ClaudeFound) => void;
+    const locateClaude = vi.fn(
+      () => new Promise<ClaudeFound>((resolve) => (found = resolve)), // e.g. a slow `claude --version`
+    );
+    const adapter = generateCorpus({ sessions: 1, projects: 1, bigSessionMessages: 0 });
+    const svc = await Promise.race([
+      startService({
+        dataDir: join(dir, 'data'),
+        claudeConfigDir: join(dir, 'claude-missing'),
+        adapter,
+        locateClaude,
+        externalRun: async () => '[]',
+        installSignalHandlers: false,
+      }),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('startService waited for claude')), 2_000),
+      ),
+    ]);
+    expect(locateClaude).toHaveBeenCalledTimes(1);
+    expect(await readDiscovery(join(dir, 'data'))).toMatchObject({ port: svc.port });
+    expect(
+      await rpc(svc.port, svc.token, 'hello', { protocolVersion: 1, client: 't' }),
+    ).toMatchObject({ result: { protocolVersion: 1 } });
+    // While locating, status does not claim Claude Code is missing: it answers once known.
+    let status: unknown;
+    const pending = rpc(svc.port, svc.token, 'system.status', {}).then((r) => (status = r));
+    await new Promise((r) => setTimeout(r, 50));
+    expect(status).toBeUndefined();
+    found({ path: '/bin/claude', version: '2.1.314' });
+    await pending;
+    expect(status).toMatchObject({
+      result: { claude: { found: true, path: '/bin/claude', version: '2.1.314' } },
+    });
+    await svc.close();
+  });
+
+  it('close() completes, removes discovery and releases the lock even when a step throws', async () => {
+    const adapter = generateCorpus({ sessions: 3, projects: 1, bigSessionMessages: 0 });
+    const errors: string[] = [];
+    const logger = {
+      debug: () => {},
+      info: () => {},
+      warn: () => {},
+      error: (m: string) => void errors.push(m),
+      flush: async () => {},
+    };
+    const start = () =>
+      startService({
+        dataDir: join(dir, 'data'),
+        claudeConfigDir: join(dir, 'claude-missing'),
+        adapter,
+        claude: { path: '/bin/claude', version: '2.1.314' },
+        logger,
+        installSignalHandlers: false,
+      });
+    const svc = await start();
+    const dispose = vi.spyOn(SessionHost.prototype, 'dispose').mockImplementation(() => {
+      throw new Error('dispose blew up');
+    });
+    const closed = vi.fn();
+    svc.onClosed(closed);
+    try {
+      await svc.close();
+    } finally {
+      dispose.mockRestore();
+    }
+    expect(closed).toHaveBeenCalledTimes(1);
+    expect(await readDiscovery(join(dir, 'data'))).toBeNull();
+    expect(await readdir(join(dir, 'data'))).not.toContain('service.lock');
+    expect(errors.some((e) => e.includes('dispose blew up'))).toBe(true);
+    // The next service can take over the data dir.
+    await (await start()).close();
   });
 
   it('without claude there is no poller: resume is unverified and status says why', async () => {
