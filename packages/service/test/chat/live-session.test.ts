@@ -1122,6 +1122,30 @@ describe('LiveSession tasks', () => {
     expect(await codeOf(s.stopTask('b1'))).toBe('NOT_LIVE');
   });
 
+  it("ends a foreground task with no end edge at its turn's result; background tasks keep running", async () => {
+    const changes: number[] = [];
+    const { adapter, timers, events, opts } = setup({
+      onRunningTasks: (_id, n) => changes.push(n),
+    });
+    const s = LiveSession.create('/p', { text: 'go' }, opts);
+    const fake = adapter.lastSession();
+    fake.emit(started('a1', { task_type: 'local_agent', is_backgrounded: false }));
+    fake.emit(started('b1', { task_type: 'local_bash', is_backgrounded: true }));
+    await settle();
+    timers.advance(33);
+    expect(s.runningTasks).toBe(2);
+    fake.emit(result('r1'));
+    await settle();
+    timers.advance(33);
+    expect(s.status).toBe('idle');
+    expect(lastTasks(events)).toEqual([
+      expect.objectContaining({ taskId: 'a1', status: 'unknown', endedAt: expect.any(Number) }),
+      expect.objectContaining({ taskId: 'b1', status: 'running' }),
+    ]);
+    expect(s.runningTasks).toBe(1);
+    expect(changes).toEqual([1, 2, 1]);
+  });
+
   it('forgets the tasks when the process ends (ended, paused or crashed)', async () => {
     for (const how of ['end', 'pause', 'crash'] as const) {
       const { adapter, events, opts } = setup();

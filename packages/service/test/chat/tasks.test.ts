@@ -262,6 +262,75 @@ describe('TaskTracker', () => {
       expect(t.get('b1')?.status).toBe('running');
     });
 
+    it('endForeground ends foreground tasks left running at a turn end as unknown', () => {
+      const c = clock();
+      const t = new TaskTracker({ now: c.now });
+      t.apply(started('a1', { task_type: 'local_agent', is_backgrounded: false }));
+      t.apply(started('a2', { task_type: 'local_agent', is_backgrounded: false }));
+      t.apply(updated('a2', { status: 'pending' }));
+      t.apply(started('a3', { task_type: 'local_agent', is_backgrounded: false }));
+      t.apply(updated('a3', { status: 'quantum' })); // unknown status, not ended
+      t.apply(started('done', { task_type: 'local_agent', is_backgrounded: false }));
+      t.apply(notification('done', 'completed'));
+      t.apply(started('bg', { task_type: 'local_bash', is_backgrounded: true }));
+      t.apply(started('moved', { task_type: 'local_agent', is_backgrounded: false }));
+      t.apply(updated('moved', { is_backgrounded: true }));
+      t.apply(level([{ task_id: 'lv', task_type: 'monitor_mcp', description: 'watch' }]));
+      c.t = 5_000;
+      expect(t.endForeground()).toBe(true);
+      for (const id of ['a1', 'a2', 'a3']) {
+        expect(t.get(id), id).toMatchObject({ status: 'unknown', endedAt: 5_000 });
+      }
+      expect(t.get('a3')).not.toHaveProperty('rawStatus');
+      expect(t.get('done')).toMatchObject({ status: 'completed', endedAt: 1_000 });
+      for (const id of ['bg', 'moved', 'lv']) {
+        expect(t.get(id), id).toMatchObject({ status: 'running' });
+        expect(t.get(id), id).not.toHaveProperty('endedAt');
+      }
+      // Nothing left to end: no change.
+      expect(t.endForeground()).toBe(false);
+      // A late end edge still sets the real outcome.
+      t.apply(notification('a1', 'failed'));
+      expect(t.get('a1')).toMatchObject({ status: 'failed', endedAt: 5_000 });
+    });
+
+    it('endForeground spares a foreground task whose launching agent still runs', () => {
+      const c = clock();
+      const t = new TaskTracker({ now: c.now });
+      t.apply(started('parent', { task_type: 'local_agent', is_backgrounded: true }));
+      t.apply(
+        started('child', {
+          task_type: 'local_agent',
+          is_backgrounded: false,
+          parent_task_id: 'parent',
+        }),
+      );
+      t.apply(started('fgParent', { task_type: 'local_agent', is_backgrounded: false }));
+      t.apply(
+        started('fgChild', {
+          task_type: 'local_agent',
+          is_backgrounded: false,
+          parent_task_id: 'fgParent',
+        }),
+      );
+      t.apply(
+        started('orphan', {
+          task_type: 'local_agent',
+          is_backgrounded: false,
+          parent_task_id: 'gone',
+        }),
+      );
+      expect(t.endForeground()).toBe(true);
+      expect(t.get('child')?.status).toBe('running');
+      expect(t.get('fgParent')?.status).toBe('unknown');
+      expect(t.get('fgChild')?.status).toBe('unknown');
+      expect(t.get('orphan')?.status).toBe('unknown');
+      // Once the launcher has ended, the next turn end ends the child too.
+      t.apply(notification('parent', 'completed'));
+      expect(t.endForeground()).toBe(true);
+      expect(t.get('child')).toMatchObject({ status: 'unknown', endedAt: expect.any(Number) });
+    });
+
     it('does not revive a task that already ended', () => {
       const t = new TaskTracker({ now: () => 1 });
       t.apply(started('b1', { task_type: 'local_bash', run_id: 'r1' }));

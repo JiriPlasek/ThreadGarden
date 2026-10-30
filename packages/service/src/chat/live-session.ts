@@ -839,8 +839,14 @@ export class LiveSession {
    * finished turn: Claude goes straight on to that input, so the chat is not
    * waiting for the user. The CLI takes up everything queued at that turn
    * boundary, so the count restarts there and the next `result` decides.
+   *
+   * Every `result` also ends the turn's foreground tasks that got no end edge
+   * (`TaskTracker.endForeground`), so none shows as running forever.
    */
   private resultArrived(): void {
+    this.guard('task tracking', () => {
+      if (this.tracker.endForeground()) this.scheduleTasks();
+    });
     const interrupted = this.interruptRequested;
     this.interruptRequested = false;
     if (this.queuedInputs > 0) {

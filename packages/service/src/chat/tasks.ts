@@ -23,7 +23,8 @@
  *   `endedAt`. Its end edge usually comes first; if it arrives late it still
  *   sets the real status;
  * - tasks never seen in a level (foreground tasks, or CLIs that send no level)
- *   are left to the edges.
+ *   are left to the edges, plus one guard: a foreground task still open at
+ *   its turn's `result` is ended there (`endForeground`).
  *
  * Run ids: "a resumed task keeps its task_id and gets a new [run id]"; run ids
  * of one task sort in the order the runs opened. A `task_started` with a new
@@ -312,6 +313,39 @@ export class TaskTracker {
     if (summary !== undefined) t.summary = summary;
     applyUsage(t, m.usage);
     return true;
+  }
+
+  // ── turn end ────────────────────────────────────────────────────────────
+
+  /**
+   * Called at a turn's `result`: ends every foreground task still open, as
+   * `unknown` with `endedAt` (the same as leaving the level). A foreground
+   * task blocks the tool call that spawned it, so it cannot outlive the turn;
+   * if its end edge never came (a CLI that sends none, a lost frame, a status
+   * pahub does not know), it would otherwise show as running forever, keep
+   * the chat in Running and block idle reclaim. A late end edge still sets
+   * the real status.
+   *
+   * Foreground means not backgrounded (`is_backgrounded` false or absent) and
+   * never seen in a level. A task whose launcher (`parent_task_id`) is a
+   * tracked task that is still open is left alone: a background agent's own
+   * subagent runs on after the main turn; it is ended at the first turn end
+   * after its launcher ended (parents are listed before their children, so
+   * one pass settles a chain). True when a task changed.
+   */
+  endForeground(): boolean {
+    let changed = false;
+    for (const e of this.entries.values()) {
+      const t = e.task;
+      if (t.backgrounded === true || e.inLevel || isFinished(t)) continue;
+      const parent = t.parentTaskId === undefined ? undefined : this.entries.get(t.parentTaskId);
+      if (parent && !isFinished(parent.task)) continue;
+      const edited = this.edit(e);
+      this.setStatus(edited, { status: 'unknown' });
+      edited.endedAt = this.opts.now();
+      changed = true;
+    }
+    return changed;
   }
 
   // ── level ───────────────────────────────────────────────────────────────
