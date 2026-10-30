@@ -392,6 +392,61 @@ describe('LiveSession', () => {
     expect(s.status).toBe('failed');
   });
 
+  it('maps a startup failure result to an explained error and failed status', async () => {
+    const { adapter, events, opts } = setup();
+    const s = LiveSession.create('/p', { text: 'go' }, opts);
+    const fake = adapter.lastSession();
+    fake.emit(
+      result('r-start', {
+        subtype: 'error_during_execution',
+        is_error: true,
+        total_cost_usd: 0,
+        errors: ['Claude Code 2.0.1 is below the minimum version 2.1.0'],
+        startup_failure_reason: 'cli_version_too_old',
+      }),
+    );
+    fake.end(new Error('Claude Code process exited with code 1'));
+    await s.whenEnded();
+
+    expect(s.status).toBe('failed');
+    expect(s.startupFailure).toMatchObject({ reason: 'cli_version_too_old', setup: true });
+    const errors = itemsOf(events).filter((i) => i.kind === 'system' && i.level === 'error');
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatchObject({
+      text: expect.stringContaining(s.startupFailure!.title),
+    });
+    expect(errors[0]).toMatchObject({ text: expect.stringContaining('minimum version 2.1.0') });
+  });
+
+  it('shows the raw reason for a startup failure this pahub does not know', async () => {
+    const { adapter, events, opts } = setup();
+    const s = LiveSession.create('/p', { text: 'go' }, opts);
+    const fake = adapter.lastSession();
+    fake.emit(
+      result('r-start', {
+        subtype: 'error_during_execution',
+        is_error: true,
+        errors: [],
+        startup_failure_reason: 'future_reason',
+      }),
+    );
+    fake.end();
+    await s.whenEnded();
+    expect(s.status).toBe('failed');
+    expect(s.startupFailure).toMatchObject({ reason: 'future_reason', setup: false });
+    const error = itemsOf(events).find((i) => i.kind === 'system' && i.level === 'error');
+    expect(error).toMatchObject({ text: expect.stringContaining('future_reason') });
+  });
+
+  it('has no startup failure for an ordinary error result', async () => {
+    const { adapter, opts } = setup();
+    const s = LiveSession.create('/p', { text: 'go' }, opts);
+    adapter.lastSession().emit(result('r1', { subtype: 'error_max_turns', is_error: true }));
+    await settle();
+    expect(s.startupFailure).toBeUndefined();
+    expect(s.status).toBe('idle');
+  });
+
   it('end closes the process, cancels pending requests and returns to history', async () => {
     const { adapter, registry, events, opts } = setup();
     const s = LiveSession.create('/p', { text: 'go' }, opts);

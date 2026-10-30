@@ -9,6 +9,7 @@
     "format": "prettier --write .",
     "typecheck": "tsc -p tsconfig.json",
     "test": "vitest run",
+    "test:real": "vitest run --config vitest.real.config.ts",
     "dev": "tsx src/main.ts",
     "build": "node scripts/build.mjs"
   },

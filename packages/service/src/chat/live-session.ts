@@ -34,6 +34,7 @@ import type {
   SDKUserMessage,
   StartOptions,
 } from '../sdk/adapter.js';
+import { startupFailureMessage, type StartupFailureMessage } from '../sdk/startup-failure.js';
 import { EventLog, type ChatEvent, type ChatEventDraft } from './event-log.js';
 import { Normalizer, deriveStatus } from './normalize.js';
 
@@ -120,6 +121,9 @@ export type LiveSnapshot = {
   waitingFor?: string;
 };
 
+/** Why Claude Code refused to start this session (§6.4); `setup` asks for the setup screen. */
+export type StartupFailure = StartupFailureMessage & { reason: string; detail?: string };
+
 export const ITEMS_COALESCE_MS = 33;
 export const DEFAULT_DENY_MESSAGE = 'Denied by user in pahub';
 
@@ -158,6 +162,7 @@ export class LiveSession {
   private published = '';
   private firstText: string | undefined;
   private contextUsed: number | undefined;
+  private startupFailureValue: StartupFailure | undefined;
   private ended: Promise<void> = Promise.resolve();
   // chat.items coalescing
   private readonly buffered = new Map<string, ChatItem>();
@@ -248,6 +253,11 @@ export class LiveSession {
   /** The event log, so a resumed instance continues its sequence numbers. */
   get eventLog(): EventLog {
     return this.log;
+  }
+
+  /** Set when the last process refused to start (a result with `startup_failure_reason`). */
+  get startupFailure(): StartupFailure | undefined {
+    return this.startupFailureValue ? { ...this.startupFailureValue } : undefined;
   }
 
   get choices(): SessionChoices {
@@ -389,6 +399,7 @@ export class LiveSession {
       ...extra,
     });
     this.session = session;
+    this.startupFailureValue = undefined;
     this.normalizer = new Normalizer({ now: this.deps.now });
     this.guard('registry.markLive', () => this.deps.registry.markLive(this.id, this.dir));
     this.ended = this.pump(session).catch((err: unknown) => this.report(err, 'message pump'));
@@ -410,6 +421,10 @@ export class LiveSession {
     this.session = null;
     this.cancelAllPending();
     this.guard('registry.markEnded', () => this.deps.registry.markEnded(this.id));
+    if (this.startupFailureValue) {
+      this.setStatus('failed'); // already explained by the startup-failure line
+      return;
+    }
     const text = failed
       ? `Session failed: ${errorText(error)}`
       : 'The session process ended unexpectedly';
@@ -442,7 +457,8 @@ export class LiveSession {
       this.updateHeader(m);
       const r = this.normalizer.push(m);
       if (r.items.length > 0) this.pushItems(r.items, r.replace);
-      this.setStatus(this.nextStatus(m));
+      if (this.noteStartupFailure(m)) this.setStatus('failed');
+      else this.setStatus(this.nextStatus(m));
     } catch (err) {
       // Defensive: one odd message must not take the chat down.
       this.pushItems(
@@ -457,6 +473,21 @@ export class LiveSession {
         false,
       );
     }
+  }
+
+  /** Maps a startup-failure result to an explained error line; true when `m` was one. */
+  private noteStartupFailure(m: SDKMessage): boolean {
+    const x: unknown = m;
+    if (!isRec(x) || x.type !== 'result') return false;
+    const reason = str(x.startup_failure_reason);
+    if (reason === undefined) return false;
+    const errors = Array.isArray(x.errors) ? x.errors.filter((e) => typeof e === 'string') : [];
+    const detail = errors.join('\n').trim();
+    const message = startupFailureMessage(reason);
+    this.startupFailureValue = { reason, ...message, ...(detail ? { detail } : {}) };
+    const text = `${message.title}: ${message.body}${detail ? `\n\nDetails: ${detail}` : ''}`;
+    this.pushItems([{ kind: 'system', id: `local:${randomUUID()}`, level: 'error', text }], false);
+    return true;
   }
 
   private nextStatus(m: SDKMessage): ChatStatus {
