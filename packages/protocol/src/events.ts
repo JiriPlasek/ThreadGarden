@@ -32,6 +32,13 @@ export const events = {
     projectName: z.string(),
     what: z.string(),
   }),
+  // ── v1.1 T2: "Your turn" ──────────────────────────────────────────────────
+  /** A pahub chat ended a turn (once per turn); the UI decides whether to notify. */
+  chatFinished: z.object({
+    sessionId: z.string(),
+    title: z.string(),
+    projectName: z.string(),
+  }),
 } as const;
 
 export type EventName = keyof typeof events;

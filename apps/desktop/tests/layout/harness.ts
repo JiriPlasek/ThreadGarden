@@ -26,6 +26,7 @@ export const summary = (
   pinned: false,
   live: false,
   external: null,
+  unread: false,
   ...over,
 });
 

@@ -15,6 +15,7 @@ const summary = (sessionId: string): ChatSummary => ({
   pinned: false,
   live: true,
   external: null,
+  unread: false,
 });
 const text = (id: string, markdown: string): ChatItem => ({
   kind: 'assistantText',

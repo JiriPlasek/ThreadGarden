@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   ChatItemSchema,
+  ChatSummarySchema,
+  ProjectSchema,
   RequestSchema,
+  SettingsPatchSchema,
   events,
   methods,
   settingsDefaults,
@@ -109,6 +112,8 @@ describe('protocol schemas', () => {
       'service.shutdown',
       'ui.visibility',
       'system.status',
+      // v1.1 T2: "Your turn"
+      'chat.markSeen',
     ];
     expect(Object.keys(methods).sort()).toEqual([...expected].sort());
     for (const name of expected) {
@@ -128,6 +133,8 @@ describe('protocol schemas', () => {
         'external.changed',
         'index.progress',
         'needsYou',
+        // v1.1 T2: "Your turn"
+        'chatFinished',
       ].sort(),
     );
   });
@@ -141,5 +148,51 @@ describe('protocol schemas', () => {
     expect(settingsDefaults.claudePath).toBeNull();
     expect(settingsDefaults.theme).toBe('system');
     expect(SettingsSchema.parse({})).toEqual(settingsDefaults);
+  });
+
+  // ── v1.1 T2: "Your turn", project order, missing folders ──────────────────
+
+  it('notifyOnFinish defaults to true and is patchable on its own', () => {
+    expect(settingsDefaults.notifyOnFinish).toBe(true);
+    expect(SettingsPatchSchema.parse({ notifyOnFinish: false })).toEqual({ notifyOnFinish: false });
+    expect(SettingsPatchSchema.parse({})).toEqual({});
+    expect(SettingsPatchSchema.safeParse({ notifyOnFinish: 'no' }).success).toBe(false);
+  });
+
+  it('ChatSummary.unread defaults to false; Project.exists defaults to true', () => {
+    const summary = {
+      sessionId: 's',
+      title: 't',
+      projectId: 'p',
+      cwd: '/w',
+      status: 'idle',
+      preview: '',
+      lastActivity: 1,
+      pinned: false,
+      live: true,
+      external: null,
+    };
+    expect(ChatSummarySchema.parse(summary).unread).toBe(false);
+    expect(ChatSummarySchema.parse({ ...summary, unread: true }).unread).toBe(true);
+    const project = {
+      projectId: 'p',
+      path: '/w',
+      displayName: 'w',
+      pinned: false,
+      hidden: false,
+      lastActivity: 1,
+      counts: { needsYou: 0, running: 0 },
+    };
+    expect(ProjectSchema.parse(project).exists).toBe(true);
+    expect(ProjectSchema.parse({ ...project, exists: false }).exists).toBe(false);
+  });
+
+  it('chat.markSeen takes a session id; chatFinished names the chat', () => {
+    expect(methods['chat.markSeen'].params.safeParse({ sessionId: 's' }).success).toBe(true);
+    expect(methods['chat.markSeen'].params.safeParse({}).success).toBe(false);
+    expect(methods['chat.markSeen'].result.safeParse({}).success).toBe(true);
+    const finished = { sessionId: 's', title: 'Fix the build', projectName: 'pahub' };
+    expect(events.chatFinished.parse(finished)).toEqual(finished);
+    expect(events.chatFinished.safeParse({ sessionId: 's' }).success).toBe(false);
   });
 });
