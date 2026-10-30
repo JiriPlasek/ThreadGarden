@@ -60,6 +60,8 @@ export const ChatItemSchema = z.discriminatedUnion('kind', [
     id: z.string(),
     level: z.enum(['info', 'warning', 'error']),
     text: z.string(),
+    /** Set on a startup failure whose fix is installing or updating Claude Code (setup screen). */
+    setup: z.boolean().optional(),
   }),
   z.object({ kind: z.literal('compactBoundary'), id: z.string() }),
   z.object({

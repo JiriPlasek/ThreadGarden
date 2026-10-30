@@ -582,7 +582,12 @@ export class LiveSession {
     const message = startupFailureMessage(reason);
     this.startupFailureValue = { reason, ...message, ...(detail ? { detail } : {}) };
     const text = `${message.title}: ${message.body}${detail ? `\n\nDetails: ${detail}` : ''}`;
-    this.pushItems([{ kind: 'system', id: `local:${randomUUID()}`, level: 'error', text }], false);
+    const id = `local:${randomUUID()}`;
+    // `setup` lets the UI show its setup screen (install/update Claude Code) for this chat.
+    this.pushItems(
+      [{ kind: 'system', id, level: 'error', text, ...(message.setup ? { setup: true } : {}) }],
+      false,
+    );
     return true;
   }
 

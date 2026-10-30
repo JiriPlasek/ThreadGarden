@@ -417,6 +417,8 @@ describe('LiveSession', () => {
       text: expect.stringContaining(s.startupFailure!.title),
     });
     expect(errors[0]).toMatchObject({ text: expect.stringContaining('minimum version 2.1.0') });
+    // The UI shows its setup screen for this chat (§6.4).
+    expect(errors[0]).toMatchObject({ setup: true });
   });
 
   it('resume of a session held by a background process fails with an explanation', async () => {
