@@ -1,12 +1,20 @@
 import { randomBytes } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import os from 'node:os';
+import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { PROTOCOL_VERSION } from '@pahub/protocol';
+import { PROTOCOL_VERSION, type EventMsg } from '@pahub/protocol';
 import pkg from '../package.json' with { type: 'json' };
 import { resolveDataDir } from './config.js';
 import { acquireInstanceLock, removeDiscovery, writeDiscovery } from './discovery.js';
+import { Catalog, type ExternalSession, type LiveChat } from './history/catalog.js';
+import { openDb, type Db } from './history/db.js';
+import { Indexer } from './history/indexer.js';
+import { createQuickSearch } from './history/search.js';
+import { watchProjects } from './history/watcher.js';
 import { createLogger, type Logger } from './logger.js';
+import type { AgentAdapter } from './sdk/adapter.js';
+import { registerHistoryHandlers } from './server/handlers/history.js';
 import { Router } from './server/router.js';
 import { startWsServer } from './server/ws-server.js';
 
@@ -22,6 +30,17 @@ export type StartOptions = {
   clearInterval?: (t: NodeJS.Timeout) => void;
   installSignalHandlers?: boolean;
   logger?: Logger;
+  /**
+   * Enables history: opens `pahub.db`, indexes sessions through this adapter,
+   * watches `<claudeConfigDir>/projects` and serves the places API.
+   */
+  adapter?: AgentAdapter;
+  /** Claude Code's config dir (`CLAUDE_CONFIG_DIR` or `~/.claude`); read-only for pahub. */
+  claudeConfigDir?: string;
+  /** Chats owned by the session host (Task 10 passes `host`). */
+  live?: { list(): LiveChat[] };
+  /** External sessions snapshot (Task 8). */
+  externals?: () => ExternalSession[];
 };
 
 export type ServiceHandle = {
@@ -57,6 +76,31 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     protocolVersion: PROTOCOL_VERSION,
   }));
 
+  const broadcastRef: { fn: (e: EventMsg) => void } = { fn: () => {} };
+  let db: Db | undefined;
+  let watcher: { close(): void } | undefined;
+  if (opts.adapter) {
+    const claudeDir =
+      opts.claudeConfigDir ?? process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), '.claude');
+    db = openDb(path.join(dataDir, 'pahub.db'));
+    const indexer = new Indexer(opts.adapter, db, (e) => broadcastRef.fn(e), {
+      onError: (err, ctx) => log.error(`indexer ${JSON.stringify(ctx)}: ${String(err)}`),
+    });
+    const catalog = new Catalog({
+      db,
+      ...(opts.live ? { live: opts.live } : {}),
+      ...(opts.externals ? { externals: opts.externals } : {}),
+    });
+    registerHistoryHandlers(router, { db, catalog, quickSearch: createQuickSearch(db, catalog) });
+    watcher = watchProjects(
+      path.join(claudeDir, 'projects'),
+      (ids) =>
+        void indexer.refresh(ids).catch((err: unknown) => log.error(`refresh: ${String(err)}`)),
+      { onError: (err) => log.error(`watcher: ${String(err)}`) },
+    );
+    void indexer.fullSync().catch((err: unknown) => log.error(`full sync: ${String(err)}`));
+  }
+
   let server: Awaited<ReturnType<typeof startWsServer>>;
   try {
     server = await startWsServer({
@@ -67,6 +111,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         lastActive = clock();
       },
     });
+    broadcastRef.fn = server.broadcast;
     await writeDiscovery(dataDir, {
       pid: process.pid,
       port: server.port,
@@ -76,6 +121,8 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       startedAt: clock(),
     });
   } catch (err) {
+    watcher?.close();
+    db?.close();
     await lock.release();
     throw err;
   }
@@ -83,8 +130,10 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   const close = (): Promise<void> => {
     closing ??= (async () => {
       clearTimer(timer);
+      watcher?.close();
       await server.close();
       await removeDiscovery(dataDir);
+      db?.close();
       await lock.release();
       await log.flush();
       for (const cb of closedCallbacks) cb();

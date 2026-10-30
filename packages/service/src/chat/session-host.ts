@@ -14,7 +14,7 @@
  * failing session never escape the reclaim timer or `stopAll`; they are
  * reported through `onError` and the remaining sessions carry on.
  */
-import type { EventMsg, Settings } from '@pahub/protocol';
+import type { ChatStatus, EventMsg, Settings } from '@pahub/protocol';
 import type { AgentAdapter } from '../sdk/adapter.js';
 import { EventLog } from './event-log.js';
 import {
@@ -196,6 +196,26 @@ export class SessionHost {
       }
     }
     return count;
+  }
+
+  /** Read-only view of every chat the host knows (live, paused or failed), for place lists. */
+  list(): {
+    sessionId: string;
+    cwd: string;
+    status: ChatStatus;
+    live: boolean;
+    waitingFor?: string;
+  }[] {
+    return [...this.sessions.values()].map((s) => {
+      const waitingFor = s.waitingFor();
+      return {
+        sessionId: s.sessionId,
+        cwd: s.cwd,
+        status: s.status,
+        live: s.live,
+        ...(waitingFor === undefined ? {} : { waitingFor }),
+      };
+    });
   }
 
   liveCount(): number {

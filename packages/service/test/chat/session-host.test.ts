@@ -118,6 +118,29 @@ describe('SessionHost', () => {
     expect(s.live).toBe(true);
   });
 
+  it('list() reports every chat with status, liveness and what it waits for', async () => {
+    const ctx = setup();
+    const { host, adapter } = ctx;
+    const { s: idle } = await idleChat(ctx, '/a');
+    const waiting = host.create('/b', { text: 'do it' });
+    void adapter.lastSession().requestPermission('Bash', { command: 'x' }, { requestId: 'w1' });
+    await settle();
+    const byId = new Map(host.list().map((c) => [c.sessionId, c]));
+    expect(byId.get(idle.sessionId)).toEqual({
+      sessionId: idle.sessionId,
+      cwd: '/a',
+      status: 'idle',
+      live: true,
+    });
+    expect(byId.get(waiting.sessionId)).toMatchObject({
+      cwd: '/b',
+      status: 'needsYou',
+      live: true,
+    });
+    expect(byId.get(waiting.sessionId)?.waitingFor).toBeTruthy();
+    expect(host.list()).toHaveLength(2);
+  });
+
   it('reclaimIdle never closes needsYou or pinned', async () => {
     const ctx = setup();
     const { host, pinned, timers, adapter } = ctx;

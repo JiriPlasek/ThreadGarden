@@ -33,7 +33,20 @@ export type ProjectRow = {
   hidden: boolean;
 };
 
-export type SessionFilter = { projectId?: string; ids?: string[] };
+export type SessionFilter = {
+  projectId?: string;
+  ids?: string[];
+  /** Rows of these projects are left out (hidden projects). */
+  excludeProjectIds?: string[];
+  /** These session ids are left out (already shown from a live source). */
+  excludeIds?: string[];
+};
+
+const notIn = (column: string, values: string[] | undefined, where: string[], params: string[]) => {
+  if (!values || values.length === 0) return;
+  where.push(`${column} NOT IN (${values.map(() => '?').join(',')})`);
+  params.push(...values);
+};
 
 /** FTS rows hold at most this many characters, so one insert never blocks long. */
 export const FTS_CHUNK_CHARS = 32 * 1024;
@@ -134,6 +147,8 @@ export class Db implements LiveRegistry {
       where.push(`s.session_id IN (${filter.ids.map(() => '?').join(',')})`);
       params.push(...filter.ids);
     }
+    notIn('s.project_id', filter.excludeProjectIds, where, params as string[]);
+    notIn('s.session_id', filter.excludeIds, where, params as string[]);
     if (cursor) {
       const at = cursor.indexOf(':');
       const modified = Number(cursor.slice(0, at));
@@ -152,6 +167,27 @@ export class Db implements LiveRegistry {
     return rows.length > limit && last
       ? { items, nextCursor: `${last.lastModified}:${last.sessionId}` }
       : { items };
+  }
+
+  /** Number of indexed sessions, optionally leaving out some projects. */
+  countSessions(excludeProjectIds: string[] = []): number {
+    const where: string[] = [];
+    const params: string[] = [];
+    notIn('project_id', excludeProjectIds, where, params);
+    const r = this.raw
+      .prepare(
+        `SELECT COUNT(*) AS n FROM sessions ${where.length ? `WHERE ${where.join(' AND ')}` : ''}`,
+      )
+      .get(...params);
+    return Number(r?.n ?? 0);
+  }
+
+  /** Newest transcript change per project. */
+  projectActivity(): Map<string, number> {
+    const rows = this.raw
+      .prepare('SELECT project_id, MAX(last_modified) AS m FROM sessions GROUP BY project_id')
+      .all();
+    return new Map(rows.map((r) => [r.project_id as string, Number(r.m)]));
   }
 
   needsReindex(info: SDKSessionInfo): boolean {

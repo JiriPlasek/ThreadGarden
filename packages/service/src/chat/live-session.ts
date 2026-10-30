@@ -632,7 +632,8 @@ export class LiveSession {
     }
   }
 
-  private waitingFor(): string | undefined {
+  /** What the chat is waiting on (first pending request) while it needs the user. */
+  waitingFor(): string | undefined {
     if (this.statusValue !== 'needsYou') return undefined;
     return this.pending.values().next().value?.what;
   }

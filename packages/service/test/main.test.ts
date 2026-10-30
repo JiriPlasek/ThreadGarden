@@ -6,6 +6,7 @@ import { WebSocket } from 'ws';
 import { readDiscovery } from '../src/discovery.js';
 import { createLogger } from '../src/logger.js';
 import { startService } from '../src/main.js';
+import { generateCorpus } from '../src/testing/corpus.js';
 
 let dir: string;
 beforeEach(async () => {
@@ -44,6 +45,26 @@ describe('startService', () => {
     await svc.close();
     expect(await readDiscovery(dir)).toBeNull();
     expect(await readdir(dir)).not.toContain('service.lock');
+  });
+
+  it('with an adapter, indexes history in the background and serves the places API', async () => {
+    const adapter = generateCorpus({ sessions: 5, projects: 2, bigSessionMessages: 0 });
+    const claudeDir = join(dir, 'claude-missing'); // projects dir absent: must not crash
+    const svc = await startService({
+      dataDir: join(dir, 'data'),
+      claudeConfigDir: claudeDir,
+      adapter,
+      installSignalHandlers: false,
+    });
+    let counts: unknown;
+    for (let i = 0; i < 100; i++) {
+      counts = await rpc(svc.port, svc.token, 'places.counts', {});
+      if ((counts as { result?: { all: number } }).result?.all === 5) break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(counts).toMatchObject({ result: { all: 5, needsYou: 0, running: 0 } });
+    expect(await readdir(join(dir, 'data'))).toContain('pahub.db');
+    await svc.close();
   });
 
   it('refuses a second instance on the same data dir', async () => {
