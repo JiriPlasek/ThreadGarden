@@ -7,6 +7,7 @@ import type {
   ChatStatus,
   ChatStatusEvent,
   ChatSummary,
+  ChatTasksEvent,
   Result,
 } from '@pahub/protocol';
 import { SvelteMap } from 'svelte/reactivity';
@@ -16,7 +17,7 @@ import { quietly, type Api } from './api';
 export const OPEN_TAIL = 200;
 export const OLDER_PAGE = 200;
 
-type ChatEvent = ChatItemsEvent | ChatStatusEvent;
+type ChatEvent = ChatItemsEvent | ChatStatusEvent | ChatTasksEvent;
 export type ModelInfo = Result<'chat.models'>[number];
 export type ResumeCheck = Result<'chat.resumeCheck'>;
 export type RespondParams = Omit<Params<'chat.respond'>, 'sessionId'>;
@@ -413,6 +414,8 @@ export class ChatsState {
     if ('items' in e) {
       chat.queued.push(e);
       this.scheduleFlush();
+    } else if ('tasks' in e) {
+      // Task lists are not shown yet; their seq still counts.
     } else {
       chat.status = e.status;
       chat.waitingFor = e.waitingFor;

@@ -190,6 +190,46 @@ describe('ServiceClient', () => {
     expect(server.calls('chat.open')).toHaveLength(1);
   });
 
+  it('a replayed chat.tasks event advances the seq without touching the chat status', async () => {
+    const chats = new ChatsState();
+    chats.init(client, { schedule: (cb) => queueMicrotask(cb) });
+    server.handlers['chat.open'] = () => ({
+      summary: summary('s1'),
+      header: {},
+      items: [text('a', 'one')],
+      hasMore: false,
+      seq: 3,
+      tasks: [],
+    });
+    await connected();
+    await chats.open('s1');
+    const status = chats.get('s1')!.status;
+    server.handlers['chat.since'] = () => ({
+      events: [
+        {
+          sessionId: 's1',
+          seq: 4,
+          tasks: [
+            {
+              taskId: 'b1',
+              kind: 'shell',
+              description: 'npm run dev',
+              status: 'running',
+              startedAt: 1,
+            },
+          ],
+        },
+      ],
+      seq: 4,
+    });
+    server.drop();
+    await vi.advanceTimersByTimeAsync(250);
+    const chat = chats.get('s1')!;
+    expect(chat.seq).toBe(4);
+    expect(chat.status).toBe(status);
+    expect(chat.items.map((i) => i.id)).toEqual(['a']);
+  });
+
   it('falls back to chat.open when chat.since reports GAP', async () => {
     const chats = new ChatsState();
     chats.init(client, { schedule: (cb) => queueMicrotask(cb) });

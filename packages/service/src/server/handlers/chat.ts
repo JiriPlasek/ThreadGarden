@@ -1,7 +1,7 @@
 /**
  * Router handlers for one chat (§4.3–§4.5, §6.4): open / page / replay,
- * create / send / resume, controls, permission answers, fork, and the
- * command and model lists.
+ * create / send / resume, controls, permission answers, fork, stopping a
+ * task (v1.1 §2), and the command and model lists.
  *
  * Validation that the protocol schema leaves open happens here: permission
  * modes are limited to what pahub offers (Ruling R11: never
@@ -10,9 +10,9 @@
  * Errors the UI acts on carry a code: `NOT_FOUND`, `NOT_LIVE`, `GAP` (the
  * client's seq is not replayable → `chat.open` again), `CLAUDE_MISSING`,
  * `RESUME_BLOCKED` (§4.4, with the reason to show), `FORK_FAILED`,
- * `INVALID_PARAMS`.
+ * `UNKNOWN_TASK`, `STOP_FAILED`, `INVALID_PARAMS`.
  */
-import type { ChatHeaderInfo, ChatItem, EventMsg, ImageRef } from '@pahub/protocol';
+import type { ChatHeaderInfo, ChatItem, ChatTask, EventMsg, ImageRef } from '@pahub/protocol';
 import type { LiveSession, UserInput } from '../../chat/live-session.js';
 import { Normalizer } from '../../chat/normalize.js';
 import type { SessionHost } from '../../chat/session-host.js';
@@ -238,11 +238,12 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): voi
    * the host holds (live, paused or failed). History entries the live
    * process already rendered — same id, or a streamed item's final message
    * (`resolveItemId`) — are dropped in favour of the live version. The live
-   * snapshot is taken after the history read, so `seq` covers every item.
+   * snapshot is taken after the history read, so `seq` covers every item
+   * (and the task list, which only a chat the host holds has).
    */
   const view = async (
     sessionId: string,
-  ): Promise<{ items: ChatItem[]; seq: number; header: ChatHeaderInfo }> => {
+  ): Promise<{ items: ChatItem[]; seq: number; header: ChatHeaderInfo; tasks: ChatTask[] }> => {
     let history: ChatItem[];
     try {
       history = await historyItems(sessionId);
@@ -253,11 +254,16 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): voi
       history = [];
     }
     const s = host.get(sessionId);
-    if (!s) return { items: history, seq: host.seqOf(sessionId), header: {} };
+    if (!s) return { items: history, seq: host.seqOf(sessionId), header: {}, tasks: [] };
     const snap = s.snapshot(Number.MAX_SAFE_INTEGER);
     const own = new Set(snap.items.map((i) => i.id));
     const earlier = history.filter((i) => !own.has(i.id) && !own.has(s.resolveItemId(i.id) ?? ''));
-    return { items: [...earlier, ...snap.items], seq: snap.seq, header: snap.header };
+    return {
+      items: [...earlier, ...snap.items],
+      seq: snap.seq,
+      header: snap.header,
+      tasks: snap.tasks,
+    };
   };
 
   router.register('chat.open', async (p) => {
@@ -275,6 +281,7 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): voi
       items,
       hasMore: v.items.length > items.length,
       seq: v.seq,
+      tasks: v.tasks,
     };
   });
 
@@ -362,6 +369,12 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): voi
   router.register('chat.setEffort', async (p) => {
     const value = effort(p.value)!;
     await requireLive(p.sessionId).setEffort(value);
+    return {};
+  });
+
+  /** Only a chat pahub runs has tasks it can stop (`NOT_LIVE` otherwise). */
+  router.register('chat.stopTask', async (p) => {
+    await requireLive(p.sessionId).stopTask(p.taskId);
     return {};
   });
 

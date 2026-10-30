@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { ChatItem, EventMsg } from '@pahub/protocol';
+import type { ChatItem, ChatTask, EventMsg } from '@pahub/protocol';
 import { LiveSession, authLabel, type LiveSessionOptions } from '../../src/chat/live-session.js';
 import { ServiceError } from '../../src/server/router.js';
 import type { PermissionUpdate } from '../../src/sdk/adapter.js';
@@ -10,8 +10,12 @@ import {
   assistantText,
   init,
   result,
+  level,
+  notification,
+  progress,
   sdk,
   settle,
+  started,
   statuses,
   streamEvent,
 } from './live-helpers.js';
@@ -54,7 +58,9 @@ const latest = (events: EventMsg[], id: string): ChatItem | undefined =>
 
 const seqOf = (e: EventMsg): number => (e.data as { seq: number }).seq;
 const chatEvents = (events: EventMsg[]) =>
-  events.filter((e) => e.event === 'chat.items' || e.event === 'chat.status');
+  events.filter(
+    (e) => e.event === 'chat.items' || e.event === 'chat.status' || e.event === 'chat.tasks',
+  );
 
 const suggestion = (toolName: string): PermissionUpdate => ({
   type: 'addRules',
@@ -867,5 +873,192 @@ describe('LiveSession', () => {
     await settle();
     expect(s.messageUuidOf('sb')).toBe('final');
     expect(s.resolveItemId('final')).toBe('sb');
+  });
+});
+
+const taskEvents = (events: EventMsg[]) =>
+  events
+    .filter((e) => e.event === 'chat.tasks')
+    .map((e) => e.data as { sessionId: string; seq: number; tasks: ChatTask[] });
+const lastTasks = (events: EventMsg[]): ChatTask[] | undefined => taskEvents(events).at(-1)?.tasks;
+
+describe('LiveSession tasks', () => {
+  it('folds SDK task messages into chat.tasks events, without chat items for them', async () => {
+    const { adapter, timers, events, opts } = setup();
+    const s = LiveSession.create('/p', { text: 'go' }, opts);
+    const fake = adapter.lastSession();
+    await settle();
+    const itemsBefore = itemsOf(events).length;
+    fake.emit(
+      started('a1', {
+        task_type: 'local_agent',
+        subagent_type: 'Explore',
+        description: 'Look around',
+        tool_use_id: 'toolu_1',
+      }),
+    );
+    fake.emit(progress('a1', { usage: { total_tokens: 7, tool_uses: 1, duration_ms: 5 } }));
+    fake.emit(level([]));
+    await settle();
+    timers.advance(33);
+    expect(itemsOf(events)).toHaveLength(itemsBefore);
+    expect(lastTasks(events)).toEqual([
+      expect.objectContaining({
+        taskId: 'a1',
+        kind: 'agent',
+        subagentType: 'Explore',
+        status: 'running',
+        tokens: 7,
+        toolUses: 1,
+        toolUseId: 'toolu_1',
+        startedAt: expect.any(Number),
+      }),
+    ]);
+    expect(taskEvents(events).every((e) => e.sessionId === s.sessionId)).toBe(true);
+    expect(s.tasks()).toEqual(lastTasks(events));
+  });
+
+  it('coalesces task changes into at most one chat.tasks emit per 33 ms', async () => {
+    const { adapter, timers, events, opts } = setup();
+    const times: number[] = [];
+    LiveSession.create(
+      '/p',
+      { text: 'go' },
+      {
+        ...opts,
+        emit: (e) => {
+          events.push(e);
+          if (e.event === 'chat.tasks') times.push(timers.now());
+        },
+      },
+    );
+    const fake = adapter.lastSession();
+    await settle();
+    timers.advance(100);
+    fake.emit(started('a1', { task_type: 'local_agent' }));
+    for (let i = 1; i <= 50; i++) {
+      fake.emit(progress('a1', { usage: { total_tokens: i, tool_uses: i, duration_ms: i } }));
+    }
+    await settle();
+    // A burst in one tick: one leading emit at most, the rest wait for the window.
+    expect(times.length).toBeLessThanOrEqual(1);
+    timers.advance(33);
+    expect(lastTasks(events)?.[0]).toMatchObject({ tokens: 50 });
+    // Steady trickle: one change every 5 ms for 300 ms.
+    for (let i = 51; i <= 110; i++) {
+      fake.emit(progress('a1', { usage: { total_tokens: i, tool_uses: i, duration_ms: i } }));
+      await settle();
+      timers.advance(5);
+    }
+    timers.advance(33);
+    for (let i = 1; i < times.length; i++) {
+      expect(times[i]! - times[i - 1]!).toBeGreaterThanOrEqual(33);
+    }
+    expect(times.length).toBeLessThanOrEqual(2 + Math.ceil((300 + 33) / 33));
+    expect(lastTasks(events)?.[0]).toMatchObject({ tokens: 110 });
+  });
+
+  it('chat.tasks events share the session seq: since() replays them and snapshot() lists the tasks', async () => {
+    const { adapter, events, opts } = setup();
+    const s = LiveSession.create('/p', { text: 'go' }, opts);
+    const fake = adapter.lastSession();
+    fake.emit(init(s.sessionId));
+    fake.emit(started('b1', { task_type: 'local_bash', description: 'npm run dev' }));
+    fake.emit(assistantText('a1', 'started the server'));
+    fake.emit(result('r1'));
+    await settle();
+    // Buffered (coalesced) task changes are flushed by snapshot and since.
+    fake.emit(progress('b1', { description: 'npm run dev (port 5173)' }));
+    await settle();
+    const snap = s.snapshot(10);
+    expect(snap.tasks).toEqual([
+      expect.objectContaining({
+        taskId: 'b1',
+        kind: 'shell',
+        description: 'npm run dev (port 5173)',
+      }),
+    ]);
+    const emitted = chatEvents(events);
+    expect(emitted.map(seqOf)).toEqual(Array.from({ length: emitted.length }, (_, i) => i + 1));
+    expect(snap.seq).toBe(emitted.length);
+    const replay = s.since(0);
+    expect(replay).toEqual(emitted);
+    expect(replay !== 'gap' && replay.some((e) => e.event === 'chat.tasks')).toBe(true);
+    expect(lastTasks(events)).toEqual(snap.tasks);
+  });
+
+  it('skips a chat.tasks emit when nothing visible changed', async () => {
+    const { adapter, timers, events, opts } = setup();
+    LiveSession.create('/p', { text: 'go' }, opts);
+    const fake = adapter.lastSession();
+    fake.emit(started('b1', { task_type: 'local_bash' }));
+    await settle();
+    timers.advance(100);
+    const n = taskEvents(events).length;
+    fake.emit(level([{ task_id: 'b1', task_type: 'local_bash', description: 'task b1' }]));
+    await settle();
+    timers.advance(100);
+    expect(taskEvents(events).length).toBe(n + 1); // now backgrounded
+    fake.emit(level([{ task_id: 'b1', task_type: 'local_bash', description: 'task b1' }]));
+    await settle();
+    timers.advance(100);
+    expect(taskEvents(events).length).toBe(n + 1);
+  });
+
+  it('stopTask asks the SDK to stop the task; the stopped notification updates it', async () => {
+    const { adapter, timers, events, opts } = setup();
+    const s = LiveSession.create('/p', { text: 'go' }, opts);
+    const fake = adapter.lastSession();
+    fake.emit(started('b1', { task_type: 'local_bash', is_backgrounded: true }));
+    await settle();
+    await s.stopTask('b1');
+    expect(fake.stoppedTasks).toEqual(['b1']);
+    fake.emit(notification('b1', 'stopped'));
+    await settle();
+    timers.advance(33);
+    expect(lastTasks(events)?.[0]).toMatchObject({
+      status: 'stopped',
+      endedAt: expect.any(Number),
+    });
+    // Stopping a task that already ended is a no-op.
+    await s.stopTask('b1');
+    expect(fake.stoppedTasks).toEqual(['b1']);
+  });
+
+  it('stopTask errors: UNKNOWN_TASK, STOP_FAILED, NOT_LIVE', async () => {
+    const { adapter, opts } = setup();
+    const s = LiveSession.create('/p', { text: 'go' }, opts);
+    const fake = adapter.lastSession();
+    fake.emit(started('b1', { task_type: 'local_bash' }));
+    await settle();
+    const codeOf = (p: Promise<unknown>) =>
+      p.then(
+        () => 'ok',
+        (e: unknown) => (e instanceof ServiceError ? e.code : String(e)),
+      );
+    expect(await codeOf(s.stopTask('nope'))).toBe('UNKNOWN_TASK');
+    fake.stopTaskError = new Error('Task b1 is not running');
+    expect(await codeOf(s.stopTask('b1'))).toBe('STOP_FAILED');
+    s.end();
+    expect(await codeOf(s.stopTask('b1'))).toBe('NOT_LIVE');
+  });
+
+  it('forgets the tasks when the process ends (ended, paused or crashed)', async () => {
+    for (const how of ['end', 'pause', 'crash'] as const) {
+      const { adapter, events, opts } = setup();
+      const s = LiveSession.create('/p', { text: 'go' }, opts);
+      const fake = adapter.lastSession();
+      fake.emit(started('b1', { task_type: 'local_bash' }));
+      await settle();
+      expect(s.tasks()).toHaveLength(1);
+      if (how === 'end') s.end();
+      else if (how === 'pause') s.pause();
+      else fake.end(new Error('boom'));
+      await s.whenEnded();
+      await settle();
+      expect(s.tasks(), how).toEqual([]);
+      expect(lastTasks(events), how).toEqual([]);
+      expect(s.snapshot(0).tasks, how).toEqual([]);
+    }
   });
 });

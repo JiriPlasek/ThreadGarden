@@ -14,6 +14,7 @@ const fakeQuery = (messages: SDKMessage[]) => {
     supportedCommands: vi.fn(async () => [{ name: 'review', description: '', argumentHint: '' }]),
     supportedModels: vi.fn(async () => []),
     accountInfo: vi.fn(async () => ({ apiProvider: 'firstParty' as const })),
+    stopTask: vi.fn<(taskId: string) => Promise<void>>(async () => {}),
     close: vi.fn(),
   });
 };
@@ -84,9 +85,11 @@ describe('RealAdapter.start', () => {
     await s.interrupt();
     await s.setModel('sonnet');
     await s.setPermissionMode('plan');
+    await s.stopTask('b1');
     expect(q.interrupt).toHaveBeenCalledOnce();
     expect(q.setModel).toHaveBeenCalledWith('sonnet');
     expect(q.setPermissionMode).toHaveBeenCalledWith('plan');
+    expect(q.stopTask).toHaveBeenCalledWith('b1');
     await expect(s.supportedCommands()).resolves.toEqual([
       { name: 'review', description: '', argumentHint: '' },
     ]);

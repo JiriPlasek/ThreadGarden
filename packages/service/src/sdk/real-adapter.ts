@@ -153,6 +153,10 @@ class RealSession implements AgentSession {
     return this.q.setPermissionMode(m);
   }
 
+  stopTask(taskId: string): Promise<void> {
+    return this.q.stopTask(taskId);
+  }
+
   supportedCommands(): Promise<SlashCommand[]> {
     return this.q.supportedCommands();
   }

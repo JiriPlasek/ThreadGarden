@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { ChatHeaderInfoSchema, ChatStatusSchema } from './chat.js';
 import { ChatItemSchema } from './items.js';
+import { ChatTaskSchema } from './tasks.js';
 
 export const ChatItemsEventSchema = z.object({
   sessionId: z.string(),
@@ -19,9 +20,22 @@ export const ChatStatusEventSchema = z.object({
 });
 export type ChatStatusEvent = z.infer<typeof ChatStatusEventSchema>;
 
+/**
+ * The full task list of a chat pahub runs (replaces the previous one). It is
+ * sequenced in the same per-session log as `chat.items` / `chat.status`, so
+ * `chat.since` replays it.
+ */
+export const ChatTasksEventSchema = z.object({
+  sessionId: z.string(),
+  seq: z.number(),
+  tasks: z.array(ChatTaskSchema),
+});
+export type ChatTasksEvent = z.infer<typeof ChatTasksEventSchema>;
+
 export const events = {
   'chat.items': ChatItemsEventSchema,
   'chat.status': ChatStatusEventSchema,
+  'chat.tasks': ChatTasksEventSchema,
   'sessions.changed': z.object({ sessionIds: z.array(z.string()) }),
   'projects.changed': z.object({}),
   'external.changed': z.object({}),

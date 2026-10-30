@@ -101,4 +101,67 @@ describe('mock service', () => {
       3,
     );
   }, 30_000);
+  it('"agent" runs a subagent task to completion; "server" keeps a shell task until stopped', async () => {
+    mock = await startMockService({
+      sessions: 2,
+      projects: 1,
+      bigSessionMessages: 4,
+      port: await freePort(),
+      token: 'mock-token',
+      installSignalHandlers: false,
+    });
+    const c = (client = await TestClient.connect(mock.svc.port, 'mock-token'));
+    type Task = { taskId: string; kind: string; status: string; description: string };
+    const tasksOf = (sessionId: string): Task[] | undefined =>
+      c.events
+        .filter(
+          (e) =>
+            e.event === 'chat.tasks' && (e.data as { sessionId: string }).sessionId === sessionId,
+        )
+        .map((e) => (e.data as { tasks: Task[] }).tasks)
+        .at(-1);
+
+    // "agent": a subagent that progresses, then completes about 3 s later.
+    const agent = await c.call<{ sessionId: string }>('chat.create', {
+      cwd: '/work',
+      text: 'use an agent to explore',
+    });
+    await eventually(() => tasksOf(agent.sessionId)?.[0]?.status === 'running', 5_000);
+    expect(tasksOf(agent.sessionId)?.[0]).toMatchObject({
+      kind: 'agent',
+      subagentType: 'Explore',
+      toolUseId: expect.any(String),
+    });
+    await eventually(
+      () => (tasksOf(agent.sessionId)?.[0] as { tokens?: number } | undefined)?.tokens,
+      5_000,
+    );
+    await eventually(() => tasksOf(agent.sessionId)?.[0]?.status === 'completed', 8_000);
+    await c.waitFor(chatStatus(agent.sessionId, 'idle'), 5_000);
+    const calls = itemsOf(c.events, agent.sessionId).filter((i) => i.kind === 'toolCall');
+    expect(calls).toEqual([expect.objectContaining({ name: 'Agent', status: 'ok' })]);
+
+    // "server": a background shell that keeps running after the turn ends.
+    const server = await c.call<{ sessionId: string }>('chat.create', {
+      cwd: '/work',
+      text: 'start the dev server',
+    });
+    await c.waitFor(chatStatus(server.sessionId, 'idle'), 10_000);
+    const opened = await c.call<{ tasks: Task[] }>('chat.open', {
+      sessionId: server.sessionId,
+      tail: 20,
+    });
+    expect(opened.tasks).toEqual([
+      expect.objectContaining({
+        kind: 'shell',
+        description: 'npm run dev',
+        status: 'running',
+        backgrounded: true,
+      }),
+    ]);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(tasksOf(server.sessionId)?.[0]?.status).toBe('running');
+    await c.call('chat.stopTask', { sessionId: server.sessionId, taskId: opened.tasks[0]!.taskId });
+    await eventually(() => tasksOf(server.sessionId)?.[0]?.status === 'stopped', 5_000);
+  }, 30_000);
 });

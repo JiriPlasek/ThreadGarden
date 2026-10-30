@@ -3,6 +3,8 @@
  * by the test: `emit()` pushes SDK messages, `requestPermission()` calls the
  * `canUseTool` callback the code under test passed to `start()`, `end()` stops
  * the stream (optionally with an error, like a crashed `claude` process).
+ * `stopTask()` only records the call (or rejects with `stopTaskError`); a test
+ * emits the resulting `task_notification` itself.
  */
 import { randomUUID } from 'node:crypto';
 import type {
@@ -32,6 +34,9 @@ const page = <T>(list: T[], o: PageOptions = {}): T[] => {
 export class FakeSession implements AgentSession {
   readonly sent: SDKUserMessage[] = [];
   interrupted = 0;
+  readonly stoppedTasks: string[] = [];
+  /** When set, `stopTask` rejects with it (after recording the call). */
+  stopTaskError: Error | undefined;
   closed = false;
   model: string | undefined;
   permissionMode: PermissionMode | undefined;
@@ -97,6 +102,11 @@ export class FakeSession implements AgentSession {
 
   async setPermissionMode(m: PermissionMode): Promise<void> {
     this.permissionMode = m;
+  }
+
+  async stopTask(taskId: string): Promise<void> {
+    this.stoppedTasks.push(taskId);
+    if (this.stopTaskError) throw this.stopTaskError;
   }
 
   async supportedCommands(): Promise<SlashCommand[]> {

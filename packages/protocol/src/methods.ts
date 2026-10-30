@@ -7,8 +7,9 @@ import {
   SettingsPatchSchema,
   SettingsSchema,
 } from './chat.js';
-import { ChatItemsEventSchema, ChatStatusEventSchema } from './events.js';
+import { ChatItemsEventSchema, ChatStatusEventSchema, ChatTasksEventSchema } from './events.js';
 import { ChatItemSchema, ImageRefSchema } from './items.js';
+import { ChatTaskSchema } from './tasks.js';
 
 const empty = z.object({});
 const sessionIdOnly = z.object({ sessionId: z.string() });
@@ -74,6 +75,8 @@ export const methods = {
       items: z.array(ChatItemSchema),
       hasMore: z.boolean(),
       seq: z.number(),
+      /** Tasks of the chat's running process (empty unless pahub runs it). */
+      tasks: z.array(ChatTaskSchema),
     }),
   ),
   'chat.older': def(
@@ -83,7 +86,7 @@ export const methods = {
   'chat.since': def(
     z.object({ sessionId: z.string(), seq: z.number() }),
     z.object({
-      events: z.array(z.union([ChatItemsEventSchema, ChatStatusEventSchema])),
+      events: z.array(z.union([ChatItemsEventSchema, ChatStatusEventSchema, ChatTasksEventSchema])),
       seq: z.number(),
     }),
   ),
@@ -150,6 +153,12 @@ export const methods = {
     ),
   ),
   'chat.resumeCommand': def(sessionIdOnly, z.object({ command: z.string() })),
+  /**
+   * Stops one task of a chat pahub runs (SDK `stopTask`); its `stopped`
+   * status arrives as `chat.tasks`. Errors: `NOT_LIVE` (pahub does not run the
+   * chat), `UNKNOWN_TASK`, `STOP_FAILED`.
+   */
+  'chat.stopTask': def(z.object({ sessionId: z.string(), taskId: z.string() }), empty),
   'external.stop': def(sessionIdOnly, z.object({})),
   'files.suggest': def(
     z.object({ cwd: z.string(), query: z.string(), limit: z.number() }),

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   ChatItemSchema,
+  ChatTaskSchema,
   RequestSchema,
   events,
   methods,
@@ -95,6 +96,7 @@ describe('protocol schemas', () => {
       'chat.commands',
       'chat.models',
       'chat.resumeCommand',
+      'chat.stopTask',
       'external.stop',
       'files.suggest',
       'meta.update',
@@ -123,6 +125,7 @@ describe('protocol schemas', () => {
       [
         'chat.items',
         'chat.status',
+        'chat.tasks',
         'sessions.changed',
         'projects.changed',
         'external.changed',
@@ -141,5 +144,74 @@ describe('protocol schemas', () => {
     expect(settingsDefaults.claudePath).toBeNull();
     expect(settingsDefaults.theme).toBe('system');
     expect(SettingsSchema.parse({})).toEqual(settingsDefaults);
+  });
+
+  it('ChatTask accepts a full agent row and a minimal unknown-status row', () => {
+    const agent = {
+      taskId: 'a1',
+      toolUseId: 'toolu_1',
+      kind: 'agent',
+      taskType: 'local_agent',
+      subagentType: 'general-purpose',
+      description: 'Explore the project',
+      status: 'running',
+      backgrounded: false,
+      parentTaskId: 'a0',
+      startedAt: 1,
+      endedAt: 2,
+      tokens: 10,
+      toolUses: 2,
+      durationMs: 1000,
+      lastTool: 'Read',
+      summary: 'Reading files',
+      error: 'boom',
+    };
+    expect(ChatTaskSchema.parse(agent)).toEqual(agent);
+    const odd = {
+      taskId: 'x',
+      kind: 'other',
+      description: 'something new',
+      status: 'unknown',
+      rawStatus: 'hibernating',
+      startedAt: 5,
+    };
+    expect(ChatTaskSchema.parse(odd)).toEqual(odd);
+    expect(ChatTaskSchema.safeParse({ ...odd, status: 'hibernating' }).success).toBe(false);
+    expect(ChatTaskSchema.safeParse({ ...odd, kind: 'robot' }).success).toBe(false);
+  });
+
+  it('chat.tasks events are replayable through chat.since and listed by chat.open', () => {
+    const tasks = [
+      { taskId: 'b1', kind: 'shell', description: 'npm run dev', status: 'running', startedAt: 1 },
+    ];
+    const event = { sessionId: 's', seq: 3, tasks };
+    expect(events['chat.tasks'].parse(event)).toEqual(event);
+    const since = methods['chat.since'].result.parse({ events: [event], seq: 3 });
+    expect(since.events[0]).toEqual(event);
+    const opened = methods['chat.open'].result.safeParse({
+      summary: {
+        sessionId: 's',
+        title: 't',
+        projectId: 'p',
+        cwd: '/',
+        status: 'idle',
+        preview: '',
+        lastActivity: 0,
+        pinned: false,
+        live: true,
+        external: null,
+      },
+      header: {},
+      items: [],
+      hasMore: false,
+      seq: 3,
+      tasks,
+    });
+    expect(opened.success).toBe(true);
+    expect(methods['chat.stopTask'].params.parse({ sessionId: 's', taskId: 'b1' })).toEqual({
+      sessionId: 's',
+      taskId: 'b1',
+    });
+    expect(methods['chat.stopTask'].result.parse({})).toEqual({});
   });
 });

@@ -1,23 +1,26 @@
 /**
  * Per-session replay buffer for the sequenced chat events (§4.5). Every
- * `chat.items` / `chat.status` event a live session emits is appended here and
+ * `chat.items` / `chat.status` / `chat.tasks` event a live session emits is appended here and
  * stamped with the next sequence number; a reconnecting client asks for
  * "everything after N" via `since(N)`. The buffer keeps the last `capacity`
  * events; asking for anything older (or for a seq this log never issued, e.g.
  * one from before a service restart) returns `'gap'` and the client reloads
  * the chat with `chat.open`.
  */
-import type { ChatItemsEvent, ChatStatusEvent } from '@pahub/protocol';
+import type { ChatItemsEvent, ChatStatusEvent, ChatTasksEvent } from '@pahub/protocol';
 
 export type ChatEvent =
-  { event: 'chat.items'; data: ChatItemsEvent } | { event: 'chat.status'; data: ChatStatusEvent };
+  | { event: 'chat.items'; data: ChatItemsEvent }
+  | { event: 'chat.status'; data: ChatStatusEvent }
+  | { event: 'chat.tasks'; data: ChatTasksEvent };
 
 type WithoutSeq<T> = Omit<T, 'seq'> & { seq?: number };
 
 /** A `ChatEvent` before `append` stamps its seq (any seq passed in is overwritten). */
 export type ChatEventDraft =
   | { event: 'chat.items'; data: WithoutSeq<ChatItemsEvent> }
-  | { event: 'chat.status'; data: WithoutSeq<ChatStatusEvent> };
+  | { event: 'chat.status'; data: WithoutSeq<ChatStatusEvent> }
+  | { event: 'chat.tasks'; data: WithoutSeq<ChatTasksEvent> };
 
 export const EVENT_LOG_CAPACITY = 5_000;
 

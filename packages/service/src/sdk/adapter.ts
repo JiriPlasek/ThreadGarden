@@ -63,6 +63,8 @@ export interface AgentSession {
   interrupt(): Promise<void>;
   setModel(m?: string): Promise<void>;
   setPermissionMode(m: PermissionMode): Promise<void>;
+  /** Stops one task (SDK `Query.stopTask`); its `stopped` task_notification follows in `messages`. */
+  stopTask(taskId: string): Promise<void>;
   supportedCommands(): Promise<SlashCommand[]>;
   supportedModels(): Promise<ModelInfo[]>;
   accountInfo(): Promise<AccountInfo>;

@@ -7,7 +7,11 @@
  * - every reply streams a few sentences with partial (`stream_event`) messages;
  * - a message containing "perm" asks for permission to run a Bash command;
  * - "ask" asks an AskUserQuestion question; "plan" asks to approve a plan
- *   (ExitPlanMode).
+ *   (ExitPlanMode);
+ * - "agent" runs an Explore subagent (an Agent tool call and its task) that
+ *   reports progress and completes after about 3 s;
+ * - "server" starts a background shell task ("npm run dev") that keeps
+ *   running until it is stopped with `chat.stopTask` (or the chat ends).
  *
  * Everything lives in temporary directories (pahub data dir and a fixture
  * `CLAUDE_CONFIG_DIR`), removed on exit. The mock's fake Claude Code writes a
@@ -36,6 +40,16 @@ import { FakeAdapter, FakeSession } from './fake-adapter.js';
 
 const MOCK_VERSION = '0.0.0-mock';
 const DELTA_MS = 40;
+/** The "agent" subagent reports progress this often, `AGENT_STEPS.length` times (~3 s). */
+const AGENT_STEP_MS = 600;
+const AGENT_STEPS = [
+  { tool: 'Glob', summary: 'Listing the project files' },
+  { tool: 'Read', summary: 'Reading package.json' },
+  { tool: 'Grep', summary: 'Searching for the entry points' },
+  { tool: 'Read', summary: 'Reading the service entry point' },
+  { tool: 'Read', summary: 'Reading the desktop app layout' },
+];
+const DEV_SERVER_COMMAND = 'npm run dev';
 
 const SENTENCES = [
   'This is the pahub mock service answering.',
@@ -64,6 +78,10 @@ const textOf = (m: SDKUserMessage): string => {
 class ScriptedSession extends FakeSession {
   private turn: Promise<void> = Promise.resolve();
   private abort = new AbortController();
+  /** Running "server" shell tasks: task id → command. */
+  private readonly shells = new Map<string, string>();
+  /** Running "agent" subagent tasks: task id → its stop signal. */
+  private readonly agents = new Map<string, AbortController>();
 
   constructor(
     options: StartOptions,
@@ -108,6 +126,29 @@ class ScriptedSession extends FakeSession {
     this.abort.abort();
   }
 
+  /** Stops a running "agent" or "server" task, like the CLI: killed, then a stopped notification. */
+  override async stopTask(taskId: string): Promise<void> {
+    await super.stopTask(taskId);
+    const agent = this.agents.get(taskId);
+    if (agent) {
+      agent.abort();
+      return;
+    }
+    const command = this.shells.get(taskId);
+    if (command === undefined) throw new Error(`No running task ${taskId}`);
+    this.shells.delete(taskId);
+    this.out(this.system('task_updated', { task_id: taskId, patch: { status: 'killed' } }));
+    this.out(
+      this.system('task_notification', {
+        task_id: taskId,
+        status: 'stopped',
+        output_file: '',
+        summary: `${command} was stopped`,
+      }),
+    );
+    this.out(this.backgroundTasks());
+  }
+
   /** Emits unless the session was closed meanwhile. */
   private out(m: SDKMessage): void {
     if (!this.closed) this.emit(m);
@@ -147,6 +188,8 @@ class ScriptedSession extends FakeSession {
     if (lower.includes('perm')) await this.permissionTurn();
     else if (lower.includes('ask')) await this.questionTurn();
     else if (lower.includes('plan')) await this.planTurn();
+    else if (lower.includes('agent')) await this.agentTurn();
+    else if (lower.includes('server')) await this.serverTurn();
     else await this.say(SENTENCES.slice(0, 3).join(' '));
     const interrupted = this.abort.signal.aborted;
     this.out(
@@ -192,6 +235,116 @@ class ScriptedSession extends FakeSession {
       await this.say('Okay, I will not run it.');
       return;
     }
+    const toolUseId = this.toolUse('Bash', input);
+    await sleep(DELTA_MS * 3);
+    this.toolResult(toolUseId, 'README.md\npackage.json\nsrc\n');
+    await this.say('There are three entries: README.md, package.json and src.');
+  }
+
+  /** A foreground Explore subagent: task_started, progress every step, then its end. */
+  private async agentTurn(): Promise<void> {
+    await this.say('I will ask a subagent to explore the project.');
+    const description = 'Explore the project structure';
+    const toolUseId = this.toolUse('Agent', {
+      description,
+      subagent_type: 'Explore',
+      prompt: 'Map the main parts of this project.',
+    });
+    const taskId = `a${randomUUID().replaceAll('-', '').slice(0, 16)}`;
+    const task = { task_id: taskId, tool_use_id: toolUseId, description, subagent_type: 'Explore' };
+    this.out(
+      this.system('task_started', { ...task, task_type: 'local_agent', is_backgrounded: false }),
+    );
+    const stop = new AbortController();
+    this.agents.set(taskId, stop);
+    const started = Date.now();
+    const usage = (steps: number) => ({
+      total_tokens: 1800 * steps,
+      tool_uses: steps,
+      duration_ms: Date.now() - started,
+    });
+    let steps = 0;
+    for (const step of AGENT_STEPS) {
+      await sleep(AGENT_STEP_MS);
+      if (this.abort.signal.aborted || stop.signal.aborted || this.closed) break;
+      steps++;
+      this.out(
+        this.system('task_progress', {
+          ...task,
+          usage: usage(steps),
+          last_tool_name: step.tool,
+          summary: step.summary,
+        }),
+      );
+    }
+    this.agents.delete(taskId);
+    const done = steps === AGENT_STEPS.length;
+    this.out(
+      this.system('task_updated', {
+        task_id: taskId,
+        patch: { status: done ? 'completed' : 'killed', end_time: Date.now() },
+      }),
+    );
+    const summary = done
+      ? 'The project has a service, a protocol package and a desktop app.'
+      : 'The subagent was stopped.';
+    this.out(
+      this.system('task_notification', {
+        task_id: taskId,
+        tool_use_id: toolUseId,
+        status: done ? 'completed' : 'stopped',
+        output_file: '',
+        summary,
+        usage: usage(steps),
+      }),
+    );
+    this.toolResult(toolUseId, summary, !done);
+    await this.say(done ? `The subagent reports: ${summary}` : 'The subagent did not finish.');
+  }
+
+  /** A background shell ("npm run dev") that runs until `stopTask`. */
+  private async serverTurn(): Promise<void> {
+    await this.say('Starting the dev server in the background.');
+    const toolUseId = this.toolUse('Bash', {
+      command: DEV_SERVER_COMMAND,
+      description: 'Start the dev server',
+      run_in_background: true,
+    });
+    const taskId = `b${randomUUID().replaceAll('-', '').slice(0, 16)}`;
+    this.shells.set(taskId, DEV_SERVER_COMMAND);
+    // Like the CLI: a task started in the background joins the level before its task_started.
+    this.out(this.backgroundTasks());
+    this.out(
+      this.system('task_started', {
+        task_id: taskId,
+        tool_use_id: toolUseId,
+        description: DEV_SERVER_COMMAND,
+        task_type: 'local_bash',
+        is_backgrounded: true,
+      }),
+    );
+    await sleep(DELTA_MS * 3);
+    this.toolResult(toolUseId, `Command running in background with ID: ${taskId}`);
+    await this.say('The dev server is running at http://localhost:5173.');
+  }
+
+  private system(subtype: string, extra: Record<string, unknown>): SDKMessage {
+    return msg({ type: 'system', subtype, uuid: randomUUID(), session_id: this.id, ...extra });
+  }
+
+  /** The level of running background tasks (`background_tasks_changed`). */
+  private backgroundTasks(): SDKMessage {
+    return this.system('background_tasks_changed', {
+      tasks: [...this.shells].map(([taskId, command]) => ({
+        task_id: taskId,
+        task_type: 'local_bash',
+        description: command,
+      })),
+    });
+  }
+
+  /** Emits an assistant message with one tool call; returns its tool_use id. */
+  private toolUse(name: string, input: Record<string, unknown>): string {
     const toolUseId = `toolu_${randomUUID()}`;
     this.out(
       msg({
@@ -202,11 +355,14 @@ class ScriptedSession extends FakeSession {
         message: {
           id: `msg_${randomUUID()}`,
           role: 'assistant',
-          content: [{ type: 'tool_use', id: toolUseId, name: 'Bash', input }],
+          content: [{ type: 'tool_use', id: toolUseId, name, input }],
         },
       }),
     );
-    await sleep(DELTA_MS * 3);
+    return toolUseId;
+  }
+
+  private toolResult(toolUseId: string, content: string, isError = false): void {
     this.out(
       msg({
         type: 'user',
@@ -215,18 +371,10 @@ class ScriptedSession extends FakeSession {
         parent_tool_use_id: null,
         message: {
           role: 'user',
-          content: [
-            {
-              type: 'tool_result',
-              tool_use_id: toolUseId,
-              content: 'README.md\npackage.json\nsrc\n',
-              is_error: false,
-            },
-          ],
+          content: [{ type: 'tool_result', tool_use_id: toolUseId, content, is_error: isError }],
         },
       }),
     );
-    await this.say('There are three entries: README.md, package.json and src.');
   }
 
   private async questionTurn(): Promise<void> {
