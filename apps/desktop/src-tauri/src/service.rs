@@ -81,8 +81,12 @@ pub fn dev_target(repo_root: &Path) -> Result<LaunchTarget, String> {
 }
 
 /// Release: the bundled Node sidecar (`pahub-node`, next to the app executable)
-/// running the bundled `service/service.mjs` resource.
+/// running the bundled `service/service.mjs` resource. Tauri canonicalizes the
+/// resource dir, which on Windows gives a verbatim `\\?\C:\…` path that Node
+/// cannot load a main script from (`EISDIR: lstat 'C:'`), so both paths are
+/// simplified to their plain form (a no-op elsewhere).
 pub fn release_target(exe_dir: &Path, resource_dir: &Path) -> Result<LaunchTarget, String> {
+    let (exe_dir, resource_dir) = (dunce::simplified(exe_dir), dunce::simplified(resource_dir));
     let node = exe_dir.join(format!("pahub-node{}", std::env::consts::EXE_SUFFIX));
     let script = resource_dir.join("service").join("service.mjs");
     for required in [&node, &script] {
@@ -536,6 +540,28 @@ mod tests {
         std::fs::write(res_dir.path().join("service/service.mjs"), "").unwrap();
         let target = release_target(exe_dir.path(), res_dir.path()).unwrap();
         assert_eq!(target.program, node);
+    }
+
+    /// Canonical paths are verbatim (`\\?\C:\…`) on Windows; the service gets plain ones.
+    #[test]
+    fn release_target_passes_plain_paths_to_node() {
+        let dir = tempfile::tempdir().unwrap();
+        let canonical = dir.path().canonicalize().unwrap();
+        let node = canonical.join(format!("pahub-node{}", std::env::consts::EXE_SUFFIX));
+        std::fs::write(&node, "").unwrap();
+        std::fs::create_dir_all(canonical.join("service")).unwrap();
+        std::fs::write(canonical.join("service").join("service.mjs"), "").unwrap();
+        let target = release_target(&canonical, &canonical).unwrap();
+        let plain = dunce::simplified(&canonical).to_path_buf();
+        assert_eq!(
+            target.program,
+            plain.join(format!("pahub-node{}", std::env::consts::EXE_SUFFIX))
+        );
+        assert_eq!(
+            target.args[1],
+            plain.join("service").join("service.mjs").into_os_string()
+        );
+        assert!(!target.args[1].to_string_lossy().starts_with(r"\\?\"));
     }
 
     #[test]
