@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { open, readFile, rename, unlink, writeFile } from 'node:fs/promises';
+import { link, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
 
@@ -51,28 +51,67 @@ const isAlive = (pid: number): boolean => {
   }
 };
 
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+const readLockPid = async (file: string): Promise<number | null> => {
+  const text = await readFile(file, 'utf8').catch(() => '');
+  const pid = Number.parseInt(text, 10);
+  return Number.isInteger(pid) && pid > 0 ? pid : null;
+};
+
+/**
+ * Single-instance lock. The pid is written to a temp file which is hard-linked onto the lock path,
+ * so the lock appears atomically and is never observed empty. An unreadable lock is treated as held.
+ */
 export const acquireInstanceLock = async (
   dataDir: string,
 ): Promise<{ release(): Promise<void> } | null> => {
   const file = lockPath(dataDir);
   const mine = String(process.pid);
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      const handle = await open(file, 'wx');
-      await handle.writeFile(mine);
-      await handle.close();
-      return {
-        release: async () => {
-          const owner = await readFile(file, 'utf8').catch(() => null);
-          if (owner === mine) await unlink(file).catch(() => {});
-        },
-      };
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+  const unique = () => `${file}.${process.pid}.${randomBytes(4).toString('hex')}`;
+  const tmp = `${unique()}.tmp`;
+  await writeFile(tmp, mine);
+  try {
+    let unreadable = 0;
+    for (let attempt = 0; attempt < 100; attempt++) {
+      try {
+        await link(tmp, file);
+        return {
+          release: async () => {
+            if ((await readFile(file, 'utf8').catch(() => null)) === mine) {
+              await unlink(file).catch(() => {});
+            }
+          },
+        };
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+      }
+      const pid = await readLockPid(file);
+      if (pid === null) {
+        if (++unreadable >= 5) return null;
+        await sleep(50);
+        continue;
+      }
+      if (isAlive(pid)) return null;
+      // Stale: only the holder of the takeover mutex may remove it, so a freshly created lock is never unlinked.
+      const mutex = `${file}.takeover`;
+      try {
+        await link(tmp, mutex);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+        const age = Date.now() - ((await stat(mutex).catch(() => null))?.mtimeMs ?? Date.now());
+        if (age > 10_000) await unlink(mutex).catch(() => {});
+        await sleep(20);
+        continue;
+      }
+      try {
+        if ((await readLockPid(file)) === pid) await unlink(file).catch(() => {});
+      } finally {
+        await unlink(mutex).catch(() => {});
+      }
     }
-    const pid = Number.parseInt(await readFile(file, 'utf8').catch(() => ''), 10);
-    if (Number.isInteger(pid) && pid > 0 && isAlive(pid)) return null;
-    await unlink(file).catch(() => {});
+    return null;
+  } finally {
+    await unlink(tmp).catch(() => {});
   }
-  return null;
 };

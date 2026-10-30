@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -56,5 +56,22 @@ describe('acquireInstanceLock', () => {
     const lock = await acquireInstanceLock(dir);
     expect(lock).not.toBeNull();
     await lock!.release();
+  });
+  it('treats an empty lock file as held', async () => {
+    await writeFile(join(dir, 'service.lock'), '');
+    expect(await acquireInstanceLock(dir)).toBeNull();
+    expect(await readFile(join(dir, 'service.lock'), 'utf8')).toBe('');
+  });
+  it('exactly one of many concurrent acquires wins', async () => {
+    const results = await Promise.all(Array.from({ length: 8 }, () => acquireInstanceLock(dir)));
+    expect(results.filter((r) => r !== null)).toHaveLength(1);
+    await results.find((r) => r !== null)!.release();
+  });
+  it('exactly one wins when racing over a stale lock', async () => {
+    await writeFile(join(dir, 'service.lock'), '2147483646');
+    const results = await Promise.all(Array.from({ length: 8 }, () => acquireInstanceLock(dir)));
+    expect(results.filter((r) => r !== null)).toHaveLength(1);
+    await results.find((r) => r !== null)!.release();
+    expect(await readdir(dir)).toEqual([]);
   });
 });
