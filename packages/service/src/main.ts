@@ -105,7 +105,10 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         run,
         () => new Set((opts.live?.list() ?? []).map((c) => c.sessionId)),
         (e) => broadcastRef.fn(e),
-        { enabled: () => db?.getSettings().externalPolling ?? true },
+        {
+          enabled: () => db?.getSettings().externalPolling ?? true,
+          onError: (err) => log.error(`external poller: ${String(err)}`),
+        },
       );
     }
     if (opts.adapter) {

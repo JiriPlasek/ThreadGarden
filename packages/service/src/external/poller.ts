@@ -91,6 +91,8 @@ export const makeClaudeRunner =
 export type PollerOptions = {
   /** Polling is skipped (and the feature reported unavailable) while this returns false. */
   enabled?: () => boolean;
+  /** Receives unexpected errors (a throwing `enabled`/`emit`); polling carries on. */
+  onError?: (err: unknown) => void;
   setTimeout?: (fn: () => void, ms: number) => NodeJS.Timeout;
   clearTimeout?: (t: NodeJS.Timeout) => void;
 };
@@ -142,6 +144,25 @@ export class ExternalPoller {
     return this.list.slice();
   }
 
+  /**
+   * The external sessions right now, or null when `claude agents` is unusable.
+   * Runs the command on demand even while background polling is switched off
+   * (the `externalPolling` setting only governs polling and display), without
+   * touching the polled snapshot in that case. Never rejects.
+   */
+  async current(): Promise<ExternalSession[] | null> {
+    try {
+      if (this.opts.enabled?.() ?? true) {
+        await this.refresh();
+        return this.available ? this.snapshot() : null;
+      }
+      return await this.fetch();
+    } catch (err) {
+      this.report(err);
+      return null;
+    }
+  }
+
   /** Polls now (joins a poll already running); never rejects. */
   refresh(): Promise<void> {
     this.inflight ??= this.poll().finally(() => {
@@ -159,36 +180,55 @@ export class ExternalPoller {
     this.cancel();
     const t = this.setTimer(() => {
       this.timer = undefined;
-      void this.refresh().then(() => {
-        if (this.started && !this.timer) {
-          this.schedule(this.visible ? POLL_VISIBLE_MS : POLL_HIDDEN_MS);
-        }
-      });
+      void this.refresh()
+        .catch((err: unknown) => this.report(err))
+        .finally(() => {
+          if (this.started && !this.timer) {
+            this.schedule(this.visible ? POLL_VISIBLE_MS : POLL_HIDDEN_MS);
+          }
+        });
     }, ms);
     t.unref?.();
     this.timer = t;
   }
 
-  private async poll(): Promise<void> {
-    let list: ExternalSession[] = [];
-    let ok = false;
-    if (this.opts.enabled?.() ?? true) {
-      try {
-        const own = this.ownIds();
-        list = parseAgents(await this.run(AGENTS_ARGS)).filter(
-          (e) => e.sessionId === undefined || !own.has(e.sessionId),
-        );
-        ok = true;
-      } catch {
-        // Missing, failing or disabled agent view: hide the feature, keep polling.
-      }
+  private report(err: unknown): void {
+    try {
+      this.opts.onError?.(err);
+    } catch {
+      // Nothing left to tell.
     }
-    this.available = ok;
-    this.list = list;
-    const key = JSON.stringify([ok, list]);
-    if (key !== this.lastKey) {
-      this.lastKey = key;
-      this.emit({ event: 'external.changed', data: {} });
+  }
+
+  /** Runs `claude agents`; pahub-owned sessions are left out. Rejects when unusable. */
+  private async fetch(): Promise<ExternalSession[]> {
+    const own = this.ownIds();
+    return parseAgents(await this.run(AGENTS_ARGS)).filter(
+      (e) => e.sessionId === undefined || !own.has(e.sessionId),
+    );
+  }
+
+  private async poll(): Promise<void> {
+    try {
+      let list: ExternalSession[] = [];
+      let ok = false;
+      if (this.opts.enabled?.() ?? true) {
+        try {
+          list = await this.fetch();
+          ok = true;
+        } catch {
+          // Missing, failing or disabled agent view: hide the feature, keep polling.
+        }
+      }
+      this.available = ok;
+      this.list = list;
+      const key = JSON.stringify([ok, list]);
+      if (key !== this.lastKey) {
+        this.lastKey = key;
+        this.emit({ event: 'external.changed', data: {} });
+      }
+    } catch (err) {
+      this.report(err);
     }
   }
 }

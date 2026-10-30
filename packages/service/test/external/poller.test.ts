@@ -189,4 +189,84 @@ describe('ExternalPoller', () => {
     expect(poller.available).toBe(false);
     expect(poller.snapshot()).toEqual([]);
   });
+
+  it('survives a throwing emit: no unhandled rejection, polling continues', async () => {
+    vi.useFakeTimers();
+    const errors: unknown[] = [];
+    let n = 0;
+    const run = vi.fn(async () => JSON.stringify([{ cwd: '/x', kind: 'k', startedAt: ++n }]));
+    const poller = new ExternalPoller(
+      run,
+      () => new Set(),
+      () => {
+        throw new Error('emit boom');
+      },
+      { onError: (e) => errors.push(e) },
+    );
+    const unhandled = vi.fn();
+    process.on('unhandledRejection', unhandled);
+    poller.start();
+    await vi.advanceTimersByTimeAsync(6_000);
+    process.off('unhandledRejection', unhandled);
+    expect(unhandled).not.toHaveBeenCalled();
+    expect(run.mock.calls.length).toBeGreaterThanOrEqual(3);
+    expect(errors.length).toBeGreaterThanOrEqual(3);
+    poller.stop();
+  });
+
+  it('survives a throwing enabled(): no unhandled rejection, polling continues', async () => {
+    vi.useFakeTimers();
+    const errors: unknown[] = [];
+    let bad = true;
+    const run = vi.fn(async () => '[]');
+    const poller = new ExternalPoller(
+      run,
+      () => new Set(),
+      () => {},
+      {
+        enabled: () => {
+          if (bad) throw new Error('db closed');
+          return true;
+        },
+        onError: (e) => errors.push(e),
+      },
+    );
+    const unhandled = vi.fn();
+    process.on('unhandledRejection', unhandled);
+    poller.start();
+    await vi.advanceTimersByTimeAsync(4_000);
+    expect(errors.length).toBeGreaterThanOrEqual(2);
+    bad = false;
+    await vi.advanceTimersByTimeAsync(2_000);
+    process.off('unhandledRejection', unhandled);
+    expect(unhandled).not.toHaveBeenCalled();
+    expect(poller.available).toBe(true);
+    poller.stop();
+  });
+
+  it('current() runs on demand while polling is disabled, leaving the snapshot alone', async () => {
+    const run = vi.fn(async () => JSON.stringify(SAMPLE));
+    const poller = new ExternalPoller(
+      run,
+      () => new Set(),
+      () => {},
+      { enabled: () => false },
+    );
+    expect(await poller.current()).toHaveLength(3);
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(poller.available).toBe(false);
+    expect(poller.snapshot()).toEqual([]);
+  });
+
+  it('current() is null when the command fails', async () => {
+    const poller = new ExternalPoller(
+      async () => {
+        throw new Error('x');
+      },
+      () => new Set(),
+      () => {},
+      { enabled: () => false },
+    );
+    expect(await poller.current()).toBeNull();
+  });
 });

@@ -19,12 +19,8 @@ export const registerExternalHandlers = (router: Router, deps: ExternalHandlerDe
   const { poller } = deps;
   const now = deps.now ?? Date.now;
 
-  /** A fresh poll, so the answer is not up to 10 s stale; null when `claude agents` is unusable. */
-  const externals = async () => {
-    if (!poller) return null;
-    await poller.refresh();
-    return poller.available ? poller.snapshot() : null;
-  };
+  /** A fresh answer, so it is not up to 10 s stale; null when `claude agents` is unusable. */
+  const externals = async () => (poller ? poller.current() : null);
 
   router.register('ui.visibility', async (p) => {
     poller?.setVisible(p.visible);

@@ -54,6 +54,32 @@ describe('external handlers', () => {
     expect(run).toHaveBeenCalledTimes(4);
   });
 
+  it('chat.resumeCheck still checks on demand when externalPolling is off', async () => {
+    const poller = new ExternalPoller(
+      async () => JSON.stringify(AGENTS),
+      () => new Set(),
+      () => {},
+      { enabled: () => false },
+    );
+    const router = new Router();
+    registerExternalHandlers(router, {
+      poller,
+      lastModifiedOf: () => undefined,
+      claude: () => undefined,
+      indexing: () => ({ done: 0, total: 0 }),
+      now: () => NOW,
+    });
+    const call = async (sessionId: string) => {
+      const r = await router.dispatch(
+        { id: 1, method: 'chat.resumeCheck', params: { sessionId } } as never,
+        { clientId: 'c' },
+      );
+      return 'result' in r ? r.result : r;
+    };
+    expect(await call('bg')).toMatchObject({ status: 'blocked' });
+    expect(await call('fin')).toMatchObject({ status: 'ok' });
+  });
+
   it('chat.resumeCheck is unverified when claude agents fails, and flags recent edits', async () => {
     const t = setup(async () => {
       throw new Error('boom');
