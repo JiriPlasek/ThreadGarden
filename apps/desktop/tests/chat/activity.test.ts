@@ -557,3 +557,52 @@ describe('running badge', () => {
     expect(second!.textContent).not.toContain('running');
   });
 });
+
+describe('End session with running background work', () => {
+  const endHandler = (s: FakeServer) => {
+    s.handlers['chat.end'] = () => ({});
+  };
+
+  it('an idle chat with running tasks asks first and lists them', async () => {
+    const { server } = await renderChat({
+      status: 'idle',
+      tasks: [
+        shell(),
+        agent({ taskId: 'a2', description: 'Review the tests', backgrounded: true }),
+        shell({ taskId: 'b2', description: 'tsc --watch', status: 'completed', endedAt: 1 }),
+      ],
+      configure: endHandler,
+    });
+    await userEvent.click(screen.getByRole('button', { name: 'End session' }));
+    const dialog = await screen.findByRole('alertdialog');
+    expect(server.calls('chat.end')).toHaveLength(0);
+    expect(dialog.textContent).toContain('2 background tasks');
+    const listed = within(dialog)
+      .getAllByRole('listitem')
+      .map((li) => li.textContent?.trim());
+    expect(listed).toEqual(['npm run dev', 'Review the tests']);
+    await userEvent.click(within(dialog).getByRole('button', { name: 'End anyway' }));
+    await waitFor(() => expect(server.calls('chat.end')).toHaveLength(1));
+    expect(server.calls('chat.end')[0]!.params).toEqual({ sessionId: SID });
+  });
+
+  it('a working chat with running tasks names the turn and the tasks', async () => {
+    await renderChat({ status: 'working', tasks: [shell()], configure: endHandler });
+    await userEvent.click(screen.getByRole('button', { name: 'End session' }));
+    const dialog = await screen.findByRole('alertdialog');
+    expect(dialog.textContent).toContain('Claude is still working');
+    expect(dialog.textContent).toContain('1 background task ');
+    expect(within(dialog).getByRole('listitem').textContent).toContain('npm run dev');
+  });
+
+  it('an idle chat whose tasks have all ended ends without asking', async () => {
+    const { server } = await renderChat({
+      status: 'idle',
+      tasks: [shell({ status: 'stopped', endedAt: 1 })],
+      configure: endHandler,
+    });
+    await userEvent.click(screen.getByRole('button', { name: 'End session' }));
+    await waitFor(() => expect(server.calls('chat.end')).toHaveLength(1));
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+  });
+});

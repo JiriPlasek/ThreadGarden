@@ -79,7 +79,7 @@
 <ConfirmDialog
   bind:open={confirming}
   title="Stop all work?"
-  description="Every chat running in pahub is interrupted and closed. Sessions running in a terminal are not affected, and any chat can be resumed later."
+  description="Every chat running in pahub is interrupted and closed, with its background agents and processes. Sessions running in a terminal are not affected, and any chat can be resumed later."
   confirmLabel="Stop all work"
   destructive
   onConfirm={async () => {

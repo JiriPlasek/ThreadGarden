@@ -110,6 +110,8 @@ describe('tray actions', () => {
     native.tray.get('stop-all')!();
     const dialog = await screen.findByRole('alertdialog');
     expect(within(dialog).getByText('Fix the build')).toBeTruthy();
+    // Closing a chat also ends its background agents and processes: the dialog says so.
+    expect(dialog.textContent).toContain('with its background agents and processes');
     await userEvent.click(within(dialog).getByRole('button', { name: /stop all work/i }));
     await waitFor(() => expect(server.calls('work.stopAll')).toHaveLength(1));
     expect(native.quitApp).not.toHaveBeenCalled();
