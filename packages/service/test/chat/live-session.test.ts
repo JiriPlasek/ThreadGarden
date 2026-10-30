@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { ChatItem, ChatTask, EventMsg } from '@pahub/protocol';
 import { LiveSession, authLabel, type LiveSessionOptions } from '../../src/chat/live-session.js';
+import { Normalizer } from '../../src/chat/normalize.js';
 import { ServiceError } from '../../src/server/router.js';
 import type { PermissionUpdate } from '../../src/sdk/adapter.js';
 import { FakeAdapter } from '../../src/testing/fake-adapter.js';
@@ -916,6 +917,31 @@ describe('LiveSession tasks', () => {
     ]);
     expect(taskEvents(events).every((e) => e.sessionId === s.sessionId)).toBe(true);
     expect(s.tasks()).toEqual(lastTasks(events));
+  });
+
+  it('tracks tasks even when rendering a task message throws', async () => {
+    const { adapter, timers, events, opts } = setup();
+    const s = LiveSession.create('/p', { text: 'go' }, opts);
+    const fake = adapter.lastSession();
+    await settle();
+    const push = vi.spyOn(Normalizer.prototype, 'push').mockImplementation(() => {
+      throw new Error('render failed');
+    });
+    try {
+      fake.emit(started('b1', { task_type: 'local_bash', description: 'npm run dev' }));
+      await settle();
+      timers.advance(33);
+    } finally {
+      push.mockRestore();
+    }
+    expect(s.tasks()).toEqual([
+      expect.objectContaining({ taskId: 'b1', kind: 'shell', status: 'running' }),
+    ]);
+    expect(lastTasks(events)).toEqual(s.tasks());
+    // The odd message is still reported in the chat.
+    expect(itemsOf(events).some((i) => i.kind === 'system' && /render failed/.test(i.text))).toBe(
+      true,
+    );
   });
 
   it('coalesces task changes into at most one chat.tasks emit per 33 ms', async () => {

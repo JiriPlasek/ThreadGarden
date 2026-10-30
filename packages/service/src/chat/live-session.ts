@@ -617,13 +617,17 @@ export class LiveSession {
   }
 
   private handle(m: SDKMessage): void {
+    // Task tracking does not depend on rendering: a message the normalizer
+    // cannot handle still updates the task list.
+    this.guard('task tracking', () => {
+      if (this.tracker.apply(m)) this.scheduleTasks();
+    });
     try {
       this.noteActivity();
       this.updateHeader(m);
       this.requestAuth(m);
       const r = this.normalizer.push(m);
       if (r.items.length > 0) this.pushItems(r.items, r.replace);
-      if (this.tracker.apply(m)) this.scheduleTasks();
       if (this.noteStartupFailure(m)) {
         this.setStatus('failed');
       } else {
