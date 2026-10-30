@@ -280,7 +280,7 @@ The chat is rendered by pahub from SDK messages.
 
 **Sessions started by pahub**
 - Run with the user's Claude Code configuration: `settingSources: ["user","project","local"]`, `systemPrompt: { type: "preset", preset: "claude_code" }`, `cwd` = the project directory, so behaviour (CLAUDE.md, skills, hooks, permissions, MCP) matches the CLI.
-- Use the user's installed `claude` via `pathToClaudeCodeExecutable` (resolved from PATH and standard install locations; overridable in settings). If none is found, pahub falls back to the SDK's bundled binary and shows a persistent notice. The Claude Code version from the session's init message is shown in the status bar.
+- Use the user's installed `claude` via `pathToClaudeCodeExecutable` (resolved from PATH and standard install locations; overridable in settings). If none is found, or a session fails to start because the CLI is too old (`cli_version_too_old`), pahub shows a setup screen explaining how to install or update Claude Code. There is no fallback to the SDK's bundled binary: it is large, would have to ship per platform, and would drift from the user's own install. The Claude Code version from the session's init message is shown in the status bar. Other documented startup-failure reasons from the SDK (e.g. `session_held_by_background`, `cwd_unavailable`) are shown to the user with their meaning.
 
 ### 6.5 Settings (pahub's own)
 
@@ -331,7 +331,7 @@ Techniques the design expects (the builder may choose others that meet the budge
   - Forward-compatibility: unknown message/content types and unknown `claude agents` fields/values render as generic items, covered by tests.
   - UI components tested with a mock service; performance budgets with a synthetic corpus where automatable.
   - A small opt-in integration suite runs against the real `claude` (requires a logged-in Claude Code; not run in CI).
-- **Packaging:** installers per OS from the Tauri bundler. The service ships inside the app as a self-contained executable (no Node installation required by users); the builder chooses the bundling method (e.g. Node SEA or Bun compile) that works on all three OSes. Code signing is out of scope for v1.
+- **Packaging:** installers per OS from the Tauri bundler. The service is bundled into a single JavaScript file and runs on a Node.js runtime shipped inside the app as a Tauri sidecar (downloaded from nodejs.org at build time and checksum-verified), so users need no Node installation. Code signing is out of scope for v1.
 - **Dependencies:** the Agent SDK is kept current (automated update PRs); its changelog is reviewed before minor bumps.
 
 ---
@@ -370,6 +370,7 @@ Decided by the designer (owner may revisit):
 - Per-chat "End session" plus 15-minute idle reclaim with transparent resume (§4.3).
 - Resume-safety policy biased toward blocking when a live process might exist (§4.4).
 - API key kept in the OS credential store.
-- Use the installed `claude`, falling back to the SDK's bundled binary with a notice.
+- Use the installed `claude` only; a setup screen when it is missing or too old (no bundled-binary fallback).
+- Service runtime: bundled JS on a shipped Node.js sidecar; storage via Node's built-in `node:sqlite` (no native addons).
 - Tabs in v1, split in v1.1.
 - Performance budgets in §8.
