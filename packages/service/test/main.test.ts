@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -64,6 +64,25 @@ describe('startService', () => {
     }
     expect(counts).toMatchObject({ result: { all: 5, needsYou: 0, running: 0 } });
     expect(await readdir(join(dir, 'data'))).toContain('pahub.db');
+    await svc.close();
+  });
+
+  it('releases the lock and closes everything when history setup fails', async () => {
+    const data = join(dir, 'data');
+    await mkdir(join(data, 'pahub.db'), { recursive: true }); // a directory: openDb must fail
+    const adapter = generateCorpus({ sessions: 1, projects: 1, bigSessionMessages: 0 });
+    await expect(
+      startService({ dataDir: data, adapter, claudeConfigDir: dir, installSignalHandlers: false }),
+    ).rejects.toThrow();
+    expect(await readdir(data)).not.toContain('service.lock');
+    expect(await readDiscovery(data)).toBeNull();
+    await rm(join(data, 'pahub.db'), { recursive: true });
+    const svc = await startService({
+      dataDir: data,
+      adapter,
+      claudeConfigDir: dir,
+      installSignalHandlers: false,
+    });
     await svc.close();
   });
 

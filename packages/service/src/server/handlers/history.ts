@@ -28,6 +28,7 @@ export const registerHistoryHandlers = (router: Router, deps: HistoryHandlerDeps
     }
     if (p.pinned !== undefined) db.setProjectPinned(p.projectId, p.pinned);
     if (p.hidden !== undefined) db.setProjectHidden(p.projectId, p.hidden);
+    catalog.invalidate();
     return {};
   });
 
@@ -40,6 +41,7 @@ export const registerHistoryHandlers = (router: Router, deps: HistoryHandlerDeps
   router.register('meta.update', async (p) => {
     if (p.customTitle !== undefined) db.setCustomTitle(p.sessionId, p.customTitle);
     if (p.pinned !== undefined) db.setSessionPinned(p.sessionId, p.pinned);
+    catalog.invalidate();
     return {};
   });
 

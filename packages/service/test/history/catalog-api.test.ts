@@ -139,6 +139,69 @@ describe('catalog and places API', () => {
     expect(q.items.map((i: Any) => i.sessionId)).toEqual(['session-9']);
   });
 
+  it('overlay changes between pages never duplicate or skip DB rows', async () => {
+    const t = await setup(30, 2);
+    t.setLive([lc('session-7', '/work/proj-1', 'working')]);
+    const first = await t.call('sessions.list', { place: { kind: 'all' }, limit: 10 });
+    expect(first.items[0].sessionId).toBe('session-7');
+    expect(first.nextCursor).toBeTruthy();
+    // between pages: session-7 needs you, and a row that was not yet shown becomes live
+    t.setLive([
+      lc('session-7', '/work/proj-1', 'needsYou', 'Bash'),
+      lc('session-0', '/work/proj-0', 'working'),
+    ]);
+    const seen = first.items.map((i: Any) => i.sessionId);
+    let cursor: string | undefined = first.nextCursor;
+    while (cursor) {
+      const r = await t.call('sessions.list', { place: { kind: 'all' }, limit: 10, cursor });
+      seen.push(...r.items.map((i: Any) => i.sessionId));
+      cursor = r.nextCursor;
+    }
+    expect(seen).toHaveLength(30);
+    expect(new Set(seen).size).toBe(30);
+  });
+
+  it('query lists page stably over the merged result and short queries match titles only', async () => {
+    const t = await setup(40, 2);
+    t.setLive([lc('session-3', '/work/proj-0', 'working')]);
+    const all: string[] = [];
+    let cursor: string | undefined;
+    do {
+      const r = await t.call('sessions.list', {
+        place: { kind: 'all' },
+        query: 'proj-0',
+        limit: 6,
+        ...(cursor ? { cursor } : {}),
+      });
+      if (cursor === undefined) t.setLive([lc('session-3', '/work/proj-0', 'needsYou')]);
+      all.push(...r.items.map((i: Any) => i.sessionId));
+      cursor = r.nextCursor;
+    } while (cursor);
+    expect(all).toHaveLength(20);
+    expect(new Set(all).size).toBe(20);
+    // two characters: title/project only, never content (no 'pa' in any title)
+    const short = await t.call('sessions.list', { place: { kind: 'all' }, query: 'pa', limit: 50 });
+    for (const i of short.items) {
+      expect(`${i.title} proj`.toLowerCase()).toContain('pa');
+    }
+  });
+
+  it('projects are pinned first, then by recent activity', async () => {
+    const t = await setup(12, 3);
+    let list = (await t.call('projects.list')) as unknown as Any[];
+    const activity = list.map((p) => p.lastActivity);
+    expect(activity).toEqual([...activity].sort((a, b) => b - a));
+    await t.call('projects.update', { projectId: list.at(-1)?.projectId, pinned: true });
+    list = (await t.call('projects.list')) as unknown as Any[];
+    expect(list[0]?.pinned).toBe(true);
+    expect(list[0]?.projectId).toBe(
+      ((await t.call('projects.list')) as unknown as Any[]).find((p) => p.pinned)?.projectId,
+    );
+    expect(list.slice(1).map((p) => p.pinned)).toEqual([false, false]);
+    const rest = list.slice(1).map((p) => p.lastActivity);
+    expect(rest).toEqual([...rest].sort((a, b) => b - a));
+  });
+
   it('includes live sessions not yet indexed and external rows', async () => {
     const t = await setup(3, 1);
     t.setLive([lc('fresh-live', '/work/new-proj', 'working')]);
@@ -195,6 +258,22 @@ describe('quickSearch', () => {
     expect(r3.items.length).toBeLessThanOrEqual(8);
     expect(r3.items.some((i: Any) => i.snippet)).toBe(true);
     expect((await t.call('search.quick', { query: '', limit: 8 })).items).toEqual([]);
+  });
+
+  it('a second keystroke does not re-query the database for the corpus', async () => {
+    const t = await setup(50, 3);
+    const search = createQuickSearch(t.db, t.catalog);
+    search('r', 10);
+    const sessions = vi.spyOn(t.db, 'listSessions');
+    const projects = vi.spyOn(t.db, 'listProjects');
+    search('re', 10);
+    search('ref', 10);
+    expect(sessions).not.toHaveBeenCalled();
+    expect(projects).not.toHaveBeenCalled();
+    // a title change invalidates the cache
+    await t.call('meta.update', { sessionId: 'session-2', customTitle: 'Brand new name' });
+    expect(search('brandnew', 5)[0]?.sessionId).toBe('session-2');
+    expect(sessions).toHaveBeenCalled();
   });
 
   it('quickSearch per keystroke ≤ 50 ms over 1,000 sessions (perf)', async () => {

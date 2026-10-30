@@ -65,6 +65,37 @@ export type CatalogOptions = {
 };
 
 type Entry = { summary: ChatSummary; indexed: boolean };
+type Snapshot = { names: Map<string, string>; hidden: string[]; rows: CorpusRow[] };
+
+/** Most full-text content hits a query list merges in. Queries under 3 characters have none. */
+export const CONTENT_HIT_CAP = 2000;
+
+/** Cursor: `<kind>:<base64url JSON of overlay ids shown on page 1>.<keyset position>`. */
+const encodeCursor = (kind: string, ids: string[], key: string): string =>
+  `${kind}:${Buffer.from(JSON.stringify(ids)).toString('base64url')}.${key}`;
+
+const decodeCursor = (
+  cursor: string | undefined,
+  kind: string,
+): { ids: string[]; key: string | undefined } => {
+  if (!cursor?.startsWith(`${kind}:`)) return { ids: [], key: undefined };
+  const body = cursor.slice(kind.length + 1);
+  const dot = body.indexOf('.');
+  try {
+    const ids: unknown = JSON.parse(Buffer.from(body.slice(0, dot), 'base64url').toString());
+    return {
+      ids: Array.isArray(ids) ? ids.filter((x): x is string => typeof x === 'string') : [],
+      key: body.slice(dot + 1) || undefined,
+    };
+  } catch {
+    return { ids: [], key: undefined };
+  }
+};
+
+const parseKey = (key: string): { at: number; id: string } => {
+  const i = key.indexOf(':');
+  return { at: Number(key.slice(0, i)), id: key.slice(i + 1) };
+};
 type Page = { items: ChatSummary[]; nextCursor?: string };
 
 /** Display order: needs you → working → idle/paused/failed → everything else (history). */
@@ -112,6 +143,7 @@ const fromRow = (r: SessionRow): ChatSummary => ({
 export type CorpusRow = {
   sessionId: string;
   title: string;
+  projectId: string;
   projectName: string;
   lastActivity: number;
 };
@@ -129,6 +161,7 @@ export class Catalog {
   private readonly gitCommonDir: GitCommonDir;
   private readonly now: () => number;
   private readonly projectIds = new Map<string, string>();
+  private cache: Snapshot | undefined;
 
   constructor(o: CatalogOptions) {
     this.db = o.db;
@@ -139,36 +172,43 @@ export class Catalog {
     this.now = o.now ?? Date.now;
   }
 
+  /** Drops the cached titles/project names; call after anything that changes them. */
+  invalidate(): void {
+    this.cache = undefined;
+  }
+
+  /**
+   * One page of a place. The first page (no cursor) starts with the whole
+   * live/external overlay; later pages are DB rows only, keyset-paged and
+   * excluding the overlay ids captured in the cursor (Ruling R15), so a status
+   * change between pages can neither duplicate nor skip a row.
+   */
   list(place: Place, query: string | undefined, limit: number, cursor?: string): Page {
-    const hidden = this.hiddenIds();
-    const overlay = this.overlay();
-    const over = this.overlayFor(place, overlay, hidden);
+    const snap = this.snapshot();
     const q = query?.trim();
-    if (q) return this.searchList(place, q, over, hidden, limit, cursor);
+    if (q) return this.searchList(place, q, snap, limit, cursor);
 
-    let start = 0;
-    let dbCursor: string | undefined;
-    if (cursor?.startsWith('o:')) start = Number(cursor.slice(2)) || 0;
-    else if (cursor?.startsWith('d:')) {
-      start = over.length;
-      dbCursor = cursor.slice(2) || undefined;
-    }
-    const items = over.slice(start, start + limit);
-    if (start + limit < over.length) return { items, nextCursor: `o:${start + limit}` };
-    if (place.kind === 'needsYou' || place.kind === 'running') return { items };
+    const first = cursor === undefined;
+    const overlay = first ? this.overlay() : new Map<string, Entry>();
+    const over = first ? this.overlayFor(place, overlay, snap.hidden) : [];
+    if (place.kind === 'needsYou' || place.kind === 'running') return { items: over };
 
-    const room = limit - items.length;
-    const filter = this.dbFilter(place, overlay, hidden);
-    const page = this.db.listSessions(filter, Math.max(room, 1), dbCursor);
-    if (room === 0) return page.items.length > 0 ? { items, nextCursor: 'd:' } : { items };
-    const merged = [...items, ...page.items.slice(0, room).map(fromRow)];
-    return page.nextCursor
-      ? { items: merged, nextCursor: `d:${page.nextCursor}` }
-      : { items: merged };
+    const page = decodeCursor(cursor, 'd');
+    const excluded = first ? [...overlay.keys()] : page.ids;
+    const filter: SessionFilter = {
+      ...(place.kind === 'project' ? { projectId: place.projectId } : {}),
+      ...(place.kind === 'all' ? { excludeProjectIds: snap.hidden } : {}),
+      excludeIds: excluded,
+    };
+    const rows = this.db.listSessions(filter, limit, page.key);
+    const items = [...over, ...rows.items.map(fromRow)];
+    return rows.nextCursor
+      ? { items, nextCursor: encodeCursor('d', excluded, rows.nextCursor) }
+      : { items };
   }
 
   counts(): { needsYou: number; running: number; all: number } {
-    const hidden = this.hiddenIds();
+    const { hidden } = this.snapshot();
     let needsYou = 0;
     let running = 0;
     let extra = 0;
@@ -183,7 +223,7 @@ export class Catalog {
   projects(): Project[] {
     const activity = this.db.projectActivity();
     const overlay = [...this.overlay().values()].map((e) => e.summary);
-    return this.db.listProjects().map((p) => {
+    const list = this.db.listProjects().map((p) => {
       let lastActivity = activity.get(p.projectId) ?? 0;
       let needsYou = 0;
       let running = 0;
@@ -203,44 +243,56 @@ export class Catalog {
         counts: { needsYou, running },
       };
     });
+    // Spec 6.1: pinned first, then most recent activity.
+    return list.sort(
+      (a, b) =>
+        Number(b.pinned) - Number(a.pinned) ||
+        b.lastActivity - a.lastActivity ||
+        a.displayName.localeCompare(b.displayName),
+    );
   }
 
-  /** Titles and project names of every known session, for quick search. */
+  /**
+   * Titles and project names of every known session, for quick search. The
+   * indexed part is cached until `invalidate()`; unindexed live/external
+   * chats are added fresh (a handful of rows).
+   */
   corpus(): CorpusRow[] {
-    const names = this.projectNames();
-    const overlay = this.overlay();
-    const out: CorpusRow[] = [];
-    for (const { summary: s } of overlay.values()) {
-      out.push({
+    const snap = this.snapshot();
+    const extra: CorpusRow[] = [];
+    for (const e of this.overlay().values()) {
+      if (e.indexed) continue;
+      const s = e.summary;
+      extra.push({
         sessionId: s.sessionId,
         title: s.title,
-        projectName: names.get(s.projectId) ?? baseName(s.cwd),
+        projectId: s.projectId,
+        projectName: snap.names.get(s.projectId) ?? baseName(s.cwd),
         lastActivity: s.lastActivity,
       });
     }
-    const rows = this.db.listSessions({ excludeIds: [...overlay.keys()] }, 1_000_000, undefined);
-    for (const r of rows.items) {
-      out.push({
-        sessionId: r.sessionId,
-        title: titleFor(r),
-        projectName: names.get(r.projectId) ?? baseName(r.cwd ?? r.projectId),
-        lastActivity: r.lastModified,
-      });
-    }
-    return out;
+    return extra.length ? [...extra, ...snap.rows] : snap.rows;
   }
 
   // ── internals ──────────────────────────────────────────────────────────────
 
-  private hiddenIds(): string[] {
-    return this.db
-      .listProjects()
-      .filter((p) => p.hidden)
-      .map((p) => p.projectId);
-  }
-
-  private projectNames(): Map<string, string> {
-    return new Map(this.db.listProjects().map((p) => [p.projectId, p.displayName]));
+  private snapshot(): Snapshot {
+    if (this.cache) return this.cache;
+    const projects = this.db.listProjects();
+    const names = new Map(projects.map((p) => [p.projectId, p.displayName]));
+    const rows = this.db.listSessions({}, 1_000_000, undefined).items.map((r) => ({
+      sessionId: r.sessionId,
+      title: titleFor(r),
+      projectId: r.projectId,
+      projectName: names.get(r.projectId) ?? baseName(r.cwd ?? r.projectId),
+      lastActivity: r.lastModified,
+    }));
+    this.cache = {
+      names,
+      hidden: projects.filter((p) => p.hidden).map((p) => p.projectId),
+      rows,
+    };
+    return this.cache;
   }
 
   private projectIdOfCwd(cwd: string): string {
@@ -340,37 +392,73 @@ export class Catalog {
     };
   }
 
-  /** A query filters the whole place (title, project name, full text) and pages by offset. */
+  /**
+   * A query matches titles and project names (substring, from the cached
+   * corpus) plus full-text content hits (at most `CONTENT_HIT_CAP`; queries
+   * under 3 characters have no content hits). Paging follows the same rules
+   * as `list`: overlay on the first page, then corpus rows by keyset.
+   */
   private searchList(
     place: Place,
     q: string,
-    over: ChatSummary[],
-    hidden: string[],
+    snap: Snapshot,
     limit: number,
     cursor: string | undefined,
   ): Page {
-    const names = this.projectNames();
     const needle = q.toLowerCase();
-    const fts = new Set(this.db.searchFts(q, 500).map((h) => h.sessionId));
-    const keep = (s: ChatSummary): boolean =>
-      s.title.toLowerCase().includes(needle) ||
-      (names.get(s.projectId) ?? '').toLowerCase().includes(needle) ||
-      fts.has(s.sessionId);
-    let matches = over.filter(keep);
-    if (place.kind === 'all' || place.kind === 'project') {
-      const overlayIds = new Set(over.map((s) => s.sessionId));
-      const filter: SessionFilter =
-        place.kind === 'project' ? { projectId: place.projectId } : { excludeProjectIds: hidden };
-      const rows = this.db.listSessions(filter, 1_000_000, undefined).items;
-      matches = matches.concat(
-        rows
-          .filter((r) => !overlayIds.has(r.sessionId))
-          .map(fromRow)
-          .filter(keep),
-      );
+    const fts = new Set(this.db.searchFts(q, CONTENT_HIT_CAP).map((h) => h.sessionId));
+    const keep = (id: string, title: string, projectId: string): boolean =>
+      title.toLowerCase().includes(needle) ||
+      (snap.names.get(projectId) ?? '').toLowerCase().includes(needle) ||
+      fts.has(id);
+
+    const first = cursor === undefined;
+    const overlay = first ? this.overlay() : new Map<string, Entry>();
+    const over = first
+      ? this.overlayFor(place, overlay, snap.hidden).filter((s) =>
+          keep(s.sessionId, s.title, s.projectId),
+        )
+      : [];
+    if (place.kind === 'needsYou' || place.kind === 'running') return { items: over };
+
+    const page = decodeCursor(cursor, 'q');
+    const excluded = new Set(first ? overlay.keys() : page.ids);
+    const after = page.key ? parseKey(page.key) : undefined;
+    const ids: string[] = [];
+    let more = false;
+    for (const r of snap.rows) {
+      if (
+        after &&
+        !(r.lastActivity < after.at || (r.lastActivity === after.at && r.sessionId > after.id))
+      ) {
+        continue;
+      }
+      if (excluded.has(r.sessionId)) continue;
+      const inPlace =
+        place.kind === 'project'
+          ? r.projectId === place.projectId
+          : !snap.hidden.includes(r.projectId);
+      if (!inPlace || !keep(r.sessionId, r.title, r.projectId)) continue;
+      if (ids.length === limit) {
+        more = true;
+        break;
+      }
+      ids.push(r.sessionId);
     }
-    const start = cursor?.startsWith('q:') ? Number(cursor.slice(2)) || 0 : 0;
-    const items = matches.slice(start, start + limit);
-    return start + limit < matches.length ? { items, nextCursor: `q:${start + limit}` } : { items };
+    const found = new Map(
+      this.db.listSessions({ ids }, ids.length || 1, undefined).items.map((r) => [r.sessionId, r]),
+    );
+    const rows = ids.flatMap((id) => {
+      const r = found.get(id);
+      return r ? [r] : [];
+    });
+    const items = [...over, ...rows.map(fromRow)];
+    const last = rows.at(-1);
+    return more && last
+      ? {
+          items,
+          nextCursor: encodeCursor('q', [...excluded], `${last.lastModified}:${last.sessionId}`),
+        }
+      : { items };
   }
 }

@@ -79,30 +79,47 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   const broadcastRef: { fn: (e: EventMsg) => void } = { fn: () => {} };
   let db: Db | undefined;
   let watcher: { close(): void } | undefined;
-  if (opts.adapter) {
-    const claudeDir =
-      opts.claudeConfigDir ?? process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), '.claude');
-    db = openDb(path.join(dataDir, 'pahub.db'));
-    const indexer = new Indexer(opts.adapter, db, (e) => broadcastRef.fn(e), {
-      onError: (err, ctx) => log.error(`indexer ${JSON.stringify(ctx)}: ${String(err)}`),
-    });
-    const catalog = new Catalog({
-      db,
-      ...(opts.live ? { live: opts.live } : {}),
-      ...(opts.externals ? { externals: opts.externals } : {}),
-    });
-    registerHistoryHandlers(router, { db, catalog, quickSearch: createQuickSearch(db, catalog) });
-    watcher = watchProjects(
-      path.join(claudeDir, 'projects'),
-      (ids) =>
-        void indexer.refresh(ids).catch((err: unknown) => log.error(`refresh: ${String(err)}`)),
-      { onError: (err) => log.error(`watcher: ${String(err)}`) },
-    );
-    void indexer.fullSync().catch((err: unknown) => log.error(`full sync: ${String(err)}`));
-  }
-
-  let server: Awaited<ReturnType<typeof startWsServer>>;
+  let server: Awaited<ReturnType<typeof startWsServer>> | undefined;
+  let startSync: (() => void) | undefined;
   try {
+    if (opts.adapter) {
+      const claudeDir =
+        opts.claudeConfigDir ?? process.env.CLAUDE_CONFIG_DIR ?? path.join(os.homedir(), '.claude');
+      const opened = openDb(path.join(dataDir, 'pahub.db'));
+      db = opened;
+      const catalogRef: { current?: Catalog } = {};
+      const indexer = new Indexer(
+        opts.adapter,
+        opened,
+        (e) => {
+          if (e.event === 'sessions.changed' || e.event === 'projects.changed') {
+            catalogRef.current?.invalidate();
+          }
+          broadcastRef.fn(e);
+        },
+        { onError: (err, ctx) => log.error(`indexer ${JSON.stringify(ctx)}: ${String(err)}`) },
+      );
+      const cat = new Catalog({
+        db: opened,
+        ...(opts.live ? { live: opts.live } : {}),
+        ...(opts.externals ? { externals: opts.externals } : {}),
+      });
+      catalogRef.current = cat;
+      registerHistoryHandlers(router, {
+        db: opened,
+        catalog: cat,
+        quickSearch: createQuickSearch(opened, cat),
+      });
+      watcher = watchProjects(
+        path.join(claudeDir, 'projects'),
+        (ids) =>
+          void indexer.refresh(ids).catch((err: unknown) => log.error(`refresh: ${String(err)}`)),
+        { onError: (err) => log.error(`watcher: ${String(err)}`) },
+      );
+      startSync = () =>
+        void indexer.fullSync().catch((err: unknown) => log.error(`full sync: ${String(err)}`));
+    }
+
     server = await startWsServer({
       token,
       router,
@@ -122,16 +139,19 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     });
   } catch (err) {
     watcher?.close();
+    await server?.close().catch(() => {});
     db?.close();
     await lock.release();
     throw err;
   }
+  const wsServer = server;
+  startSync?.();
 
   const close = (): Promise<void> => {
     closing ??= (async () => {
       clearTimer(timer);
       watcher?.close();
-      await server.close();
+      await wsServer.close();
       await removeDiscovery(dataDir);
       db?.close();
       await lock.release();
@@ -159,12 +179,12 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     for (const sig of ['SIGINT', 'SIGTERM'] as const) process.once(sig, () => void close());
   }
 
-  log.info(`service started on 127.0.0.1:${server.port}`);
+  log.info(`service started on 127.0.0.1:${wsServer.port}`);
   return {
-    port: server.port,
+    port: wsServer.port,
     token,
     router,
-    broadcast: server.broadcast,
+    broadcast: wsServer.broadcast,
     close,
     onClosed: (cb) => void closedCallbacks.push(cb),
   };
