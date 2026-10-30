@@ -50,6 +50,17 @@ describe('protocol schemas', () => {
     }
   });
 
+  it('keeps parentToolUseId on subagent items', () => {
+    const item = {
+      kind: 'assistantText',
+      id: 'b',
+      markdown: 'x',
+      streaming: false,
+      parentToolUseId: 't',
+    };
+    expect(ChatItemSchema.parse(item)).toEqual(item);
+  });
+
   it('rejects a request without id', () => {
     expect(RequestSchema.safeParse({ method: 'hello', params: {} }).success).toBe(false);
     expect(RequestSchema.safeParse({ id: 1, method: 'hello', params: {} }).success).toBe(true);

@@ -3,6 +3,12 @@ import { z } from 'zod';
 export const ImageRefSchema = z.object({ mediaType: z.string(), data: z.string() });
 export type ImageRef = z.infer<typeof ImageRefSchema>;
 
+/**
+ * Set on items produced inside a subagent: the `tool_use` id of the Agent/Task
+ * call that started it (SDK `parent_tool_use_id`). Absent on main-thread items.
+ */
+const parent = { parentToolUseId: z.string().optional() };
+
 export const ChatItemSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('user'),
@@ -10,14 +16,16 @@ export const ChatItemSchema = z.discriminatedUnion('kind', [
     text: z.string(),
     images: z.array(ImageRefSchema).optional(),
     ts: z.number(),
+    ...parent,
   }),
   z.object({
     kind: z.literal('assistantText'),
     id: z.string(),
     markdown: z.string(),
     streaming: z.boolean(),
+    ...parent,
   }),
-  z.object({ kind: z.literal('thinking'), id: z.string(), text: z.string() }),
+  z.object({ kind: z.literal('thinking'), id: z.string(), text: z.string(), ...parent }),
   z.object({
     kind: z.literal('toolCall'),
     id: z.string(),
@@ -33,6 +41,7 @@ export const ChatItemSchema = z.discriminatedUnion('kind', [
     kind: z.literal('todo'),
     id: z.string(),
     todos: z.array(z.object({ content: z.string(), status: z.string() })),
+    ...parent,
   }),
   z.object({
     kind: z.literal('permissionRequest'),
@@ -66,6 +75,7 @@ export const ChatItemSchema = z.discriminatedUnion('kind', [
     id: z.string(),
     sdkType: z.string(),
     raw: z.unknown(),
+    ...parent,
   }),
 ]);
 export type ChatItem = z.infer<typeof ChatItemSchema>;
