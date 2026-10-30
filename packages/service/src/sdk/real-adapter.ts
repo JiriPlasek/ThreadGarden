@@ -63,6 +63,12 @@ export const buildSessionEnv = (
  * `/commands` behave as in the CLI. `resume` and `sessionId` are exclusive
  * in the SDK (without `forkSession`); when resuming, the resumed id is the
  * session id.
+ *
+ * `perTaskStopAffordance` declares that pahub renders a Stop per background
+ * task wired to `stop_task` (the Activity panel). With it, an interrupt
+ * (Stop / Esc) only aborts the current turn and spares running background
+ * agents and processes; without it the CLI fails closed and an interrupt
+ * kills them all. Ending the session still ends them.
  */
 export const buildQueryOptions = (o: StartOptions): Options => {
   const opts: Options = {
@@ -71,6 +77,7 @@ export const buildQueryOptions = (o: StartOptions): Options => {
     settingSources: ['user', 'project', 'local'],
     systemPrompt: { type: 'preset', preset: 'claude_code' },
     includePartialMessages: true,
+    perTaskStopAffordance: true,
     canUseTool: o.canUseTool,
     env: { ...o.env, CLAUDE_CODE_STARTUP_FAILURE_RESULTS: '1' },
   };

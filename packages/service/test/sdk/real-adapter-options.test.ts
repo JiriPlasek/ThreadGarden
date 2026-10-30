@@ -42,10 +42,18 @@ describe('buildQueryOptions', () => {
         'env',
         'includePartialMessages',
         'pathToClaudeCodeExecutable',
+        'perTaskStopAffordance',
         'settingSources',
         'systemPrompt',
       ].sort(),
     );
+  });
+
+  it('declares the per-task stop affordance, so Stop / Esc on a turn spares background tasks', () => {
+    // SDK 0.3.314 Options.perTaskStopAffordance: without it, an interrupt on an
+    // open-input session kills every background task (the CLI fails closed).
+    expect(buildQueryOptions(start()).perTaskStopAffordance).toBe(true);
+    expect(buildQueryOptions(start({ resume: 'abc' })).perTaskStopAffordance).toBe(true);
   });
 
   it('passes model, effort and permission mode only when chosen', () => {

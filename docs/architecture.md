@@ -107,6 +107,11 @@ paused, and the next message resumes it transparently. Pinned chats, chats
 waiting on the user and chats with a running background task (Ruling R29:
 closing the process would kill it) are never reclaimed. Closing a tab never
 ends a session.
+**Stop** (or Esc) interrupts only the current turn: pahub declares the SDK's
+`perTaskStopAffordance` (it renders a Stop per task, wired to `stop_task`), so
+the CLI spares running background agents and processes, which are stopped one
+at a time from the Activity panel. Without the declaration the CLI would kill
+them on every interrupt. End session ends them with the process.
 **Stop all work** interrupts and closes every live pahub session; the service
 keeps running.
 

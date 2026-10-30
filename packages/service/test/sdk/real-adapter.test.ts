@@ -59,6 +59,7 @@ describe('RealAdapter.start', () => {
       sessionId: startOptions.sessionId,
       pathToClaudeCodeExecutable: '/bin/claude',
       systemPrompt: { type: 'preset', preset: 'claude_code' },
+      perTaskStopAffordance: true,
     });
 
     s.send(userMessage('one'));
