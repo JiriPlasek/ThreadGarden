@@ -16,7 +16,12 @@ export default defineConfig({
           filename.split(/[/\\]/).includes('node_modules') ? undefined : true,
       },
       // A static SPA: every route falls back to index.html (no server, no SSR).
-      adapter: adapter({ fallback: 'index.html' }),
+      // `PAHUB_UI_OUT` lets the Playwright build (mock address baked in) go elsewhere.
+      adapter: adapter({
+        pages: process.env.PAHUB_UI_OUT ?? 'build',
+        assets: process.env.PAHUB_UI_OUT ?? 'build',
+        fallback: 'index.html',
+      }),
     }),
   ],
   clearScreen: false,

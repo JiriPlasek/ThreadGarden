@@ -177,6 +177,7 @@
         <!-- svelte-ignore a11y_click_events_have_key_events -->
         <li
           id={optionId(i)}
+          data-key={row.key}
           role="option"
           aria-selected={i === active}
           class={cn(

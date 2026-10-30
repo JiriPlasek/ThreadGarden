@@ -8,3 +8,7 @@ docs
 build
 .svelte-kit
 apps/desktop/src-tauri/gen
+build-e2e
+test-results
+playwright-report
+apps/desktop/src-tauri/binaries
