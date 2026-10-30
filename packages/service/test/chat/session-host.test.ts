@@ -4,6 +4,27 @@ import { SessionHost, type SessionHostDeps } from '../../src/chat/session-host.j
 import { FakeAdapter } from '../../src/testing/fake-adapter.js';
 import { ManualTimers, MemoryRegistry, result, settle, statuses } from './live-helpers.js';
 
+class ThrowingRegistry extends MemoryRegistry {
+  override markEnded(sessionId: string): void {
+    super.markEnded(sessionId);
+    throw new Error('db is locked');
+  }
+}
+
+/** Collects unhandled promise rejections while `fn` runs (plus a few turns after). */
+const watchUnhandled = async (fn: () => Promise<void>): Promise<unknown[]> => {
+  const seen: unknown[] = [];
+  const onRejection = (reason: unknown) => seen.push(reason);
+  process.on('unhandledRejection', onRejection);
+  try {
+    await fn();
+    await settle();
+  } finally {
+    process.off('unhandledRejection', onRejection);
+  }
+  return seen;
+};
+
 const MIN = 60_000;
 
 const setup = (over: Partial<SessionHostDeps> = {}) => {
@@ -235,5 +256,121 @@ describe('SessionHost', () => {
     const resumed = host.ensureLive('s1', '/one');
     expect(adapter.lastSession().options.resume).toBe('s1');
     expect(resumed.since(0)).not.toBe('gap');
+  });
+
+  it('keeps seq monotonic when an ended chat is resumed in the same run', async () => {
+    const ctx = setup();
+    const { host, events } = ctx;
+    const { s } = await idleChat(ctx);
+    host.end(s.sessionId);
+    const oldSeq = s.seq;
+    expect(oldSeq).toBeGreaterThan(1);
+
+    const resumed = host.ensureLive(s.sessionId, '/proj');
+    resumed.send({ text: 'back again' });
+    expect(resumed.seq).toBeGreaterThan(oldSeq);
+
+    const after = resumed.since(oldSeq);
+    expect(after).not.toBe('gap');
+    const seqs = (after as { data: { seq: number } }[]).map((e) => e.data.seq);
+    expect(seqs).toEqual(Array.from({ length: seqs.length }, (_, i) => oldSeq + 1 + i));
+    expect(resumed.since(oldSeq - 1)).toBe('gap'); // the old events are gone, never renumbered
+    // Every event this session ever emitted has a strictly increasing seq.
+    const emitted = events
+      .filter((e) => e.event.startsWith('chat.'))
+      .map((e) => (e.data as { seq: number }).seq);
+    expect(emitted).toEqual([...emitted].sort((a, b) => a - b));
+    expect(new Set(emitted).size).toBe(emitted.length);
+  });
+
+  it('keeps seq monotonic when a chat stopped by stopAll is resumed', () => {
+    const { host } = setup();
+    const s = host.create('/a', { text: 'one' });
+    host.stopAll();
+    const oldSeq = s.seq; // includes the final 'history' status event
+    const resumed = host.ensureLive(s.sessionId, '/a');
+    expect(resumed.seq).toBeGreaterThan(oldSeq);
+    expect(resumed.since(oldSeq)).not.toBe('gap');
+    expect(resumed.since(0)).toBe('gap');
+  });
+
+  it('contains a throwing registry: no unhandled rejection, other chats unaffected', async () => {
+    const errors: string[] = [];
+    const { host, adapter } = setup({
+      registry: new ThrowingRegistry(),
+      onError: (_err, context) => errors.push(context),
+    });
+    const a = host.create('/a', { text: 'one' });
+    const fakeA = adapter.lastSession();
+    const b = host.create('/b', { text: 'two' });
+    const c = host.create('/c', { text: 'three' });
+
+    const unhandled = await watchUnhandled(async () => {
+      fakeA.end(new Error('boom'));
+      await a.whenEnded();
+      expect(() => host.end(c.sessionId)).not.toThrow();
+    });
+
+    expect(unhandled).toEqual([]);
+    expect(a.status).toBe('failed');
+    expect(b.status).toBe('working');
+    expect(b.live).toBe(true);
+    expect(host.get(c.sessionId)).toBeUndefined();
+    expect(c.status).toBe('history');
+    expect(errors.filter((e) => e.startsWith('registry.markEnded'))).toHaveLength(2);
+  });
+
+  it('contains a throwing getSettings inside the reclaim timer', async () => {
+    const errors: string[] = [];
+    const ctx = setup({
+      getSettings: () => {
+        throw new Error('settings unavailable');
+      },
+      onError: (_err, context) => errors.push(context),
+    });
+    ctx.host.start();
+    const s = ctx.host.create('/a', { text: 'one' });
+    expect(() => ctx.timers.advance(3 * MIN)).not.toThrow();
+    expect(errors).toEqual(['idle reclaim', 'idle reclaim', 'idle reclaim']);
+    expect(s.live).toBe(true);
+    ctx.host.dispose();
+  });
+
+  it('reclaim continues past a session whose pin lookup throws', async () => {
+    const errors: string[] = [];
+    let broken = '';
+    const ctx = setup({
+      isPinned: (id) => {
+        if (id === broken) throw new Error('pins unavailable');
+        return false;
+      },
+      onError: (_err, context) => errors.push(context),
+    });
+    const { s: first } = await idleChat(ctx, '/one');
+    const { s: second } = await idleChat(ctx, '/two');
+    broken = first.sessionId;
+    expect(ctx.host.reclaimIdle(ctx.timers.now() + 15 * MIN)).toBe(1);
+    expect(first.live).toBe(true);
+    expect(second.status).toBe('paused');
+    expect(errors).toEqual([`idle reclaim (session ${first.sessionId})`]);
+  });
+
+  it('stopAll continues past a throwing session', () => {
+    const errors: string[] = [];
+    const { host } = setup({ onError: (_err, context) => errors.push(context) });
+    const a = host.create('/a', { text: 'one' });
+    const b = host.create('/b', { text: 'two' });
+    const c = host.create('/c', { text: 'three' });
+    b.end = () => {
+      throw new Error('stuck');
+    };
+
+    expect(host.stopAll()).toBe(2);
+    expect(a.live).toBe(false);
+    expect(c.live).toBe(false);
+    expect(host.get(b.sessionId)).toBe(b); // not stopped, still tracked
+    expect(errors).toEqual([`stop all (session ${b.sessionId})`]);
+    b.end = Object.getPrototypeOf(b).end;
+    host.end(b.sessionId);
   });
 });

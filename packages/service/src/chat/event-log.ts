@@ -23,12 +23,25 @@ export const EVENT_LOG_CAPACITY = 5_000;
 
 export class EventLog {
   private readonly buf: (ChatEvent | undefined)[];
-  private last = 0;
+  private last: number;
+  private readonly first: number;
 
-  constructor(private readonly capacity = EVENT_LOG_CAPACITY) {
+  /**
+   * `startAfter`: the last seq a previous log for the same session issued, so
+   * numbering stays monotonic when a chat is ended and later resumed in the
+   * same service run. `since()` of anything before it is a `'gap'`.
+   */
+  constructor(
+    private readonly capacity = EVENT_LOG_CAPACITY,
+    startAfter = 0,
+  ) {
     if (!Number.isInteger(capacity) || capacity < 1)
       throw new Error('EventLog capacity must be ≥ 1');
+    if (!Number.isInteger(startAfter) || startAfter < 0)
+      throw new Error('EventLog startAfter must be a non-negative integer');
     this.buf = new Array<ChatEvent | undefined>(capacity);
+    this.last = startAfter;
+    this.first = startAfter + 1;
   }
 
   /** Seq of the newest event (0 when empty). */
@@ -61,6 +74,6 @@ export class EventLog {
   }
 
   private oldest(): number {
-    return Math.max(1, this.last - this.capacity + 1);
+    return Math.max(this.first, this.last - this.capacity + 1);
   }
 }

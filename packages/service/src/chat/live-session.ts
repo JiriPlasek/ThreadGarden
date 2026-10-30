@@ -91,6 +91,16 @@ export type LiveSessionDeps = {
   timers?: Timers;
   /** Title and project name for the `needsYou` notification; defaults to first message / cwd basename. */
   describe?: (sessionId: string, cwd: string) => { title?: string; projectName?: string };
+  /**
+   * Receives failures of injected dependencies (registry, describe) and of the
+   * message pump, which are contained so they never crash the service (§7).
+   * Default: `console.error`. Must not throw; a throw is ignored.
+   */
+  onError?: (err: unknown, context: string) => void;
+};
+
+export const defaultOnError = (err: unknown, context: string): void => {
+  console.error(`pahub: ${context}:`, err);
 };
 
 export type LiveSessionOptions = LiveSessionDeps &
@@ -380,8 +390,8 @@ export class LiveSession {
     });
     this.session = session;
     this.normalizer = new Normalizer({ now: this.deps.now });
-    this.deps.registry.markLive(this.id, this.dir);
-    this.ended = this.pump(session);
+    this.guard('registry.markLive', () => this.deps.registry.markLive(this.id, this.dir));
+    this.ended = this.pump(session).catch((err: unknown) => this.report(err, 'message pump'));
   }
 
   private async pump(session: AgentSession): Promise<void> {
@@ -399,7 +409,7 @@ export class LiveSession {
     if (this.session !== session) return; // closed on purpose (end / pause / stop all)
     this.session = null;
     this.cancelAllPending();
-    this.deps.registry.markEnded(this.id);
+    this.guard('registry.markEnded', () => this.deps.registry.markEnded(this.id));
     const text = failed
       ? `Session failed: ${errorText(error)}`
       : 'The session process ended unexpectedly';
@@ -417,7 +427,7 @@ export class LiveSession {
       } catch {
         // The process is going away either way.
       }
-      this.deps.registry.markEnded(this.id);
+      this.guard('registry.markEnded', () => this.deps.registry.markEnded(this.id));
     }
     this.setStatus(final);
   }
@@ -539,7 +549,7 @@ export class LiveSession {
       signal.addEventListener('abort', onAbort, { once: true });
       this.pushItems([item], false);
       this.setStatus('needsYou');
-      const d = this.deps.describe?.(this.id, this.dir) ?? {};
+      const d = this.guard('describe', () => this.deps.describe?.(this.id, this.dir)) ?? {};
       this.out({
         event: 'needsYou',
         data: {
@@ -646,6 +656,24 @@ export class LiveSession {
     const seq = this.log.append(e);
     const stamped = this.log.get(seq);
     if (stamped) this.out(stamped);
+  }
+
+  /** Runs a dependency call; a throw is reported and yields `undefined`. */
+  private guard<T>(context: string, fn: () => T): T | undefined {
+    try {
+      return fn();
+    } catch (err) {
+      this.report(err, `${context} (session ${this.id})`);
+      return undefined;
+    }
+  }
+
+  private report(err: unknown, context: string): void {
+    try {
+      (this.deps.onError ?? defaultOnError)(err, context);
+    } catch {
+      // Nothing left to tell.
+    }
   }
 
   private out(e: EventMsg): void {

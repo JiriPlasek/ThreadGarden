@@ -7,12 +7,19 @@
  * `paused` (idle-reclaimed) and `failed` (crashed / interrupted by a service
  * restart) — stay in the map as non-live `LiveSession`s; resuming one carries
  * its event log over so sequence numbers continue. Ended chats (`history`)
- * are forgotten.
+ * are forgotten except for their last seq, which seeds the log of a later
+ * resume in the same service run so per-session seq stays monotonic (§4.5).
+ *
+ * Robustness (§7): dependency failures (settings, pins, registry) and a
+ * failing session never escape the reclaim timer or `stopAll`; they are
+ * reported through `onError` and the remaining sessions carry on.
  */
 import type { EventMsg, Settings } from '@pahub/protocol';
 import type { AgentAdapter } from '../sdk/adapter.js';
+import { EventLog } from './event-log.js';
 import {
   LiveSession,
+  defaultOnError,
   realTimers,
   type LiveRegistry,
   type LiveSessionDeps,
@@ -42,10 +49,14 @@ export type SessionHostDeps = {
   /** `idleReclaimMinutes` is read at every reclaim pass; 0 disables reclaim. */
   getSettings: () => Settings;
   describe?: LiveSessionDeps['describe'];
+  /** Contained failures (see module doc); also handed to every session. Default: `console.error`. */
+  onError?: LiveSessionDeps['onError'];
 };
 
 export class SessionHost {
   private readonly sessions = new Map<string, LiveSession>();
+  /** Last seq of chats ended (forgotten) in this service run, by session id. */
+  private readonly seqFloor = new Map<string, number>();
   private readonly timers: Timers;
   private reclaimTimer: unknown = undefined;
 
@@ -56,10 +67,13 @@ export class SessionHost {
   /** Starts the reclaim pass every `RECLAIM_INTERVAL_MS`. */
   start(): void {
     if (this.reclaimTimer !== undefined) return;
-    this.reclaimTimer = this.timers.setInterval(
-      () => this.reclaimIdle(this.deps.now()),
-      RECLAIM_INTERVAL_MS,
-    );
+    this.reclaimTimer = this.timers.setInterval(() => {
+      try {
+        this.reclaimIdle(this.deps.now());
+      } catch (err) {
+        this.report(err, 'idle reclaim');
+      }
+    }, RECLAIM_INTERVAL_MS);
   }
 
   /** Stops the reclaim timer (sessions are left alone; see `stopAll`). */
@@ -86,12 +100,16 @@ export class SessionHost {
   ensureLive(sessionId: string, cwd: string): LiveSession {
     const current = this.sessions.get(sessionId);
     if (current?.live) return current;
+    const floor = this.seqFloor.get(sessionId);
+    const log =
+      current?.eventLog ?? (floor === undefined ? undefined : new EventLog(undefined, floor));
     const s = LiveSession.resume(
       sessionId,
       cwd,
-      this.options({ ...current?.choices, ...(current ? { log: current.eventLog } : {}) }),
+      this.options({ ...current?.choices, ...(log ? { log } : {}) }),
     );
     this.sessions.set(sessionId, s);
+    this.seqFloor.delete(sessionId);
     return s;
   }
 
@@ -100,39 +118,52 @@ export class SessionHost {
     const s = this.sessions.get(sessionId);
     if (!s) return;
     s.end();
-    this.sessions.delete(sessionId);
+    this.forget(s);
   }
 
-  /** Stop all work: interrupts and closes every live session; returns how many. */
+  /**
+   * Stop all work: interrupts and closes every live session. A session that
+   * throws while stopping is reported and skipped (it stays in the host);
+   * returns how many were stopped.
+   */
   stopAll(): number {
     let count = 0;
-    for (const [id, s] of [...this.sessions]) {
+    for (const s of [...this.sessions.values()]) {
       if (!s.live) continue;
-      s.interrupt().catch(() => {
-        // Closing follows immediately; a failed interrupt changes nothing.
-      });
-      s.end();
-      this.sessions.delete(id);
-      count++;
+      try {
+        s.interrupt().catch(() => {
+          // Closing follows immediately; a failed interrupt changes nothing.
+        });
+        s.end();
+        this.forget(s);
+        count++;
+      } catch (err) {
+        this.report(err, `stop all (session ${s.sessionId})`);
+      }
     }
     return count;
   }
 
   /**
    * Closes live chats idle for at least `idleReclaimMinutes` (never pinned,
-   * never waiting on the user); they become `paused`. Returns how many.
+   * never waiting on the user); they become `paused`. Returns how many. A
+   * failure for one session is reported and the pass continues.
    */
   reclaimIdle(now: number): number {
     const minutes = this.deps.getSettings().idleReclaimMinutes;
     if (!(minutes > 0)) return 0;
     const limit = minutes * 60_000;
     let count = 0;
-    for (const [id, s] of this.sessions) {
-      if (!s.live || s.status !== 'idle' || s.idleSince === null) continue;
-      if (now - s.idleSince < limit) continue;
-      if (s.pendingRequests().length > 0 || this.deps.isPinned(id)) continue;
-      s.pause();
-      count++;
+    for (const [id, s] of [...this.sessions]) {
+      try {
+        if (!s.live || s.status !== 'idle' || s.idleSince === null) continue;
+        if (now - s.idleSince < limit) continue;
+        if (s.pendingRequests().length > 0 || this.deps.isPinned(id)) continue;
+        s.pause();
+        count++;
+      } catch (err) {
+        this.report(err, `idle reclaim (session ${id})`);
+      }
     }
     return count;
   }
@@ -142,16 +173,27 @@ export class SessionHost {
    * with the previous service; they show as failed with a resume hint.
    */
   recoverAfterRestart(): number {
+    let entries: { sessionId: string; cwd: string }[];
+    try {
+      entries = this.deps.registry.listLive();
+    } catch (err) {
+      this.report(err, 'registry.listLive');
+      return 0;
+    }
     let count = 0;
-    for (const { sessionId, cwd } of this.deps.registry.listLive()) {
-      if (this.sessions.get(sessionId)?.live) continue;
-      const s = LiveSession.restore(sessionId, cwd, 'failed', this.options({}), {
-        level: 'error',
-        text: INTERRUPTED_TEXT,
-      });
-      this.sessions.set(sessionId, s);
-      this.deps.registry.markEnded(sessionId);
-      count++;
+    for (const { sessionId, cwd } of entries) {
+      try {
+        if (this.sessions.get(sessionId)?.live) continue;
+        const s = LiveSession.restore(sessionId, cwd, 'failed', this.options({}), {
+          level: 'error',
+          text: INTERRUPTED_TEXT,
+        });
+        this.sessions.set(sessionId, s);
+        count++;
+        this.deps.registry.markEnded(sessionId);
+      } catch (err) {
+        this.report(err, `recover after restart (session ${sessionId})`);
+      }
     }
     return count;
   }
@@ -162,8 +204,21 @@ export class SessionHost {
     return n;
   }
 
+  private forget(s: LiveSession): void {
+    this.sessions.delete(s.sessionId);
+    this.seqFloor.set(s.sessionId, s.seq);
+  }
+
+  private report(err: unknown, context: string): void {
+    try {
+      (this.deps.onError ?? defaultOnError)(err, context);
+    } catch {
+      // Nothing left to tell.
+    }
+  }
+
   private options(extra: Partial<LiveSessionOptions>): LiveSessionOptions {
-    const { adapter, registry, emit, now, describe } = this.deps;
+    const { adapter, registry, emit, now, describe, onError } = this.deps;
     return {
       adapter,
       registry,
@@ -173,6 +228,7 @@ export class SessionHost {
       now,
       timers: this.timers,
       ...(describe ? { describe } : {}),
+      ...(onError ? { onError } : {}),
       ...extra,
     };
   }

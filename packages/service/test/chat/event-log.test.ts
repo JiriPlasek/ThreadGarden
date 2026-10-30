@@ -62,4 +62,16 @@ describe('EventLog', () => {
       { event: 'chat.items', data: { sessionId: 's', items: [], seq: 2 } },
     ]);
   });
+
+  it('continues numbering after startAfter and reports anything earlier as a gap', () => {
+    const log = new EventLog(10, 300);
+    expect(log.seq).toBe(300);
+    expect(log.since(300)).toEqual([]);
+    expect(log.append(status(0))).toBe(301);
+    expect(log.since(300)).toEqual([
+      { event: 'chat.status', data: { sessionId: 's', status: 'working', seq: 301 } },
+    ]);
+    expect(log.since(299)).toBe('gap');
+    expect(log.since(0)).toBe('gap');
+  });
 });
