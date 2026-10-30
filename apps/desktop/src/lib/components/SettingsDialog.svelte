@@ -211,6 +211,9 @@
         <input type="checkbox" bind:checked={form.notifications} /> Notifications when a chat needs you
       </label>
       <label class={checkClass}>
+        <input type="checkbox" bind:checked={form.notifyOnFinish} /> Notify when a chat finishes
+      </label>
+      <label class={checkClass}>
         <input type="checkbox" bind:checked={form.enterToSend} /> Enter sends the message (Shift+Enter
         for a new line)
       </label>

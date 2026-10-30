@@ -387,6 +387,7 @@
             onFork={fork}
             {requests}
             memory={chat.view}
+            stickRequests={chat.stickRequests}
           />
         {/if}
 

@@ -1,7 +1,8 @@
 /**
  * Router handlers for one chat (§4.3–§4.5, §6.4): open / page / replay,
  * create / send / resume, controls, permission answers, fork, stopping a
- * task (v1.1 §2), and the command and model lists.
+ * task (v1.1 §2), the command and model lists, and the seen state behind
+ * "Your turn" (v1.1 `chat.markSeen`).
  *
  * Validation that the protocol schema leaves open happens here: permission
  * modes are limited to what pahub offers (Ruling R11: never
@@ -65,6 +66,8 @@ export type ChatHandlerDeps = {
   onError: (err: unknown, context: string) => void;
   /** Overrides `HISTORY_CACHE_CHARS`. */
   historyCacheChars?: number;
+  /** Clock for the seen time of `chat.markSeen` (v1.1); default `Date.now`. */
+  now?: () => number;
 };
 
 /** Rough memory weight of an item: its text plus a fixed overhead. */
@@ -168,6 +171,14 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): voi
 
   const changed = (sessionIds: string[]) =>
     deps.emit({ event: 'sessions.changed', data: { sessionIds } });
+
+  /**
+   * v1.1 "Your turn": the user has seen the chat's latest turn. Lists change
+   * (Needs you, counts) only when that cleared an unread turn.
+   */
+  const markSeen = (sessionId: string): void => {
+    if (db.markSeen(sessionId, (deps.now ?? Date.now)())) changed([sessionId]);
+  };
 
   /** A Claude Code process may be started: `claude` is found and the auth policy is met. */
   const requireRunnable = async (): Promise<void> => {
@@ -314,6 +325,7 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): voi
     };
     await requireRunnable();
     const s = host.create(p.cwd, toInput(p), choices);
+    markSeen(s.sessionId); // a new chat has nothing unseen; kept for symmetry with chat.send
     changed([s.sessionId]);
     return { sessionId: s.sessionId };
   });
@@ -336,7 +348,14 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): voi
       s = host.ensureLive(p.sessionId, cwd);
       changed([p.sessionId]);
     }
-    return s.send(input);
+    const sent = s.send(input);
+    markSeen(p.sessionId); // replying means the last turn was seen
+    return sent;
+  });
+
+  router.register('chat.markSeen', async (p) => {
+    markSeen(p.sessionId);
+    return {};
   });
 
   router.register('chat.interrupt', async (p) => {

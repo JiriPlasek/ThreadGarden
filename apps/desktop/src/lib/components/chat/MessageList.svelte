@@ -29,6 +29,7 @@
     memory,
     fallbackHeight = 600,
     overscan = 6,
+    stickRequests = 0,
   }: {
     items: readonly ChatItem[];
     hasMore?: boolean;
@@ -42,6 +43,8 @@
     /** Viewport height used until the real one is measured (and in tests). */
     fallbackHeight?: number;
     overscan?: number;
+    /** Each change jumps to the bottom and follows new output again (`ChatsState.stickToBottom`). */
+    stickRequests?: number;
   } = $props();
 
   /** Within this distance of the bottom the list sticks to new output. */
@@ -207,6 +210,17 @@
     flashTimer = setTimeout(() => (flashed = null), 1200);
     return true;
   };
+
+  /** Sticks to the bottom (v1.1 §5); the same as "Jump to latest". */
+  export const stickToBottom = scrollToBottom;
+
+  let stickSeen = untrack(() => stickRequests);
+  $effect(() => {
+    const n = stickRequests;
+    if (n === stickSeen) return;
+    stickSeen = n;
+    untrack(scrollToBottom);
+  });
 
   // ---- measuring ----
 

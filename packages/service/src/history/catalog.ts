@@ -41,6 +41,8 @@ export type LiveChat = {
   status: ChatStatus;
   live: boolean;
   waitingFor?: string;
+  /** When the chat last did something (sent, received output); its project rises at once (v1.1). */
+  lastActivity?: number;
 };
 
 const externalInfo = (e: ExternalSession): ExternalInfo => ({
@@ -60,6 +62,8 @@ export type CatalogOptions = {
   platform?: NodeJS.Platform;
   gitCommonDir?: GitCommonDir;
   now?: () => number;
+  /** Whether a project folder exists (a cached check, see `FolderCheck`); default: always. */
+  folderExists?: (path: string) => boolean;
 };
 
 type Entry = { summary: ChatSummary; indexed: boolean };
@@ -113,6 +117,18 @@ const rank = (s: ChatStatus): number => {
   }
 };
 
+/**
+ * v1.1 "Your turn": a chat with an unseen finished turn is unread unless it
+ * waits on the user (needsYou wins) or is (or may be) working.
+ */
+const BUSY: ReadonlySet<ChatStatus> = new Set(['needsYou', 'working', 'unknown']);
+
+/** Unread chats → when their last turn ended (`Db.unreadTurns`). */
+type Turns = Map<string, number>;
+
+const isUnread = (s: ChatSummary, turns: Turns): boolean =>
+  turns.has(s.sessionId) && !BUSY.has(s.status);
+
 const byOrder = (a: ChatSummary, b: ChatSummary): number =>
   rank(a.status) - rank(b.status) ||
   b.lastActivity - a.lastActivity ||
@@ -124,7 +140,7 @@ const previewOf = (r: SessionRow): string =>
 
 const baseName = (p: string): string => p.split(/[\\/]/).filter(Boolean).at(-1) ?? p;
 
-const fromRow = (r: SessionRow): ChatSummary => ({
+const fromRow = (r: SessionRow, unread = false): ChatSummary => ({
   sessionId: r.sessionId,
   title: titleFor(r),
   projectId: r.projectId,
@@ -135,6 +151,7 @@ const fromRow = (r: SessionRow): ChatSummary => ({
   pinned: r.pinned,
   live: false,
   external: null,
+  unread,
 });
 
 /** One row of the quick-search corpus. */
@@ -158,8 +175,11 @@ export class Catalog {
   private readonly platform: NodeJS.Platform;
   private readonly gitCommonDir: GitCommonDir;
   private readonly now: () => number;
+  private readonly folderExists: (path: string) => boolean;
   private readonly projectIds = new Map<string, string>();
   private cache: Snapshot | undefined;
+  /** The project order `projects()` last returned (ids, joined), for `projectOrderChanged`. */
+  private lastProjectOrder: string | undefined;
 
   constructor(o: CatalogOptions) {
     this.db = o.db;
@@ -168,6 +188,7 @@ export class Catalog {
     this.platform = o.platform ?? process.platform;
     this.gitCommonDir = o.gitCommonDir ?? defaultGitCommonDir;
     this.now = o.now ?? Date.now;
+    this.folderExists = o.folderExists ?? (() => true);
   }
 
   /** Drops the cached titles/project names; call after anything that changes them. */
@@ -186,10 +207,12 @@ export class Catalog {
     const q = query?.trim();
     if (q) return this.searchList(place, q, snap, limit, cursor);
 
+    const turns = this.db.unreadTurns();
     const first = cursor === undefined;
-    const overlay = first ? this.overlay() : new Map<string, Entry>();
+    const overlay = first ? this.overlay(turns) : new Map<string, Entry>();
+    if (place.kind === 'needsYou') return { items: first ? this.needsYouList(overlay, turns) : [] };
     const over = first ? this.overlayFor(place, overlay, snap.hidden) : [];
-    if (place.kind === 'needsYou' || place.kind === 'running') return { items: over };
+    if (place.kind === 'running') return { items: over };
 
     const page = decodeCursor(cursor, 'd');
     const excluded = first ? [...overlay.keys()] : page.ids;
@@ -199,7 +222,7 @@ export class Catalog {
       excludeIds: excluded,
     };
     const rows = this.db.listSessions(filter, limit, page.key);
-    const items = [...over, ...rows.items.map(fromRow)];
+    const items = [...over, ...rows.items.map((r) => fromRow(r, turns.has(r.sessionId)))];
     return rows.nextCursor
       ? { items, nextCursor: encodeCursor('d', excluded, rows.nextCursor) }
       : { items };
@@ -212,40 +235,52 @@ export class Catalog {
 
   /** The summaries of `sessionIds` in that order (see `summary`); unknown ids are left out. */
   summaries(sessionIds: readonly string[]): ChatSummary[] {
-    const overlay = this.overlay();
+    const turns = this.db.unreadTurns();
+    const overlay = this.overlay(turns);
     return sessionIds.flatMap((id) => {
       const o = overlay.get(id);
       if (o) return [o.summary];
       const row = this.db.getSession(id);
-      return row ? [fromRow(row)] : [];
+      return row ? [fromRow(row, turns.has(id))] : [];
     });
   }
 
+  /** `needsYou` counts the chats waiting on the user and the unread ones (v1.1). */
   counts(): { needsYou: number; running: number; all: number } {
     const { hidden } = this.snapshot();
-    let needsYou = 0;
+    const turns = this.db.unreadTurns();
+    const overlay = this.overlay(turns);
     let running = 0;
     let extra = 0;
-    for (const e of this.overlay().values()) {
-      if (e.summary.status === 'needsYou') needsYou++;
-      else if (e.summary.status === 'working') running++;
+    for (const e of overlay.values()) {
+      if (e.summary.status === 'working') running++;
       if (!e.indexed && !hidden.includes(e.summary.projectId)) extra++;
     }
+    const needsYou = this.needsYouList(overlay, turns).length;
     return { needsYou, running, all: this.db.countSessions(hidden) + extra };
   }
 
+  /**
+   * Pinned first, then most recent activity (spec 6.1, v1.1 §4). Activity
+   * includes the live chats' last activity, so a project rises as soon as a
+   * chat in it is active. `counts.needsYou` includes unread chats.
+   */
   projects(): Project[] {
     const activity = this.db.projectActivity();
-    const overlay = [...this.overlay().values()].map((e) => e.summary);
+    const turns = this.db.unreadTurns();
+    const byId = this.overlay(turns);
+    const overlay = [...byId.values()].map((e) => e.summary);
+    const needsYouBy = new Map<string, number>();
+    for (const s of this.needsYouList(byId, turns)) {
+      needsYouBy.set(s.projectId, (needsYouBy.get(s.projectId) ?? 0) + 1);
+    }
     const list = this.db.listProjects().map((p) => {
       let lastActivity = activity.get(p.projectId) ?? 0;
-      let needsYou = 0;
       let running = 0;
       for (const s of overlay) {
         if (s.projectId !== p.projectId) continue;
         lastActivity = Math.max(lastActivity, s.lastActivity);
-        if (s.status === 'needsYou') needsYou++;
-        else if (s.status === 'working') running++;
+        if (s.status === 'working') running++;
       }
       return {
         projectId: p.projectId,
@@ -254,16 +289,29 @@ export class Catalog {
         pinned: p.pinned,
         hidden: p.hidden,
         lastActivity,
-        counts: { needsYou, running },
+        counts: { needsYou: needsYouBy.get(p.projectId) ?? 0, running },
+        exists: this.folderExists(p.path),
       };
     });
-    // Spec 6.1: pinned first, then most recent activity.
-    return list.sort(
+    list.sort(
       (a, b) =>
         Number(b.pinned) - Number(a.pinned) ||
         b.lastActivity - a.lastActivity ||
         a.displayName.localeCompare(b.displayName),
     );
+    this.lastProjectOrder = list.map((p) => p.projectId).join('\n');
+    return list;
+  }
+
+  /**
+   * True when the project order differs from what `projects()` last returned
+   * (to a client, or to the previous call of this); used to send
+   * `projects.changed` when live activity reorders projects.
+   */
+  projectOrderChanged(): boolean {
+    const before = this.lastProjectOrder;
+    this.projects();
+    return before !== this.lastProjectOrder;
   }
 
   /**
@@ -274,7 +322,7 @@ export class Catalog {
   corpus(): CorpusRow[] {
     const snap = this.snapshot();
     const extra: CorpusRow[] = [];
-    for (const e of this.overlay().values()) {
+    for (const e of this.overlay(new Map()).values()) {
       if (e.indexed) continue;
       const s = e.summary;
       extra.push({
@@ -323,7 +371,7 @@ export class Catalog {
    * entry (that is pahub's own process); an external entry wins over a paused
    * or failed pahub chat, which has no process — it is running in a terminal.
    */
-  private overlay(): Map<string, Entry> {
+  private overlay(turns: Turns): Map<string, Entry> {
     const owned = this.live.list();
     const liveIds = new Set(owned.filter((l) => l.live).map((l) => l.sessionId));
     // Only sessions with an id can be listed (and opened); the rest are visible via the poller.
@@ -342,29 +390,30 @@ export class Catalog {
     );
     for (const l of live) {
       const row = rows.get(l.sessionId);
-      out.set(l.sessionId, {
-        indexed: row !== undefined,
-        summary: {
-          ...this.base(l.sessionId, l.cwd, row, undefined),
-          status: l.status,
-          live: l.live,
-          ...(l.waitingFor === undefined ? {} : { waitingFor: l.waitingFor }),
-        },
-      });
+      const summary: ChatSummary = {
+        ...this.base(l.sessionId, l.cwd, row, undefined),
+        status: l.status,
+        live: l.live,
+        ...(l.waitingFor === undefined ? {} : { waitingFor: l.waitingFor }),
+        ...(l.lastActivity === undefined
+          ? {}
+          : { lastActivity: Math.max(row?.lastModified ?? 0, l.lastActivity) }),
+      };
+      summary.unread = isUnread(summary, turns);
+      out.set(l.sessionId, { indexed: row !== undefined, summary });
     }
     for (const e of ext) {
       const row = rows.get(e.sessionId);
       const base = this.base(e.sessionId, e.cwd, row, e.name);
-      out.set(e.sessionId, {
-        indexed: row !== undefined,
-        summary: {
-          ...base,
-          status: externalStatus(e),
-          external: externalInfo(e),
-          lastActivity: Math.max(row?.lastModified ?? 0, e.startedAt) || base.lastActivity,
-          ...(e.waitingFor === undefined ? {} : { waitingFor: e.waitingFor }),
-        },
-      });
+      const summary: ChatSummary = {
+        ...base,
+        status: externalStatus(e),
+        external: externalInfo(e),
+        lastActivity: Math.max(row?.lastModified ?? 0, e.startedAt) || base.lastActivity,
+        ...(e.waitingFor === undefined ? {} : { waitingFor: e.waitingFor }),
+      };
+      summary.unread = isUnread(summary, turns);
+      out.set(e.sessionId, { indexed: row !== undefined, summary });
     }
     return out;
   }
@@ -387,7 +436,36 @@ export class Catalog {
       pinned: this.db.isSessionPinned(sessionId),
       live: false,
       external: null,
+      unread: false,
     };
+  }
+
+  /**
+   * The Needs you place (v1.1): chats waiting on the user (display order),
+   * then unread chats by most recent turn end. Unread chats the host and the
+   * poller do not hold come from the index; unknown ids are left out.
+   */
+  private needsYouList(overlay: Map<string, Entry>, turns: Turns): ChatSummary[] {
+    const waiting = [...overlay.values()]
+      .map((e) => e.summary)
+      .filter((s) => s.status === 'needsYou')
+      .sort(byOrder);
+    if (turns.size === 0) return waiting;
+    const missing = [...turns.keys()].filter((id) => !overlay.has(id));
+    const rows = new Map(
+      missing.length === 0
+        ? []
+        : this.db
+            .listSessions({ ids: missing }, missing.length, undefined)
+            .items.map((r) => [r.sessionId, r]),
+    );
+    const unread = [...turns.keys()].flatMap((id) => {
+      const o = overlay.get(id);
+      if (o) return o.summary.unread ? [o.summary] : [];
+      const row = rows.get(id);
+      return row ? [fromRow(row, true)] : [];
+    });
+    return [...waiting, ...unread];
   }
 
   /** The overlay rows that belong to `place`, in display order. */
@@ -437,14 +515,19 @@ export class Catalog {
       (snap.names.get(projectId) ?? '').toLowerCase().includes(needle) ||
       fts.has(id);
 
+    const turns = this.db.unreadTurns();
     const first = cursor === undefined;
-    const overlay = first ? this.overlay() : new Map<string, Entry>();
+    const overlay = first ? this.overlay(turns) : new Map<string, Entry>();
+    if (place.kind === 'needsYou') {
+      const all = first ? this.needsYouList(overlay, turns) : [];
+      return { items: all.filter((s) => keep(s.sessionId, s.title, s.projectId)) };
+    }
     const over = first
       ? this.overlayFor(place, overlay, snap.hidden).filter((s) =>
           keep(s.sessionId, s.title, s.projectId),
         )
       : [];
-    if (place.kind === 'needsYou' || place.kind === 'running') return { items: over };
+    if (place.kind === 'running') return { items: over };
 
     const page = decodeCursor(cursor, 'q');
     const excluded = new Set(first ? overlay.keys() : page.ids);
@@ -477,7 +560,7 @@ export class Catalog {
       const r = found.get(id);
       return r ? [r] : [];
     });
-    const items = [...over, ...rows.map(fromRow)];
+    const items = [...over, ...rows.map((r) => fromRow(r, turns.has(r.sessionId)))];
     const last = rows.at(-1);
     return more && last
       ? {

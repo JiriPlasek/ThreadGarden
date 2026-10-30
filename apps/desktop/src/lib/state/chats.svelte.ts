@@ -107,6 +107,8 @@ export class ChatState {
   running = $derived(runningTasks(this.tasks));
   /** Message list geometry, kept while the chat is resident. */
   view: ListMemory = { heights: new Map(), stick: true, anchor: null };
+  /** Bumped by `stickToBottom`: a shown message list jumps to the bottom (v1.1 §5). */
+  stickRequests = $state(0);
 
   /** True while a Claude process runs this chat (header pickers apply live). */
   get live(): boolean {
@@ -307,9 +309,23 @@ export class ChatsState {
   setPermissionMode = (sessionId: string, value: string): Promise<void> =>
     this.setHeader('chat.setPermissionMode', 'permissionMode', sessionId, value);
 
+  /**
+   * Scrolls the chat's messages to the bottom and follows new output again, even
+   * if the user had scrolled up (v1.1 §5: sending, or answering a request that
+   * resumes work). Scrolling up afterwards pauses following as usual.
+   */
+  stickToBottom = (sessionId: string): void => {
+    const chat = this.byId.get(sessionId);
+    if (!chat) return;
+    chat.view.stick = true;
+    chat.view.anchor = null;
+    chat.stickRequests += 1;
+  };
+
   /** Sends a message; resolves to whether the service queued it behind the running turn. */
   send = async (sessionId: string, text: string, images?: ImageRef[]): Promise<boolean> => {
     if (!this.api) throw new Error('Not connected to the pahub service');
+    this.stickToBottom(sessionId);
     const r = await this.api.request('chat.send', {
       sessionId,
       text,
@@ -328,7 +344,10 @@ export class ChatsState {
     }
     const params = { ...p };
     if (!params.images?.length) delete params.images;
-    return (await this.api.request('chat.create', params)).sessionId;
+    const { sessionId } = await this.api.request('chat.create', params);
+    // A new chat's list starts at the bottom anyway; this covers one already resident.
+    this.stickToBottom(sessionId);
+    return sessionId;
   };
 
   /** Stops the current turn (Stop button / Esc). */
@@ -344,6 +363,7 @@ export class ChatsState {
     answers?: Record<string, string>,
   ): Promise<void> => {
     if (!this.api) throw new Error('Not connected to the pahub service');
+    this.stickToBottom(sessionId);
     await this.api.request('chat.respond', { sessionId, ...p });
     this.byId
       .get(sessionId)

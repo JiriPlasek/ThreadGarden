@@ -195,6 +195,9 @@ export const methods = {
       indexing: z.object({ done: z.number(), total: z.number() }),
     }),
   ),
+  // ── v1.1 T2: "Your turn" ──────────────────────────────────────────────────
+  /** The user has seen the chat's latest turn (idempotent); clears `unread`. */
+  'chat.markSeen': def(sessionIdOnly, empty),
 } as const;
 
 export type MethodName = keyof typeof methods;

@@ -54,6 +54,12 @@ const steps: string[] = [
   `,
   // Current FTS generation per session (see Db full-text section).
   `CREATE TABLE IF NOT EXISTS fts_gen (session_id TEXT PRIMARY KEY, gen INTEGER NOT NULL);`,
+  // v1.1 "Your turn": when pahub last saw each chat and when its last turn ended.
+  `CREATE TABLE IF NOT EXISTS turn_state (
+    session_id TEXT PRIMARY KEY,
+    last_seen_at INTEGER,
+    last_turn_ended_at INTEGER
+  );`,
 ];
 
 export const migrate = (db: DatabaseSync): void => {

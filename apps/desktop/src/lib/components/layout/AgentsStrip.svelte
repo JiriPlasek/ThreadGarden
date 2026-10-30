@@ -40,12 +40,12 @@
               'hover:bg-accent focus-visible:ring-ring/50 flex h-6 max-w-60 items-center gap-1.5 rounded px-2 outline-none focus-visible:ring-2',
               agent.sessionId === tabs.active && 'bg-accent text-accent-foreground',
             )}
-            title={`${agent.title} · ${project} · ${statusLabel(agent.status, rawStatus(agent))}${
+            title={`${agent.title} · ${project} · ${statusLabel(agent.status, rawStatus(agent), agent.unread)}${
               detail ? ` · ${detail}` : ''
             }`}
             onclick={() => tabs.openTab(agent.sessionId)}
           >
-            <StatusIcon status={agent.status} raw={rawStatus(agent)} />
+            <StatusIcon status={agent.status} raw={rawStatus(agent)} unread={agent.unread} />
             <span class="truncate">{agent.title}</span>
             <span class="text-muted-foreground max-w-24 shrink-0 truncate">{project}</span>
             {#if agent.external}

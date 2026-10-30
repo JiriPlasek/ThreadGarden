@@ -11,6 +11,12 @@ const needsYou = (sessionId: string) => ({
   what: 'permission: Bash(npm test)',
 });
 
+const finished = (sessionId: string) => ({
+  sessionId,
+  title: `Chat ${sessionId}`,
+  projectName: 'alpha',
+});
+
 const flush = () => new Promise((r) => setTimeout(r, 0));
 
 const start = async (configure?: Parameters<typeof setup>[0]) => {
@@ -122,6 +128,56 @@ describe('notifications', () => {
     await vi.waitFor(() => expect(env.app.places.selected).toEqual({ kind: 'needsYou' }));
     await flush();
     expect(env.app.tabs.active).toBeNull();
+  });
+
+  it('chatFinished notifies only when the chat is not visible and the setting is on', async () => {
+    const env = await start();
+    env.app.tabs.openTab('s1');
+    window.dispatchEvent(new Event('focus'));
+
+    // The finished chat is the active tab of a focused window: no notification.
+    env.server.push('chatFinished', finished('s1'));
+    await flush();
+    expect(env.notify).not.toHaveBeenCalled();
+
+    // Another tab is active: notify, title first, project in the body.
+    env.server.push('chatFinished', finished('s2'));
+    await flush();
+    expect(env.notify).toHaveBeenCalledTimes(1);
+    expect(env.notify.mock.calls[0]).toEqual(['Chat s2 finished — your turn', 'alpha', 's2']);
+
+    // The window is not focused: notify even for the active tab.
+    window.dispatchEvent(new Event('blur'));
+    env.server.push('chatFinished', finished('s1'));
+    await flush();
+    expect(env.notify).toHaveBeenCalledTimes(2);
+
+    // "Notify when a chat finishes" off: nothing, even though needs-you notifications are on.
+    env.app.settings.value = { ...env.app.settings.value, notifyOnFinish: false };
+    env.server.push('chatFinished', finished('s3'));
+    await flush();
+    expect(env.notify).toHaveBeenCalledTimes(2);
+    env.server.push('needsYou', needsYou('s3'));
+    await flush();
+    expect(env.notify).toHaveBeenCalledTimes(3);
+  });
+
+  it('focus soon after a finish notification opens the chat when it is the only one waiting', async () => {
+    const env = await start((server) => {
+      server.handlers['sessions.list'] = (p) =>
+        (p as ListParams).place.kind === 'needsYou'
+          ? { items: [summary('s2', { status: 'idle', live: true, unread: true })] }
+          : { items: [] };
+    });
+    window.dispatchEvent(new Event('blur'));
+    env.server.push('chatFinished', finished('s2'));
+    await flush();
+    expect(env.notify).toHaveBeenCalledTimes(1);
+
+    env.advance(5_000);
+    window.dispatchEvent(new Event('focus'));
+    await vi.waitFor(() => expect(env.app.tabs.active).toBe('s2'));
+    expect(env.app.places.selected).toEqual({ kind: 'needsYou' });
   });
 
   it('tray badge follows the needs-you count', async () => {

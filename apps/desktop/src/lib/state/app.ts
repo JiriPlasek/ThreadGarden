@@ -14,6 +14,7 @@ import { places } from './places.svelte';
 import { sessions } from './sessions.svelte';
 import { settings } from './settings.svelte';
 import { tabs } from './tabs.svelte';
+import { yourTurn } from './your-turn.svelte';
 
 export const client = new ServiceClient();
 
@@ -46,6 +47,7 @@ const wire = (): void => {
   lifecycle.init(client, agents, connection, connectTo);
   tabs.subscribe(() => chats.sync(tabs.open, tabs.active));
   startAttention({ api: client, settings, tabs, places });
+  yourTurn.init(client, { tabs, chats, sessions, agents });
 };
 
 /**
@@ -62,6 +64,7 @@ const connectTo = async (conn: ServiceConnection): Promise<void> => {
     settings.restoreColumns(),
     settings.restoreScale(),
     settings.restoreActivity(),
+    places.restoreMissingOpen(),
     tabs.restore(),
   ]);
   loaded = true;

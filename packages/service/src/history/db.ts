@@ -1,7 +1,8 @@
 /**
  * pahub's own SQLite store (`node:sqlite`, WAL). It holds the history index,
- * pahub-side titles/pins, drafts, settings, UI state and the live-session
- * registry. It never touches Claude Code's data.
+ * pahub-side titles/pins, drafts, settings, UI state, the live-session
+ * registry and the seen/turn-ended times behind "Your turn". It never touches
+ * Claude Code's data.
  */
 import './sqlite-warning.js';
 import { DatabaseSync } from 'node:sqlite';
@@ -326,13 +327,15 @@ export class Db implements LiveRegistry {
   }
 
   /**
-   * Removes a session's row and index text. `meta` and `drafts` are kept on
-   * purpose (cheap, and a pahub title survives a transcript that reappears).
+   * Removes a session's row, index text and "Your turn" state. `meta` and
+   * `drafts` are kept on purpose (cheap, and a pahub title survives a
+   * transcript that reappears).
    */
   deleteSession(sessionId: string): void {
     this.raw.exec('BEGIN');
     try {
       this.raw.prepare('DELETE FROM sessions WHERE session_id = ?').run(sessionId);
+      this.raw.prepare('DELETE FROM turn_state WHERE session_id = ?').run(sessionId);
       this.raw.prepare('DELETE FROM fts_gen WHERE session_id = ?').run(sessionId);
       this.deleteFtsRowids(this.ftsRows(sessionId).map((r) => r.rowid));
       this.raw.exec('COMMIT');
@@ -480,6 +483,53 @@ export class Db implements LiveRegistry {
         'INSERT INTO ui_state (key, json) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET json = excluded.json',
       )
       .run(key, JSON.stringify(value));
+  }
+
+  // --- "Your turn" (v1.1) -----------------------------------------------------------
+  //
+  // A chat is unread while its last turn ended after pahub last saw it. The
+  // two times are ordered by operation, not only by the clock: a turn end is
+  // stored after the last seen time and a seen time after the last turn end,
+  // so two events in the same millisecond (or a clock that went back) still
+  // compare in the order they happened.
+
+  /** Records that a turn of `sessionId` ended at `at`. */
+  setTurnEnded(sessionId: string, at: number): void {
+    this.raw
+      .prepare(
+        `INSERT INTO turn_state (session_id, last_turn_ended_at) VALUES (?1, ?2)
+         ON CONFLICT(session_id) DO UPDATE SET last_turn_ended_at =
+           MAX(?2, COALESCE(last_seen_at + 1, ?2), COALESCE(last_turn_ended_at, ?2))`,
+      )
+      .run(sessionId, at);
+  }
+
+  /** The user has seen the chat at `at`; true when that cleared an unread turn. */
+  markSeen(sessionId: string, at: number): boolean {
+    const r = this.raw
+      .prepare('SELECT last_seen_at, last_turn_ended_at FROM turn_state WHERE session_id = ?')
+      .get(sessionId);
+    const ended = r?.last_turn_ended_at as number | null | undefined;
+    const seen = r?.last_seen_at as number | null | undefined;
+    if (ended === null || ended === undefined) return false; // no finished turn: nothing to see
+    if (seen !== null && seen !== undefined && seen >= ended) return false;
+    this.raw
+      .prepare('UPDATE turn_state SET last_seen_at = ? WHERE session_id = ?')
+      .run(Math.max(at, ended), sessionId);
+    return true;
+  }
+
+  /** Unread chats → when their last turn ended, most recent first. */
+  unreadTurns(): Map<string, number> {
+    const rows = this.raw
+      .prepare(
+        `SELECT session_id, last_turn_ended_at FROM turn_state
+         WHERE last_turn_ended_at IS NOT NULL
+           AND (last_seen_at IS NULL OR last_turn_ended_at > last_seen_at)
+         ORDER BY last_turn_ended_at DESC, session_id`,
+      )
+      .all();
+    return new Map(rows.map((r) => [r.session_id as string, r.last_turn_ended_at as number]));
   }
 
   // --- LiveRegistry ---------------------------------------------------------------

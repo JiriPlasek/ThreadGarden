@@ -13,13 +13,22 @@
 
   const isKnown = (s: string): s is Known => Object.hasOwn(LABELS, s);
 
+  /**
+   * "Your turn" (v1.1 §3): a turn finished while the user was not looking. A chat
+   * that waits for an answer or works shows that instead.
+   */
+  export const isYourTurn = (status: string, unread?: boolean): boolean =>
+    !!unread && status !== 'needsYou' && status !== 'working';
+
   /** Accessible label for a status; unknown values carry their raw text (spec §6.2). */
-  export const statusLabel = (status: string, raw?: string): string =>
-    status === 'history'
-      ? 'History'
-      : isKnown(status)
-        ? LABELS[status]
-        : `Unknown status: ${raw || status}`;
+  export const statusLabel = (status: string, raw?: string, unread?: boolean): string =>
+    isYourTurn(status, unread)
+      ? 'Your turn'
+      : status === 'history'
+        ? 'History'
+        : isKnown(status)
+          ? LABELS[status]
+          : `Unknown status: ${raw || status}`;
 </script>
 
 <script lang="ts">
@@ -28,6 +37,7 @@
   let {
     status,
     raw,
+    unread = false,
     decorative = false,
     class: className,
   }: {
@@ -35,13 +45,23 @@
     status: string;
     /** The source's own value (e.g. an external session's state), shown for unknown statuses. */
     raw?: string;
+    /** The chat finished a turn the user has not seen (`ChatSummary.unread`). */
+    unread?: boolean;
     /** Next to text that already says the same thing: hidden from assistive technology. */
     decorative?: boolean;
     class?: string;
   } = $props();
 
-  const kind = $derived(status === 'history' ? 'history' : isKnown(status) ? status : 'unknown');
-  const label = $derived(statusLabel(status, raw));
+  const kind = $derived(
+    isYourTurn(status, unread)
+      ? 'yourTurn'
+      : status === 'history'
+        ? 'history'
+        : isKnown(status)
+          ? status
+          : 'unknown',
+  );
+  const label = $derived(statusLabel(status, raw, unread));
 </script>
 
 {#if kind === 'history'}
@@ -61,6 +81,7 @@
       'inline-flex size-3.5 shrink-0 items-center justify-center',
       kind === 'needsYou' && 'text-amber-500 dark:text-amber-400',
       kind === 'working' && 'text-emerald-500 dark:text-emerald-400',
+      kind === 'yourTurn' && 'text-blue-500 dark:text-blue-400',
       (kind === 'idle' || kind === 'paused' || kind === 'unknown') && 'text-muted-foreground',
       kind === 'idle' && 'opacity-70',
       kind === 'failed' && 'text-destructive',
@@ -71,6 +92,9 @@
       {#if kind === 'needsYou'}
         <circle cx="6" cy="6" r="4.5" fill="none" stroke="currentColor" stroke-width="1.5" />
         <path d="M6 1.5 A4.5 4.5 0 0 1 6 10.5 Z" fill="currentColor" />
+      {:else if kind === 'yourTurn'}
+        <circle cx="6" cy="6" r="3.5" fill="currentColor" />
+        <circle cx="6" cy="6" r="5.25" fill="none" stroke="currentColor" stroke-width="0.75" />
       {:else if kind === 'working'}
         <circle class="pulse" cx="6" cy="6" r="4.5" fill="currentColor" />
       {:else if kind === 'idle'}

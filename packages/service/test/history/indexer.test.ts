@@ -225,6 +225,20 @@ describe('Indexer', () => {
     expect(events.some((e) => e.event === 'projects.changed')).toBe(true);
   });
 
+  it('prunes the "Your turn" state of vanished sessions, not of live or listed ones', async () => {
+    const { adapter, db, indexer } = setup(3);
+    await indexer.fullSync();
+    const [gone, live, kept] = [...adapter.sessions.keys()] as [string, string, string];
+    for (const id of [gone, live, kept]) db.setTurnEnded(id, 10);
+    db.markLive(live, '/work/proj-1');
+    adapter.sessions.delete(gone);
+    adapter.sessions.delete(live);
+    await indexer.fullSync();
+    expect([...db.unreadTurns().keys()].sort()).toEqual([kept, live].sort());
+    const rows = db.raw.prepare('SELECT session_id FROM turn_state').all();
+    expect(rows.map((r) => r.session_id).sort()).toEqual([kept, live].sort());
+  });
+
   it('isolates a failing session: others index, projects sync, failure is reported and unmarked', async () => {
     const { adapter, db, events } = setup(5);
     const failing = 'session-2';

@@ -56,6 +56,11 @@ export type SessionHostDeps = {
    * default 0. A seq from another run is then never valid here (§4.5).
    */
   seqBase?: number;
+  // ── v1.1 T2 ──
+  /** Handed to every session (see `LiveSessionDeps.onTurnEnded`). */
+  onTurnEnded?: LiveSessionDeps['onTurnEnded'];
+  /** Handed to every session (see `LiveSessionDeps.onActivity`). */
+  onActivity?: LiveSessionDeps['onActivity'];
 };
 
 export class SessionHost {
@@ -212,15 +217,18 @@ export class SessionHost {
     status: ChatStatus;
     live: boolean;
     waitingFor?: string;
+    lastActivity?: number;
   }[] {
     return [...this.sessions.values()].map((s) => {
       const waitingFor = s.waitingFor();
+      const lastActivity = s.lastActivity;
       return {
         sessionId: s.sessionId,
         cwd: s.cwd,
         status: s.status,
         live: s.live,
         ...(waitingFor === undefined ? {} : { waitingFor }),
+        ...(lastActivity === null ? {} : { lastActivity }),
       };
     });
   }
@@ -263,7 +271,7 @@ export class SessionHost {
   }
 
   private options(extra: Partial<LiveSessionOptions>): LiveSessionOptions {
-    const { adapter, registry, emit, now, describe, onError } = this.deps;
+    const { adapter, registry, emit, now, describe, onError, onTurnEnded, onActivity } = this.deps;
     return {
       adapter,
       registry,
@@ -274,6 +282,8 @@ export class SessionHost {
       timers: this.timers,
       ...(describe ? { describe } : {}),
       ...(onError ? { onError } : {}),
+      ...(onTurnEnded ? { onTurnEnded } : {}),
+      ...(onActivity ? { onActivity } : {}),
       ...extra,
       log: extra.log ?? new EventLog(undefined, this.seqBase),
     };

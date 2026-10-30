@@ -34,6 +34,11 @@ export const ChatSummarySchema = z.object({
   live: z.boolean(),
   external: ExternalInfoSchema.nullable(),
   waitingFor: z.string().optional(),
+  /**
+   * v1.1 "Your turn": a turn ended since the chat was last seen, and it is
+   * neither waiting on the user nor working (pahub-side state, never Claude Code's).
+   */
+  unread: z.boolean().default(false),
 });
 export type ChatSummary = z.infer<typeof ChatSummarySchema>;
 
@@ -45,6 +50,8 @@ export const ProjectSchema = z.object({
   hidden: z.boolean(),
   lastActivity: z.number(),
   counts: z.object({ needsYou: z.number(), running: z.number() }),
+  /** v1.1: whether the project folder exists on disk (cached stat; "Missing folders" when false). */
+  exists: z.boolean().default(true),
 });
 export type Project = z.infer<typeof ProjectSchema>;
 
@@ -77,6 +84,8 @@ const settingsFields = {
   theme: z.enum(['system', 'light', 'dark']),
   startOnLogin: z.boolean(),
   externalPolling: z.boolean(),
+  /** v1.1: desktop notification when a chat finishes a turn while not looked at. */
+  notifyOnFinish: z.boolean(),
 };
 
 export const SettingsSchema = z.object({
@@ -87,6 +96,7 @@ export const SettingsSchema = z.object({
   theme: settingsFields.theme.default('system'),
   startOnLogin: settingsFields.startOnLogin.default(false),
   externalPolling: settingsFields.externalPolling.default(true),
+  notifyOnFinish: settingsFields.notifyOnFinish.default(true),
 });
 export type Settings = z.infer<typeof SettingsSchema>;
 
