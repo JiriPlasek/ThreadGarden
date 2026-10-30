@@ -291,6 +291,51 @@ describe('TaskTracker', () => {
     expect(t.list()).toHaveLength(1);
   });
 
+  it('a late same-run task_started or a non-terminal task_updated never revives an ended task', () => {
+    const c = clock();
+    const t = new TaskTracker({ now: c.now });
+    t.apply(started('b1', { task_type: 'local_bash', run_id: 'r1', description: 'npm run dev' }));
+    c.t = 2_000;
+    t.apply(notification('b1', 'stopped', { run_id: 'r1' }));
+    const ended = t.get('b1')!;
+    expect(ended).toMatchObject({ status: 'stopped', startedAt: 1_000, endedAt: 2_000 });
+    c.t = 3_000;
+    // A started frame of the same run arriving late (after its end edge).
+    t.apply(started('b1', { task_type: 'local_bash', run_id: 'r1' }));
+    expect(t.get('b1')).toEqual(ended);
+    // A non-terminal update of the same run.
+    t.apply(updated('b1', { status: 'running' }, { run_id: 'r1' }));
+    expect(t.get('b1')).toEqual(ended);
+    // A terminal update of the same run may still correct the end status.
+    t.apply(updated('b1', { status: 'failed', error: 'exit 1' }, { run_id: 'r1' }));
+    expect(t.get('b1')).toMatchObject({ status: 'failed', error: 'exit 1', endedAt: 2_000 });
+  });
+
+  it('a new run id in task_updated restarts an ended task; absent run ids still restart', () => {
+    const c = clock();
+    const t = new TaskTracker({ now: c.now });
+    t.apply(started('a1', { task_type: 'local_agent', run_id: 'r1' }));
+    t.apply(progress('a1', { run_id: 'r1', usage: { total_tokens: 5, tool_uses: 1 } }));
+    t.apply(notification('a1', 'completed', { run_id: 'r1', summary: 'first' }));
+    c.t = 5_000;
+    t.apply(updated('a1', { status: 'running' }, { run_id: 'r2' }));
+    const again = t.get('a1')!;
+    expect(again).toMatchObject({ status: 'running', startedAt: 5_000 });
+    expect(again).not.toHaveProperty('endedAt');
+    expect(again).not.toHaveProperty('summary');
+    expect(again).not.toHaveProperty('tokens');
+    // Frames of r1 are now late.
+    expect(t.apply(notification('a1', 'failed', { run_id: 'r1' }))).toBe(false);
+
+    // Without run ids (older CLIs) a new start still restarts the row.
+    t.apply(started('b1', { task_type: 'local_bash' }));
+    t.apply(notification('b1', 'completed'));
+    c.t = 6_000;
+    t.apply(started('b1', { task_type: 'local_bash' }));
+    expect(t.get('b1')).toMatchObject({ status: 'running', startedAt: 6_000 });
+    expect(t.get('b1')).not.toHaveProperty('endedAt');
+  });
+
   it(`keeps at most ${MAX_TASKS} tasks, dropping the oldest finished first`, () => {
     const t = new TaskTracker({ now: () => 1 });
     t.apply(started('keep-running', { task_type: 'local_bash' }));

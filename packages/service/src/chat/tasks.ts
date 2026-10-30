@@ -185,6 +185,9 @@ export class TaskTracker {
     const runId = str(m.run_id);
     const prev = this.entries.get(id);
     if (prev && isLate(runId, prev.runId)) return false;
+    // A late start of a run that already ended must not revive it; only a new
+    // run (or a CLI that sends no run ids) restarts the row.
+    if (prev && isFinished(prev.task) && sameRunId(runId, prev.runId)) return false;
     const taskType = str(m.task_type) ?? prev?.task.taskType;
     const subagentType = nonEmpty(m.subagent_type) ?? prev?.task.subagentType;
     const toolUseId = str(m.tool_use_id) ?? prev?.task.toolUseId;
@@ -264,8 +267,20 @@ export class TaskTracker {
     const e = this.known(m);
     if (!e || !isRec(m.patch)) return false;
     const p = m.patch;
+    const status = p.status === undefined ? undefined : updatedStatus(p.status);
+    const runId = str(m.run_id);
     const t = this.edit(e);
-    if (p.status !== undefined) this.setStatus(t, updatedStatus(p.status));
+    if (status !== undefined) {
+      if (!isFinished(t) || ENDED.has(status.status)) {
+        this.setStatus(t, status);
+      } else if (status.status !== 'unknown' && !sameRunId(runId, e.runId)) {
+        // A non-terminal update of a new run (or with no run ids) restarts the
+        // ended row; one of the run that ended is late and changes nothing.
+        restart(t, this.opts.now());
+        if (runId !== undefined) e.runId = runId;
+        this.setStatus(t, status);
+      }
+    }
     const description = nonEmpty(p.description);
     if (description !== undefined) t.description = description;
     const error = nonEmpty(p.error);
@@ -410,6 +425,27 @@ export class TaskTracker {
     }
   }
 }
+
+/** Both frames name the same run (absent run ids never match: older CLIs send none). */
+const sameRunId = (a: string | undefined, b: string | undefined): boolean =>
+  a !== undefined && b !== undefined && a === b;
+
+/** Clears what belonged to the ended run of `t`; a new run starts now. */
+const restart = (t: ChatTask, now: number): void => {
+  for (const k of [
+    'endedAt',
+    'rawStatus',
+    'tokens',
+    'toolUses',
+    'durationMs',
+    'lastTool',
+    'summary',
+    'error',
+  ] as const) {
+    delete t[k];
+  }
+  t.startedAt = now;
+};
 
 /** A frame naming a run that sorts before the one shown is late (SDK run id contract). */
 const isLate = (runId: string | undefined, current: string | undefined): boolean =>
