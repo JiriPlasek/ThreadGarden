@@ -4,6 +4,7 @@
   import EyeIcon from '@lucide/svelte/icons/eye';
   import EyeOffIcon from '@lucide/svelte/icons/eye-off';
   import FolderIcon from '@lucide/svelte/icons/folder';
+  import FolderXIcon from '@lucide/svelte/icons/folder-x';
   import InboxIcon from '@lucide/svelte/icons/inbox';
   import PanelLeftCloseIcon from '@lucide/svelte/icons/panel-left-close';
   import PinIcon from '@lucide/svelte/icons/pin';
@@ -16,19 +17,22 @@
   import IconButton from './IconButton.svelte';
   import StatusIcon from './StatusIcon.svelte';
 
-  /** Left column (spec §6.1): smart folders with counts, then projects (pinned, then recent). */
+  /**
+   * Left column (spec §6.1): smart folders with counts, then projects in the
+   * service's order (pinned, then recent activity). Projects whose folder is
+   * gone sit in a collapsed "Missing folders" group below them (v1.1 §4).
+   */
   let { onCollapse }: { onCollapse?: () => void } = $props();
 
   const { places, interaction } = useApp();
 
   let showHidden = $state(false);
 
-  const byPinnedThenRecent = (a: Project, b: Project): number =>
-    Number(b.pinned) - Number(a.pinned) ||
-    b.lastActivity - a.lastActivity ||
-    a.displayName.localeCompare(b.displayName);
+  /** `exists` is optional for a service without it: such folders count as present. */
+  const isMissing = (p: Project): boolean => p.exists === false;
 
-  const visible = $derived(places.projects.filter((p) => !p.hidden).sort(byPinnedThenRecent));
+  const visible = $derived(places.projects.filter((p) => !p.hidden && !isMissing(p)));
+  const missing = $derived(places.projects.filter((p) => !p.hidden && isMissing(p)));
   const hidden = $derived(
     places.projects
       .filter((p) => p.hidden)
@@ -72,17 +76,20 @@
             type="button"
             class={itemClass(isSelected(place))}
             aria-current={isSelected(place) ? 'true' : undefined}
-            title={project.path}
+            title={isMissing(project) ? `${project.path} (folder not found)` : project.path}
             onclick={() => select(place)}
           >
-            {#if project.pinned}
+            {#if isMissing(project)}
+              <FolderXIcon class="text-muted-foreground size-4 shrink-0" aria-hidden="true" />
+            {:else if project.pinned}
               <PinIcon class="text-muted-foreground size-4 shrink-0" aria-hidden="true" />
             {:else}
               <FolderIcon class="text-muted-foreground size-4 shrink-0" aria-hidden="true" />
             {/if}
             <span class="min-w-0 truncate">{project.displayName}</span>
             {#if project.counts.needsYou > 0}
-              {@render badge(project.counts.needsYou, 'amber', 'Needs you')}
+              <!-- The service counts unread chats ("Your turn") here too. -->
+              {@render badge(project.counts.needsYou, 'amber', 'Needs you or your turn')}
             {:else}
               {@render badge(project.counts.running, 'green', 'Working')}
             {/if}
@@ -172,6 +179,28 @@
         {@render projectItem(project)}
       {/each}
     </ul>
+
+    {#if missing.length > 0}
+      <button
+        type="button"
+        class="text-muted-foreground hover:text-foreground mt-3 flex h-6 items-center gap-1 px-2 text-[0.6875rem]"
+        aria-expanded={places.missingOpen}
+        onclick={() => places.setMissingOpen(!places.missingOpen)}
+      >
+        <ChevronRightIcon
+          class={cn('size-3.5 transition-transform', places.missingOpen && 'rotate-90')}
+          aria-hidden="true"
+        />
+        Missing folders ({missing.length})
+      </button>
+      {#if places.missingOpen}
+        <ul class="space-y-px opacity-80" aria-label="Missing folders">
+          {#each missing as project (project.projectId)}
+            {@render projectItem(project)}
+          {/each}
+        </ul>
+      {/if}
+    {/if}
 
     {#if hidden.length > 0}
       <button

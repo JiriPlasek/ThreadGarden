@@ -8,7 +8,7 @@
   import { fullTime, relativeTime } from '#lib/format/time.js';
   import { cn } from '#lib/utils.js';
   import { externalLabel, previewLine, rawStatus } from './chat-info';
-  import StatusIcon from './StatusIcon.svelte';
+  import StatusIcon, { isYourTurn } from './StatusIcon.svelte';
 
   let {
     chat,
@@ -42,6 +42,7 @@
 
   const line = $derived(previewLine(chat));
   const waiting = $derived(chat.status === 'needsYou' && !!chat.waitingFor);
+  const yourTurn = $derived(isYourTurn(chat.status, chat.unread));
 </script>
 
 <ContextMenu.Root>
@@ -67,7 +68,7 @@
         onclick={() => onOpen(chat)}
       >
         <div class="flex min-w-0 items-center gap-2">
-          <StatusIcon status={chat.status} raw={rawStatus(chat)} />
+          <StatusIcon status={chat.status} raw={rawStatus(chat)} unread={chat.unread} />
           <span class="min-w-0 truncate text-[0.8125rem] leading-5 font-medium">{chat.title}</span>
           {#if chat.pinned}
             <PinIcon class="text-muted-foreground size-3.5 shrink-0" aria-label="Pinned" />
@@ -84,6 +85,12 @@
           {#if projectName}
             <span class="bg-muted max-w-[45%] shrink-0 truncate rounded px-1 text-[0.6875rem]"
               >{projectName}</span
+            >
+          {/if}
+          {#if yourTurn}
+            <!-- The status icon already says it to assistive technology. -->
+            <span class="shrink-0 font-medium text-blue-600 dark:text-blue-400" aria-hidden="true"
+              >Your turn</span
             >
           {/if}
           <span class={cn('min-w-0 truncate', waiting && 'text-amber-700 dark:text-amber-400')}

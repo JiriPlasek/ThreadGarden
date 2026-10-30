@@ -1,8 +1,11 @@
 /**
  * Getting the user's attention (spec §6.2): an OS notification when a chat
- * starts needing the user and they are not looking at it, the tray badge with
- * the number of chats waiting, and the window's focus reported to the service
- * (`ui.visibility`, which paces external-session polling).
+ * starts needing the user, or finishes a turn ("Your turn", v1.1 §3), and they
+ * are not looking at it; the tray badge with the number of chats waiting (the
+ * service counts unread chats in it); and the window's focus reported to the
+ * service (`ui.visibility`, which paces external-session polling).
+ *
+ * Marking a finished chat seen is `YourTurnState`'s job.
  *
  * The notification plugin cannot report clicks (ruling R26). Clicking a
  * notification focuses pahub, so when the window gains focus within
@@ -54,6 +57,7 @@ export const startAttention = (deps: AttentionDeps): (() => void) => {
     const n = notified;
     notified = null;
     if (!n || now() - n.at > FOCUS_OPENS_WITHIN_MS) return;
+    // Finished chats are listed there too, below the ones waiting on an answer.
     places.select({ kind: 'needsYou' });
     const { items } = await api.request('sessions.list', {
       place: { kind: 'needsYou' },
@@ -87,6 +91,12 @@ export const startAttention = (deps: AttentionDeps): (() => void) => {
       if (focused && tabs.active === e.sessionId) return;
       notified = { sessionId: e.sessionId, at: now() };
       quietly(notify(e.title, `${e.projectName} · ${e.what}`, e.sessionId));
+    }),
+    api.on('chatFinished', (e) => {
+      if (!settings.value.notifyOnFinish) return;
+      if (focused && tabs.active === e.sessionId) return;
+      notified = { sessionId: e.sessionId, at: now() };
+      quietly(notify(`${e.title} finished — your turn`, e.projectName, e.sessionId));
     }),
     places.subscribeCounts((counts) => {
       if (counts.needsYou === badge) return;

@@ -1,6 +1,9 @@
 import type { Place, Project } from '@pahub/protocol';
 import { quietly, type Api } from './api';
 
+/** `uiState` key: whether the "Missing folders" group of the places column is expanded. */
+export const MISSING_OPEN_KEY = 'places.missingOpen';
+
 export type PlaceCounts = { needsYou: number; running: number; all: number };
 
 export const samePlace = (a: Place, b: Place): boolean =>
@@ -11,6 +14,8 @@ export class PlacesState {
   selected = $state<Place>({ kind: 'all' });
   counts = $state<PlaceCounts>({ needsYou: 0, running: 0, all: 0 });
   projects = $state<Project[]>([]);
+  /** The "Missing folders" group is expanded (collapsed by default, v1.1 §4). */
+  missingOpen = $state(false);
 
   private api: Api | null = null;
   private readonly subscribers = new Set<() => void>();
@@ -74,6 +79,22 @@ export class PlacesState {
       }
     })();
     return this.inflight;
+  };
+
+  /** Loads the persisted expand state of the "Missing folders" group (collapsed when unknown). */
+  restoreMissingOpen = async (): Promise<void> => {
+    if (!this.api) return;
+    try {
+      const { value } = await this.api.request('uiState.get', { key: MISSING_OPEN_KEY });
+      if (typeof value === 'boolean') this.missingOpen = value;
+    } catch {
+      // Collapsed is fine.
+    }
+  };
+
+  setMissingOpen = (open: boolean): void => {
+    this.missingOpen = open;
+    if (this.api) quietly(this.api.request('uiState.set', { key: MISSING_OPEN_KEY, value: open }));
   };
 
   /** The service emits no event for its own metadata changes, so the lists are re-fetched here. */

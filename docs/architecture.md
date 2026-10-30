@@ -205,6 +205,10 @@ neither waiting on the user nor working. Needs you lists the waiting chats
 first, then the unread ones by most recent turn end, and its count includes
 both. The two times are ordered by operation as well as by clock, so a turn
 end and a seen mark in the same millisecond still compare correctly.
+The UI decides what "seen" means: a chat is marked seen while it is the active
+tab of a focused window (at once on `chatFinished`, otherwise after the tab
+has been shown for a moment, so tabs only passed through stay unread), and it
+posts the "finished — your turn" notification only for chats not on screen.
 
 **Chat view.** `chat.open` returns the last N items of the SDK history merged
 with the live session's items (the live version wins for anything both have),
