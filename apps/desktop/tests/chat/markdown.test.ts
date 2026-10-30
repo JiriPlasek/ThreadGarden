@@ -104,6 +104,31 @@ describe('markdown', () => {
     expect(renderMarkdown('<pre>PAHUB-CODE-0</pre>')).not.toContain('code-block');
   });
 
+  it('never leaves code blocks or other block content inside a link', () => {
+    const box = document.createElement('div');
+    for (const md of [
+      '<a href="https://evil.example">\n\n```ts\nx\n```\n\n</a>',
+      '<a href="https://evil.example">\n\n- item\n\n```\nplain\n```\n</a>',
+      '<a href="https://evil.example"><pre>raw</pre><p>para</p></a>',
+    ]) {
+      box.innerHTML = renderMarkdown(md);
+      expect(box.querySelector('a .code-block, a pre, a p, a ul, a div')).toBeNull();
+      expect(box.textContent).not.toBe('');
+    }
+    // Inline links are untouched.
+    box.innerHTML = renderMarkdown('a [link](https://example.com) here');
+    expect(box.querySelector('a')?.getAttribute('href')).toBe('https://example.com');
+  });
+
+  it('leaves no code placeholder text behind, even when the html parser moves it', () => {
+    for (const md of [
+      '<select>\n\n```ts\nx\n```\n\n</select>',
+      '<table><tr>\n\n```\nx\n```\n\n</tr></table>',
+    ]) {
+      expect(renderMarkdown(md)).not.toContain('PAHUB-CODE');
+    }
+  });
+
   it('code blocks render as plain text first, with a language label and copy button', () => {
     const html = renderMarkdown('```ts\nconst a = 1 < 2;\n```');
     expect(html).toContain('data-lang="ts"');

@@ -71,6 +71,9 @@
     const target = e.target as Element | null;
     const copy = target?.closest('[data-copy-code]');
     if (copy) {
+      // Never let this click do anything else (e.g. follow an enclosing link).
+      e.preventDefault();
+      e.stopPropagation();
       const code = copy.closest('.code-block')?.querySelector('pre')?.textContent ?? '';
       void copyText(code).then(() => {
         copy.textContent = 'Copied';

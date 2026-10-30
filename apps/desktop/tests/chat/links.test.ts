@@ -31,4 +31,24 @@ describe('links in assistant text', () => {
     expect(allowed).toBe(false);
     expect(openExternal).toHaveBeenCalledWith('https://example.com/docs');
   });
+
+  it('the code Copy button never lets the click reach a link or the webview', async () => {
+    openExternal.mockClear();
+    const { container } = render(AssistantText, {
+      item: { id: 'c1', markdown: '```ts\nconst x = 1;\n```', streaming: false },
+    });
+    // Even if a link ever ended up around it, the click must stop here.
+    const button = container.querySelector('[data-copy-code]')!;
+    const outer = document.createElement('a');
+    outer.href = 'https://evil.example/';
+    const reached = vi.fn();
+    outer.addEventListener('click', reached);
+    container.parentElement!.insertBefore(outer, container);
+    outer.appendChild(container);
+
+    const allowed = await fireEvent.click(button);
+    expect(allowed).toBe(false); // default prevented
+    expect(reached).not.toHaveBeenCalled(); // propagation stopped
+    expect(openExternal).not.toHaveBeenCalled();
+  });
 });

@@ -63,16 +63,26 @@ const randomHex = (): string => {
   crypto.getRandomValues(a);
   return [...a].map((n) => n.toString(16).padStart(8, '0')).join('');
 };
-/** Model output cannot know this, so it cannot forge a code-block placeholder. */
-const NONCE = randomHex();
-const PLACEHOLDER = new RegExp(`<pre>PAHUB-CODE-${NONCE}-(\\d+)</pre>`, 'g');
+/**
+ * Fresh per render: model output cannot know it, so it cannot forge a
+ * code-block placeholder (and a nonce leaked into one render is useless later).
+ */
+let nonce = randomHex();
+/**
+ * A placeholder, intact (`<pre>…</pre>`) or as text the HTML parser moved out
+ * of its `<pre>`; only intact ones of the current render become code blocks.
+ */
+const PLACEHOLDER = /(<pre>)?PAHUB-CODE-([0-9a-f]+)-(\d+)(<\/pre>)?/g;
+/** Block content that must never sit inside a link (a click on it would follow the link). */
+const BLOCK_CONTENT =
+  'p, pre, div, ul, ol, li, blockquote, table, h1, h2, h3, h4, h5, h6, hr, details, summary';
 
 const marked = new Marked({ gfm: true, breaks: false, async: false });
 marked.use({
   renderer: {
     code({ text, lang }: Tokens.Code): string {
       const i = blocks.push({ text, lang: langOf(lang) }) - 1;
-      return `<pre>PAHUB-CODE-${NONCE}-${i}</pre>\n`;
+      return `<pre>PAHUB-CODE-${nonce}-${i}</pre>\n`;
     },
     image({ href, title, text }: Tokens.Image): string {
       if (isInlineImage(href)) {
@@ -198,6 +208,11 @@ const sanitizeMarkdown = (html: string): string => {
     if (input.getAttribute('type') === 'checkbox') input.setAttribute('disabled', '');
     else input.remove();
   }
+  // Links keep inline content only: one wrapped around a code block (or any
+  // block) is unwrapped, so no click inside a block can follow a link.
+  for (const a of fragment.querySelectorAll('a')) {
+    if (a.querySelector(BLOCK_CONTENT)) a.replaceWith(...a.childNodes);
+  }
   const box = document.createElement('div');
   box.append(fragment);
   return box.innerHTML;
@@ -223,11 +238,15 @@ const codeBlockHtml = (b: CodeBlock, highlighted: string | undefined): string =>
 
 const render = (md: string, highlights?: Map<string, string>): string => {
   blocks = [];
+  nonce = randomHex();
   const raw = marked.parse(md) as string;
   const found = blocks;
+  const current = nonce;
   blocks = [];
-  return sanitizeMarkdown(raw).replace(PLACEHOLDER, (_m, i: string) => {
-    const b = found[Number(i)];
+  // One pass, so code inserted here is never rescanned: intact placeholders of
+  // this render become code blocks, anything else that looks like one goes.
+  return sanitizeMarkdown(raw).replace(PLACEHOLDER, (_m, open, n: string, i: string, close) => {
+    const b = open && close && n === current ? found[Number(i)] : undefined;
     return b ? codeBlockHtml(b, highlights?.get(codeKey(b.lang, b.text))) : '';
   });
 };
