@@ -11,6 +11,7 @@
     "test": "vitest run",
     "test:real": "vitest run --config vitest.real.config.ts",
     "dev": "tsx src/main.ts",
+    "mock": "tsx src/testing/mock-main.ts",
     "build": "node scripts/build.mjs"
   },
   "dependencies": {
