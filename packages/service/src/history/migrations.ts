@@ -60,6 +60,13 @@ const steps: string[] = [
     last_seen_at INTEGER,
     last_turn_ended_at INTEGER
   );`,
+  // v1.1: "Notify when a chat finishes" starts as the user's existing
+  // notifications choice (someone who silenced pahub stays silenced). Once, on
+  // upgrade: from then on the two settings are independent. Only a boolean is
+  // copied, since an invalid stored value would void every setting.
+  `INSERT OR IGNORE INTO settings (key, json)
+     SELECT 'notifyOnFinish', json FROM settings
+     WHERE key = 'notifications' AND json IN ('true', 'false');`,
 ];
 
 export const migrate = (db: DatabaseSync): void => {

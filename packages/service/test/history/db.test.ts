@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { openDb } from '../../src/history/db.js';
+import { DatabaseSync } from 'node:sqlite';
+import { Db, openDb } from '../../src/history/db.js';
 import { migrate } from '../../src/history/migrations.js';
 import type { SDKSessionInfo } from '../../src/sdk/adapter.js';
 
@@ -37,6 +38,37 @@ describe('migrations', () => {
       expect(names).toContain(t);
     }
     db.close();
+  });
+
+  it('on upgrade, notifyOnFinish starts as the stored notifications setting (v1.1)', () => {
+    /** A pahub.db as v1.1 found it: the first three steps, `notifications` maybe stored. */
+    const before = (notifications: string | undefined) => {
+      const raw = new DatabaseSync(':memory:');
+      migrate(raw);
+      raw.exec('DELETE FROM settings');
+      raw.exec('PRAGMA user_version = 3');
+      if (notifications !== undefined) {
+        raw
+          .prepare("INSERT INTO settings (key, json) VALUES ('notifications', ?)")
+          .run(notifications);
+      }
+      migrate(raw);
+      return new Db(raw);
+    };
+    // A user who silenced pahub stays silenced…
+    const silenced = before('false');
+    expect(silenced.getSettings()).toMatchObject({ notifications: false, notifyOnFinish: false });
+    // …and from then on the two settings are independent.
+    silenced.patchSettings({ notifications: true });
+    expect(silenced.getSettings()).toMatchObject({ notifications: true, notifyOnFinish: false });
+    expect(before('true').getSettings().notifyOnFinish).toBe(true);
+    expect(before(undefined).getSettings().notifyOnFinish).toBe(true);
+    // A stored value that is not a boolean is not copied (it would void every setting).
+    expect(before('"loud"').getSettings().notifyOnFinish).toBe(true);
+    // A new install: turning notifications off later leaves notifyOnFinish alone.
+    const fresh = openDb(':memory:');
+    fresh.patchSettings({ notifications: false });
+    expect(fresh.getSettings()).toMatchObject({ notifications: false, notifyOnFinish: true });
   });
 });
 
