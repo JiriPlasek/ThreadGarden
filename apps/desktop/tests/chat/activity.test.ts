@@ -397,6 +397,101 @@ describe('activity panel', () => {
     await new Promise((r) => setTimeout(r, 30));
     expect(viewport.scrollTop).toBe(before);
   });
+
+  it('hiding a panel opened on request in a chat without tasks keeps the setting on', async () => {
+    const { server, app, panel } = await renderChat();
+    const toggle = screen.getByRole('button', { name: 'Activity panel' });
+    await userEvent.click(toggle);
+    expect(panel()).toBeTruthy();
+    await userEvent.click(toggle);
+    expect(panel()).toBeNull();
+    expect(app.settings.activityOpen).toBe(true);
+    expect(
+      server.calls('uiState.set').filter((c) => (c.params as { key: string }).key === ACTIVITY_KEY),
+    ).toEqual([]);
+  });
+
+  it('Ctrl+. ignores key repeat and Shift', async () => {
+    const { panel } = await renderChat({ tasks: [shell()] });
+    expect(panel()).toBeTruthy();
+    await fireEvent.keyDown(window, { key: '.', code: 'Period', ctrlKey: true, repeat: true });
+    expect(panel()).toBeTruthy();
+    await fireEvent.keyDown(window, { key: '>', code: 'Period', ctrlKey: true, shiftKey: true });
+    expect(panel()).toBeTruthy();
+    await fireEvent.keyDown(window, { key: '.', code: 'Period', metaKey: true });
+    expect(panel()).toBeNull();
+  });
+
+  it('a paused task shows a frozen time marked paused and does not tick', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
+    vi.setSystemTime(NOW);
+    const { panel } = await renderChat({
+      tasks: [agent({ status: 'paused', startedAt: NOW - 42_000 })],
+    });
+    const row = within(panel()!).getByRole('listitem');
+    expect(within(row).getByRole('img', { name: 'Paused' })).toBeTruthy();
+    expect(row.textContent).toContain('42s (paused)');
+    expect(vi.getTimerCount()).toBe(0);
+    vi.setSystemTime(NOW + 5_000);
+    await new Promise((r) => setTimeout(r, 20));
+    expect(row.textContent).toContain('42s (paused)');
+  });
+});
+
+describe('activity panel in a narrow chat pane (ruling R30)', () => {
+  let restore: (() => void) | null = null;
+  /** jsdom has no layout: report this width for the chat body. */
+  const paneWidth = (px: number): void => {
+    const original = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'clientWidth');
+    Object.defineProperty(HTMLElement.prototype, 'clientWidth', {
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.hasAttribute('data-chat-body') ? px : 0;
+      },
+    });
+    restore = () => {
+      if (original) Object.defineProperty(HTMLElement.prototype, 'clientWidth', original);
+    };
+  };
+  afterEach(() => {
+    restore?.();
+    restore = null;
+  });
+
+  it('is an overlay drawer, opened on request only; Esc closes it and refocuses the toggle', async () => {
+    paneWidth(600);
+    const { server, view, panel } = await renderChat({ tasks: [shell()] });
+    // Tasks alone do not cover a narrow chat.
+    expect(panel()).toBeNull();
+    const toggle = screen.getByRole('button', { name: 'Activity panel' });
+    await userEvent.click(toggle);
+    const drawer = panel()!;
+    expect(drawer.hasAttribute('data-overlay')).toBe(true);
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        within(drawer).getByRole('button', { name: 'Hide activity' }),
+      ),
+    );
+    await userEvent.keyboard('{Escape}');
+    expect(panel()).toBeNull();
+    await waitFor(() => expect(document.activeElement).toBe(toggle));
+    // Opening and closing the drawer is not the remembered side-column setting.
+    expect(
+      server.calls('uiState.set').filter((c) => (c.params as { key: string }).key === ACTIVITY_KEY),
+    ).toEqual([]);
+    expect(server.calls('chat.interrupt')).toHaveLength(0);
+
+    // The scrim closes it too.
+    await userEvent.click(toggle);
+    await userEvent.click(view.container.querySelector<HTMLElement>('[data-activity-scrim]')!);
+    expect(panel()).toBeNull();
+  });
+
+  it('is a side column when the pane is wide enough', async () => {
+    paneWidth(1000);
+    const { panel } = await renderChat({ tasks: [shell()] });
+    expect(panel()!.hasAttribute('data-overlay')).toBe(false);
+  });
 });
 
 describe('running badge', () => {

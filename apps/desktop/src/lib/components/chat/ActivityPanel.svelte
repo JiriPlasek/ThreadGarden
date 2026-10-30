@@ -18,10 +18,16 @@
    */
   let {
     chat,
+    overlay = false,
+    element = $bindable(null),
     onClose,
     onShowAgent,
   }: {
     chat: ChatState;
+    /** A drawer over the chat (narrow panes) rather than a column beside it; Esc closes it. */
+    overlay?: boolean;
+    /** The panel's root element. */
+    element?: HTMLElement | null;
     onClose: () => void;
     /** Scrolls the messages to the tool call with this `toolUseId`, when it is loaded. */
     onShowAgent: (toolUseId: string) => void;
@@ -33,7 +39,9 @@
   const agents = $derived(tasks.filter((t) => t.kind === 'agent'));
   /** Shells, monitors and task types pahub does not know (shown with their raw type). */
   const processes = $derived(tasks.filter((t) => t.kind !== 'agent'));
-  const ticking = $derived(tasks.some((t) => !taskEnded(t)));
+  /** Paused tasks keep the time they had when first seen paused, so they do not tick. */
+  const ticking = $derived(tasks.some((t) => !taskEnded(t) && t.status !== 'paused'));
+  const pausedFor = new Map<string, number>();
 
   let now = $state(Date.now());
   $effect(() => {
@@ -47,6 +55,15 @@
   const since = (t: ChatTask): string => {
     if (t.endedAt !== undefined) return elapsed(t.endedAt - t.startedAt);
     if (taskEnded(t) && t.durationMs !== undefined) return elapsed(t.durationMs);
+    if (t.status === 'paused') {
+      let frozen = pausedFor.get(t.taskId);
+      if (frozen === undefined) {
+        frozen = Date.now() - t.startedAt;
+        pausedFor.set(t.taskId, frozen);
+      }
+      return `${elapsed(frozen)} (paused)`;
+    }
+    pausedFor.delete(t.taskId);
     return elapsed(now - t.startedAt);
   };
   const detailsId = (t: ChatTask): string => `activity-${chat.sessionId}-${t.taskId}`;
@@ -109,14 +126,32 @@
   </span>
 {/snippet}
 
-<section aria-label="Activity" class="bg-muted/20 flex min-h-0 w-72 shrink-0 flex-col border-l">
+<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+<section
+  bind:this={element}
+  aria-label="Activity"
+  data-overlay={overlay || undefined}
+  class={cn(
+    'flex min-h-0 flex-col border-l',
+    overlay
+      ? 'bg-background absolute inset-y-0 right-0 z-30 w-[min(18rem,90%)] shadow-lg'
+      : 'bg-muted/20 w-[min(18rem,40%)] shrink-0',
+  )}
+  onkeydown={(e) => {
+    if (overlay && e.key === 'Escape' && !e.defaultPrevented) {
+      e.preventDefault();
+      onClose();
+    }
+  }}
+>
   <div class="flex h-8 shrink-0 items-center gap-2 border-b pr-1.5 pl-3">
-    <h2 class="text-xs font-semibold">Activity</h2>
+    <h2 class="shrink-0 text-xs font-semibold">Activity</h2>
     {#if chat.running > 0}
-      <span class="text-muted-foreground text-[0.6875rem] tabular-nums">{chat.running} running</span
+      <span class="text-muted-foreground min-w-0 truncate text-[0.6875rem] tabular-nums"
+        >{chat.running} running</span
       >
     {/if}
-    <IconButton label="Hide activity" class="ml-auto" side="left" onclick={onClose}>
+    <IconButton label="Hide activity" class="ml-auto shrink-0" side="left" onclick={onClose}>
       <XIcon />
     </IconButton>
   </div>

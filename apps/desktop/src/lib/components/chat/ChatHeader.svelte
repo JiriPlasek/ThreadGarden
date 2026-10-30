@@ -171,7 +171,7 @@
           {#if !activityOpen && chat.running > 0}
             <!-- Running tasks while the panel is hidden: the tab badge says how many. -->
             <span
-              class="absolute top-0.5 right-0.5 size-1.5 rounded-full bg-emerald-500"
+              class="absolute top-0.5 right-0.5 size-1.5 rounded-full bg-emerald-600 dark:bg-emerald-400"
               aria-hidden="true"
             ></span>
           {/if}

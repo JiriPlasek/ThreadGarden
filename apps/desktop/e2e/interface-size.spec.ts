@@ -76,3 +76,66 @@ for (const [label, presses] of [
     expect(clipped).toEqual([]);
   });
 }
+
+/**
+ * Ruling R30: with background tasks present, the Activity panel never squeezes
+ * the chat. Narrow chat panes get it as an overlay drawer (opened on request,
+ * the messages and composer keep their width); wide ones as a side column of
+ * at most 40 % of the pane. Its controls stay on screen either way.
+ */
+for (const c of [
+  { width: 720, scale: '100 %', presses: 0, session: 975, overlay: true },
+  { width: 1200, scale: '150 %', presses: 5, session: 974, overlay: true },
+  { width: 1400, scale: '100 %', presses: 0, session: 973, overlay: false },
+] as const) {
+  test(`activity panel fits a ${c.width} px window at ${c.scale}`, async ({ page }) => {
+    await page.setViewportSize({ width: c.width, height: 900 });
+    await openApp(page);
+    // The mock's session-N belongs to proj-(N mod 50): its project lists it near the top.
+    await page
+      .getByRole('navigation', { name: 'Places' })
+      .getByRole('button', { name: new RegExp(`^proj-${c.session % 50}( \\d+)?$`) })
+      .click();
+    await page
+      .getByRole('region', { name: 'Chat list' })
+      .locator(`[role="option"][data-session-id="session-${c.session}"]`)
+      .click();
+    const composer = page.getByRole('textbox', { name: 'Message' });
+    await composer.fill('Start the dev server');
+    await composer.press('Enter');
+    await expect(page.getByRole('tab', { selected: true })).toContainText('1 running');
+    for (let i = 0; i < c.presses; i++) await page.keyboard.press('ControlOrMeta+Equal');
+
+    const activity = page.getByRole('region', { name: 'Activity' });
+    if (c.overlay) {
+      // Tasks alone do not cover a narrow chat; Ctrl+. opens the drawer.
+      await expect(activity).toHaveCount(0);
+      const before = (await composer.boundingBox())!.width;
+      await page.keyboard.press('ControlOrMeta+.');
+      await expect(activity).toHaveAttribute('data-overlay', 'true');
+      expect((await composer.boundingBox())!.width).toBeCloseTo(before, 0);
+    } else {
+      await expect(activity).toBeVisible();
+      await expect(activity).not.toHaveAttribute('data-overlay');
+      const body = (await page.locator('[data-chat-body]').boundingBox())!;
+      const panel = (await activity.boundingBox())!;
+      expect(panel.width).toBeLessThanOrEqual(body.width * 0.4 + 1);
+      expect((await composer.boundingBox())!.width).toBeGreaterThanOrEqual(240);
+    }
+
+    for (const control of [
+      activity.getByRole('button', { name: 'Hide activity' }),
+      activity.getByRole('button', { name: 'Stop npm run dev' }),
+    ]) {
+      await expect(control).toBeVisible();
+      const box = (await control.boundingBox())!;
+      expect(box.x).toBeGreaterThanOrEqual(0);
+      expect(box.x + box.width).toBeLessThanOrEqual(c.width);
+    }
+
+    if (c.overlay) {
+      await page.keyboard.press('Escape');
+      await expect(activity).toHaveCount(0);
+    }
+  });
+}

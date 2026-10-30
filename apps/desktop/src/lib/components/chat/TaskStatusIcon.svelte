@@ -35,7 +35,7 @@
   data-status={kind}
   class={cn(
     'inline-flex size-3.5 shrink-0 items-center justify-center',
-    kind === 'running' && 'text-emerald-500 dark:text-emerald-400',
+    kind === 'running' && 'text-emerald-600 dark:text-emerald-400',
     kind === 'completed' && 'text-emerald-600 dark:text-emerald-400',
     kind === 'failed' && 'text-destructive',
     (kind === 'pending' || kind === 'paused' || kind === 'stopped' || kind === 'unknown') &&

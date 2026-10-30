@@ -7,6 +7,7 @@
   import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
   import Composer from '#lib/components/composer/Composer.svelte';
   import SetupScreen from '#lib/components/SetupScreen.svelte';
+  import { rowPx } from '#lib/interface-scale.js';
   import { copyText } from '#lib/native.js';
   import { RequestError } from '#lib/service/client.js';
   import type { ResumeCheck } from '#lib/state/chats.svelte.js';
@@ -29,7 +30,9 @@
    *
    * The Activity panel (spec v1.1 §2) sits on the right. It shows when the
    * remembered setting says so and the chat has had tasks; for other chats
-   * only on request (the header's Activity button or Ctrl/Cmd+.).
+   * only on request (the header's Activity button or Ctrl/Cmd+.). In a chat
+   * pane narrower than SIDE_PANEL_MIN_REM it would squeeze the messages, so
+   * there it is an overlay drawer instead, opened on request only (ruling R30).
    */
   let { sessionId }: { sessionId: string } = $props();
 
@@ -246,15 +249,44 @@
 
   // ── Activity panel ──────────────────────────────────────────────────────
 
+  /** Narrower chat panes (≈ 720 px at 100 %) get the panel as an overlay drawer. */
+  const SIDE_PANEL_MIN_REM = 42.5;
+  /** The chat body's width (0 until measured: then the side column applies). */
+  let bodyWidth = $state(0);
+  const overlay = $derived(bodyWidth > 0 && bodyWidth < rowPx(SIDE_PANEL_MIN_REM, settings.scale));
+  let drawerOpen = $state(false);
+  let drawer = $state<HTMLElement | null>(null);
+
   const activityShown = $derived(
-    chat?.loaded === true && settings.activityOpen && (chat.hadTasks || chat.activityRequested),
+    chat?.loaded === true &&
+      (overlay ? drawerOpen : settings.activityOpen && (chat.hadTasks || chat.activityRequested)),
   );
+
+  const activityToggle = (): HTMLElement | null =>
+    root?.querySelector<HTMLElement>('header button[aria-label="Activity panel"]') ?? null;
+
+  const openDrawer = async (): Promise<void> => {
+    drawerOpen = true;
+    await tick();
+    drawer?.querySelector<HTMLElement>('button[aria-label="Hide activity"]')?.focus();
+  };
+
+  const closeDrawer = async (): Promise<void> => {
+    const a = document.activeElement;
+    const inside = !!a && (a === document.body || !!drawer?.contains(a));
+    drawerOpen = false;
+    await tick();
+    if (inside) activityToggle()?.focus();
+  };
 
   const toggleActivity = (): void => {
     const c = chats.get(sessionId);
     if (!c) return;
-    if (activityShown) {
-      settings.setActivityOpen(false);
+    if (overlay) {
+      void (drawerOpen ? closeDrawer() : openDrawer());
+    } else if (activityShown) {
+      // Shown only on request in a chat without tasks: that request is all there is to undo.
+      if (c.hadTasks) settings.setActivityOpen(false);
       c.activityRequested = false;
     } else {
       settings.setActivityOpen(true);
@@ -263,7 +295,8 @@
   };
 
   const onWindowKey = (e: KeyboardEvent): void => {
-    if (!(e.ctrlKey || e.metaKey) || e.altKey || e.defaultPrevented) return;
+    if (!(e.ctrlKey || e.metaKey) || e.altKey || e.shiftKey || e.repeat) return;
+    if (e.defaultPrevented) return;
     if (e.key !== '.' && e.code !== 'Period') return;
     // A modal dialog owns the keyboard while it is open.
     if (document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
@@ -320,7 +353,7 @@
       {forkError}
     </div>
   {/if}
-  <div class="flex min-h-0 flex-1">
+  <div class="relative flex min-h-0 flex-1" data-chat-body bind:clientWidth={bodyWidth}>
     <div class="flex min-h-0 min-w-0 flex-1 flex-col">
       {#if chat?.error && !chat.loaded}
         <div class="flex min-h-0 flex-1 items-center justify-center p-6">
@@ -435,7 +468,23 @@
       {/if}
     </div>
     {#if chat && activityShown}
-      <ActivityPanel {chat} onClose={toggleActivity} onShowAgent={showAgent} />
+      {#if overlay}
+        <!-- Clicking beside the drawer closes it; Esc and its close button do too. -->
+        <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+        <div
+          class="absolute inset-0 z-20 bg-black/20"
+          data-activity-scrim
+          aria-hidden="true"
+          onclick={() => void closeDrawer()}
+        ></div>
+      {/if}
+      <ActivityPanel
+        {chat}
+        {overlay}
+        bind:element={drawer}
+        onClose={toggleActivity}
+        onShowAgent={showAgent}
+      />
     {/if}
   </div>
 </div>
