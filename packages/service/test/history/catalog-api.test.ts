@@ -248,6 +248,17 @@ describe('catalog and places API', () => {
     expect((await t.call('settings.get')).idleReclaimMinutes).toBe(5);
   });
 
+  it('uiState round-trips arbitrary JSON and returns null when unset', async () => {
+    const t = await setup(1, 1);
+    expect(await t.call('uiState.get', { key: 'tabs' })).toEqual({ value: null });
+    await t.call('uiState.set', { key: 'tabs', value: { open: ['a', 'b'], active: 'b' } });
+    expect(await t.call('uiState.get', { key: 'tabs' })).toEqual({
+      value: { open: ['a', 'b'], active: 'b' },
+    });
+    await t.call('uiState.set', { key: 'tabs', value: 3 });
+    expect(await t.call('uiState.get', { key: 'tabs' })).toEqual({ value: 3 });
+  });
+
   it('projects.update rejects an unknown project', async () => {
     const t = await setup(1, 1);
     await expect(t.call('projects.update', { projectId: 'nope', pinned: true })).rejects.toThrow(

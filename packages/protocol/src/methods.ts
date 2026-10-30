@@ -159,6 +159,8 @@ export const methods = {
   ),
   'drafts.get': def(z.object({ key: z.string() }), z.object({ text: z.string() })),
   'drafts.set': def(z.object({ key: z.string(), text: z.string() }), empty),
+  'uiState.get': def(z.object({ key: z.string() }), z.object({ value: z.unknown() })),
+  'uiState.set': def(z.object({ key: z.string(), value: z.unknown() }), empty),
   'settings.get': def(empty, SettingsSchema),
   'settings.set': def(SettingsPatchSchema, SettingsSchema),
   'auth.setApiKey': def(z.object({ key: z.string().nullable() }), empty),

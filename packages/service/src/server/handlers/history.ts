@@ -55,6 +55,12 @@ export const registerHistoryHandlers = (router: Router, deps: HistoryHandlerDeps
     return {};
   });
 
+  router.register('uiState.get', async (p) => ({ value: db.getUiState(p.key) ?? null }));
+  router.register('uiState.set', async (p) => {
+    db.setUiState(p.key, p.value ?? null);
+    return {};
+  });
+
   router.register('settings.get', async () => db.getSettings());
   router.register('settings.set', async (p) => {
     const settings = db.patchSettings(p);

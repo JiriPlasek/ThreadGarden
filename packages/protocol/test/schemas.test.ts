@@ -98,6 +98,8 @@ describe('protocol schemas', () => {
       'meta.update',
       'drafts.get',
       'drafts.set',
+      'uiState.get',
+      'uiState.set',
       'settings.get',
       'settings.set',
       'auth.setApiKey',

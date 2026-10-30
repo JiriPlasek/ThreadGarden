@@ -1,35 +1,35 @@
 <script lang="ts">
-  import { serviceConnection } from '#lib/native.js';
-  import { fetchHello } from '#lib/service/hello.js';
+  import { startApp } from '#lib/state/app.js';
+  import { connection } from '#lib/state/connection.svelte.js';
 
-  type Status =
-    | { kind: 'connecting' }
-    | { kind: 'connected'; version: string }
-    | { kind: 'failed'; message: string };
-
-  let status = $state<Status>({ kind: 'connecting' });
+  let failure = $state<string | null>(null);
 
   const describe = (err: unknown): string => {
     const text = err instanceof Error ? err.message : String(err);
-    return text === 'service-version-mismatch'
+    return text === 'service-version-mismatch' || text === 'Incompatible protocol version'
       ? 'Restart the pahub service to update.'
       : `Could not reach the pahub service: ${text}`;
   };
 
   $effect(() => {
-    serviceConnection()
-      .then((conn) => fetchHello(conn))
-      .then((hello) => (status = { kind: 'connected', version: hello.serviceVersion }))
-      .catch((err: unknown) => (status = { kind: 'failed', message: describe(err) }));
+    startApp().catch((err: unknown) => (failure = describe(err)));
   });
 </script>
 
 <main class="flex min-h-screen items-center justify-center p-8">
-  {#if status.kind === 'connecting'}
-    <p class="text-muted-foreground" data-testid="status">Connecting…</p>
-  {:else if status.kind === 'connected'}
-    <p data-testid="status">pahub service {status.version}</p>
+  {#if failure}
+    <p class="text-destructive" data-testid="status">{failure}</p>
+  {:else if connection.status === 'open'}
+    <p data-testid="status">
+      pahub service {connection.serviceVersion}{connection.restartNeeded
+        ? ' (restart the pahub service to update)'
+        : ''}
+    </p>
+  {:else if connection.status === 'incompatible'}
+    <p class="text-destructive" data-testid="status">Restart the pahub service to update.</p>
   {:else}
-    <p class="text-destructive" data-testid="status">{status.message}</p>
+    <p class="text-muted-foreground" data-testid="status">
+      {connection.status === 'reconnecting' ? 'Reconnecting…' : 'Connecting…'}
+    </p>
   {/if}
 </main>
