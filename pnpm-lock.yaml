@@ -44,9 +44,15 @@ importers:
       '@pahub/protocol':
         specifier: workspace:*
         version: link:../protocol
+      fdir:
+        specifier: ^6.5.0
+        version: 6.5.0(picomatch@4.0.7)
       fuzzysort:
         specifier: ^4.0.2
         version: 4.0.2
+      ignore:
+        specifier: ^7.0.14
+        version: 7.0.14
       ws:
         specifier: ^8.18.3
         version: 8.22.0

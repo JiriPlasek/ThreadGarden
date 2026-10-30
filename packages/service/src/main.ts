@@ -7,6 +7,7 @@ import { PROTOCOL_VERSION, type EventMsg } from '@pahub/protocol';
 import pkg from '../package.json' with { type: 'json' };
 import { resolveDataDir } from './config.js';
 import { acquireInstanceLock, removeDiscovery, writeDiscovery } from './discovery.js';
+import { FileIndex } from './files/file-index.js';
 import { ExternalPoller, makeClaudeRunner, type ExternalSession } from './external/poller.js';
 import { Catalog, type LiveChat } from './history/catalog.js';
 import { openDb, type Db } from './history/db.js';
@@ -17,6 +18,7 @@ import { createLogger, type Logger } from './logger.js';
 import type { AgentAdapter } from './sdk/adapter.js';
 import type { ClaudeFound, ClaudeProblem } from './sdk/claude-path.js';
 import { registerExternalHandlers } from './server/handlers/external.js';
+import { registerFileHandlers } from './server/handlers/files.js';
 import { registerHistoryHandlers } from './server/handlers/history.js';
 import { Router } from './server/router.js';
 import { startWsServer } from './server/ws-server.js';
@@ -150,6 +152,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         void indexer.fullSync().catch((err: unknown) => log.error(`full sync: ${String(err)}`));
     }
 
+    registerFileHandlers(router, { index: new FileIndex() });
     registerExternalHandlers(router, {
       ...(poller ? { poller } : {}),
       lastModifiedOf: (id) => db?.getSession(id)?.lastModified,
