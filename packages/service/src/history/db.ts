@@ -350,16 +350,30 @@ export class Db implements LiveRegistry {
    * Substring search (trigram, case-insensitive) with one hit per session, best
    * rank first. Queries shorter than 3 characters cannot match a trigram index
    * and return nothing. The query is matched literally (never as FTS syntax).
-   * A match spanning two chunks of one session may be missed.
+   * A match spanning two chunks of one session may be missed. v1.2:
+   * `archived` limits the hits to archived chats (true) or the others (false),
+   * in SQL, so neither group can crowd the other out.
    */
-  searchFts(query: string, limit: number): { sessionId: string; snippet: string }[] {
+  searchFts(
+    query: string,
+    limit: number,
+    archived?: boolean,
+  ): { sessionId: string; snippet: string }[] {
     const q = query.trim();
     if ([...q].length < 3 || limit <= 0) return [];
     const phrase = `"${q.replaceAll('"', '""')}"`;
+    // The session id of a `<sessionId>#<generation>` key.
+    const id = `substr(messages_fts.session_id, 1,
+      length(rtrim(messages_fts.session_id, '0123456789')) - 1)`;
+    const bucket =
+      archived === undefined
+        ? ''
+        : `AND ${archived ? '' : 'NOT '}EXISTS (SELECT 1 FROM chat_buckets b
+             WHERE b.bucket = 'archived' AND b.session_id = ${id})`;
     const rows = this.raw
       .prepare(
         `SELECT session_id, snippet(messages_fts, 1, '', '', '…', 16) AS snip
-         FROM messages_fts WHERE messages_fts MATCH ? ORDER BY rank LIMIT ?`,
+         FROM messages_fts WHERE messages_fts MATCH ? ${bucket} ORDER BY rank LIMIT ?`,
       )
       .all(phrase, limit * 5 + 20);
     const gens = this.raw.prepare('SELECT gen FROM fts_gen WHERE session_id = ?');
@@ -495,18 +509,24 @@ export class Db implements LiveRegistry {
 
   /**
    * Moves chats into `bucket` (one transaction). `hold` applies to `onHold`
-   * only; every move clears "back from hold".
+   * only; every move clears "back from hold". With `seenAt` the chats are
+   * also marked seen at that time (Ruling R32: archiving), in the same
+   * transaction.
    */
   setBucket(
     sessionIds: readonly string[],
     bucket: Bucket,
     hold: { until?: number | undefined; note?: string | undefined } = {},
+    seenAt?: number,
   ): void {
     if (sessionIds.length === 0) return;
     const onHold = bucket === 'onHold';
     const note = onHold && hold.note?.trim() ? hold.note.trim() : null;
     const until = onHold ? (hold.until ?? null) : null;
-    this.inTransaction(() => this.setBucketRows(sessionIds, bucket, until, note));
+    this.inTransaction(() => {
+      this.setBucketRows(sessionIds, bucket, until, note);
+      if (seenAt !== undefined) for (const id of sessionIds) this.markSeen(id, seenAt);
+    });
   }
 
   /** Archived chats among `sessionIds` become active; returns those, in the given order. */

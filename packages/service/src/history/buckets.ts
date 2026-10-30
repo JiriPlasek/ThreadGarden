@@ -44,7 +44,9 @@ export class Buckets {
    * `chat.setBucket`: moves the known chats (one transaction). Archiving is
    * refused for a chat pahub runs (`LIVE`: the UI asks to end it first) or
    * one working or waiting elsewhere (`RUNNING`: it would come right back).
-   * A hold whose time has already passed ends at once.
+   * A hold whose time has already passed ends at once. Archiving also marks
+   * the chats seen (Ruling R32), so they leave Needs you unless they wait on
+   * the user.
    */
   set(
     sessionIds: readonly string[],
@@ -65,7 +67,7 @@ export class Buckets {
       else moved.push(id);
     }
     if (moved.length > 0) {
-      this.db.setBucket(moved, bucket, hold);
+      this.db.setBucket(moved, bucket, hold, bucket === 'archived' ? this.now() : undefined);
       this.changed(moved, bucket);
       if (bucket === 'onHold' && hold.until !== undefined) this.sweepHolds();
     }
@@ -128,6 +130,8 @@ export class Buckets {
     this.changed(back, 'active');
     const names = new Map(this.db.listProjects().map((p) => [p.projectId, p.displayName]));
     for (const s of this.catalog.summaries(back)) {
+      // A chat that works or waits on the user is not flagged (it is in use); nothing to announce.
+      if (!s.backFromHold) continue;
       this.emit({
         event: 'chatBackFromHold',
         data: {

@@ -132,6 +132,24 @@ describe('buckets (service)', () => {
     expect((await c.call<Any>('places.counts', {})).archived).toBe(0);
   });
 
+  it('a chat resumed for a message that then fails to send is not left archived', async () => {
+    const adapter = new FakeAdapter();
+    addHistory(adapter, 'h1', dir, NOW - 1000);
+    const start0 = adapter.start.bind(adapter);
+    adapter.start = (o) => {
+      const s = start0(o);
+      s.send = () => {
+        throw new Error('stdin closed');
+      };
+      return s;
+    };
+    const c = await start(adapter);
+    await c.call('chat.setBucket', { sessionIds: ['h1'], bucket: 'archived' });
+    const r = await c.raw('chat.send', { sessionId: 'h1', text: 'hello' });
+    expect(r.error?.code).toBe('INTERNAL');
+    expect(await summary(c, 'h1')).toMatchObject({ live: true, bucket: 'active' });
+  });
+
   it('an archived chat that starts running outside pahub returns to Active', async () => {
     const adapter = new FakeAdapter();
     addHistory(adapter, 'h1', dir, NOW - 1000);

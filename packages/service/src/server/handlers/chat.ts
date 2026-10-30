@@ -357,9 +357,11 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): voi
       s = host.ensureLive(p.sessionId, cwd);
       changed([p.sessionId]);
     }
+    // Nothing gets lost in the archive: a chat being sent a message (and
+    // perhaps running now) is active, even if the send itself then fails.
+    unarchive(p.sessionId);
     const sent = s.send(input);
     markSeen(p.sessionId); // replying means the last turn was seen
-    unarchive(p.sessionId); // nothing gets lost in the archive
     return sent;
   });
 

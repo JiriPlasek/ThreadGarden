@@ -572,3 +572,79 @@ describe('buckets: persistence', () => {
     }
   });
 });
+
+describe('buckets: review fixes', () => {
+  it('archived title matches never crowd out a weaker active match in search.quick', async () => {
+    const t = await setup();
+    const archived = ['session-1', 'session-2', 'session-3', 'session-4', 'session-5'];
+    for (const id of archived) {
+      await t.call('meta.update', { sessionId: id, customTitle: 'flux capacitor' });
+    }
+    await t.call('meta.update', {
+      sessionId: 'session-6',
+      customTitle: 'notes on the flux of a big capacitor',
+    });
+    await t.setBucket(archived, 'archived');
+    const hits = (await t.call('search.quick', { query: 'flux capacitor', limit: 3 }))
+      .items as Any[];
+    expect(hits).toHaveLength(3);
+    expect(hits[0]).toMatchObject({ sessionId: 'session-6' });
+    expect(hits[0]).not.toHaveProperty('archived');
+    for (const h of hits.slice(1)) expect(h.archived).toBe(true);
+  });
+
+  it('archived full-text matches never crowd out an active one in search.quick', async () => {
+    const t = await setup();
+    const archived = ['session-1', 'session-2', 'session-3', 'session-4', 'session-5'];
+    for (const id of archived) t.db.setFts(id, 'zygomorphic zygomorphic zygomorphic');
+    t.db.setFts('session-6', `${'filler words here '.repeat(200)} zygomorphic`);
+    await t.setBucket(archived, 'archived');
+    const hits = (await t.call('search.quick', { query: 'zygomorphic', limit: 2 })).items as Any[];
+    expect(hits.map((h) => [h.sessionId, h.archived ?? false])).toEqual([
+      ['session-6', false],
+      [expect.any(String), true],
+    ]);
+  });
+
+  it('Ruling R32: archiving a chat marks it seen, so it leaves Needs you', async () => {
+    const t = await setup();
+    t.db.setTurnEnded('session-1', 10);
+    t.db.setTurnEnded('session-2', 20);
+    expect(await t.ids({ kind: 'needsYou' })).toEqual(['session-2', 'session-1']);
+    expect((await t.call('places.counts')).needsYou).toBe(2);
+    await t.setBucket(['session-1'], 'archived');
+    expect(await t.ids({ kind: 'needsYou' })).toEqual(['session-2']);
+    expect((await t.call('places.counts')).needsYou).toBe(1);
+    expect(t.catalog.summary('session-1')).toMatchObject({ bucket: 'archived', unread: false });
+    // On hold does not: the chat stays unread.
+    await t.setBucket(['session-2'], 'onHold');
+    expect(t.catalog.summary('session-2')?.unread).toBe(true);
+    // An archived chat that really waits on the user still shows under Needs you.
+    await t.setBucket(['session-3'], 'archived');
+    t.setExternals([ext('session-3', '/work/proj-0', { status: 'waiting' })]);
+    expect(await t.ids({ kind: 'needsYou' })).toEqual(['session-3', 'session-2']);
+  });
+
+  it('a hold that ends while the chat works or waits is not announced', async () => {
+    const t = await setup();
+    const now = BASE + 100 * DAY;
+    await t.setBucket(['session-1', 'session-2', 'session-3'], 'onHold', {
+      holdUntil: now + 1000,
+    });
+    t.setLive([lc('session-1', '/work/proj-1', 'working')]);
+    t.setExternals([ext('session-2', '/work/proj-2', { status: 'waiting' })]);
+    t.events.length = 0;
+    t.setNow(now + 2000);
+    t.buckets.sweepHolds();
+    expect(t.events).toEqual([
+      {
+        event: 'sessions.changed',
+        data: { sessionIds: ['session-1', 'session-2', 'session-3'] },
+      },
+      {
+        event: 'chatBackFromHold',
+        data: { sessionId: 'session-3', title: expect.any(String), projectName: 'proj-0' },
+      },
+    ]);
+  });
+});
