@@ -169,13 +169,55 @@ export class Db implements LiveRegistry {
   }
 
   // --- full-text ------------------------------------------------------------
+  //
+  // FTS rows are keyed `<sessionId>#<generation>`. `fts_gen` names the current
+  // generation per session, so a rebuild stages rows under the next generation
+  // (invisible to search) and `commitFts` makes them current in one short
+  // statement; a failed rebuild leaves the previous text searchable.
 
-  /** Replaces a session's indexed text (chunked into several FTS rows). */
+  /** Starts a rebuild: returns the key to pass to `addFtsChunk`. */
+  stageFts(sessionId: string): { key: string; gen: number } {
+    const gen = this.currentGen(sessionId) + 1;
+    return { key: `${sessionId}#${gen}`, gen };
+  }
+
+  /** Adds one staged row; callers keep `text` ≤ `FTS_CHUNK_CHARS` (see `chunkText`). */
+  addFtsChunk(key: string, text: string): void {
+    if (text.length === 0) return;
+    this.raw.prepare('INSERT INTO messages_fts (session_id, text) VALUES (?, ?)').run(key, text);
+  }
+
+  /** Makes the staged generation current (one small write). */
+  commitFts(sessionId: string, gen: number): void {
+    this.raw
+      .prepare(
+        `INSERT INTO fts_gen (session_id, gen) VALUES (?, ?)
+         ON CONFLICT(session_id) DO UPDATE SET gen = excluded.gen`,
+      )
+      .run(sessionId, gen);
+  }
+
+  /** Rowids of this session's FTS rows that are not the current generation (old or abandoned). */
+  staleFtsRowids(sessionId: string): number[] {
+    const cur = this.currentGen(sessionId);
+    return this.ftsRows(sessionId)
+      .filter((r) => r.gen !== cur)
+      .map((r) => r.rowid);
+  }
+
+  deleteFtsRowids(rowids: number[]): void {
+    const stmt = this.raw.prepare('DELETE FROM messages_fts WHERE rowid = ?');
+    for (const id of rowids) stmt.run(id);
+  }
+
+  /** Replaces a session's indexed text synchronously (small texts, tests). */
   setFts(sessionId: string, text: string): void {
+    const { key, gen } = this.stageFts(sessionId);
     this.raw.exec('BEGIN');
     try {
-      this.clearFts(sessionId);
-      for (const chunk of chunkText(text)) this.addFtsChunk(sessionId, chunk);
+      for (const chunk of chunkText(text)) this.addFtsChunk(key, chunk);
+      this.commitFts(sessionId, gen);
+      this.deleteFtsRowids(this.staleFtsRowids(sessionId));
       this.raw.exec('COMMIT');
     } catch (e) {
       this.raw.exec('ROLLBACK');
@@ -183,16 +225,22 @@ export class Db implements LiveRegistry {
     }
   }
 
-  clearFts(sessionId: string): void {
-    this.raw.prepare('DELETE FROM messages_fts WHERE session_id = ?').run(sessionId);
+  private currentGen(sessionId: string): number {
+    const r = this.raw.prepare('SELECT gen FROM fts_gen WHERE session_id = ?').get(sessionId);
+    return (r?.gen as number | undefined) ?? 0;
   }
 
-  /** Adds one FTS row; callers keep `text` ≤ `FTS_CHUNK_CHARS` (see `chunkText`). */
-  addFtsChunk(sessionId: string, text: string): void {
-    if (text.length === 0) return;
-    this.raw
-      .prepare('INSERT INTO messages_fts (session_id, text) VALUES (?, ?)')
-      .run(sessionId, text);
+  private ftsRows(sessionId: string): { rowid: number; gen: number }[] {
+    return this.raw
+      .prepare(
+        `SELECT rowid, session_id FROM messages_fts
+         WHERE substr(session_id, 1, length(?1) + 1) = ?1 || '#'`,
+      )
+      .all(sessionId)
+      .map((r) => ({
+        rowid: r.rowid as number,
+        gen: Number((r.session_id as string).slice(sessionId.length + 1)),
+      }));
   }
 
   /**
@@ -211,16 +259,57 @@ export class Db implements LiveRegistry {
          FROM messages_fts WHERE messages_fts MATCH ? ORDER BY rank LIMIT ?`,
       )
       .all(phrase, limit * 5 + 20);
+    const gens = this.raw.prepare('SELECT gen FROM fts_gen WHERE session_id = ?');
     const seen = new Set<string>();
     const out: { sessionId: string; snippet: string }[] = [];
     for (const r of rows) {
-      const id = r.session_id as string;
+      const key = r.session_id as string;
+      const at = key.lastIndexOf('#');
+      const id = key.slice(0, at);
       if (seen.has(id)) continue;
+      if (gens.get(id)?.gen !== Number(key.slice(at + 1))) continue; // stale or staged
       seen.add(id);
       out.push({ sessionId: id, snippet: r.snip as string });
       if (out.length >= limit) break;
     }
     return out;
+  }
+
+  // --- removal ----------------------------------------------------------------
+
+  allSessionIds(): string[] {
+    return this.raw
+      .prepare('SELECT session_id FROM sessions')
+      .all()
+      .map((r) => r.session_id as string);
+  }
+
+  /**
+   * Removes a session's row and index text. `meta` and `drafts` are kept on
+   * purpose (cheap, and a pahub title survives a transcript that reappears).
+   */
+  deleteSession(sessionId: string): void {
+    this.raw.exec('BEGIN');
+    try {
+      this.raw.prepare('DELETE FROM sessions WHERE session_id = ?').run(sessionId);
+      this.raw.prepare('DELETE FROM fts_gen WHERE session_id = ?').run(sessionId);
+      this.deleteFtsRowids(this.ftsRows(sessionId).map((r) => r.rowid));
+      this.raw.exec('COMMIT');
+    } catch (e) {
+      this.raw.exec('ROLLBACK');
+      throw e;
+    }
+  }
+
+  /** Deletes projects without sessions unless pinned; returns how many went. */
+  pruneEmptyProjects(): number {
+    const r = this.raw
+      .prepare(
+        `DELETE FROM projects WHERE pinned = 0
+         AND NOT EXISTS (SELECT 1 FROM sessions s WHERE s.project_id = projects.project_id)`,
+      )
+      .run();
+    return Number(r.changes);
   }
 
   // --- projects -------------------------------------------------------------

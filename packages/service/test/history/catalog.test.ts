@@ -15,6 +15,13 @@ describe('titleFor', () => {
     expect(titleFor({ firstPrompt: 'a\n\n  b' })).toBe('a b');
   });
 
+  it('truncates every non-custom title but not a custom one', () => {
+    const long = 'w '.repeat(100);
+    expect(titleFor({ summary: long }).length).toBeLessThanOrEqual(80);
+    expect(titleFor({ sdkTitle: long }).length).toBeLessThanOrEqual(80);
+    expect(titleFor({ customTitle: long })).toBe(long.trim());
+  });
+
   it('never returns empty', () => {
     expect(titleFor({})).not.toBe('');
   });

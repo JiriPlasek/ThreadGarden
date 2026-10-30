@@ -52,6 +52,8 @@ const steps: string[] = [
   CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, json TEXT NOT NULL);
   CREATE TABLE IF NOT EXISTS ui_state (key TEXT PRIMARY KEY, json TEXT NOT NULL);
   `,
+  // Current FTS generation per session (see Db full-text section).
+  `CREATE TABLE IF NOT EXISTS fts_gen (session_id TEXT PRIMARY KEY, gen INTEGER NOT NULL);`,
 ];
 
 export const migrate = (db: DatabaseSync): void => {

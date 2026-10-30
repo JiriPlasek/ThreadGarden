@@ -106,4 +106,120 @@ describe('Indexer', () => {
     expect(rows.n).toBeLessThanOrEqual(50_000 + 20_000);
     expect(rows.n).toBeGreaterThan(10_000);
   });
+
+  it('keeps the most recent text when over the cap', async () => {
+    const adapter = generateCorpus({ sessions: 0, projects: 1, bigSessionMessages: 100 });
+    const msgs = adapter.sessions.get('session-big')!.messages;
+    msgs[0] = sm('user', { role: 'user', content: 'headmarkerxyz' });
+    msgs[msgs.length - 1] = sm('assistant', {
+      role: 'assistant',
+      content: [{ type: 'text', text: 'tailmarkerxyz' }],
+    });
+    const db = openDb(':memory:');
+    await new Indexer(adapter, db, () => {}, {
+      platform: 'linux',
+      gitCommonDir: () => null,
+      maxTextChars: 50_000,
+    }).fullSync();
+    expect(db.searchFts('tailmarkerxyz', 5)).toHaveLength(1);
+    expect(db.searchFts('headmarkerxyz', 5)).toEqual([]);
+  });
+
+  it('removes vanished sessions and empty projects but keeps live sessions and pinned projects', async () => {
+    const { adapter, db, indexer, events } = setup(6); // 3 projects x 2 sessions
+    await indexer.fullSync();
+    expect(db.listProjects()).toHaveLength(3);
+    const ids = [...adapter.sessions.keys()];
+    const inProject = (p: string) =>
+      ids.filter((i) => adapter.sessions.get(i)?.info.cwd === `/work/proj-${p}`);
+    // proj-0: gone entirely, but one of its sessions is live
+    const [p0a, p0b] = inProject('0') as [string, string];
+    db.markLive(p0b, '/work/proj-0');
+    // proj-1: gone entirely, pinned project
+    db.setProjectPinned('/work/proj-1', true);
+    // proj-2: gone entirely, unpinned
+    for (const id of [...inProject('0'), ...inProject('1'), ...inProject('2')])
+      adapter.sessions.delete(id);
+    events.length = 0;
+    await indexer.fullSync();
+    expect(db.getSession(p0a)).toBeUndefined();
+    expect(db.getSession(p0b)).toBeDefined(); // live: kept
+    expect(db.listSessions({}, 100, undefined).items.map((s) => s.sessionId)).toEqual([p0b]);
+    expect(db.searchFts('parity', 100).some((h) => h.sessionId === p0a)).toBe(false);
+    expect(db.raw.prepare('SELECT count(*) AS n FROM messages_fts').get()?.n).toBeLessThanOrEqual(
+      2,
+    );
+    expect(
+      db
+        .listProjects()
+        .map((p) => p.projectId)
+        .sort(),
+    ).toEqual(['/work/proj-0', '/work/proj-1']);
+    expect(events.some((e) => e.event === 'projects.changed')).toBe(true);
+  });
+
+  it('isolates a failing session: others index, projects sync, failure is reported and unmarked', async () => {
+    const { adapter, db, events } = setup(5);
+    const failing = 'session-2';
+    const real = adapter.getSessionMessages.bind(adapter);
+    vi.spyOn(adapter, 'getSessionMessages').mockImplementation(async (id, o) => {
+      if (id === failing) throw new Error('boom');
+      return real(id, o);
+    });
+    const errors: { id: string; msg: string }[] = [];
+    const indexer = new Indexer(adapter, db, (e) => events.push(e), {
+      platform: 'linux',
+      gitCommonDir: () => null,
+      onError: (e, c) => errors.push({ id: c.sessionId, msg: (e as Error).message }),
+    });
+    await indexer.fullSync();
+    expect(errors).toEqual([{ id: failing, msg: 'boom' }]);
+    for (const [id, s] of adapter.sessions) expect(db.needsReindex(s.info)).toBe(id === failing);
+    expect(db.listProjects().length).toBe(3);
+
+    const realInfo = adapter.getSessionInfo.bind(adapter);
+    vi.spyOn(adapter, 'getSessionInfo').mockImplementation(async (id) => {
+      if (id === 'session-0') throw new Error('info boom');
+      return realInfo(id);
+    });
+    await indexer.refresh(['session-0', 'session-1']);
+    expect(errors.at(-1)).toEqual({ id: 'session-0', msg: 'info boom' });
+  });
+
+  it('a failure mid-extraction leaves the previous index text searchable', async () => {
+    const { adapter, db, indexer } = setup(1);
+    await indexer.fullSync();
+    expect(db.searchFts('parity', 5)).toHaveLength(1);
+    const s = adapter.sessions.get('session-0')!;
+    s.info = { ...s.info, lastModified: s.info.lastModified + 1 };
+    vi.spyOn(adapter, 'getSessionMessages').mockRejectedValue(new Error('mid'));
+    await indexer.fullSync();
+    expect(db.needsReindex(s.info)).toBe(true);
+    expect(db.searchFts('parity', 5)).toHaveLength(1);
+  });
+
+  it('a failure while writing the new index leaves the old text and no stray rows', async () => {
+    const adapter = generateCorpus({ sessions: 0, projects: 1, bigSessionMessages: 60 });
+    const db = openDb(':memory:');
+    const indexer = new Indexer(adapter, db, () => {}, {
+      platform: 'linux',
+      gitCommonDir: () => null,
+    });
+    await indexer.fullSync();
+    const count = () => db.raw.prepare('SELECT count(*) AS n FROM messages_fts').get()?.n;
+    const before = count();
+    const s = adapter.sessions.get('session-big')!;
+    s.info = { ...s.info, lastModified: s.info.lastModified + 1 };
+    const real = db.addFtsChunk.bind(db);
+    let calls = 0;
+    vi.spyOn(db, 'addFtsChunk').mockImplementation((k, t) => {
+      if (++calls === 3) throw new Error('disk');
+      real(k, t);
+    });
+    await indexer.fullSync();
+    expect(calls).toBe(3);
+    expect(db.needsReindex(s.info)).toBe(true);
+    expect(db.searchFts('parity', 5)).toHaveLength(1);
+    expect(count()).toBe(before);
+  });
 });

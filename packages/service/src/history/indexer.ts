@@ -11,13 +11,17 @@ import {
 
 /**
  * Cap on indexed text per session, in characters (~2 MB of mostly-ASCII text).
- * Text beyond it is not indexed (the chat itself is unaffected); this bounds
- * index size and the work done for huge transcripts.
+ * When a transcript has more, the most RECENT text (the tail) is kept and the
+ * oldest is dropped: recent context is what people search for. The whole
+ * transcript is still paged through (with event-loop yields) but only the tail
+ * is held and indexed, which bounds index size and memory. The chat view is
+ * unaffected: it reads messages from the SDK, not from the index.
  */
 export const MAX_TEXT_CHARS = 2 * 1024 * 1024;
 
 const BATCH = 20;
-const PAGE = 200;
+const PAGE = 100;
+const DELETE_BATCH = 8;
 const UNKNOWN_PROJECT = '(unknown)';
 
 const yieldLoop = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
@@ -44,12 +48,15 @@ export type IndexerOptions = {
   platform?: NodeJS.Platform;
   gitCommonDir?: GitCommonDir;
   maxTextChars?: number;
+  /** Called when one session fails to sync; the sync carries on with the rest. */
+  onError?: (error: unknown, context: { sessionId: string; step: 'refresh' | 'sync' }) => void;
 };
 
 export class Indexer {
   private readonly platform: NodeJS.Platform;
   private readonly gitCommonDir: GitCommonDir;
   private readonly maxText: number;
+  private readonly onError: NonNullable<IndexerOptions['onError']>;
   private running: Promise<void> = Promise.resolve();
 
   constructor(
@@ -61,6 +68,7 @@ export class Indexer {
     this.platform = options.platform ?? process.platform;
     this.gitCommonDir = options.gitCommonDir ?? defaultGitCommonDir;
     this.maxText = options.maxTextChars ?? MAX_TEXT_CHARS;
+    this.onError = options.onError ?? (() => {});
   }
 
   /** Upserts every session's metadata and (re)indexes the ones that changed. */
@@ -68,6 +76,7 @@ export class Indexer {
     return this.serial(async () => {
       const all = await this.adapter.listSessions();
       await this.process(all, true);
+      this.removeVanished(new Set(all.map((i) => i.sessionId)));
     });
   }
 
@@ -76,8 +85,12 @@ export class Indexer {
     return this.serial(async () => {
       const infos: SDKSessionInfo[] = [];
       for (const id of sessionIds) {
-        const info = await this.adapter.getSessionInfo(id);
-        if (info) infos.push(info);
+        try {
+          const info = await this.adapter.getSessionInfo(id);
+          if (info) infos.push(info);
+        } catch (e) {
+          this.onError(e, { sessionId: id, step: 'refresh' });
+        }
       }
       await this.process(infos, false);
     });
@@ -95,7 +108,11 @@ export class Indexer {
     let done = 0;
     for (let i = 0; i < infos.length; i += BATCH) {
       for (const info of infos.slice(i, i + BATCH)) {
-        if (await this.one(info, seenProjects)) changed.push(info.sessionId);
+        try {
+          if (await this.one(info, seenProjects)) changed.push(info.sessionId);
+        } catch (e) {
+          this.onError(e, { sessionId: info.sessionId, step: 'sync' });
+        }
         done++;
       }
       if (progress) this.emit({ event: 'index.progress', data: { done, total: infos.length } });
@@ -104,7 +121,11 @@ export class Indexer {
     if (progress && infos.length === 0) {
       this.emit({ event: 'index.progress', data: { done: 0, total: 0 } });
     }
-    this.syncProjects(seenProjects);
+    try {
+      this.syncProjects(seenProjects);
+    } catch (e) {
+      this.onError(e, { sessionId: '', step: 'sync' });
+    }
     if (changed.length > 0) this.emit({ event: 'sessions.changed', data: { sessionIds: changed } });
   }
 
@@ -123,12 +144,9 @@ export class Indexer {
     const stale = this.db.needsReindex(info);
     this.db.upsertSession(info, projectId);
     if (stale) {
-      try {
-        await this.indexText(info);
-        this.db.markIndexed(info);
-      } catch {
-        // leave unmarked: the next sync retries this session
-      }
+      // A failure propagates: the session stays unmarked and is retried next sync.
+      await this.indexText(info);
+      this.db.markIndexed(info);
     }
     const after = this.db.getSession(info.sessionId);
     return (
@@ -140,25 +158,76 @@ export class Indexer {
     );
   }
 
+  /**
+   * Pages through the whole transcript (yielding between pages) keeping only
+   * the newest `maxText` characters, then writes them as a staged FTS
+   * generation and swaps it in with one short statement. Any failure leaves the
+   * previous index text intact.
+   */
   private async indexText(info: SDKSessionInfo): Promise<void> {
     const id = info.sessionId;
-    this.db.clearFts(id);
+    const parts: string[] = [];
     let total = 0;
-    for (let offset = 0; total < this.maxText; offset += PAGE) {
+    for (let offset = 0; ; offset += PAGE) {
       const page = await this.adapter.getSessionMessages(id, { limit: PAGE, offset });
       if (page.length === 0) break;
-      let text = extractText(page);
+      const text = extractText(page);
       if (text.length > 0) {
-        if (total + text.length > this.maxText) text = text.slice(0, this.maxText - total);
+        parts.push(text);
         total += text.length;
-        for (const chunk of chunkText(text)) {
-          this.db.addFtsChunk(id, chunk);
-          await yieldLoop();
+        while (total > this.maxText) {
+          const head = parts[0] as string;
+          if (total - head.length >= this.maxText) {
+            parts.shift();
+            total -= head.length;
+          } else {
+            parts[0] = head.slice(total - this.maxText);
+            total = this.maxText;
+          }
         }
       }
       if (page.length < PAGE) break;
       await yieldLoop();
     }
+    const stage = this.db.stageFts(id);
+    try {
+      for (const chunk of chunkText(parts.join('\n'))) {
+        this.db.addFtsChunk(stage.key, chunk);
+        await yieldLoop();
+      }
+      this.db.commitFts(id, stage.gen);
+    } catch (e) {
+      await this.dropStale(id);
+      throw e;
+    }
+    await this.dropStale(id);
+  }
+
+  private async dropStale(sessionId: string): Promise<void> {
+    const rowids = this.db.staleFtsRowids(sessionId);
+    for (let i = 0; i < rowids.length; i += DELETE_BATCH) {
+      this.db.deleteFtsRowids(rowids.slice(i, i + DELETE_BATCH));
+      await yieldLoop();
+    }
+  }
+
+  /** Deletes sessions that no longer exist in the SDK listing (never a live one) and empty projects. */
+  private removeVanished(listed: Set<string>): void {
+    const live = new Set(this.db.listLive().map((l) => l.sessionId));
+    const removed: string[] = [];
+    for (const id of this.db.allSessionIds()) {
+      if (listed.has(id) || live.has(id)) continue;
+      try {
+        this.db.deleteSession(id);
+        removed.push(id);
+      } catch (e) {
+        this.onError(e, { sessionId: id, step: 'sync' });
+      }
+    }
+    if (removed.length === 0) return;
+    const pruned = this.db.pruneEmptyProjects();
+    this.emit({ event: 'sessions.changed', data: { sessionIds: removed } });
+    if (pruned > 0) this.emit({ event: 'projects.changed', data: {} });
   }
 
   private syncProjects(seen: Map<string, string>): void {

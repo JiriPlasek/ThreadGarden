@@ -28,6 +28,14 @@ describe('indexer perf', () => {
     // 2,000 messages × ~10 KB = ~20 MB of transcript text.
     const adapter = generateCorpus({ sessions: 0, projects: 1, bigSessionMessages: 2000 });
     const db = openDb(':memory:');
+    // Count what the indexer's fetch path really pulls through.
+    let fetched = 0;
+    const real = adapter.getSessionMessages.bind(adapter);
+    adapter.getSessionMessages = async (id, o) => {
+      const page = await real(id, o);
+      for (const m of page) fetched += JSON.stringify(m.message).length;
+      return page;
+    };
     const indexer = new Indexer(adapter, db, () => {}, opts);
     const h = monitorEventLoopDelay({ resolution: 5 });
     h.enable();
@@ -40,6 +48,8 @@ describe('indexer perf', () => {
       `20 MB session: total ${total.toFixed(0)} ms, max loop delay ${maxMs.toFixed(1)} ms`,
     );
     // The histogram resolution adds its own 5 ms tick to every sample.
+    console.info(`fetched ${(fetched / 1e6).toFixed(1)} MB`);
+    expect(fetched).toBeGreaterThanOrEqual(19_000_000);
     expect(maxMs - 5).toBeLessThanOrEqual(50 * slack);
     expect(db.searchFts('parity', 5).length).toBe(1);
     db.close();
