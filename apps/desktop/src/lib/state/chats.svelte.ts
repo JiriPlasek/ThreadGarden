@@ -116,6 +116,13 @@ const defaultSchedule: Schedule = (cb) => {
 
 export class ChatsState {
   readonly byId = new SvelteMap<string, ChatState>();
+  /**
+   * Summaries of open tabs whose chat is not loaded yet (restored tabs in the
+   * background): enough for the tab's title and status, kept current by
+   * `chat.status` events. A chat is loaded only when its tab is first shown.
+   */
+  private readonly peeks = new SvelteMap<string, ChatSummary>();
+  private readonly peeking = new Set<string>();
 
   private api: Api | null = null;
   private schedule: Schedule = defaultSchedule;
@@ -131,15 +138,48 @@ export class ChatsState {
 
   get = (sessionId: string): ChatState | undefined => this.byId.get(sessionId);
 
-  /** Makes exactly these chats resident: opens missing ones, drops the rest (closed tabs keep no items). */
-  sync = (sessionIds: readonly string[]): void => {
+  /**
+   * Follows the open tabs: the active chat is opened (and stays resident while
+   * its tab is open, so switching back is instant); background tabs that were
+   * never shown are not read at all, only summarised; closed tabs are dropped.
+   * Restoring ten big chats at launch must not mean ten full transcript reads.
+   */
+  sync = (sessionIds: readonly string[], active: string | null): void => {
     const wanted = new Set(sessionIds);
     for (const id of [...this.byId.keys()]) if (!wanted.has(id)) this.drop(id);
-    for (const id of wanted) if (!this.byId.has(id)) quietly(this.open(id));
+    for (const id of [...this.peeks.keys()]) if (!wanted.has(id)) this.peeks.delete(id);
+    if (active !== null && wanted.has(active) && !this.byId.has(active)) {
+      quietly(this.open(active));
+    }
+    const unseen = [...wanted].filter(
+      (id) => !this.byId.has(id) && !this.peeks.has(id) && !this.peeking.has(id),
+    );
+    if (unseen.length > 0) quietly(this.peek(unseen));
   };
+
+  /** The tab-bar summary of an open chat that is not loaded (yet). */
+  summaryOf = (sessionId: string): ChatSummary | undefined => this.peeks.get(sessionId);
 
   drop = (sessionId: string): void => {
     this.byId.delete(sessionId);
+    this.peeks.delete(sessionId);
+  };
+
+  private peek = async (sessionIds: string[]): Promise<void> => {
+    const api = this.api;
+    if (!api) return;
+    for (const id of sessionIds) this.peeking.add(id);
+    try {
+      const { items } = await api.request('sessions.summaries', { sessionIds });
+      for (const s of items) {
+        // Loaded or closed meanwhile: the chat itself (or nothing) is the source now.
+        if (this.peeking.has(s.sessionId) && !this.byId.has(s.sessionId)) {
+          this.peeks.set(s.sessionId, s);
+        }
+      }
+    } finally {
+      for (const id of sessionIds) this.peeking.delete(id);
+    }
   };
 
   /** Loads the tail of a chat; events arriving meanwhile are buffered and merged by seq. */
@@ -339,7 +379,17 @@ export class ChatsState {
 
   private onStatus = (e: ChatStatusEvent): void => {
     const chat = this.byId.get(e.sessionId);
-    if (chat) this.dispatch(chat, e);
+    if (chat) {
+      this.dispatch(chat, e);
+      return;
+    }
+    const peek = this.peeks.get(e.sessionId);
+    if (peek) {
+      const next: ChatSummary = { ...peek, status: e.status };
+      if (e.waitingFor === undefined) delete next.waitingFor;
+      else next.waitingFor = e.waitingFor;
+      this.peeks.set(e.sessionId, next);
+    }
   };
 
   /** Routes one event; events at or below the chat's seq are duplicates and ignored. */

@@ -25,10 +25,12 @@
   const info = (sessionId: string) => {
     const chat = chats.get(sessionId);
     const listedSummary = listed.get(sessionId);
-    const summary = listedSummary ?? chat?.summary ?? null;
+    // A background tab that was never shown has only a summary (see chats.sync).
+    const peek = chat ? undefined : chats.summaryOf(sessionId);
+    const summary = listedSummary ?? chat?.summary ?? peek ?? null;
     return {
       title: summary?.title ?? 'Loading…',
-      status: chat?.loaded ? chat.status : (listedSummary?.status ?? 'history'),
+      status: chat?.loaded ? chat.status : (peek?.status ?? listedSummary?.status ?? 'history'),
       raw: rawStatus(summary),
     };
   };

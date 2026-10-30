@@ -92,7 +92,7 @@ export const setup = async (configure?: (server: FakeServer) => void) => {
     app.connection.setVersions(conn);
     await client.connect(`ws://fake:${conn.port}`, conn.token);
   });
-  app.tabs.subscribe(() => app.chats.sync(app.tabs.open));
+  app.tabs.subscribe(() => app.chats.sync(app.tabs.open, app.tabs.active));
 
   const context = new Map<unknown, unknown>([[APP_CONTEXT, app]]);
   return { server, client, app, context };

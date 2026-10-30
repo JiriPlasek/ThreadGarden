@@ -1,7 +1,9 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import AppShell from '#lib/components/layout/AppShell.svelte';
   import ServiceBanner from '#lib/components/ServiceBanner.svelte';
   import ServiceDialogs from '#lib/components/ServiceDialogs.svelte';
+  import { Button } from '#lib/components/ui/button/index.js';
   import { startApp } from '#lib/state/app.js';
   import { connection } from '#lib/state/connection.svelte.js';
 
@@ -11,13 +13,17 @@
   const isMismatch = (text: string): boolean =>
     text === 'service-version-mismatch' || text === 'Incompatible protocol version';
 
-  $effect(() => {
+  /** Connects to (or starts) the service; a failure offers Retry, never a dead end. */
+  const start = (): void => {
+    failure = null;
     startApp().catch((err: unknown) => {
       const text = err instanceof Error ? err.message : String(err);
       if (isMismatch(text)) connection.markIncompatible();
       else failure = `Could not reach the pahub service: ${text}`;
     });
-  });
+  };
+
+  onMount(start);
 
   /** After the first successful connection the layout stays up; drops show a banner. */
   const ready = $derived(connection.status === 'open' || connection.status === 'reconnecting');
@@ -28,8 +34,9 @@
 {:else if ready}
   <AppShell />
 {:else if failure}
-  <main class="flex min-h-screen items-center justify-center p-8">
-    <p class="text-destructive text-sm" data-testid="status">{failure}</p>
+  <main class="flex min-h-screen flex-col items-center justify-center gap-3 p-8">
+    <p class="text-destructive max-w-prose text-center text-sm" data-testid="status">{failure}</p>
+    <Button size="sm" onclick={start}>Retry</Button>
   </main>
 {:else}
   <main class="flex min-h-screen items-center justify-center p-8">

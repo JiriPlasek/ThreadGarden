@@ -182,6 +182,33 @@ describe('tabs', () => {
   });
 });
 
+describe('restored tabs', () => {
+  it('open one chat at launch, label the rest from summaries', async () => {
+    const { server, app, context } = await setup((server) => {
+      server.handlers['uiState.get'] = (p) =>
+        (p as { key: string }).key === 'tabs'
+          ? { value: { open: ['t1', 't2', 't3'], active: 't3' } }
+          : { value: null };
+      server.handlers['sessions.summaries'] = (p) => ({
+        items: (p as { sessionIds: string[] }).sessionIds.map((id) =>
+          summary(id, { title: `Restored ${id}` }),
+        ),
+      });
+    });
+    await app.tabs.restore();
+    render(TabsBar, { context });
+    const tablist = screen.getByRole('tablist');
+    await waitFor(() => expect(within(tablist).getByText('Restored t1')).toBeTruthy());
+    expect(within(tablist).getByText('Restored t2')).toBeTruthy();
+    expect(server.calls('chat.open').map((c) => c.params)).toEqual([
+      { sessionId: 't3', tail: expect.any(Number) },
+    ]);
+    await userEvent.click(within(tablist).getByText('Restored t1'));
+    await waitFor(() => expect(server.calls('chat.open')).toHaveLength(2));
+    expect(server.calls('chat.open')[1]!.params).toMatchObject({ sessionId: 't1' });
+  });
+});
+
 describe('status icon', () => {
   it('unknown status renders neutral icon with raw tooltip', () => {
     render(StatusIcon, { props: { status: 'unknown', raw: 'hibernating' } });

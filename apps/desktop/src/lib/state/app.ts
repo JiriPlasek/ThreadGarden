@@ -21,8 +21,15 @@ let started: Promise<void> | null = null;
 let wired = false;
 let loaded = false;
 
-/** Idempotent: later calls return the first call's promise. */
-export const startApp = (): Promise<void> => (started ??= run());
+/**
+ * Idempotent while it succeeds or is in progress: later calls return the same
+ * promise. A failed start is forgotten, so "Retry" (or any later call) tries again.
+ */
+export const startApp = (): Promise<void> =>
+  (started ??= run().catch((err: unknown) => {
+    started = null;
+    throw err;
+  }));
 
 /** Registers every state module with the client, once, before the first connection. */
 const wire = (): void => {
@@ -37,7 +44,7 @@ const wire = (): void => {
   agents.init(client);
   interaction.init(client);
   lifecycle.init(client, agents, connection, connectTo);
-  tabs.subscribe(() => chats.sync(tabs.open));
+  tabs.subscribe(() => chats.sync(tabs.open, tabs.active));
   startAttention({ api: client, settings, tabs, places });
 };
 

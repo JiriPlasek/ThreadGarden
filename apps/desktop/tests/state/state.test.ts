@@ -153,15 +153,51 @@ describe('chats', () => {
     expect(chats.get('s1')!.seq).toBe(11);
   });
 
-  it('sync opens missing chats and drops closed ones', async () => {
+  it('sync opens missing chats as they are activated and drops closed ones', async () => {
     const { chats } = setup();
-    chats.sync(['s1', 's2']);
+    server.handlers['sessions.summaries'] = () => ({ items: [] });
+    chats.sync(['s1', 's2'], 's1');
+    chats.sync(['s1', 's2'], 's2');
     await flushAsync();
     expect([...chats.byId.keys()].sort()).toEqual(['s1', 's2']);
-    chats.sync(['s2']);
+    chats.sync(['s2'], 's2');
     expect([...chats.byId.keys()]).toEqual(['s2']);
     server.push('chat.items', { sessionId: 's1', seq: 99, items: [text('x', 'x')] });
     expect(chats.get('s1')).toBeUndefined();
+  });
+
+  it('restored tabs: only the active chat is opened; the others load when activated', async () => {
+    const { chats } = setup();
+    server.handlers['sessions.summaries'] = (p) => ({
+      items: (p as { sessionIds: string[] }).sessionIds.map((id) => ({
+        ...summary(id),
+        title: `Title ${id}`,
+        status: 'working',
+      })),
+    });
+    chats.sync(['s1', 's2', 's3'], 's2');
+    await flushAsync();
+    expect(
+      server.calls('chat.open').map((c) => (c.params as { sessionId: string }).sessionId),
+    ).toEqual(['s2']);
+    // Background tabs still show a title and status, from one light summaries request.
+    expect(server.calls('sessions.summaries').map((c) => c.params)).toEqual([
+      { sessionIds: ['s1', 's3'] },
+    ]);
+    expect(chats.summaryOf('s1')).toMatchObject({ title: 'Title s1', status: 'working' });
+    // Their status follows events without loading them.
+    server.push('chat.status', { sessionId: 's3', seq: 5, status: 'needsYou', waitingFor: 'Bash' });
+    expect(chats.summaryOf('s3')).toMatchObject({ status: 'needsYou', waitingFor: 'Bash' });
+    expect(chats.get('s3')).toBeUndefined();
+
+    chats.sync(['s1', 's2', 's3'], 's3');
+    await flushAsync();
+    expect(
+      server.calls('chat.open').map((c) => (c.params as { sessionId: string }).sessionId),
+    ).toEqual(['s2', 's3']);
+    // A chat that was shown stays resident (switching back is instant).
+    expect([...chats.byId.keys()].sort()).toEqual(['s2', 's3']);
+    expect(server.calls('sessions.summaries')).toHaveLength(1);
   });
 
   it('derives pending permission requests', async () => {

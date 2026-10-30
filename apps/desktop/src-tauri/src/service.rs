@@ -17,7 +17,10 @@ use crate::discovery::{self, Discovery};
 /// Must equal `PROTOCOL_VERSION` in `packages/protocol/src/version.ts` (checked by a test).
 pub const PROTOCOL_VERSION: u32 = 1;
 /// How long a freshly spawned service may take to write `service.json` and answer `hello`.
-pub const START_TIMEOUT: Duration = Duration::from_secs(5);
+/// The service writes `service.json` as soon as it listens — it looks for Claude Code
+/// (`claude --version`, seconds on some machines) only afterwards — so this covers a
+/// cold Node start and opening `pahub.db`, with room for antivirus scanning.
+pub const START_TIMEOUT: Duration = Duration::from_secs(15);
 const HELLO_TIMEOUT: Duration = Duration::from_secs(2);
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 /// Node prints an ExperimentalWarning for `node:sqlite`; nobody reads the service's stderr anyway.
@@ -296,7 +299,7 @@ fn connection(d: &Discovery, hello: &HelloResult, app_version: &str) -> Connecti
 }
 
 /// Connects to the running service, or calls `launch` to start one and waits
-/// up to `start_timeout` for a fresh `service.json` whose service answers `hello`.
+/// up to `start_timeout` for a live `service.json` whose service answers `hello`.
 /// Only a different *protocol* is an error; a different service version is reported.
 pub async fn connect(
     data_dir: &Path,
@@ -305,25 +308,22 @@ pub async fn connect(
     launch: impl FnOnce() -> Result<(), String>,
 ) -> Result<Connection, String> {
     let recorded = discovery::read_discovery(data_dir);
-    if let Some(d) = recorded.as_ref().filter(|d| discovery::pid_alive(d.pid)) {
-        // A live process that does not answer (a reused pid, a hung service)
-        // counts as no service; the new one then replaces it.
-        if let Ok(h) = hello(d.port, &d.token, HELLO_TIMEOUT).await {
-            check_protocol(&h)?;
-            return Ok(connection(d, &h, app_version));
-        }
+    if let Some(d) = recorded.as_ref().filter(|d| discovery::pid_alive(d.pid))
+        && let Ok(h) = hello(d.port, &d.token, HELLO_TIMEOUT).await
+    {
+        check_protocol(&h)?;
+        return Ok(connection(d, &h, app_version));
     }
 
-    let is_fresh = |d: &Discovery| {
-        recorded
-            .as_ref()
-            .is_none_or(|old| (old.pid, old.started_at) != (d.pid, d.started_at))
-    };
+    // A live process that did not answer is either not the service (a reused
+    // pid) or a busy one. A new service is started either way: for a reused pid
+    // it takes over and records itself; next to a busy service it finds the
+    // data dir locked and exits. So whichever live service the record names
+    // once it answers — the new one, or the busy one after all — is used.
     launch()?;
     let deadline = tokio::time::Instant::now() + start_timeout;
     loop {
-        if let Some(d) =
-            discovery::read_live_discovery(data_dir, discovery::pid_alive).filter(|d| is_fresh(d))
+        if let Some(d) = discovery::read_live_discovery(data_dir, discovery::pid_alive)
             && let Ok(h) = hello(d.port, &d.token, HELLO_TIMEOUT).await
         {
             check_protocol(&h)?;
@@ -392,6 +392,40 @@ mod tests {
                         let reply = serde_json::json!({
                             "id": req["id"],
                             "result": { "serviceVersion": service_version, "protocolVersion": protocol_version },
+                        });
+                        let _ = ws.send(Message::text(reply.to_string())).await;
+                    }
+                });
+            }
+        });
+        port
+    }
+
+    /// A stand-in for a busy service (e.g. parsing a big transcript): the first
+    /// `hello` goes unanswered for longer than `HELLO_TIMEOUT`; later ones are answered.
+    async fn busy_then_answering_service(token: &'static str) -> u16 {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let first = Arc::new(AtomicBool::new(true));
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                let busy = first.swap(false, Ordering::SeqCst);
+                tokio::spawn(async move {
+                    let check = RequireToken(format!("pahub.{token}"));
+                    let Ok(mut ws) = tokio_tungstenite::accept_hdr_async(stream, check).await
+                    else {
+                        return;
+                    };
+                    while let Some(Ok(msg)) = ws.next().await {
+                        let Ok(text) = msg.to_text() else { continue };
+                        let req: serde_json::Value = serde_json::from_str(text).unwrap();
+                        if busy {
+                            tokio::time::sleep(HELLO_TIMEOUT + Duration::from_secs(1)).await;
+                            return;
+                        }
+                        let reply = serde_json::json!({
+                            "id": req["id"],
+                            "result": { "serviceVersion": APP_VERSION, "protocolVersion": PROTOCOL_VERSION },
                         });
                         let _ = ws.send(Message::text(reply.to_string())).await;
                     }
@@ -666,6 +700,35 @@ mod tests {
         assert!(launched.load(Ordering::SeqCst));
         assert_eq!(conn.port, port);
         assert_eq!(conn.token, "new");
+    }
+
+    #[tokio::test]
+    async fn a_slow_recorded_service_is_used_rather_than_failing_the_start() {
+        let dir = tempfile::tempdir().unwrap();
+        let port = busy_then_answering_service("tok").await;
+        write_discovery(dir.path(), port, "tok", 1);
+        let launched = Arc::new(AtomicBool::new(false));
+        let flag = launched.clone();
+        // The extra service started meanwhile exits at once (the data dir is
+        // locked), so no fresh service.json ever appears: the recorded service,
+        // answering now, is the one to use.
+        let conn = connect(dir.path(), APP_VERSION, Duration::from_secs(5), move || {
+            flag.store(true, Ordering::SeqCst);
+            Ok(())
+        })
+        .await
+        .unwrap();
+        assert!(launched.load(Ordering::SeqCst));
+        assert_eq!(conn.port, port);
+        assert_eq!(conn.token, "tok");
+    }
+
+    #[test]
+    fn start_timeout_covers_a_cold_service_start() {
+        // The service writes service.json right after it listens (before it looks
+        // for Claude Code), but a cold Node start under antivirus scanning can
+        // still take several seconds.
+        assert!(START_TIMEOUT >= Duration::from_secs(15));
     }
 
     #[tokio::test]
