@@ -15,8 +15,8 @@ test('activity panel: a subagent runs and ends, a dev server runs and is stopped
   );
   const composer = page.getByRole('textbox', { name: 'Message' });
   const activity = page.getByRole('region', { name: 'Activity' });
-  // A history chat that never had tasks: no panel.
-  await expect(activity).toHaveCount(0);
+  // v1.3: the panel is one global setting, shown on a history chat too.
+  await expect(activity).toContainText('Activity is available for chats running in pahub');
 
   // "agent": an Explore subagent reports progress, then completes.
   await composer.fill('Let an agent explore the code');
@@ -27,6 +27,13 @@ test('activity panel: a subagent runs and ends, a dev server runs and is stopped
   await expect(agent.getByRole('img', { name: 'Running' })).toBeVisible();
   await expect(page.getByRole('tab', { selected: true })).toContainText('1 running');
   await expect(agent).toContainText(/\d+ tools?/);
+  // Its model (the Agent call's input), and its nested subagent with a streamed model.
+  await expect(agent).toContainText('haiku');
+  const nested = agents.getByRole('listitem').filter({ hasText: 'Find the entry points' });
+  await expect(nested).toHaveAttribute('data-depth', '1');
+  await expect(nested).toContainText('sonnet-4-5');
+  await agent.getByRole('button', { name: 'Details of Explore the project structure' }).click();
+  await expect(agent.locator('dl')).toContainText('Map the main parts of this project.');
   await expect(agent.getByRole('img', { name: 'Completed' })).toBeVisible({ timeout: 20_000 });
   await expect(page.getByRole('tab', { selected: true })).not.toContainText('running');
 
@@ -71,7 +78,7 @@ test('activity panel: a subagent runs and ends, a dev server runs and is stopped
   await expect(row).toHaveCount(0);
 
   // Clicking the agent shows the Agent call that started it.
-  await agent.getByRole('button').click();
+  await agent.getByRole('button', { name: /^Show Explore the project structure/ }).click();
   await expect(page.locator('[data-row][data-flash]')).toContainText(
     'Explore the project structure',
   );

@@ -178,8 +178,13 @@ describe('protocol schemas', () => {
       lastTool: 'Read',
       summary: 'Reading files',
       error: 'boom',
+      model: 'sonnet',
+      prompt: 'Map the project',
+      spawnDepth: 2,
+      workflowName: 'spec',
     };
     expect(ChatTaskSchema.parse(agent)).toEqual(agent);
+    expect(ChatTaskSchema.safeParse({ ...agent, spawnDepth: 'deep' }).success).toBe(false);
     const odd = {
       taskId: 'x',
       kind: 'other',

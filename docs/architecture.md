@@ -117,6 +117,18 @@ them on every interrupt. End session ends them with the process.
 **Stop all work** interrupts and closes every live pahub session; the service
 keeps running.
 
+**Activity panel** (v1.1 §2, v1.3 §2). Each live session folds the SDK's
+`system/task_*` and `background_tasks_changed` messages into a task list
+(`chat/tasks.ts`), published as `chat.tasks`. An agent's model is on no task
+frame: the tracker takes it from the `model` input of the Agent call that
+started the task, else from the `message.model` of the subagent's streamed
+messages (`parent_tool_use_id`), remembered per tool use id because they
+arrive around the task frames in either order. The prompt, spawn depth and
+workflow name come from `task_started`. The UI orders each section (not
+ended first, then by end time), nests tasks under their `parentTaskId` and
+shows the panel on every chat while the one global `activity.open` setting
+is on; a narrow chat pane opens it as a drawer on request instead.
+
 ## Protocol
 
 `packages/protocol` types every message with zod schemas shared by the

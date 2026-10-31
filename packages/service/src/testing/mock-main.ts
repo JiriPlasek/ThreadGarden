@@ -8,8 +8,9 @@
  * - a message containing "perm" asks for permission to run a Bash command;
  * - "ask" asks an AskUserQuestion question; "plan" asks to approve a plan
  *   (ExitPlanMode);
- * - "agent" runs an Explore subagent (an Agent tool call and its task) that
- *   reports progress and completes after about 3 s;
+ * - "agent" runs an Explore subagent on `haiku` (an Agent tool call and its
+ *   task) that reports progress, spawns a nested subagent whose model is
+ *   streamed, and completes after about 3 s;
  * - "server" starts a background shell task ("npm run dev") that keeps
  *   running until it is stopped with `chat.stopTask` (or the chat ends).
  *
@@ -78,6 +79,9 @@ const textOf = (m: SDKUserMessage): string => {
     )
     .join('\n');
 };
+
+/** The "agent" subagent's nested subagent: its task, its Agent call, its one tool call. */
+type NestedAgent = { taskId: string; toolUseId: string; parentToolUseId: string; grepId: string };
 
 /** A fake Claude Code session that answers every message with the script above. */
 class ScriptedSession extends FakeSession {
@@ -246,19 +250,32 @@ class ScriptedSession extends FakeSession {
     await this.say('There are three entries: README.md, package.json and src.');
   }
 
-  /** A foreground Explore subagent: task_started, progress every step, then its end. */
+  /**
+   * A foreground Explore subagent on the `haiku` model (task_started, progress
+   * every step, then its end). Its second step spawns a nested subagent (a
+   * depth-2 task with `parent_task_id`) whose model is only known from the
+   * messages it streams, like a real one without a `model` input.
+   */
   private async agentTurn(): Promise<void> {
     await this.say('I will ask a subagent to explore the project.');
     const description = 'Explore the project structure';
+    const prompt = 'Map the main parts of this project.';
     const toolUseId = this.toolUse('Agent', {
       description,
       subagent_type: 'Explore',
-      prompt: 'Map the main parts of this project.',
+      model: 'haiku',
+      prompt,
     });
     const taskId = `a${randomUUID().replaceAll('-', '').slice(0, 16)}`;
     const task = { task_id: taskId, tool_use_id: toolUseId, description, subagent_type: 'Explore' };
     this.out(
-      this.system('task_started', { ...task, task_type: 'local_agent', is_backgrounded: false }),
+      this.system('task_started', {
+        ...task,
+        task_type: 'local_agent',
+        is_backgrounded: false,
+        prompt,
+        spawn_depth: 1,
+      }),
     );
     const stop = new AbortController();
     this.agents.set(taskId, stop);
@@ -268,6 +285,7 @@ class ScriptedSession extends FakeSession {
       tool_uses: steps,
       duration_ms: Date.now() - started,
     });
+    let nested: NestedAgent | undefined;
     let steps = 0;
     for (const step of AGENT_STEPS) {
       await sleep(AGENT_STEP_MS);
@@ -281,7 +299,9 @@ class ScriptedSession extends FakeSession {
           summary: step.summary,
         }),
       );
+      if (steps === 2) nested = this.nestedAgent(taskId, toolUseId);
     }
+    if (nested) this.endNestedAgent(nested, steps === AGENT_STEPS.length);
     this.agents.delete(taskId);
     const done = steps === AGENT_STEPS.length;
     this.out(
@@ -305,6 +325,51 @@ class ScriptedSession extends FakeSession {
     );
     this.toolResult(toolUseId, summary, !done);
     await this.say(done ? `The subagent reports: ${summary}` : 'The subagent did not finish.');
+  }
+
+  /** The "agent" subagent's own subagent: its Agent call and first message come from inside the parent. */
+  private nestedAgent(parentTaskId: string, parentToolUseId: string): NestedAgent {
+    const description = 'Find the entry points';
+    const prompt = 'List the entry points of the service and the desktop app.';
+    const toolUseId = this.toolUse(
+      'Agent',
+      { description, subagent_type: 'general-purpose', prompt },
+      parentToolUseId,
+    );
+    const taskId = `a${randomUUID().replaceAll('-', '').slice(0, 16)}`;
+    this.out(
+      this.system('task_started', {
+        task_id: taskId,
+        tool_use_id: toolUseId,
+        description,
+        subagent_type: 'general-purpose',
+        task_type: 'local_agent',
+        is_backgrounded: false,
+        parent_task_id: parentTaskId,
+        prompt,
+        spawn_depth: 2,
+      }),
+    );
+    const grepId = this.toolUse('Grep', { pattern: 'main' }, toolUseId, 'claude-sonnet-4-5');
+    return { taskId, toolUseId, parentToolUseId, grepId };
+  }
+
+  private endNestedAgent(n: NestedAgent, done: boolean): void {
+    const summary = done ? 'Two entry points: main.ts and the app layout.' : 'Stopped.';
+    this.toolResult(n.grepId, 'src/main.ts\napps/desktop/src/routes/+layout.svelte\n', false, {
+      parent: n.toolUseId,
+    });
+    this.out(
+      this.system('task_notification', {
+        task_id: n.taskId,
+        tool_use_id: n.toolUseId,
+        status: done ? 'completed' : 'stopped',
+        output_file: '',
+        summary,
+        usage: { total_tokens: 2400, tool_uses: 1, duration_ms: AGENT_STEP_MS * 3 },
+      }),
+    );
+    this.toolResult(n.toolUseId, summary, !done, { parent: n.parentToolUseId });
   }
 
   /** A background shell ("npm run dev") that runs until `stopTask`. */
@@ -348,18 +413,27 @@ class ScriptedSession extends FakeSession {
     });
   }
 
-  /** Emits an assistant message with one tool call; returns its tool_use id. */
-  private toolUse(name: string, input: Record<string, unknown>): string {
+  /**
+   * Emits an assistant message with one tool call (inside the subagent of
+   * `parent` when given, streamed with `model`); returns its tool_use id.
+   */
+  private toolUse(
+    name: string,
+    input: Record<string, unknown>,
+    parent: string | null = null,
+    model?: string,
+  ): string {
     const toolUseId = `toolu_${randomUUID()}`;
     this.out(
       msg({
         type: 'assistant',
         uuid: randomUUID(),
         session_id: this.id,
-        parent_tool_use_id: null,
+        parent_tool_use_id: parent,
         message: {
           id: `msg_${randomUUID()}`,
           role: 'assistant',
+          ...(model === undefined ? {} : { model }),
           content: [{ type: 'tool_use', id: toolUseId, name, input }],
         },
       }),
@@ -367,13 +441,18 @@ class ScriptedSession extends FakeSession {
     return toolUseId;
   }
 
-  private toolResult(toolUseId: string, content: string, isError = false): void {
+  private toolResult(
+    toolUseId: string,
+    content: string,
+    isError = false,
+    o: { parent?: string } = {},
+  ): void {
     this.out(
       msg({
         type: 'user',
         uuid: randomUUID(),
         session_id: this.id,
-        parent_tool_use_id: null,
+        parent_tool_use_id: o.parent ?? null,
         message: {
           role: 'user',
           content: [{ type: 'tool_result', tool_use_id: toolUseId, content, is_error: isError }],

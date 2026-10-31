@@ -99,10 +99,6 @@ export class ChatState {
    * the list). Empty for chats pahub does not run.
    */
   tasks = $state.raw<ChatTask[]>([]);
-  /** The chat has had tasks while open here: the Activity panel shows by default. */
-  hadTasks = $state(false);
-  /** The user asked for the Activity panel in this chat although it never had tasks. */
-  activityRequested = $state(false);
   /** Running tasks, for the "N running" badges. */
   running = $derived(runningTasks(this.tasks));
   /** Message list geometry, kept while the chat is resident. */
@@ -292,7 +288,7 @@ export class ChatsState {
       chat.waitingFor = r.summary.waitingFor;
       chat.hasMore = r.hasMore;
       // An older service has no task tracking: no tasks.
-      this.setTasks(chat, Array.isArray(r.tasks) ? r.tasks : []);
+      chat.tasks = Array.isArray(r.tasks) ? r.tasks : [];
       chat.seq = r.seq;
       chat.loaded = true;
       // Queued items at or below the snapshot are already part of it; applying a stale
@@ -504,11 +500,6 @@ export class ChatsState {
     if (chat) this.dispatch(chat, e);
   };
 
-  private setTasks = (chat: ChatState, tasks: ChatTask[]): void => {
-    chat.tasks = tasks;
-    if (tasks.length > 0) chat.hadTasks = true;
-  };
-
   private onStatus = (e: ChatStatusEvent): void => {
     const chat = this.byId.get(e.sessionId);
     if (chat) {
@@ -540,7 +531,7 @@ export class ChatsState {
       chat.queued.push(e);
       this.scheduleFlush();
     } else if ('tasks' in e) {
-      this.setTasks(chat, e.tasks);
+      chat.tasks = e.tasks;
     } else {
       chat.status = e.status;
       chat.waitingFor = e.waitingFor;
