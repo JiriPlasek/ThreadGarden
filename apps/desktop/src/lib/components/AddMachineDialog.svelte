@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import { MachineAddressSchema, MachinePortSchema } from '@threadgarden/protocol';
   import { Button } from '#lib/components/ui/button/index.js';
   import * as Dialog from '#lib/components/ui/dialog/index.js';
@@ -26,44 +27,64 @@
   /** The name this PC goes by on the other machine: its hostname. */
   const defaultName = (): string => machines.local?.info?.name || THIS_PC;
 
-  let wasOpen = false;
+  /** Back to a blank form: the one-time code and the errors about it never outlive the dialog. */
+  const reset = (): void => {
+    address = '';
+    port = String(DEFAULT_PORT);
+    code = '';
+    deviceName = defaultName();
+    error = null;
+    busy = false;
+  };
+
   $effect(() => {
-    const open = interaction.addMachineOpen;
-    if (open && !wasOpen) {
-      address = '';
-      port = String(DEFAULT_PORT);
-      code = '';
-      deviceName = defaultName();
-      error = null;
-      busy = false;
-    }
-    wasOpen = open;
+    // Every way the dialog closes (pairing, Cancel, Escape, Settings closing) ends up here.
+    if (!interaction.addMachineOpen) untrack(reset);
   });
 
   const close = (): void => {
     interaction.addMachineOpen = false;
   };
 
-  const failure = (err: unknown, at: string): string => {
-    if (err instanceof RequestError) {
-      switch (err.code) {
-        case 'PAIRING_UNREACHABLE':
-          return `Can't reach ${at}. Is the machine on and Threadgarden running there?`;
-        case 'PAIRING_PROOF_FAILED':
-          return `The machine at ${at} couldn't prove it knows this code. Nothing was sent. Check the code and the address.`;
-        case 'PAIRING_INVALID':
-          return "That code isn't valid. Run `threadgarden pair` on the machine for a new one.";
-        case 'PAIRING_EXPIRED':
-          return 'That code has expired. Run `threadgarden pair` again.';
-        case 'PAIRING_SELF':
-          return "That's this machine.";
-        case 'PAIRING_DUPLICATE': {
-          const named = machines.list.find(
-            (m) => !m.local && m.address.toLowerCase() === at.toLowerCase(),
-          )?.name;
-          return `Already paired as ${named ?? err.message}.`;
-        }
+  const PAIRING_CODES = [
+    'PAIRING_UNREACHABLE',
+    'PAIRING_PROOF_FAILED',
+    'PAIRING_INVALID',
+    'PAIRING_EXPIRED',
+    'PAIRING_SELF',
+    'PAIRING_DUPLICATE',
+  ] as const;
+  type PairingCode = (typeof PAIRING_CODES)[number];
+  const isPairingCode = (c: string): c is PairingCode =>
+    (PAIRING_CODES as readonly string[]).includes(c);
+
+  const ALREADY = 'Already paired as ';
+
+  const pairingText = (c: PairingCode, at: string, message: string): string => {
+    switch (c) {
+      case 'PAIRING_UNREACHABLE':
+        return `Can't reach ${at}. Is the machine on and Threadgarden running there?`;
+      case 'PAIRING_PROOF_FAILED':
+        return `The machine at ${at} couldn't prove it knows this code. Nothing was sent. Check the code and the address.`;
+      case 'PAIRING_INVALID':
+        return "That code isn't valid. Run `threadgarden pair` on the machine for a new one.";
+      case 'PAIRING_EXPIRED':
+        return 'That code has expired. Run `threadgarden pair` again.';
+      case 'PAIRING_SELF':
+        return "That's this machine.";
+      case 'PAIRING_DUPLICATE':
+        // The service's message is exactly `Already paired as <name>`.
+        return message.startsWith(ALREADY) ? `${message}.` : 'That machine is already paired.';
+      default: {
+        const unknown: never = c;
+        return String(unknown);
       }
+    }
+  };
+
+  const failure = (err: unknown, at: string): string => {
+    if (err instanceof RequestError && isPairingCode(err.code)) {
+      return pairingText(err.code, at, err.message);
     }
     return err instanceof Error ? err.message : String(err);
   };

@@ -113,15 +113,100 @@ describe('Settings → Machines', () => {
     expect(env.app.interaction.addMachineOpen).toBe(true);
   });
 
-  it('names the machine already paired', async () => {
+  it('names the machine already paired, whatever address was typed', async () => {
     const env = await setupTwoMachines();
-    pairing(env as Env, new RpcFail('PAIRING_DUPLICATE'));
+    pairing(env as Env, new RpcFail('PAIRING_DUPLICATE', 'Already paired as Ubuntu PC'));
     const dialog = await openAdd(env);
-    await fill(dialog, '192.168.1.5', 'ABCD-EFGH-JKLM');
+    await fill(dialog, 'other-name.local', 'ABCD-EFGH-JKLM');
     await userEvent.click(within(dialog).getByRole('button', { name: 'Pair' }));
     expect((await within(dialog).findByRole('alert')).textContent).toBe(
       'Already paired as Ubuntu PC.',
     );
+  });
+
+  it('says the machine is already paired when the service names none', async () => {
+    const env = await setupTwoMachines();
+    pairing(env as Env, new RpcFail('PAIRING_DUPLICATE', 'PAIRING_DUPLICATE'));
+    const dialog = await openAdd(env);
+    await fill(dialog, 'x.local', 'ABCD-EFGH-JKLM');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Pair' }));
+    expect((await within(dialog).findByRole('alert')).textContent).toBe(
+      'That machine is already paired.',
+    );
+  });
+
+  it('shows the service message for a code it does not know', async () => {
+    const env = await setupTwoMachines();
+    pairing(env as Env, new RpcFail('SOMETHING_ELSE', 'Odd failure'));
+    const dialog = await openAdd(env);
+    await fill(dialog, 'x.local', 'ABCD-EFGH-JKLM');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Pair' }));
+    expect((await within(dialog).findByRole('alert')).textContent).toBe('Odd failure');
+  });
+
+  it('forgets the code and the error on every way of closing', async () => {
+    const env = await setupTwoMachines();
+    pairing(env as Env, new RpcFail('PAIRING_INVALID'));
+    await openSettings(env);
+    for (const close of [
+      (d: HTMLElement) => userEvent.click(within(d).getByRole('button', { name: 'Cancel' })),
+      () => userEvent.keyboard('{Escape}'),
+    ]) {
+      await userEvent.click(
+        within(screen.getByRole('dialog', { name: /^settings$/i })).getByRole('button', {
+          name: /add machine/i,
+        }),
+      );
+      const dialog = await screen.findByRole('dialog', { name: /add machine/i });
+      await fill(dialog, 'x.local', 'ABCD-EFGH-JKLM');
+      await userEvent.click(within(dialog).getByRole('button', { name: 'Pair' }));
+      await within(dialog).findByRole('alert');
+      await close(dialog);
+      await waitFor(() => expect(env.app.interaction.addMachineOpen).toBe(false));
+      await waitFor(() =>
+        expect(screen.queryByRole('dialog', { name: /add machine/i })).toBeNull(),
+      );
+      await userEvent.click(
+        within(screen.getByRole('dialog', { name: /^settings$/i })).getByRole('button', {
+          name: /add machine/i,
+        }),
+      );
+      const again = await screen.findByRole('dialog', { name: /add machine/i });
+      expect((within(again).getByLabelText('Pairing code') as HTMLInputElement).value).toBe('');
+      expect(within(again).queryByRole('alert')).toBeNull();
+      await userEvent.click(within(again).getByRole('button', { name: 'Cancel' }));
+      await waitFor(() =>
+        expect(screen.queryByRole('dialog', { name: /add machine/i })).toBeNull(),
+      );
+    }
+  });
+
+  it('closes the Add dialog with Settings', async () => {
+    const env = await setupTwoMachines();
+    await openAdd(env);
+    env.app.interaction.settingsOpen = false;
+    await waitFor(() => expect(env.app.interaction.addMachineOpen).toBe(false));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    env.app.interaction.settingsOpen = true;
+    await screen.findByRole('dialog', { name: /^settings$/i });
+    expect(env.app.interaction.addMachineOpen).toBe(false);
+    expect(screen.queryByRole('dialog', { name: /add machine/i })).toBeNull();
+  });
+
+  it('refreshes edits from machines.changed, except the field being typed in', async () => {
+    const env = await setupTwoMachines();
+    const settings = await openSettings(env);
+    const card = within(settings).getByRole('group', { name: 'Ubuntu PC' });
+    const name = within(card).getByLabelText('Name') as HTMLInputElement;
+    const address = within(card).getByLabelText('Address') as HTMLInputElement;
+    await userEvent.type(address, 'x');
+    await userEvent.type(name, 'y');
+    env.server.push('machines.changed', [
+      { ...pairedMachine(M1, 'Ubuntu PC'), address: '10.0.0.9', name: 'Renamed' },
+    ]);
+    await waitFor(() => expect(address.value).toBe('10.0.0.9'));
+    // The name field has focus: what is typed stays.
+    expect(name.value).toBe('Ubuntu PCy');
   });
 
   it('refuses an invalid address or port before asking the service', async () => {

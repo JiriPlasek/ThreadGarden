@@ -84,6 +84,8 @@
       settings.checkApiKey().catch(() => {});
       showSection();
     }
+    // The Add machine dialog never outlives Settings, whichever way Settings closed.
+    if (!open && interaction.addMachineOpen) interaction.addMachineOpen = false;
     wasOpen = open;
   });
 

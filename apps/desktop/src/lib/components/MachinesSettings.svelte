@@ -23,15 +23,40 @@
 
   type Draft = { name: string; address: string; port: string };
   /** What the owner typed per machine id; absent: the machine's own values. */
-  let drafts = $state<Record<string, Draft>>({});
+  let drafts = $state<Record<string, Partial<Draft>>>({});
   let busy = $state<Record<string, boolean>>({});
   let errors = $state<Record<string, string | null>>({});
 
-  const draftOf = (m: MachineEntry): Draft =>
-    drafts[m.id] ?? { name: m.name, address: m.address, port: String(m.port) };
+  const valuesOf = (m: MachineEntry): Draft => ({
+    name: m.name,
+    address: m.address,
+    port: String(m.port),
+  });
+  const draftOf = (m: MachineEntry): Draft => ({ ...valuesOf(m), ...drafts[m.id] });
   const edit = (m: MachineEntry, patch: Partial<Draft>): void => {
-    drafts[m.id] = { ...draftOf(m), ...patch };
+    drafts[m.id] = { ...drafts[m.id], ...patch };
   };
+
+  /** The values each machine had when last seen, to tell a change from `machines.changed` from typing. */
+  const seen = new Map<string, Draft>();
+  $effect(() => {
+    const focused = document.activeElement?.id ?? '';
+    for (const m of paired) {
+      const now = valuesOf(m);
+      const before = seen.get(m.id);
+      seen.set(m.id, now);
+      const draft = drafts[m.id];
+      if (!draft) continue;
+      for (const key of Object.keys(draft) as (keyof Draft)[]) {
+        const external = before !== undefined && before[key] !== now[key];
+        // A field being edited keeps what is typed; the others follow the service.
+        if ((external && focused !== `machine-${key}-${m.id}`) || draft[key] === now[key]) {
+          delete draft[key];
+        }
+      }
+      if (Object.keys(draft).length === 0) delete drafts[m.id];
+    }
+  });
   const dirty = (m: MachineEntry): boolean => {
     const d = draftOf(m);
     return d.name !== m.name || d.address !== m.address || d.port !== String(m.port);
