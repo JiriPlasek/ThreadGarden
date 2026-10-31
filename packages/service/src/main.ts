@@ -82,7 +82,10 @@ export type StartOptions = {
   historyCacheChars?: number;
   /** Base environment of session processes (default `process.env`); the API key is added on top. */
   sessionEnv?: NodeJS.ProcessEnv;
-  /** Timers for the session host (coalescing, idle reclaim); default Node timers. */
+  /**
+   * Timers for the session host (coalescing, idle reclaim) and `chat.end`'s
+   * index wait; default Node timers.
+   */
   sessionTimers?: Timers;
   /** Whether a project folder exists (v1.1 §4); default one `fs.stat` per folder. */
   folderStat?: (path: string) => Promise<boolean>;
@@ -422,6 +425,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         emit: (e) => emitChat(e),
         onError,
         now: clock,
+        timers: opts.sessionTimers ?? realTimers,
         titles: chatTitles,
       });
       watcher = watchProjects(

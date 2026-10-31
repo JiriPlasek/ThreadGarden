@@ -15,7 +15,12 @@
  * `UNKNOWN_TASK`, `STOP_FAILED`, `INVALID_PARAMS`.
  */
 import type { ChatHeaderInfo, ChatItem, ChatTask, EventMsg, ImageRef } from '@pahub/protocol';
-import type { LiveSession, UserInput } from '../../chat/live-session.js';
+import {
+  realTimers,
+  type LiveSession,
+  type Timers,
+  type UserInput,
+} from '../../chat/live-session.js';
 import { Normalizer } from '../../chat/normalize.js';
 import type { SessionHost } from '../../chat/session-host.js';
 import type { ChatTitles } from '../../chat/titles.js';
@@ -48,6 +53,13 @@ export const EFFORT_LEVELS: readonly Effort[] = ['low', 'medium', 'high', 'xhigh
  */
 export const HISTORY_CACHE_CHARS = 32 * 1024 * 1024;
 
+/**
+ * How long `chat.end` waits for the ended chat to be indexed. The index
+ * queue can be busy (a first-run full sync takes minutes); the indexing
+ * still finishes afterwards.
+ */
+export const END_INDEX_WAIT_MS = 5_000;
+
 export type ChatHandlerDeps = {
   host: SessionHost;
   adapter: AgentAdapter;
@@ -73,6 +85,8 @@ export type ChatHandlerDeps = {
   historyCacheChars?: number;
   /** Clock for the seen time of `chat.markSeen` (v1.1); default `Date.now`. */
   now?: () => number;
+  /** Timer for `END_INDEX_WAIT_MS`; default Node's. */
+  timers?: Pick<Timers, 'setTimeout' | 'clearTimeout'>;
   // ── v1.2 C1: chat titles ──
   /** Names the chats pahub starts (provisional title, then a generated one). */
   titles?: ChatTitles;
@@ -409,8 +423,10 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): voi
 
   /**
    * Indexing waits while a turn runs, so a chat ended mid-turn may not be
-   * indexed yet. It is indexed before this answers, so it stays listed and
-   * can be moved at once ("End this chat and archive it?").
+   * indexed yet. It is indexed before this answers (for at most
+   * `END_INDEX_WAIT_MS`), so it stays listed and can be moved at once ("End
+   * this chat and archive it?"). Past the cap the answer comes anyway; a move
+   * right after may then skip the chat as `NOT_FOUND`, which the UI reports.
    */
   router.register('chat.end', async (p) => {
     if (host.get(p.sessionId)) {
@@ -418,9 +434,19 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): voi
       deps.titles?.forget(p.sessionId); // a first turn cut short gets no generated title
       host.end(p.sessionId);
       changed([p.sessionId]);
-      await deps.indexNow([p.sessionId]).catch((err: unknown) => {
+      const timers = deps.timers ?? realTimers;
+      let timer: unknown;
+      const capped = new Promise<void>((resolve) => {
+        timer = timers.setTimeout(resolve, END_INDEX_WAIT_MS);
+      });
+      const indexed = deps.indexNow([p.sessionId]).catch((err: unknown) => {
         deps.onError(err, `index ended chat ${p.sessionId}`);
       });
+      try {
+        await Promise.race([indexed, capped]);
+      } finally {
+        timers.clearTimeout(timer);
+      }
     }
     return {};
   });

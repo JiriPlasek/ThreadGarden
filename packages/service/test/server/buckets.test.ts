@@ -7,8 +7,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { EventMsg } from '@pahub/protocol';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { realTimers, type Timers } from '../../src/chat/live-session.js';
 import { startService, type ServiceHandle, type StartOptions } from '../../src/main.js';
 import type { SessionMessage } from '../../src/sdk/adapter.js';
+import { END_INDEX_WAIT_MS } from '../../src/server/handlers/chat.js';
 import { FakeAdapter } from '../../src/testing/fake-adapter.js';
 import { result } from '../chat/live-helpers.js';
 import { TestClient, eventually } from '../e2e/ws-client.js';
@@ -145,6 +147,56 @@ describe('buckets (service)', () => {
       { updated: 1, skipped: [] },
     );
     expect(await summary(c, sessionId)).toMatchObject({ live: false, bucket: 'archived' });
+  });
+
+  it('chat.end waits for the index at most END_INDEX_WAIT_MS, and leaves no timer behind', async () => {
+    const adapter = new FakeAdapter();
+    // Node timers, except the cap, which the test fires (or sees cleared) itself.
+    type Cap = { fire: () => void; cleared: boolean };
+    const caps: Cap[] = [];
+    const timers: Timers = {
+      ...realTimers,
+      setTimeout: (fn, ms) => {
+        if (ms !== END_INDEX_WAIT_MS) return realTimers.setTimeout(fn, ms);
+        const cap = { fire: fn, cleared: false };
+        caps.push(cap);
+        return cap;
+      },
+      clearTimeout: (h) => {
+        const cap = caps.find((c) => c === h);
+        if (cap) cap.cleared = true;
+        else realTimers.clearTimeout(h);
+      },
+    };
+    // A busy index queue (a first-run full sync): the ended chat's refresh hangs.
+    let hang = false;
+    let release: (() => void) | undefined;
+    const info = adapter.getSessionInfo.bind(adapter);
+    adapter.getSessionInfo = (id) =>
+      hang ? new Promise((r) => (release = () => r(undefined))) : info(id);
+    const c = await start(adapter, { sessionTimers: timers });
+
+    // Indexed in time: the answer comes at once and the cap is cleared.
+    const a = (await c.call<Any>('chat.create', { cwd: dir, text: 'first' })).sessionId as string;
+    addHistory(adapter, a, dir, NOW - 2000);
+    await c.call('chat.end', { sessionId: a });
+    expect(caps).toHaveLength(1);
+    expect(caps[0]!.cleared).toBe(true);
+
+    // Indexing hangs: the cap answers.
+    const b = (await c.call<Any>('chat.create', { cwd: dir, text: 'second' })).sessionId as string;
+    addHistory(adapter, b, dir, NOW - 1000);
+    hang = true;
+    let answered = false;
+    const ended = c.call('chat.end', { sessionId: b }).then(() => (answered = true));
+    await eventually(() => caps.length === 2 && release !== undefined);
+    await new Promise((r) => setTimeout(r, 50));
+    expect(answered).toBe(false);
+    caps[1]!.fire();
+    await ended;
+    expect(answered).toBe(true);
+    expect(caps[1]!.cleared).toBe(true);
+    release!(); // the queue moves on (and the service can close)
   });
 
   it('a chat sent a message is back in the main quick-search results', async () => {
