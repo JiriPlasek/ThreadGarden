@@ -3,7 +3,7 @@
  * provisional title of a chat pahub starts, the generated one after its first
  * turn, the setting and the API-key-only gate.
  */
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ChatSummary, EventMsg } from '@pahub/protocol';
@@ -225,5 +225,96 @@ describe('chat titles (service)', () => {
     await new Promise((r) => setTimeout(r, 50));
     expect(adapter.oneShots).toHaveLength(1);
     expect(await titleOf(c, second.sessionId)).toBe('Two');
+  });
+
+  // ── fix round 1 ──
+
+  it('R33: no title query when user or project settings could route sessions elsewhere', async () => {
+    const adapter = new FakeAdapter();
+    answering(adapter, 'Should not appear');
+    await mkdir(join(dir, 'claude'), { recursive: true });
+    await writeFile(
+      join(dir, 'claude', 'settings.json'),
+      '{"env":{"ANTHROPIC_BASE_URL":"https://gateway.example"}}',
+    );
+    const c = await start(adapter);
+    const { sessionId } = await c.call<{ sessionId: string }>('chat.create', {
+      cwd: dir,
+      text: 'Fix the login bug',
+    });
+    await firstTurn(c, adapter, sessionId, 'On it.');
+    await new Promise((r) => setTimeout(r, 100));
+    expect(adapter.oneShots).toHaveLength(0);
+    expect(await titleOf(c, sessionId)).toBe('Fix the login bug');
+  });
+
+  it('R33: project-local settings of the chat folder count too', async () => {
+    const adapter = new FakeAdapter();
+    answering(adapter, 'Should not appear');
+    const project = join(dir, 'proj');
+    await mkdir(join(project, '.claude'), { recursive: true });
+    await writeFile(join(project, '.claude', 'settings.local.json'), '{"apiKeyHelper":"/bin/k"}');
+    const c = await start(adapter);
+    const { sessionId } = await c.call<{ sessionId: string }>('chat.create', {
+      cwd: project,
+      text: 'Fix the login bug',
+    });
+    await firstTurn(c, adapter, sessionId, 'On it.');
+    await new Promise((r) => setTimeout(r, 100));
+    expect(adapter.oneShots).toHaveLength(0);
+  });
+
+  it('the running title query never shows up as an external chat', async () => {
+    const adapter = new FakeAdapter();
+    let answer: (s: string) => void = () => {};
+    adapter.oneShotReply = () => new Promise<string>((r) => (answer = r));
+    let agents: unknown[] = [];
+    const c = await start(adapter, { externalRun: async () => JSON.stringify(agents) });
+    const { sessionId } = await c.call<{ sessionId: string }>('chat.create', {
+      cwd: dir,
+      text: 'Fix the login bug',
+    });
+    await firstTurn(c, adapter, sessionId, 'On it.');
+    await eventually(() => adapter.oneShots.length === 1);
+    const ghost = adapter.oneShots[0]!.sessionId;
+    expect(ghost).not.toBe(sessionId);
+    const agent = (id: string, pid: number) => ({
+      pid,
+      cwd: dir,
+      kind: 'interactive',
+      startedAt: Date.now(),
+      sessionId: id,
+      status: 'busy',
+    });
+    agents = [agent(ghost, 4001), agent('elsewhere-1', 4002)];
+    // A resume check polls `claude agents` now.
+    await c.call('chat.resumeCheck', { sessionId: 'elsewhere-1' });
+    const listed = await c.call<{ items: ChatSummary[] }>('sessions.summaries', {
+      sessionIds: [ghost, 'elsewhere-1'],
+    });
+    expect(listed.items.map((s) => s.sessionId)).toEqual(['elsewhere-1']);
+    answer('Login bug fix');
+    await eventually(async () => (await titleOf(c, sessionId)) === 'Login bug fix');
+  });
+
+  it('a chat ended before its first turn finished is never titled later', async () => {
+    const adapter = new FakeAdapter();
+    answering(adapter, 'Should not appear');
+    const c = await start(adapter);
+    const { sessionId } = await c.call<{ sessionId: string }>('chat.create', {
+      cwd: dir,
+      text: 'Fix the login bug',
+    });
+    await c.call('chat.end', { sessionId });
+    // Resumed later; its next turn is not a first turn pahub saw.
+    adapter.sessions.set(sessionId, {
+      info: { sessionId, summary: '', lastModified: 1, cwd: dir },
+      messages: [],
+    });
+    await c.call('chat.send', { sessionId, text: 'Second' });
+    await firstTurn(c, adapter, sessionId, 'Reply.');
+    await new Promise((r) => setTimeout(r, 100));
+    expect(adapter.oneShots).toHaveLength(0);
+    expect(await titleOf(c, sessionId)).toBe('Fix the login bug');
   });
 });

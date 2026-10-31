@@ -156,6 +156,7 @@ describe('RealAdapter.oneShot', () => {
     env: { PATH: '/usr/bin' },
     claudePath: '/bin/claude',
     signal,
+    sessionId: '0b0e8f6a-1111-4222-8333-944455556666',
   });
   const ok = { type: 'result', subtype: 'success', is_error: false, result: 'Login fix' };
 
@@ -206,5 +207,48 @@ describe('RealAdapter.oneShot', () => {
     ac.abort();
     await expect(adapter.oneShot(oneShot(ac.signal))).rejects.toThrow(/aborted/);
     expect(calls).toHaveLength(0);
+  });
+});
+
+describe('RealAdapter.oneShot (fix round 1)', () => {
+  const opts = (signal: AbortSignal): OneShotOptions => ({
+    prompt: 'Title this',
+    systemPrompt: 'Reply with only a title',
+    model: 'haiku',
+    cwd: '/p',
+    env: { PATH: '/usr/bin' },
+    claudePath: '/bin/claude',
+    signal,
+    sessionId: '0b0e8f6a-1111-4222-8333-944455556666',
+  });
+
+  it('rejects when an assistant message carried an API error, even if the result says success', async () => {
+    const apiError = {
+      type: 'assistant',
+      error: 'authentication_failed',
+      message: { content: [{ type: 'text', text: 'Invalid API key · Please run /login' }] },
+    };
+    const success = {
+      type: 'result',
+      subtype: 'success',
+      is_error: false,
+      result: 'Invalid API key · Please run /login',
+    };
+    const { adapter } = setup([apiError, success] as unknown as SDKMessage[]);
+    await expect(adapter.oneShot(opts(new AbortController().signal))).rejects.toThrow(
+      /authentication_failed/,
+    );
+  });
+
+  it('a query that throws at once leaves no abort listener behind', async () => {
+    const { sdk, adapter } = setup();
+    sdk.query = (() => {
+      throw new Error('spawn failed');
+    }) as unknown as SdkApi['query'];
+    const signal = new AbortController().signal;
+    const add = vi.spyOn(signal, 'addEventListener');
+    const remove = vi.spyOn(signal, 'removeEventListener');
+    await expect(adapter.oneShot(opts(signal))).rejects.toThrow(/spawn failed/);
+    expect(add.mock.calls.length).toBe(remove.mock.calls.length);
   });
 });

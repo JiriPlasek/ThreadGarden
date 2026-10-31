@@ -41,9 +41,10 @@ describe('titleFor', () => {
     expect(titleFor(all)).toBe('Custom');
     expect(titleFor({ ...all, customTitle: null })).toBe('Generated');
     expect(titleFor({ ...all, customTitle: null, generatedTitle: ' ' })).toBe('Sdk');
-    expect(titleFor({ ...all, customTitle: null, generatedTitle: null, sdkTitle: null })).toBe(
-      'Summary',
-    );
+    const noTitles = { ...all, customTitle: null, generatedTitle: null, sdkTitle: null };
+    // A chat pahub named ignores the SDK summary (fix round 1, M1); others keep it.
+    expect(titleFor(noTitles)).toBe('Provisional');
+    expect(titleFor({ ...noTitles, autoTitle: null })).toBe('Summary');
     expect(titleFor({ autoTitle: 'Provisional', firstPrompt: 'First prompt' })).toBe('Provisional');
     expect(titleFor({ firstPrompt: 'First prompt' })).toBe('First prompt');
   });
@@ -61,6 +62,19 @@ describe('titleFor', () => {
         firstPrompt: prompt,
       }),
     ).toBe(titleFor({ firstPrompt: prompt }));
+  });
+
+  it('v1.2: a chat pahub named ignores the SDK summary (only its last prompt for SDK chats)', () => {
+    // Claude Code's own titles arrive as sdkTitle; the summary of an untitled
+    // SDK chat is its last prompt, which must not replace pahub's name.
+    expect(
+      titleFor({ summary: 'Third message', firstPrompt: 'First', autoTitle: 'Provisional' }),
+    ).toBe('Provisional');
+    expect(
+      titleFor({ summary: 'Third message', autoTitle: 'Provisional', sdkTitle: 'Renamed in CLI' }),
+    ).toBe('Renamed in CLI');
+    // Without a pahub name the summary still ranks above the first prompt.
+    expect(titleFor({ summary: 'Third message', firstPrompt: 'First' })).toBe('Third message');
   });
 
   it('v1.2: generated and provisional titles are truncated to 80 chars like other non-custom ones', () => {

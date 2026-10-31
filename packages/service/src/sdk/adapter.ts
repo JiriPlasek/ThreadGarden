@@ -60,7 +60,7 @@ export type PageOptions = { limit?: number; offset?: number };
 
 /**
  * A one-shot, tool-less question to a model through Claude Code (title
- * generation): one turn, nothing persisted, no settings loaded.
+ * generation): one turn, no transcript, no settings loaded.
  */
 export type OneShotOptions = {
   prompt: string;
@@ -73,6 +73,11 @@ export type OneShotOptions = {
   claudePath: string;
   /** Aborts the query (timeout, service shutdown). */
   signal: AbortSignal;
+  /**
+   * The query's session id (a fresh UUID): its process shows in Claude Code's
+   * session list while it runs, and pahub leaves it out of external chats.
+   */
+  sessionId: string;
 };
 
 export interface AgentSession {

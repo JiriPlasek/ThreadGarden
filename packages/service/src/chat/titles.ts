@@ -7,14 +7,16 @@
  *   its first line, as typed — slash commands and @mentions included);
  * - after the chat's first turn, if "Name new chats automatically" is on, a
  *   3–6 word title from a small model (one one-shot `haiku` query through the
- *   user's own Claude Code, nothing persisted, no tools). Any failure keeps
- *   the provisional title, logged at debug level only.
+ *   user's own Claude Code: no transcript, no tools, no settings — and so
+ *   not sent when settings could route sessions elsewhere, Ruling R33). Any
+ *   failure keeps the provisional title, logged at debug level only.
  *
  * Both are pahub's own metadata (`chat_titles`), below the user's custom title
  * (`titleFor`). At most one generation per chat, at most
  * `TITLE_CONCURRENCY` at a time; only chats pahub started (or continued
  * while they had no title at all) are named, never history-only or external ones.
  */
+import { randomUUID } from 'node:crypto';
 import type { EventMsg } from '@pahub/protocol';
 import { FIRST_PROMPT_MAX, UNTITLED_TITLE, titleFor } from '../history/catalog.js';
 import type { Db } from '../history/db.js';
@@ -34,6 +36,20 @@ export const TITLE_CONCURRENCY = 2;
 const MIN_SENTENCE = 16;
 /** Most characters of the reply start when the message alone would fill the question. */
 const REPLY_SHARE = 500;
+/** A longer answer is chatter ("Here is a title for …"), a refusal or an error text, not a title. */
+const TITLE_WORDS_MAX = 10;
+/** Abbreviations whose dot ends no sentence. */
+const ABBREVIATIONS: ReadonlySet<string> = new Set([
+  'e.g.',
+  'i.e.',
+  'etc.',
+  'vs.',
+  'cf.',
+  'approx.',
+  'incl.',
+  'esp.',
+  'viz.',
+]);
 
 const collapse = (s: string): string => s.replace(/\s+/g, ' ').trim();
 const cut = (s: string): string => s.slice(0, FIRST_PROMPT_MAX).trim();
@@ -46,11 +62,14 @@ const cut = (s: string): string => s.slice(0, FIRST_PROMPT_MAX).trim();
 export const provisionalTitle = (text: string): string => {
   const line = text.split(/\r?\n/).find((l) => l.trim() !== '') ?? '';
   const flat = collapse(line);
-  // A sentence ends at . ! ? followed by a space (not inside `app.ts` or `v1.2`).
+  // A sentence ends at . ! ? followed by a space (not inside `app.ts` or `v1.2`,
+  // nor after an abbreviation such as "e.g.").
   const end = /[.!?](?= )/g;
   let m: RegExpExecArray | null;
   while ((m = end.exec(flat)) !== null) {
-    if (m.index + 1 >= MIN_SENTENCE) return cut(flat.slice(0, m.index + 1));
+    const sentence = flat.slice(0, m.index + 1);
+    if (ABBREVIATIONS.has((sentence.split(' ').at(-1) ?? '').toLowerCase())) continue;
+    if (sentence.length >= MIN_SENTENCE) return cut(sentence);
   }
   return cut(flat);
 };
@@ -61,9 +80,10 @@ const END_PUNCTUATION = /[\s.,;:!?…。]+$/;
 
 /**
  * The model's answer as a title: the first line with content, without a
- * "Title:" label, markdown emphasis, heading marks, surrounding quotes or end
- * punctuation, whitespace collapsed, at most 80 characters. Empty when
- * nothing usable is left.
+ * "Title:" label, bold or code marks, emphasis wrapping the whole title,
+ * heading marks, surrounding quotes or end punctuation (`__init__` stays),
+ * whitespace collapsed, at most 80 characters. Empty when nothing usable is
+ * left or the answer has more than `TITLE_WORDS_MAX` words.
  */
 export const sanitizeTitle = (raw: string): string => {
   const lines = raw
@@ -73,18 +93,19 @@ export const sanitizeTitle = (raw: string): string => {
         .trim()
         .replace(/^#+\s*/, '')
         .replace(/^title\s*:\s*/i, '')
-        .replace(/\*\*|__|`/g, ''),
+        .replace(/\*\*|`/g, ''),
     )
     .filter((l) => l.replace(EDGE_QUOTES, '').trim() !== '');
   let t = collapse(lines[0] ?? '');
   for (let before = ''; before !== t;) {
     before = t;
     t = t
-      .replace(/^[*_]+|[*_]+$/g, '')
+      .replace(/^(__|\*|_)(.+)\1$/, '$2')
       .replace(EDGE_QUOTES, '')
       .replace(END_PUNCTUATION, '')
       .trim();
   }
+  if (t.split(' ').length > TITLE_WORDS_MAX) return '';
   return cut(t);
 };
 
@@ -129,6 +150,12 @@ export type ChatTitlesDeps = {
   titleChanged: (sessionId: string) => void;
   /** `sessions.changed` when a generated title arrives. */
   emit: (e: EventMsg) => void;
+  /**
+   * Ruling R33: why a title query could route differently from the chat's
+   * sessions (settings it would not load, see `chat/title-routing.ts`), else
+   * undefined. A reason skips the generation and is logged once.
+   */
+  routedElsewhere?: (cwd: string) => Promise<string | undefined>;
   /** Failures (never message content): debug level only. */
   debug?: (msg: string) => void;
   timers?: Pick<Timers, 'setTimeout' | 'clearTimeout'>;
@@ -151,7 +178,10 @@ export class ChatTitles {
   /** Chats a generation was due for in this service run (at most one each). */
   private readonly tried = new Set<string>();
   private readonly queue: (() => Promise<void>)[] = [];
-  private readonly running = new Set<AbortController>();
+  /** Running generations → the session id of their one-shot query, once it is sent. */
+  private readonly running = new Map<AbortController, string | undefined>();
+  /** Routing reasons already logged (Ruling R33: once each). */
+  private readonly logged = new Set<string>();
   private readonly timers: Pick<Timers, 'setTimeout' | 'clearTimeout'>;
   private disposed = false;
 
@@ -196,12 +226,25 @@ export class ChatTitles {
     queueMicrotask(() => this.pump());
   }
 
+  /** The host dropped `sessionId` (End session) before its first turn ended: no title follows. */
+  forget(sessionId: string): void {
+    this.pending.delete(sessionId);
+  }
+
+  /**
+   * Session ids of the title queries running now. Claude Code lists their
+   * processes among its sessions; they are pahub's own, never external chats.
+   */
+  runningIds(): string[] {
+    return [...this.running.values()].filter((id): id is string => id !== undefined);
+  }
+
   /** Aborts running generations and drops queued ones (service shutdown). */
   dispose(): void {
     this.disposed = true;
     this.queue.length = 0;
     this.pending.clear();
-    for (const a of this.running) a.abort();
+    for (const a of this.running.keys()) a.abort();
   }
 
   private pump(): void {
@@ -215,7 +258,7 @@ export class ChatTitles {
 
   private async generate(sessionId: string, p: Pending): Promise<void> {
     const abort = new AbortController();
-    this.running.add(abort);
+    this.running.set(abort, undefined);
     let timer: unknown;
     try {
       const { db } = this.deps;
@@ -225,8 +268,19 @@ export class ChatTitles {
         this.deps.debug?.(`title of ${sessionId}: skipped, Claude Code cannot run now`);
         return;
       }
+      const reason = await this.deps.routedElsewhere?.(p.cwd);
+      if (reason) {
+        if (!this.logged.has(reason)) {
+          this.logged.add(reason);
+          this.deps.debug?.(`titles skipped: ${reason} (Ruling R33)`);
+        }
+        return;
+      }
+      if (abort.signal.aborted) return; // shut down meanwhile
       const prompt = titlePrompt(p.text, this.deps.firstReply(sessionId));
       if (!prompt) return;
+      const queryId = randomUUID();
+      this.running.set(abort, queryId);
       const timeoutMs = this.deps.timeoutMs ?? TITLE_TIMEOUT_MS;
       // The timeout and a shutdown abort the query and settle this at once.
       const stopped = new Promise<never>((_, reject) => {
@@ -245,6 +299,7 @@ export class ChatTitles {
           env: run.env,
           claudePath: run.claudePath,
           signal: abort.signal,
+          sessionId: queryId,
         }),
         stopped,
       ]);

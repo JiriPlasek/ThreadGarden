@@ -7,6 +7,7 @@ import pkg from '../package.json' with { type: 'json' };
 import { nextSeqEpoch, seqBaseForEpoch } from './chat/event-log.js';
 import { realTimers, type Timers } from './chat/live-session.js';
 import { SessionHost } from './chat/session-host.js';
+import { RoutingSettingsCheck, routingSettingsPaths } from './chat/title-routing.js';
 import { ChatTitles } from './chat/titles.js';
 import { resolveClaudeConfigDir } from './config.js';
 import { acquireInstanceLock, removeDiscovery, writeDiscovery } from './discovery.js';
@@ -222,7 +223,12 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         run,
         // Only *live* pahub chats are pahub's own processes. A paused or failed
         // chat has none, so one that is running now runs in a terminal (§4.4).
-        () => new Set((live()?.list() ?? []).filter((c) => c.live).map((c) => c.sessionId)),
+        // v1.2 C1: so are the title queries pahub runs (`claude` lists them while they run).
+        () =>
+          new Set([
+            ...(live()?.list() ?? []).filter((c) => c.live).map((c) => c.sessionId),
+            ...(titles?.runningIds() ?? []),
+          ]),
         (e) => {
           // v1.2: archived chats running elsewhere return to Active first.
           if (e.event === 'external.changed') {
@@ -348,6 +354,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         folderExists: (p) => folders.exists(p),
       });
       catalogRef.current = cat;
+      const routing = new RoutingSettingsCheck();
       const chatTitles = new ChatTitles({
         db: opened,
         adapter,
@@ -364,6 +371,8 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
           };
         },
         firstReply: (id) => sessionHost.get(id)?.firstReplyText() ?? '',
+        // Ruling R33: never around the provider the user's settings choose.
+        routedElsewhere: (cwd) => routing.check(routingSettingsPaths(claudeDir, cwd)),
         titleChanged: (id) => cat.titleChanged(id),
         emit: (e) => broadcastRef.fn(e),
         debug: (m) => log.debug(m),

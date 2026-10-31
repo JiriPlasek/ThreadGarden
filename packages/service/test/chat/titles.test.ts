@@ -37,6 +37,21 @@ describe('provisionalTitle', () => {
     );
   });
 
+  it('does not cut at common abbreviations', () => {
+    expect(provisionalTitle('Please refactor the parser, e.g. the lexer part. Then test.')).toBe(
+      'Please refactor the parser, e.g. the lexer part.',
+    );
+    expect(provisionalTitle('Compare the old parser vs. the new one. Thanks')).toBe(
+      'Compare the old parser vs. the new one.',
+    );
+    expect(provisionalTitle('Clean up logs, caches etc. in the build folder')).toBe(
+      'Clean up logs, caches etc. in the build folder',
+    );
+    expect(provisionalTitle('Use the fast path, i.e. skip the cache. Then measure.')).toBe(
+      'Use the fast path, i.e. skip the cache.',
+    );
+  });
+
   it('does not split at dots inside words, paths or versions', () => {
     expect(provisionalTitle('Update src/app.ts to v1.2 and bump package.json')).toBe(
       'Update src/app.ts to v1.2 and bump package.json',
@@ -82,6 +97,18 @@ describe('sanitizeTitle', () => {
 
   it('keeps identifiers intact', () => {
     expect(sanitizeTitle('Fix parse_args in cli.py')).toBe('Fix parse_args in cli.py');
+    expect(sanitizeTitle('Fix __init__ loading')).toBe('Fix __init__ loading');
+    expect(sanitizeTitle('__Fix init loading__')).toBe('Fix init loading');
+    expect(sanitizeTitle('_Fix init loading_')).toBe('Fix init loading');
+  });
+
+  it('rejects chatter: an answer of more than 10 words is no title', () => {
+    expect(
+      sanitizeTitle('Here is a short title for this conversation about the Safari login bug'),
+    ).toBe('');
+    expect(sanitizeTitle('One two three four five six seven eight nine ten')).toBe(
+      'One two three four five six seven eight nine ten',
+    );
   });
 
   it('collapses whitespace and cuts to 80 characters', () => {
@@ -141,6 +168,7 @@ let enabled: boolean;
 let run: TitleRun | undefined;
 let replies: Map<string, string>;
 let debug: string[];
+let routed: string | undefined;
 let titles: ChatTitles;
 
 beforeEach(() => {
@@ -152,6 +180,7 @@ beforeEach(() => {
   run = { claudePath: '/bin/claude', env: { PATH: '/usr/bin', ANTHROPIC_API_KEY: 'sk-x' } };
   replies = new Map();
   debug = [];
+  routed = undefined;
   titles = new ChatTitles({
     db,
     adapter: model,
@@ -161,6 +190,7 @@ beforeEach(() => {
     titleChanged: () => {},
     emit: (e) => events.push(e),
     debug: (m) => debug.push(m),
+    routedElsewhere: async () => routed,
     timers,
   });
 });
@@ -352,5 +382,48 @@ describe('ChatTitles', () => {
     model.calls[0]!.resolve('Late');
     await flush();
     expect(db.metaOf('a').generatedTitle).toBeNull();
+  });
+
+  // ── fix round 1 ──
+
+  it('R33: skips when settings could route sessions elsewhere, logging the reason once', async () => {
+    routed = '/cfg/settings.json sets env';
+    for (const id of ['a', 'b']) {
+      titles.started(id, '/w', `Message for ${id}`);
+      titles.turnEnded(id);
+    }
+    await flush();
+    expect(model.calls).toHaveLength(0);
+    expect(db.metaOf('a').autoTitle).toBe('Message for a');
+    expect(debug.filter((m) => m.includes('sets env'))).toHaveLength(1);
+  });
+
+  it('gives each one-shot a fresh session id, listed in runningIds while it runs', async () => {
+    titles.started('a', '/w', 'Message for a');
+    titles.started('b', '/w', 'Message for b');
+    expect(titles.runningIds()).toEqual([]);
+    titles.turnEnded('a');
+    titles.turnEnded('b');
+    await flush();
+    const ids = model.calls.map((c) => c.o.sessionId);
+    expect(ids).toHaveLength(2);
+    for (const id of ids) expect(id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(new Set(ids).size).toBe(2);
+    expect(ids).not.toContain('a');
+    expect(titles.runningIds().sort()).toEqual([...ids].sort());
+    model.calls[0]!.resolve('Title A');
+    model.calls[1]!.reject(new Error('fail'));
+    await flush();
+    expect(titles.runningIds()).toEqual([]);
+  });
+
+  it('forget drops a chat whose session ended before its first turn did', async () => {
+    titles.started('a', '/w', 'Message for a');
+    titles.forget('a');
+    titles.turnEnded('a');
+    await flush();
+    expect(model.calls).toHaveLength(0);
+    // The provisional title stays.
+    expect(db.metaOf('a').autoTitle).toBe('Message for a');
   });
 });

@@ -132,6 +132,7 @@ describe('buildOneShotOptions (title generation)', () => {
     env: { PATH: '/usr/bin', ANTHROPIC_API_KEY: 'sk-x' },
     claudePath: '/home/u/.local/bin/claude',
     signal: new AbortController().signal,
+    sessionId: '0b0e8f6a-1111-4222-8333-944455556666',
   };
 
   it('never persists a transcript, loads no settings and allows no tools, for one turn', () => {
@@ -153,6 +154,12 @@ describe('buildOneShotOptions (title generation)', () => {
     expect(o.abortController).toBe(ac);
   });
 
+  it('runs under the known session id pahub gave it (so the external poller can leave it out)', () => {
+    const o = buildOneShotOptions(oneShot, new AbortController());
+    expect(o.sessionId).toBe('0b0e8f6a-1111-4222-8333-944455556666');
+    expect(o).not.toHaveProperty('resume');
+  });
+
   it("runs like the user's sessions: same claude, environment (API key included) and folder", () => {
     const o = buildOneShotOptions(oneShot, new AbortController());
     expect(o.pathToClaudeCodeExecutable).toBe('/home/u/.local/bin/claude');
@@ -171,6 +178,7 @@ describe('buildOneShotOptions (title generation)', () => {
         'model',
         'pathToClaudeCodeExecutable',
         'persistSession',
+        'sessionId',
         'settingSources',
         'strictMcpConfig',
         'systemPrompt',

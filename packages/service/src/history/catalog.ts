@@ -37,9 +37,13 @@ const short = (s: string): string => s.replace(/\s+/g, ' ').slice(0, FIRST_PROMP
 /**
  * The user's custom title → (v1.2 C1) the generated title → Claude Code's
  * own title → its summary → (v1.2 C1) the provisional title → the first
- * prompt. The SDK's summary falls back to the first prompt for a chat without
- * a title; such a summary is no title of Claude Code's own and ranks as the
- * first prompt, after the provisional title.
+ * prompt.
+ *
+ * The SDK's summary is no title of Claude Code's own when the chat has none
+ * (its titles arrive as `sdkTitle`): it is the last prompt, else the first.
+ * So a summary equal to the first prompt ranks as the first prompt, and a
+ * chat pahub named (a provisional title) ignores the summary altogether,
+ * keeping a stable name instead of following its latest message.
  */
 export const titleFor = (s: TitleParts): string => {
   const custom = clean(s.customTitle);
@@ -50,8 +54,9 @@ export const titleFor = (s: TitleParts): string => {
     const title = short(clean(t));
     if (title) return title;
   }
-  if (summary && summary !== prompt) return summary;
-  return short(clean(s.autoTitle)) || prompt || UNTITLED_TITLE;
+  const auto = short(clean(s.autoTitle));
+  if (summary && summary !== prompt && !auto) return summary;
+  return auto || prompt || UNTITLED_TITLE;
 };
 
 // ── session catalog ──────────────────────────────────────────────────────────

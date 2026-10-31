@@ -402,6 +402,7 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): voi
   router.register('chat.end', async (p) => {
     if (host.get(p.sessionId)) {
       forget(p.sessionId); // the transcript now holds the live turns
+      deps.titles?.forget(p.sessionId); // a first turn cut short gets no generated title
       host.end(p.sessionId);
       changed([p.sessionId]);
     }
