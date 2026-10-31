@@ -62,7 +62,9 @@ checks that its pid is alive and that `hello` answers on the advertised port,
 and otherwise starts the service detached (Windows: a new process group with
 no console, breaking away from the app's job object when allowed; Unix: a new
 session via `setsid`; stdio to the null device) and waits up to 15 s for a
-live `service.json` whose service answers. The service takes a lock file in
+live `service.json` whose service answers (up to 10 minutes while the
+service copies pahub's database, which it does before it listens: about 4 s
+per 160 MB). The service takes a lock file in
 the data dir, so only one runs per data dir; it listens and writes
 `service.json` first and looks for Claude Code (`claude --version`, which can
 take seconds) in the background, so the UI can connect at once — requests

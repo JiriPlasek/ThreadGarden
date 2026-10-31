@@ -21,6 +21,12 @@ pub const PROTOCOL_VERSION: u32 = 4;
 /// (`claude --version`, seconds on some machines) only afterwards — so this covers a
 /// cold Node start and opening `threadgarden.db`, with room for antivirus scanning.
 pub const START_TIMEOUT: Duration = Duration::from_secs(15);
+/// While the service copies pahub's database (spec v1.3 §9) it does not answer
+/// yet, and a large database takes longer than a cold start (about 4 s per
+/// 160 MB), so the wait goes on, up to this long, while the copy is under way.
+pub const MIGRATION_TIMEOUT: Duration = Duration::from_secs(600);
+/// The service's temporary copy during that migration (`migrate-data-dir.ts`).
+const MIGRATING_PREFIX: &str = "threadgarden.db.migrating-";
 const HELLO_TIMEOUT: Duration = Duration::from_secs(2);
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
 /// Node prints an ExperimentalWarning for `node:sqlite`; nobody reads the service's stderr anyway.
@@ -342,6 +348,17 @@ async fn answering(dirs: &DataDirs) -> Option<(Discovery, HelloResult)> {
     None
 }
 
+/// The service is copying pahub's database into `dir`.
+fn migrating(dir: &Path) -> bool {
+    std::fs::read_dir(dir).is_ok_and(|entries| {
+        entries.flatten().any(|e| {
+            e.file_name()
+                .to_string_lossy()
+                .starts_with(MIGRATING_PREFIX)
+        })
+    })
+}
+
 /// Connects to the running service, or calls `launch` to start one and waits
 /// up to `start_timeout` for a live `service.json` whose service answers `hello`.
 /// Only a different *protocol* is an error; a different service version is reported.
@@ -365,13 +382,16 @@ pub async fn connect(
     // data dir locked and exits. So whichever live service the record names
     // once it answers — the new one, or the busy one after all — is used.
     launch()?;
-    let deadline = tokio::time::Instant::now() + start_timeout;
+    let started = tokio::time::Instant::now();
+    let deadline = started + start_timeout;
     loop {
         if let Some((d, h)) = answering(dirs).await {
             check_protocol(&h)?;
             return Ok(connection(&d, &h, app_version));
         }
-        if tokio::time::Instant::now() >= deadline {
+        let now = tokio::time::Instant::now();
+        let copying = now < started + MIGRATION_TIMEOUT && migrating(&dirs.dir);
+        if now >= deadline && !copying {
             return Err(format!(
                 "service-start-timeout: no service answered within {} s (logs in {})",
                 start_timeout.as_secs_f32(),
@@ -835,6 +855,21 @@ mod tests {
         assert!(launched.load(Ordering::SeqCst));
         assert_eq!(conn.port, port);
         assert_eq!(conn.token, "tok");
+    }
+
+    #[test]
+    fn migrating_sees_only_the_services_temporary_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!migrating(dir.path()));
+        std::fs::write(dir.path().join("threadgarden.db"), b"").unwrap();
+        assert!(!migrating(dir.path()));
+        std::fs::write(
+            dir.path().join("threadgarden.db.migrating-42-ab12cd34"),
+            b"",
+        )
+        .unwrap();
+        assert!(migrating(dir.path()));
+        assert!(!migrating(&dir.path().join("missing")));
     }
 
     #[test]
