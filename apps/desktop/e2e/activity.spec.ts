@@ -15,8 +15,8 @@ test('activity panel: a subagent runs and ends, a dev server runs and is stopped
   );
   const composer = page.getByRole('textbox', { name: 'Message' });
   const activity = page.getByRole('region', { name: 'Activity' });
-  // A history chat that never had tasks: no panel.
-  await expect(activity).toHaveCount(0);
+  // v1.3: the panel is one global setting, shown on a history chat too.
+  await expect(activity).toContainText('Activity is available for chats running in pahub');
 
   // "agent": an Explore subagent reports progress, then completes.
   await composer.fill('Let an agent explore the code');

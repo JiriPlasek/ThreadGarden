@@ -28,11 +28,12 @@
    * has text, or another text field is focused) or focus is elsewhere in the
    * window (e.g. the chat list). The "waiting for you" bar always offers a jump.
    *
-   * The Activity panel (spec v1.1 §2) sits on the right. It shows when the
-   * remembered setting says so and the chat has had tasks; for other chats
-   * only on request (the header's Activity button or Ctrl/Cmd+.). In a chat
-   * pane narrower than SIDE_PANEL_MIN_REM it would squeeze the messages, so
-   * there it is an overlay drawer instead, opened on request only (ruling R30).
+   * The Activity panel (spec v1.1 §2) sits on the right. One remembered,
+   * global setting decides whether it shows, on every chat (v1.3 §2); the
+   * header's Activity button and Ctrl/Cmd+. flip it. In a chat pane narrower
+   * than SIDE_PANEL_MIN_REM it would squeeze the messages, so there it is an
+   * overlay drawer instead, opened on request in this view only (ruling R30):
+   * one that covered the chat on every chat switch would be in the way.
    */
   let { sessionId }: { sessionId: string } = $props();
 
@@ -258,8 +259,7 @@
   let drawer = $state<HTMLElement | null>(null);
 
   const activityShown = $derived(
-    chat?.loaded === true &&
-      (overlay ? drawerOpen : settings.activityOpen && (chat.hadTasks || chat.activityRequested)),
+    chat?.loaded === true && (overlay ? drawerOpen : settings.activityOpen),
   );
 
   const activityToggle = (): HTMLElement | null =>
@@ -280,18 +280,9 @@
   };
 
   const toggleActivity = (): void => {
-    const c = chats.get(sessionId);
-    if (!c) return;
-    if (overlay) {
-      void (drawerOpen ? closeDrawer() : openDrawer());
-    } else if (activityShown) {
-      // Shown only on request in a chat without tasks: that request is all there is to undo.
-      if (c.hadTasks) settings.setActivityOpen(false);
-      c.activityRequested = false;
-    } else {
-      settings.setActivityOpen(true);
-      if (!c.hadTasks) c.activityRequested = true;
-    }
+    if (!chats.get(sessionId)) return;
+    if (overlay) void (drawerOpen ? closeDrawer() : openDrawer());
+    else settings.setActivityOpen(!settings.activityOpen);
   };
 
   const onWindowKey = (e: KeyboardEvent): void => {

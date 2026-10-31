@@ -95,7 +95,6 @@ describe('chat state: tasks', () => {
     const { server, app } = await renderChat({ tasks: [agent()] });
     const chat = app.chats.get(SID)!;
     expect(chat.tasks.map((t) => t.taskId)).toEqual(['a1']);
-    expect(chat.hadTasks).toBe(true);
 
     pushTasks(server, 2, [agent({ status: 'completed', endedAt: Date.now() }), shell()]);
     await waitFor(() => expect(chat.tasks.map((t) => t.taskId)).toEqual(['a1', 'b1']));
@@ -107,10 +106,9 @@ describe('chat state: tasks', () => {
     await new Promise((r) => setTimeout(r, 10));
     expect(chat.tasks).toHaveLength(2);
 
-    // The process ended: the list empties, the chat still had tasks.
+    // The process ended: the list empties.
     pushTasks(server, 3, []);
     await waitFor(() => expect(chat.tasks).toEqual([]));
-    expect(chat.hadTasks).toBe(true);
   });
 
   it('counts running, pending and not-yet-ended unknown tasks as running', () => {
@@ -298,32 +296,30 @@ describe('activity panel', () => {
     expect(icon.getAttribute('title')).toContain('lucid');
   });
 
-  it('is hidden for a chat that never had tasks; the toggle shows an empty state', async () => {
+  it('v1.3: shows on a chat that never had tasks too, with the empty state', async () => {
     const { panel } = await renderChat();
-    expect(panel()).toBeNull();
-    const toggle = screen.getByRole('button', { name: 'Activity panel' });
-    expect(toggle.getAttribute('aria-pressed')).toBe('false');
-    await userEvent.click(toggle);
     expect(panel()!.textContent).toContain('No agents or background processes yet');
+    const toggle = screen.getByRole('button', { name: 'Activity panel' });
     expect(toggle.getAttribute('aria-pressed')).toBe('true');
   });
 
-  it('appears when the first task arrives', async () => {
+  it('lists the first task when it arrives', async () => {
     const { server, panel } = await renderChat();
-    expect(panel()).toBeNull();
     pushTasks(server, 2, [shell()]);
-    await waitFor(() => expect(panel()).toBeTruthy());
+    await waitFor(() =>
+      expect(within(panel()!).getByRole('list', { name: 'Processes' }).textContent).toContain(
+        'npm run dev',
+      ),
+    );
   });
 
   it('history and external chats say activity is for chats running in pahub', async () => {
     const { panel } = await renderChat({ status: 'history' });
-    await userEvent.click(screen.getByRole('button', { name: 'Activity panel' }));
     expect(panel()!.textContent).toContain('Activity is available for chats running in pahub');
   });
 
   it('an external chat says so too', async () => {
     const { panel } = await renderChat({ status: 'working', external: true });
-    await userEvent.click(screen.getByRole('button', { name: 'Activity panel' }));
     expect(panel()!.textContent).toContain('Activity is available for chats running in pahub');
   });
 
@@ -400,17 +396,24 @@ describe('activity panel', () => {
     expect(viewport.scrollTop).toBe(before);
   });
 
-  it('hiding a panel opened on request in a chat without tasks keeps the setting on', async () => {
-    const { server, app, panel } = await renderChat();
+  it('v1.3: the toggle is one global state, also in a chat without tasks', async () => {
+    const { server, app, view, panel, context } = await renderChat();
     const toggle = screen.getByRole('button', { name: 'Activity panel' });
     await userEvent.click(toggle);
-    expect(panel()).toBeTruthy();
-    await userEvent.click(toggle);
     expect(panel()).toBeNull();
-    expect(app.settings.activityOpen).toBe(true);
-    expect(
-      server.calls('uiState.set').filter((c) => (c.params as { key: string }).key === ACTIVITY_KEY),
-    ).toEqual([]);
+    expect(app.settings.activityOpen).toBe(false);
+    await waitFor(() =>
+      expect(server.calls('uiState.set').map((c) => c.params)).toContainEqual({
+        key: ACTIVITY_KEY,
+        value: false,
+      }),
+    );
+    // Another chat view (a chat with tasks, a chat switch) follows the same setting.
+    view.unmount();
+    render(ChatView, { props: { sessionId: SID }, context });
+    expect(panel()).toBeNull();
+    app.settings.setActivityOpen(true);
+    await waitFor(() => expect(panel()).toBeTruthy());
   });
 
   it('Ctrl+. ignores key repeat and Shift', async () => {

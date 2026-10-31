@@ -39,8 +39,8 @@ export class SettingsState {
   scale = $state(readCachedScale());
 
   /**
-   * Whether the chat view shows the Activity panel (for chats that have had
-   * tasks; others show it only on request). Remembered in `uiState`.
+   * Whether the chat view shows the Activity panel, on every chat (v1.3 §2;
+   * narrow panes open it as a drawer on request instead). Remembered in `uiState`.
    */
   activityOpen = $state(true);
 
