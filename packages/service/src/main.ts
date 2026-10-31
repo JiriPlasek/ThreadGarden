@@ -18,6 +18,7 @@ import { Catalog, UNTITLED_TITLE, titleFor, type LiveChat } from './history/cata
 import { openDb, type Db } from './history/db.js';
 import { Indexer } from './history/indexer.js';
 import { FolderCheck, ProjectOrderNotifier } from './history/project-activity.js';
+import { ProjectIcons, type FoundIcon } from './history/project-icons.js';
 import { createQuickSearch } from './history/search.js';
 import { watchProjects } from './history/watcher.js';
 import { createLogger, type Logger } from './logger.js';
@@ -89,6 +90,8 @@ export type StartOptions = {
   sessionTimers?: Timers;
   /** Whether a project folder exists (v1.1 §4); default one `fs.stat` per folder. */
   folderStat?: (path: string) => Promise<boolean>;
+  /** Where a project's icon is looked up (v1.3 §5); default the project folder itself. */
+  projectIconSearch?: (projectPath: string) => Promise<FoundIcon | null>;
   /** Fixed port and token (mock service, UI tests); default a random port and a fresh token. */
   port?: number;
   token?: string;
@@ -405,6 +408,11 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         catalog: cat,
         quickSearch: createQuickSearch(opened, cat),
         buckets: bucketList,
+        icons: new ProjectIcons({
+          onError,
+          ...(opts.projectIconSearch ? { find: opts.projectIconSearch } : {}),
+        }),
+        folderExists: (p) => folders.exists(p),
         onSettingsChanged: (patch) => {
           if (patch.claudePath !== undefined && opts.locateClaude) relocate();
         },

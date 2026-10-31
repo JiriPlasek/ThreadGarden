@@ -3,6 +3,7 @@ import type { EventMsg, SettingsPatch } from '@pahub/protocol';
 import { Buckets } from '../../history/buckets.js';
 import type { Catalog } from '../../history/catalog.js';
 import type { Db } from '../../history/db.js';
+import { ProjectIcons } from '../../history/project-icons.js';
 import type { QuickHit } from '../../history/search.js';
 import { ServiceError, type Router } from '../router.js';
 
@@ -17,6 +18,10 @@ export type HistoryHandlerDeps = {
   buckets?: Buckets;
   /** Events (`sessions.changed`, …) for the default `buckets`. */
   emit?: (e: EventMsg) => void;
+  /** v1.3 project icons; default: a `ProjectIcons` over the real file system. */
+  icons?: Pick<ProjectIcons, 'get'>;
+  /** Cached folder check (`FolderCheck.exists`): a missing folder has no icon; default: always. */
+  folderExists?: (path: string) => boolean;
 };
 
 /**
@@ -27,6 +32,8 @@ export const registerHistoryHandlers = (router: Router, deps: HistoryHandlerDeps
   const { db, catalog, quickSearch } = deps;
   const now = deps.now ?? Date.now;
   const buckets = deps.buckets ?? new Buckets({ db, catalog, emit: deps.emit ?? (() => {}), now });
+  const icons = deps.icons ?? new ProjectIcons();
+  const folderExists = deps.folderExists ?? (() => true);
 
   router.register('places.counts', async () => catalog.counts());
   router.register('projects.list', async () => catalog.projects());
@@ -39,6 +46,14 @@ export const registerHistoryHandlers = (router: Router, deps: HistoryHandlerDeps
     if (p.hidden !== undefined) db.setProjectHidden(p.projectId, p.hidden);
     catalog.invalidate();
     return {};
+  });
+
+  // v1.3 §5: looked up in the project's own folder (never the Claude config dir).
+  router.register('projects.icon', async (p) => {
+    const project = db.listProjects().find((x) => x.projectId === p.projectId);
+    if (!project) throw new ServiceError('NOT_FOUND', `Unknown project ${p.projectId}`);
+    if (!folderExists(project.path)) return { dataUrl: null };
+    return { dataUrl: await icons.get(project.projectId, project.path) };
   });
 
   router.register('sessions.list', async (p) =>
