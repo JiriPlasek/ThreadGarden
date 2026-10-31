@@ -46,13 +46,16 @@ const wire = (): void => {
   wireScope(localScope, { tabs, settings, agents });
   tabs.init(client, { localMachineId: () => localScope.machineId });
   settings.init(client);
-  agents.init(client);
+  agents.init(client, { machineId: () => localScope.machineId });
   lifecycle.init(client, agents, connection, connectTo);
   usage.init(client);
   analytics.init(client);
   startAttention({ api: client, settings, tabs: localScope.tabs, places });
   // Paired machines: a scope each, on its relay client through the local service.
-  scopes.follow(machines, tabs, (m) => createScope(m.id, m.client, { tabs, settings }));
+  // Needs you, Running, the bucket counts and the agents strip add up every machine's.
+  places.follow(scopes);
+  agents.follow(scopes);
+  scopes.follow(machines, tabs, (m) => createScope(m.id, m.client, { tabs, settings, agents }));
   machines.init(client, client, {
     relayUrl: (id) => relayUrl(current?.port ?? 0, id),
     localToken: () => current?.token ?? '',

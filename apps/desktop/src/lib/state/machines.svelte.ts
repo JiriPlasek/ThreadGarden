@@ -7,7 +7,7 @@ import {
 import { machineTokens } from '../native';
 import { ServiceClient, type ClientOptions, type ClientStatus } from '../service/client';
 import type { Api } from './api';
-import { LOCAL_FALLBACK_ID } from './refs';
+import { LOCAL_FALLBACK_ID, THIS_PC } from './refs';
 
 export type MachineStatus =
   'connecting' | 'on' | 'unreachable' | 'locked' | 'incompatible' | 'mismatch' | 'refused';
@@ -186,7 +186,7 @@ export class MachinesState {
     if (!this.localEntry) {
       this.localEntry = {
         id: machine?.id ?? LOCAL_FALLBACK_ID,
-        name: machine?.name ?? 'This PC',
+        name: machine?.name ?? THIS_PC,
         address: '127.0.0.1',
         port: 0,
         local: true,

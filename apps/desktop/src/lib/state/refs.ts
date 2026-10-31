@@ -11,6 +11,9 @@ export type ChatRef = { machineId: string; sessionId: string };
  */
 export const LOCAL_FALLBACK_ID = 'local';
 
+/** The local machine's name in the UI. */
+export const THIS_PC = 'This PC';
+
 /** The id of the machine a `hello` answer came from (This PC's, for the local client). */
 export const machineIdOf = (hello: { machine?: { id: string } | null } | null): string =>
   hello?.machine?.id ?? LOCAL_FALLBACK_ID;

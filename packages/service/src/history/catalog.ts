@@ -1,10 +1,11 @@
-import type {
-  Bucket,
-  ChatStatus,
-  ChatSummary,
-  ExternalInfo,
-  Place,
-  Project,
+import {
+  compareChats,
+  type Bucket,
+  type ChatStatus,
+  type ChatSummary,
+  type ExternalInfo,
+  type Place,
+  type Project,
 } from '@threadgarden/protocol';
 import type { ExternalSession } from '../external/poller.js';
 import { externalStatus } from '../external/resume-safety.js';
@@ -129,23 +130,6 @@ const parseKey = (key: string): { at: number; id: string } => {
 };
 type Page = { items: ChatSummary[]; nextCursor?: string };
 
-/** Display order: needs you → working → idle/paused/failed → everything else (history). */
-const rank = (s: ChatStatus): number => {
-  switch (s) {
-    case 'needsYou':
-      return 0;
-    case 'working':
-    case 'unknown':
-      return 1;
-    case 'idle':
-    case 'paused':
-    case 'failed':
-      return 2;
-    default:
-      return 3;
-  }
-};
-
 /**
  * v1.1 "Your turn": a chat with an unseen finished turn is unread unless it
  * waits on the user (needsYou wins) or is (or may be) working.
@@ -212,11 +196,6 @@ export const isActiveNow = (s: ChatSummary): boolean =>
  * while its turn is idle (e.g. its dev server still runs).
  */
 const isRunning = (s: ChatSummary): boolean => s.status === 'working' || (s.runningTasks ?? 0) > 0;
-
-const byOrder = (a: ChatSummary, b: ChatSummary): number =>
-  rank(a.status) - rank(b.status) ||
-  b.lastActivity - a.lastActivity ||
-  a.sessionId.localeCompare(b.sessionId);
 
 const PREVIEW_MAX = 140;
 const previewOf = (r: SessionRow): string =>
@@ -577,7 +556,7 @@ export class Catalog {
     const waiting = [...overlay.values()]
       .map((e) => e.summary)
       .filter((s) => s.status === 'needsYou')
-      .sort(byOrder);
+      .sort(compareChats);
     const backs = this.db.backFromHold();
     if (turns.size === 0 && backs.size === 0) return waiting;
     const since = new Map(turns);
@@ -614,7 +593,7 @@ export class Catalog {
             return this.inPlace(place, s.projectId, s.bucket, hidden);
         }
       });
-    return picked.sort(byOrder);
+    return picked.sort(compareChats);
   }
 
   /**

@@ -2,6 +2,7 @@ import type { Place as WirePlace, Project } from '@threadgarden/protocol';
 import { quietly, type Api } from './api';
 import { ProjectIconsState } from './project-icons.svelte';
 import { LOCAL_FALLBACK_ID } from './refs';
+import type { Scopes } from './scope';
 
 type WireProjectPlace = Extract<WirePlace, { kind: 'project' }>;
 
@@ -37,6 +38,26 @@ export type PlaceCounts = {
   archived?: number;
 };
 
+const BUCKET_COUNTS = ['active', 'onHold', 'archived'] as const;
+
+/**
+ * The counts of several machines added up; a bucket count is left out only
+ * when no machine sends it (older services). One machine's counts come back as they are.
+ */
+export const sumCounts = (all: readonly PlaceCounts[]): PlaceCounts => {
+  if (all.length === 1) return all[0]!;
+  const sum: PlaceCounts = { needsYou: 0, running: 0, all: 0 };
+  for (const c of all) {
+    sum.needsYou += c.needsYou;
+    sum.running += c.running;
+    sum.all += c.all;
+    for (const k of BUCKET_COUNTS) {
+      if (c[k] !== undefined) sum[k] = (sum[k] ?? 0) + c[k];
+    }
+  }
+  return sum;
+};
+
 /** What a project place's "Include on hold / archived" toggle adds (v1.2 §3). */
 export const INCLUDE_OTHER_BUCKETS = ['onHold', 'archived'] as const;
 
@@ -65,7 +86,13 @@ export const includesOtherBuckets = (place: Place): boolean =>
 
 export class PlacesState {
   selected = $state<Place>({ kind: 'active' });
+  /**
+   * The counts of the cross-machine places: this machine's plus, once
+   * `follow` runs (This PC's places), those of every connected paired machine.
+   */
   counts = $state<PlaceCounts>({ needsYou: 0, running: 0, all: 0 });
+  /** This machine's own counts. */
+  ownCounts = $state<PlaceCounts>({ needsYou: 0, running: 0, all: 0 });
   projects = $state<Project[]>([]);
   /** The "Missing folders" group is expanded (collapsed by default, v1.1 §4). */
   missingOpen = $state(false);
@@ -78,6 +105,10 @@ export class PlacesState {
   private readonly countWatchers = new Set<(counts: PlaceCounts) => void>();
   private inflight: Promise<void> | null = null;
   private again = false;
+  /** Counts of the connected paired machines (`follow`), in the order they came. */
+  private readonly others = new Map<string, PlaceCounts>();
+  /** `ownCounts` as the service sent it (what the sum is made of). */
+  private own: PlaceCounts = this.ownCounts;
 
   init = (api: Api, opts: { localMachineId?: () => string } = {}): void => {
     this.api = api;
@@ -100,7 +131,44 @@ export class PlacesState {
     return () => this.subscribers.delete(cb);
   };
 
-  /** Called after every counts fetch (e.g. for the tray badge). */
+  /**
+   * Adds every connected paired machine's counts to `counts` (This PC's
+   * places do this): a machine's counts join when it sends them and leave
+   * when it disconnects or goes.
+   */
+  follow = (scopes: Pick<Scopes, 'observe'>): (() => void) =>
+    scopes.observe(
+      (scope) => {
+        const id = scope.machineId;
+        const leave = (): void => {
+          if (this.others.delete(id)) this.sum();
+        };
+        const offs = [
+          scope.places.subscribeCounts((c) => {
+            if (scope.api.status !== 'open') return;
+            this.others.set(id, c);
+            this.sum();
+          }),
+          scope.api.onStatus((s) => {
+            if (s !== 'open') leave();
+          }),
+        ];
+        if (scope.api.status === 'open') quietly(scope.places.refresh());
+        return () => {
+          for (const off of offs) off();
+          leave();
+        };
+      },
+      { paired: true },
+    );
+
+  private sum = (): void => {
+    const counts = sumCounts([this.own, ...this.others.values()]);
+    this.counts = counts;
+    for (const cb of this.countWatchers) cb(counts);
+  };
+
+  /** Called after every counts fetch, with the summed counts (e.g. for the tray badge). */
   subscribeCounts = (cb: (counts: PlaceCounts) => void): (() => void) => {
     this.countWatchers.add(cb);
     return () => this.countWatchers.delete(cb);
@@ -140,9 +208,10 @@ export class PlacesState {
             api.request('places.counts', {}),
             api.request('projects.list', {}),
           ]);
-          this.counts = counts;
+          this.ownCounts = counts;
+          this.own = counts;
           this.projects = projects;
-          for (const cb of this.countWatchers) cb(counts);
+          this.sum();
         } while (this.again);
         this.icons.revalidate();
       } finally {

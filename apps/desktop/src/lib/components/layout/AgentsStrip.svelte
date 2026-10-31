@@ -4,6 +4,8 @@
   import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
   import { Button } from '#lib/components/ui/button/index.js';
   import { useApp } from '#lib/state/context.js';
+  import { chatKey } from '#lib/state/refs.js';
+  import type { MachineScope } from '#lib/state/scope.js';
   import { cn } from '#lib/utils.js';
   import { baseName, externalLabel, previewLine, rawStatus } from './chat-info';
   import RunningBadge from './RunningBadge.svelte';
@@ -14,18 +16,29 @@
    * Bottom strip (spec §6.1, Ruling R21): every live Threadgarden chat and every active
    * external session from every project, needs-you → working → idle. Clicking one
    * opens (or focuses) its tab; a chat with running background tasks shows its
-   * "N running" pill (Ruling R29). "Stop all work" (enabled while any Threadgarden chat is
-   * live; it closes idle ones too) sits behind a confirmation. v1.3 B: the
-   * usage meter sits before it (hidden while nothing is known).
+   * "N running" pill (Ruling R29). "Stop all work" (enabled while any Threadgarden chat of
+   * This PC is live; it closes idle ones too) sits behind a confirmation. v1.3 B: the
+   * usage meter sits before it (hidden while nothing is known). With paired
+   * machines, every connected machine's agents are listed; each opens on its machine.
    */
-  const { agents, chats, tabs, places, scopes } = useApp();
-  /** The strip lists This PC's agents (every machine's come with cross-machine lists). */
+  const { agents, tabs, scopes } = useApp();
   const local = scopes.local();
 
   let confirming = $state(false);
 
-  const names = $derived(new Map(places.projects.map((p) => [p.projectId, p.displayName])));
-  const canStop = $derived(agents.items.some((a) => a.live));
+  const scopeOf = (machineId: string): MachineScope => scopes.get(machineId) ?? local;
+  /** Project names by machine. */
+  const namesOn = $derived(
+    new Map(
+      scopes
+        .all()
+        .map((s) => [
+          s.machineId,
+          new Map(s.places.projects.map((p) => [p.projectId, p.displayName])),
+        ]),
+    ),
+  );
+  const canStop = $derived(agents.local.some((a) => a.live));
 </script>
 
 <footer class="bg-muted/40 flex h-8 shrink-0 items-center gap-2 border-t pr-1 pl-2 text-xs">
@@ -36,21 +49,22 @@
       class="flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto [scrollbar-width:none]"
       aria-label="Running agents"
     >
-      {#each agents.items as agent (agent.sessionId)}
-        {@const project = names.get(agent.projectId) ?? baseName(agent.cwd)}
+      {#each agents.items as agent (chatKey(agent))}
+        {@const project = namesOn.get(agent.machineId)?.get(agent.projectId) ?? baseName(agent.cwd)}
         {@const detail = previewLine(agent)}
-        {@const running = chats.get(agent.sessionId)?.running ?? agent.runningTasks ?? 0}
+        {@const running =
+          scopeOf(agent.machineId).chats.get(agent.sessionId)?.running ?? agent.runningTasks ?? 0}
         <li class="shrink-0">
           <button
             type="button"
             class={cn(
               'hover:bg-accent focus-visible:ring-ring/50 flex h-6 max-w-60 items-center gap-1.5 rounded px-2 outline-none focus-visible:ring-2',
-              agent.sessionId === local.tabs.active && 'bg-accent text-accent-foreground',
+              chatKey(agent) === tabs.active && 'bg-accent text-accent-foreground',
             )}
             title={`${agent.title} · ${project} · ${statusLabel(agent.status, rawStatus(agent), agent.unread)}${
               detail ? ` · ${detail}` : ''
             }`}
-            onclick={() => tabs.openTab({ machineId: local.machineId, sessionId: agent.sessionId })}
+            onclick={() => tabs.openTab({ machineId: agent.machineId, sessionId: agent.sessionId })}
           >
             <StatusIcon status={agent.status} raw={rawStatus(agent)} unread={agent.unread} />
             <span class="truncate">{agent.title}</span>

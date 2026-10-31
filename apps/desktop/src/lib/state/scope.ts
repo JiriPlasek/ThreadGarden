@@ -42,12 +42,10 @@ export type ScopeDeps = {
    * watcher per scope comes with remote chats, Task 13).
    */
   settings: SettingsState;
-  /** What the agents strip lists ("Your turn" reads it); none for a machine the strip does not cover yet. */
+  /** What the agents strip lists ("Your turn" reads this machine's rows of it). */
   agents?: Pick<AgentsState, 'items'>;
   chats?: ChatsOptions;
 };
-
-const NO_AGENTS: Pick<AgentsState, 'items'> = { items: [] };
 
 /** A scope around existing store instances; `machineId` is read on every use. */
 export const makeScope = (
@@ -86,7 +84,12 @@ export const wireScope = (scope: MachineScope, deps: ScopeDeps): (() => void) =>
     tabs: scope.tabs,
     chats,
     sessions,
-    agents: deps.agents ?? NO_AGENTS,
+    agents: {
+      get items() {
+        const id = scope.machineId;
+        return deps.agents?.items.filter((a) => a.machineId === id) ?? [];
+      },
+    },
   });
   return () => {
     offTabs();
@@ -114,9 +117,17 @@ export const createScope = (
   return Object.assign(scope, { stop });
 };
 
+type Observer = {
+  cb: (scope: MachineScope) => (() => void) | void;
+  /** Cleanups of the scopes `cb` saw, by scope. */
+  seen: Map<MachineScope, () => void>;
+};
+
 /** This PC's scope plus one per paired machine (reactive). */
 export class Scopes {
   private readonly others = new SvelteMap<string, MachineScope & { stop?: () => void }>();
+  private readonly observers = new Set<Observer>();
+  private readonly pairedObservers = new Set<Observer>();
 
   constructor(private readonly here: MachineScope) {}
 
@@ -127,6 +138,48 @@ export class Scopes {
 
   /** This PC first, then the paired machines in the order they appeared. */
   all = (): MachineScope[] => [this.here, ...this.others.values()];
+
+  /**
+   * Calls `cb` for every scope now (This PC first) and for each one that
+   * appears later; the function `cb` returns runs when that scope goes (or
+   * when the returned function stops observing). `paired`: the paired
+   * machines' scopes only.
+   */
+  observe = (
+    cb: (scope: MachineScope) => (() => void) | void,
+    o: { paired?: boolean } = {},
+  ): (() => void) => {
+    const observer: Observer = { cb, seen: new Map() };
+    const set = o.paired ? this.pairedObservers : this.observers;
+    set.add(observer);
+    for (const scope of o.paired ? [...this.others.values()] : this.all()) {
+      this.attach(observer, scope);
+    }
+    return () => {
+      set.delete(observer);
+      for (const off of observer.seen.values()) off();
+      observer.seen.clear();
+    };
+  };
+
+  private attach = (observer: Observer, scope: MachineScope): void => {
+    const off = observer.cb(scope);
+    if (off) observer.seen.set(scope, off);
+  };
+
+  private added = (scope: MachineScope): void => {
+    for (const observer of [...this.observers, ...this.pairedObservers]) {
+      this.attach(observer, scope);
+    }
+  };
+
+  private gone = (scope: MachineScope): void => {
+    for (const observer of [...this.observers, ...this.pairedObservers]) {
+      const off = observer.seen.get(scope);
+      observer.seen.delete(scope);
+      off?.();
+    }
+  };
 
   /**
    * Keeps a scope per paired machine: created (by `make`) when the machine
@@ -151,14 +204,21 @@ export class Scopes {
     const offListed = machines.onListed(prune);
     prune();
     machines.onAdded((m) => {
-      this.others.get(m.id)?.stop?.();
-      this.others.set(m.id, make(m));
+      const old = this.others.get(m.id);
+      if (old) {
+        old.stop?.();
+        this.gone(old);
+      }
+      const scope = make(m);
+      this.others.set(m.id, scope);
+      this.added(scope);
     });
     machines.onRemoved((id) => {
       tabs.closeMachine(id);
       const scope = this.others.get(id);
       this.others.delete(id);
       scope?.stop?.();
+      if (scope) this.gone(scope);
     });
   };
 }

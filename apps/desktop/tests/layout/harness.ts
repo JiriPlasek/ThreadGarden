@@ -178,7 +178,7 @@ const wire = (
   wireScope(local, { tabs, settings, agents: app.agents, chats: chatOptions });
   app.tabs.init(client, { localMachineId: () => local.machineId });
   app.settings.init(client);
-  app.agents.init(client);
+  app.agents.init(client, { machineId: () => local.machineId });
   // "Restart service" reconnects to whatever the (fake) service connection reports.
   app.lifecycle.init(client, app.agents, app.connection, async (conn) => {
     app.connection.setVersions(conn);
@@ -186,8 +186,10 @@ const wire = (
   });
   app.usage.init(client);
   app.analytics.init(client);
+  app.places.follow(scopes);
+  app.agents.follow(scopes);
   scopes.follow(app.machines, tabs, (m) =>
-    createScope(m.id, m.client, { tabs, settings, chats: chatOptions }),
+    createScope(m.id, m.client, { tabs, settings, agents: app.agents, chats: chatOptions }),
   );
   app.machines.init(client, client, {
     relayUrl: (id) => `ws://fake:1/relay?machine=${id}`,

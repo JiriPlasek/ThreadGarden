@@ -35,9 +35,12 @@ export class LifecycleState {
     this.reconnect = reconnect;
   };
 
-  /** Threadgarden's own live chats: what the actions stop (terminal sessions are not affected). */
+  /**
+   * This PC's own live chats: what the actions stop (terminal sessions and
+   * other machines are not affected).
+   */
   get running(): ChatSummary[] {
-    return this.agents?.items.filter((a) => a.live && !a.external) ?? [];
+    return this.agents?.local.filter((a) => a.live && !a.external) ?? [];
   }
 
   /** True when the service can answer requests (not down, not another protocol). */

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { Bucket, ChatSummary } from '@threadgarden/protocol';
+  import type { Bucket } from '@threadgarden/protocol';
   import { untrack } from 'svelte';
   import { SvelteSet } from 'svelte/reactivity';
   import LayersIcon from '@lucide/svelte/icons/layers';
@@ -10,7 +10,10 @@
   import { rowPx } from '#lib/interface-scale.js';
   import { ARCHIVE_OLDER_DAYS } from '#lib/state/buckets.svelte.js';
   import { useApp } from '#lib/state/context.js';
+  import { MergedList, type MachineChat } from '#lib/state/merged-list.svelte.js';
   import { includesOtherBuckets } from '#lib/state/places.svelte.js';
+  import { chatKey } from '#lib/state/refs.js';
+  import type { MachineScope } from '#lib/state/scope.js';
   import { baseName } from './chat-info';
   import ChatListRow from './ChatListRow.svelte';
   import IconButton from './IconButton.svelte';
@@ -36,12 +39,79 @@
    * Ctrl/Cmd+A the cursor's section, Esc clears it; a bulk bar acts on it.
    * The Older header offers "Archive all older than 30 days" (also a Ctrl+K
    * command, as the header is hidden from assistive technology).
+   *
+   * Machines: once a machine is paired, Needs you, Running and the buckets
+   * list every connected machine's chats (`MergedList`; a machine whose chats
+   * are missing is named above the list); a project lists its machine's chats.
+   * Rows are keyed by machine and session id, and act through their machine.
+   * With This PC alone, the list is This PC's `sessions`, as always.
    */
   let { onCollapse }: { onCollapse?: () => void } = $props();
 
-  const { sessions, places, tabs, agents, settings, chats, buckets, scheduled, scopes } = useApp();
-  /** The list shows This PC's chats (lists across machines come later). */
+  const { sessions, places, tabs, agents, settings, machines, scopes } = useApp();
   const local = scopes.local();
+
+  /** The scope of a machine (This PC's for a project without one). */
+  const scopeOf = (machineId: string | undefined): MachineScope =>
+    (machineId === undefined ? undefined : scopes.get(machineId)) ?? local;
+
+  /** The selected project's machine; This PC for the cross-machine places. */
+  const placeScope = $derived(
+    places.selected.kind === 'project' ? scopeOf(places.selected.machineId) : local,
+  );
+
+  /** The cross-machine place's list while a machine is paired (else This PC's `sessions`). */
+  let merged = $state<MergedList | null>(null);
+  $effect(() => {
+    const place = places.selected;
+    if (place.kind === 'project' || scopes.all().length < 2) return;
+    // Only the place and the set of machines make a new list (it follows the rest itself).
+    return untrack(() => {
+      const list = new MergedList(() => scopes.all(), place, { machines });
+      list.query = sessions.query;
+      merged = list;
+      const stop = list.watch(scopes);
+      void list.reload().catch(() => {});
+      return () => {
+        stop();
+        merged = null;
+      };
+    });
+  });
+
+  // A project on another machine: that machine's `sessions` lists it.
+  $effect(() => {
+    const place = places.selected;
+    const scope = placeScope;
+    if (place.kind !== 'project' || scope === local) return;
+    untrack(() => {
+      scope.places.select(place);
+      scope.places.setInclude(includesOtherBuckets(place));
+    });
+  });
+
+  // The search box's query (This PC's `sessions.query`) applies to the list shown.
+  $effect(() => {
+    const query = sessions.query;
+    const list = merged;
+    const other = placeScope === local ? null : placeScope.sessions;
+    if (list && list.query !== query) untrack(() => void list.setQuery(query).catch(() => {}));
+    else if (!list && other && other.query !== query) {
+      untrack(() => void other.setQuery(query).catch(() => {}));
+    }
+  });
+
+  const shown = $derived(merged ?? placeScope.sessions);
+  const items = $derived.by((): MachineChat[] => {
+    if (merged) return merged.items;
+    const machineId = placeScope.machineId;
+    return placeScope.sessions.items.map((c) => ({ ...c, machineId }));
+  });
+  const hasMore = $derived(
+    merged ? merged.nextAvailable : placeScope.sessions.nextCursor !== undefined,
+  );
+  const skipped = $derived(merged?.skipped ?? []);
+  const keyOf = (chat: MachineChat): string => chatKey(chat);
 
   /**
    * Fixed row heights of the virtual list, in rem so they follow the interface
@@ -58,11 +128,11 @@
   const CLOCK_MS = 30_000;
   const MINUTE_MS = 60_000;
 
-  let list = $state<ReturnType<typeof VirtualList<ListRow>> | null>(null);
+  let list = $state<ReturnType<typeof VirtualList<ListRow<MachineChat>>> | null>(null);
   let viewport = $state<HTMLDivElement | null>(null);
   let search = $state(sessions.query);
   let searchTimer: ReturnType<typeof setTimeout> | undefined;
-  let renaming = $state<ChatSummary | null>(null);
+  let renaming = $state<MachineChat | null>(null);
   let now = $state(Date.now());
 
   $effect(() => {
@@ -73,7 +143,7 @@
     };
   });
 
-  /** The multi-selection (session ids) and where a Shift+click range starts. */
+  /** The multi-selection (row keys) and where a Shift+click range starts. */
   const selection = new SvelteSet<string>();
   let anchor: string | null = null;
 
@@ -91,19 +161,20 @@
   /** Sections move with the clock once a minute, not on every render or tick. */
   const minute = $derived(Math.floor(now / MINUTE_MS) * MINUTE_MS);
   const grouped = $derived(
-    groupChats(sessions.items, minute, {
+    groupChats(items, minute, {
       // Every chat of these places is a "now" chat, whatever its status says by now.
       allNow: places.selected.kind === 'needsYou' || places.selected.kind === 'running',
-      hasMore: sessions.nextCursor !== undefined,
+      hasMore,
+      keyOf,
     }),
   );
 
-  /** The keyboard cursor follows the active tab until the user moves it. */
-  let cursor = $derived<string | null>(local.tabs.active);
+  /** The keyboard cursor (a row key) follows the active tab until the user moves it. */
+  let cursor = $derived<string | null>(tabs.active);
   const cursorIndex = $derived(cursor === null ? -1 : (grouped.indexOf.get(cursor) ?? -1));
 
   /** The selected chats still listed, in display order. */
-  const selectedChats = $derived(grouped.chats.filter((c) => selection.has(c.sessionId)));
+  const selectedChats = $derived(grouped.chats.filter((c) => selection.has(keyOf(c))));
   // Chats that left the list (archived from Active, …) leave the selection.
   $effect(() => {
     const listed = grouped.indexOf;
@@ -112,7 +183,20 @@
     });
   });
 
-  const names = $derived(new Map(places.projects.map((p) => [p.projectId, p.displayName])));
+  /** Project names by machine. */
+  const namesOn = $derived(
+    new Map(
+      scopes
+        .all()
+        .map((s) => [
+          s.machineId,
+          new Map(s.places.projects.map((p) => [p.projectId, p.displayName])),
+        ]),
+    ),
+  );
+  const names = $derived(namesOn.get(placeScope.machineId) ?? new Map<string, string>());
+  const projectNameOf = (chat: MachineChat): string =>
+    namesOn.get(chat.machineId)?.get(chat.projectId) ?? baseName(chat.cwd);
   const spansProjects = $derived(places.selected.kind !== 'project');
   const placeTitle = $derived.by(() => {
     const p = places.selected;
@@ -140,12 +224,15 @@
         places.selected.kind === 'all' ||
         places.selected.kind === 'project'),
   );
+  /** In Active, This PC's chats (each machine tidies its own). */
   const archiveOlder = (): void => {
     const p = places.selected;
-    void buckets.askArchiveOlder(p.kind === 'project' ? p.projectId : undefined);
+    void placeScope.buckets.askArchiveOlder(p.kind === 'project' ? p.projectId : undefined);
   };
 
-  const rowId = (sessionId: string): string => `chat-row-${sessionId}`;
+  /** This PC's rows keep their plain id; another machine's add the machine. */
+  const rowId = (chat: MachineChat): string =>
+    chat.machineId === local.machineId ? `chat-row-${chat.sessionId}` : `chat-row-${keyOf(chat)}`;
   const sectionId = (section: string): string => `chat-section-${section}`;
   const headerSections = $derived(
     grouped.rows.filter((r): r is HeaderRow => r.kind === 'header').map((r) => r.section),
@@ -157,9 +244,9 @@
     searchTimer = setTimeout(() => void sessions.setQuery(value.trim()), SEARCH_DELAY_MS);
   };
 
-  const open = (chat: ChatSummary): void => {
-    cursor = chat.sessionId;
-    tabs.openTab({ machineId: local.machineId, sessionId: chat.sessionId });
+  const open = (chat: MachineChat): void => {
+    cursor = keyOf(chat);
+    tabs.openTab({ machineId: chat.machineId, sessionId: chat.sessionId });
   };
 
   const clearSelection = (): void => {
@@ -173,13 +260,13 @@
     const a = grouped.indexOf.get(from) ?? b;
     selection.clear();
     for (let i = Math.min(a, b); i <= Math.max(a, b); i++) {
-      selection.add(grouped.chats[i]!.sessionId);
+      selection.add(keyOf(grouped.chats[i]!));
     }
   };
 
   /** A plain click opens; Ctrl/Cmd+click toggles the chat, Shift+click selects a range. */
-  const onRowClick = (chat: ChatSummary, e?: MouseEvent): void => {
-    const id = chat.sessionId;
+  const onRowClick = (chat: MachineChat, e?: MouseEvent): void => {
+    const id = keyOf(chat);
     if (e && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
       cursor = id;
       anchor = id;
@@ -216,22 +303,34 @@
     if (!row || row.kind !== 'chat') return;
     selection.clear();
     for (const r of grouped.rows) {
-      if (r.kind === 'chat' && r.section === row.section) selection.add(r.chat.sessionId);
+      if (r.kind === 'chat' && r.section === row.section) selection.add(r.key);
     }
   };
 
+  /** `targets` by machine, in the order the machines first appear. */
+  const byMachine = (targets: MachineChat[]): [MachineScope, MachineChat[]][] => {
+    const groups = new Map<string, MachineChat[]>();
+    for (const t of targets) groups.set(t.machineId, [...(groups.get(t.machineId) ?? []), t]);
+    return [...groups].map(([machineId, chats]) => [scopeOf(machineId), chats]);
+  };
+
   /**
-   * Moves chats to a bucket; On hold opens the hold popover first. Moving the
-   * selection clears it (once the hold is saved, for On hold).
+   * Moves chats to a bucket, each through its machine; On hold opens the hold
+   * popover first. Moving the selection clears it (once the hold is saved, for On hold).
    */
-  const move = (targets: ChatSummary[], bucket: Bucket, fromSelection: boolean): void => {
+  const move = (targets: MachineChat[], bucket: Bucket, fromSelection: boolean): void => {
     if (targets.length === 0) return;
+    const groups = byMachine(targets);
     if (bucket === 'onHold') {
-      buckets.hold(targets, fromSelection ? clearSelection : undefined);
+      for (const [scope, group] of groups) {
+        scope.buckets.hold(group, fromSelection ? clearSelection : undefined);
+      }
       return;
     }
     if (fromSelection) clearSelection();
-    void (bucket === 'archived' ? buckets.archive(targets) : buckets.activate(targets));
+    for (const [{ buckets }, group] of groups) {
+      void (bucket === 'archived' ? buckets.archive(group) : buckets.activate(group));
+    }
   };
 
   /** From the keyboard: the selection, or the chat under the cursor when nothing is selected. */
@@ -242,8 +341,8 @@
   };
 
   /** From a row's menu: the whole selection when the row is part of it. */
-  const moveFromMenu = (chat: ChatSummary, bucket: Bucket): void => {
-    if (selection.has(chat.sessionId)) move(selectedChats, bucket, true);
+  const moveFromMenu = (chat: MachineChat, bucket: Bucket): void => {
+    if (selection.has(keyOf(chat))) move(selectedChats, bucket, true);
     else move([chat], bucket, false);
   };
 
@@ -254,7 +353,7 @@
     const n = grouped.chats.length;
     if (n === 0) return;
     const i = Math.max(0, Math.min(n - 1, index));
-    cursor = grouped.chats[i]!.sessionId;
+    cursor = keyOf(grouped.chats[i]!);
     list?.scrollToIndex(grouped.rowOf[i]!);
   };
 
@@ -262,9 +361,10 @@
   const toggleCursor = (): void => {
     const chat = grouped.chats[cursorIndex];
     if (!chat) return;
-    anchor = chat.sessionId;
-    if (selection.has(chat.sessionId)) selection.delete(chat.sessionId);
-    else selection.add(chat.sessionId);
+    const key = keyOf(chat);
+    anchor = key;
+    if (selection.has(key)) selection.delete(key);
+    else selection.add(key);
   };
 
   const onListKey = (e: KeyboardEvent): void => {
@@ -341,13 +441,28 @@
     }
   };
 
-  const togglePin = (chat: ChatSummary): void => {
-    void sessions.setPinned(chat.sessionId, !chat.pinned).catch(() => {});
+  /** A merged list learns of a pin or a title from no event: it is fetched again. */
+  const refetchMerged = (): void => {
+    void merged?.refetch().catch(() => {});
   };
 
-  const rename = async (sessionId: string, title: string | null): Promise<void> => {
-    await sessions.rename(sessionId, title);
+  const togglePin = (chat: MachineChat): void => {
+    void scopeOf(chat.machineId)
+      .sessions.setPinned(chat.sessionId, !chat.pinned)
+      .then(refetchMerged)
+      .catch(() => {});
+  };
+
+  const rename = async (chat: MachineChat, title: string | null): Promise<void> => {
+    await scopeOf(chat.machineId).sessions.rename(chat.sessionId, title);
+    refetchMerged();
     void agents.refresh().catch(() => {});
+  };
+
+  /** The rename dialog's chat (the dialog names it by session id only). */
+  const renameRenaming = async (sessionId: string, title: string | null): Promise<void> => {
+    const chat = renaming;
+    if (chat?.sessionId === sessionId) await rename(chat, title);
   };
 
   /** Left/Right move between the bulk bar's buttons (toolbar keys). */
@@ -397,11 +512,17 @@
     </label>
   </div>
 
-  {#if sessions.error}
+  {#if shown.error}
     <p class="text-destructive px-3 pb-2 text-xs" role="alert">
-      Could not load chats: {sessions.error}
+      Could not load chats: {shown.error}
     </p>
   {/if}
+
+  {#each skipped as name, i (i)}
+    <p class="text-muted-foreground px-3 pb-2 text-xs" role="status">
+      {name} is unreachable — its chats are missing here
+    </p>
+  {/each}
 
   {#if selectedChats.length > 0}
     <div
@@ -466,12 +587,12 @@
     rowHeight={heightOf}
     key={(r) => r.key}
     isSticky={(r) => r.kind === 'header'}
-    onEndReached={() => void sessions.loadMore()}
+    onEndReached={() => void shown.loadMore()}
     role="listbox"
     aria-label="{placeTitle} chats"
     aria-multiselectable="true"
-    aria-activedescendant={cursorIndex >= 0 ? rowId(cursor!) : undefined}
-    aria-busy={sessions.loading}
+    aria-activedescendant={cursorIndex >= 0 ? rowId(grouped.chats[cursorIndex]!) : undefined}
+    aria-busy={shown.loading}
     tabindex={0}
     onkeydown={onListKey}
     class="focus-visible:ring-ring/50 min-h-0 flex-1 overflow-y-auto pb-1 outline-none [scrollbar-width:thin] focus-visible:ring-2 focus-visible:ring-inset"
@@ -481,26 +602,25 @@
         {@render header(r, false)}
       {:else}
         {@const chat = r.chat}
+        {@const scope = scopeOf(chat.machineId)}
         <ChatListRow
           {chat}
-          id={rowId(chat.sessionId)}
+          id={rowId(chat)}
           index={r.index}
           setSize={grouped.chats.length}
           describedBy={sectionId(r.section)}
-          selected={selection.size > 0 ? selection.has(chat.sessionId) : chat.sessionId === cursor}
-          checked={selection.has(chat.sessionId)}
-          cursor={chat.sessionId === cursor}
-          active={chat.sessionId === local.tabs.active}
-          projectName={spansProjects
-            ? (names.get(chat.projectId) ?? baseName(chat.cwd))
-            : undefined}
+          selected={selection.size > 0 ? selection.has(r.key) : r.key === cursor}
+          checked={selection.has(r.key)}
+          cursor={r.key === cursor}
+          active={r.key === tabs.active}
+          projectName={spansProjects ? projectNameOf(chat) : undefined}
           {now}
-          running={chats.get(chat.sessionId)?.running ?? chat.runningTasks ?? 0}
-          scheduled={scheduled.forChat(chat.sessionId)}
-          onOpen={onRowClick}
-          onRename={(c) => (renaming = c)}
-          onTogglePin={togglePin}
-          onMove={moveFromMenu}
+          running={scope.chats.get(chat.sessionId)?.running ?? chat.runningTasks ?? 0}
+          scheduled={scope.scheduled.forChat(chat.sessionId)}
+          onOpen={(_, e) => onRowClick(chat, e)}
+          onRename={() => (renaming = chat)}
+          onTogglePin={() => togglePin(chat)}
+          onMove={(_, bucket) => moveFromMenu(chat, bucket)}
         />
       {/if}
     {/snippet}
@@ -511,7 +631,7 @@
     {/snippet}
   </VirtualList>
 
-  {#if sessions.items.length === 0 && !sessions.loading}
+  {#if items.length === 0 && !shown.loading}
     <p
       class="text-muted-foreground pointer-events-none absolute inset-x-0 top-28 px-4 text-center text-xs"
     >
@@ -520,4 +640,4 @@
   {/if}
 </section>
 
-<RenameDialog chat={renaming} onSubmit={rename} onClose={() => (renaming = null)} />
+<RenameDialog chat={renaming} onSubmit={renameRenaming} onClose={() => (renaming = null)} />

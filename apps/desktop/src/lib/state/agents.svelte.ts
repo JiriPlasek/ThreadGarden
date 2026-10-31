@@ -1,53 +1,140 @@
 import type { ChatStatus, ChatSummary } from '@threadgarden/protocol';
 import { quietly, type Api } from './api';
+import { mergeSorted, type MachineChat } from './merged-list.svelte';
+import { LOCAL_FALLBACK_ID } from './refs';
+import type { Scopes } from './scope';
 
 /** More agents than this at once is not a realistic workload; the strip shows what fits. */
 export const AGENTS_LIMIT = 200;
 
+/** One machine's part of the strip. */
+type Feed = {
+  machineId: () => string;
+  api: Api;
+  /** This PC's: always asked (a failure surfaces), kept while disconnected. */
+  local: boolean;
+  items: MachineChat[];
+  inflight: Promise<void> | null;
+  again: boolean;
+  offs: (() => void)[];
+};
+
 /**
  * Every running agent across all projects (spec §6.1 bottom strip, Ruling R21):
  * every live Threadgarden chat (needs you, working, idle) plus external sessions that
- * need the user or are working, ordered needs-you → working → idle.
+ * need the user or are working, ordered needs-you → working → idle. With paired
+ * machines (`follow`), the agents of every connected machine, each with its machine.
  */
 export class AgentsState {
-  items = $state.raw<ChatSummary[]>([]);
+  items = $state.raw<MachineChat[]>([]);
   needsYou = $derived(this.items.filter((s) => s.status === 'needsYou').length);
 
-  private api: Api | null = null;
-  private inflight: Promise<void> | null = null;
-  private again = false;
+  /** This PC first, then the paired machines in the order they appeared. */
+  private feeds: Feed[] = [];
+  private localFeed: Feed | null = null;
 
-  init = (api: Api): void => {
-    this.api = api;
-    const refresh = () => quietly(this.refresh());
-    api.on('sessions.changed', refresh);
-    api.on('external.changed', refresh);
-    api.on('chat.status', (e) => {
-      const cur = this.items.find((s) => s.sessionId === e.sessionId);
-      // Header-only events (cost, model, …) do not change the strip.
-      if (
-        cur ? cur.status === e.status && cur.waitingFor === e.waitingFor : e.status === 'history'
-      ) {
-        return;
-      }
-      refresh();
-    });
-    api.onOpen(() => this.refresh());
-    if (api.status === 'open') refresh();
+  /** This PC's client; `machineId` names This PC in `items` (default `local`). */
+  init = (api: Api, o: { machineId?: () => string } = {}): void => {
+    this.localFeed = this.add(api, o.machineId ?? (() => LOCAL_FALLBACK_ID), true);
   };
 
-  /** Re-fetches the lists; overlapping calls coalesce into one trailing fetch. */
-  refresh = (): Promise<void> => {
-    if (this.inflight) {
-      this.again = true;
-      return this.inflight;
+  /** Lists every paired machine's agents too, while it is connected. */
+  follow = (scopes: Pick<Scopes, 'observe'>): (() => void) =>
+    scopes.observe(
+      (scope) => {
+        const feed = this.add(scope.api, () => scope.machineId, false);
+        return () => this.remove(feed);
+      },
+      { paired: true },
+    );
+
+  /**
+   * This PC's agents: what "Stop all work", restarting the service and
+   * quitting stop (each acts on This PC's service only).
+   */
+  get local(): MachineChat[] {
+    const id = this.localFeed?.machineId();
+    return this.items.filter((a) => a.machineId === id);
+  }
+
+  /** Re-fetches the lists of This PC and every connected machine; overlapping calls coalesce per machine. */
+  refresh = async (): Promise<void> => {
+    await Promise.all(
+      this.feeds.filter((f) => f.local || f.api.status === 'open').map(this.refreshFeed),
+    );
+  };
+
+  /** Stops the work on This PC (see `local`). */
+  stopAll = async (): Promise<number> => {
+    const feed = this.localFeed;
+    if (!feed) return 0;
+    const { stopped } = await feed.api.request('work.stopAll', {});
+    quietly(this.refreshFeed(feed));
+    return stopped;
+  };
+
+  private add = (api: Api, machineId: () => string, local: boolean): Feed => {
+    const feed: Feed = { machineId, api, local, items: [], inflight: null, again: false, offs: [] };
+    this.feeds.push(feed);
+    const refresh = () => quietly(this.refreshFeed(feed));
+    feed.offs.push(
+      api.on('sessions.changed', refresh),
+      api.on('external.changed', refresh),
+      api.on('chat.status', (e) => {
+        const cur = feed.items.find((s) => s.sessionId === e.sessionId);
+        // Header-only events (cost, model, …) do not change the strip.
+        if (
+          cur ? cur.status === e.status && cur.waitingFor === e.waitingFor : e.status === 'history'
+        ) {
+          return;
+        }
+        refresh();
+      }),
+      api.onOpen(() => this.refreshFeed(feed)),
+    );
+    if (!local) {
+      // A machine that drops takes its agents along (nothing is known of them meanwhile).
+      feed.offs.push(
+        api.onStatus((s) => {
+          if (s === 'open' || feed.items.length === 0) return;
+          feed.items = [];
+          this.merge();
+        }),
+      );
     }
-    const api = this.api;
-    if (!api) return Promise.resolve();
-    this.inflight = (async () => {
+    if (api.status === 'open') refresh();
+    return feed;
+  };
+
+  private remove = (feed: Feed): void => {
+    for (const off of feed.offs) off();
+    this.feeds = this.feeds.filter((f) => f !== feed);
+    this.merge();
+  };
+
+  /** One machine's rows as they are; several machines' merged by group, then recency. */
+  private merge = (): void => {
+    const [only, ...more] = this.feeds;
+    this.items =
+      only && more.length === 0
+        ? only.items
+        : mergeSorted(
+            this.feeds.map((f) => f.items),
+            byGroup,
+          );
+  };
+
+  /** Re-fetches one machine's lists; overlapping calls coalesce into one trailing fetch. */
+  private refreshFeed = (feed: Feed): Promise<void> => {
+    if (feed.inflight) {
+      feed.again = true;
+      return feed.inflight;
+    }
+    const { api } = feed;
+    feed.inflight = (async () => {
       try {
         do {
-          this.again = false;
+          feed.again = false;
           // "Needs you" and "Running" span every project (hidden ones too) and
           // bucket. The first page of a bucket place starts with its live and
           // external sessions, which is where idle live chats come from: Active
@@ -58,25 +145,22 @@ export class AgentsState {
             api.request('sessions.list', { place: { kind: 'active' }, limit: 1 }),
             api.request('sessions.list', { place: { kind: 'onHold' }, limit: 1 }),
           ]);
-          this.items = mergeAgents([
+          // A machine removed meanwhile.
+          if (!this.feeds.includes(feed)) return;
+          const machineId = feed.machineId();
+          feed.items = mergeAgents([
             ...needsYou.items,
             ...running.items,
             ...active.items,
             ...onHold.items,
-          ]);
-        } while (this.again);
+          ]).map((s) => ({ ...s, machineId }));
+          this.merge();
+        } while (feed.again);
       } finally {
-        this.inflight = null;
+        feed.inflight = null;
       }
     })();
-    return this.inflight;
-  };
-
-  stopAll = async (): Promise<number> => {
-    if (!this.api) return 0;
-    const { stopped } = await this.api.request('work.stopAll', {});
-    quietly(this.refresh());
-    return stopped;
+    return feed.inflight;
   };
 }
 
@@ -91,8 +175,8 @@ const isAgent = (s: ChatSummary): boolean =>
  * status change), grouped needs-you → working → idle, otherwise in the
  * service's order (most recent first).
  */
-export const mergeAgents = (lists: ChatSummary[]): ChatSummary[] => {
-  const byId = new Map<string, ChatSummary>();
+export const mergeAgents = <T extends ChatSummary>(lists: T[]): T[] => {
+  const byId = new Map<string, T>();
   for (const s of lists) byId.set(s.sessionId, s);
   return [...byId.values()]
     .filter(isAgent)
@@ -100,5 +184,9 @@ export const mergeAgents = (lists: ChatSummary[]): ChatSummary[] => {
     .sort((a, b) => GROUP[a.s.status]! - GROUP[b.s.status]! || a.i - b.i)
     .map(({ s }) => s);
 };
+
+/** Across machines: needs-you → working → idle, most recent first within a group. */
+const byGroup = (a: ChatSummary, b: ChatSummary): number =>
+  GROUP[a.status]! - GROUP[b.status]! || b.lastActivity - a.lastActivity;
 
 export const agents = new AgentsState();

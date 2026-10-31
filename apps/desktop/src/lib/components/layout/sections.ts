@@ -57,25 +57,25 @@ export type HeaderRow = {
   more: boolean;
 };
 
-export type ChatRow = {
+export type ChatRow<T extends ChatSummary = ChatSummary> = {
   kind: 'chat';
   key: string;
-  chat: ChatSummary;
+  chat: T;
   /** Position among the chats, in display order. */
   index: number;
   section: SectionId;
 };
 
-export type ListRow = HeaderRow | ChatRow;
+export type ListRow<T extends ChatSummary = ChatSummary> = HeaderRow | ChatRow<T>;
 
-export type Grouped = {
+export type Grouped<T extends ChatSummary = ChatSummary> = {
   /** Headers and chats, as the virtual list shows them. */
-  rows: ListRow[];
+  rows: ListRow<T>[];
   /** The chats in display order (what keyboard navigation walks). */
-  chats: ChatSummary[];
+  chats: T[];
   /** `rowOf[i]`: the row index of `chats[i]`. */
   rowOf: number[];
-  /** Session id → position in `chats`. */
+  /** A chat's key (`keyOf`: its session id by default) → position in `chats`. */
   indexOf: Map<string, number>;
 };
 
@@ -83,21 +83,23 @@ export type Grouped = {
  * Splits a place's chats into sections, keeping the service order within each
  * (so "now" keeps the status order). Empty sections are left out. `allNow`
  * (the Needs you and Running places) puts every chat in "now"; `hasMore` marks
- * the last section's count as partial. Linear in the number of chats.
+ * the last section's count as partial; `keyOf` keys the rows (lists across
+ * machines add the machine). Linear in the number of chats.
  */
-export const groupChats = (
-  items: readonly ChatSummary[],
+export const groupChats = <T extends ChatSummary>(
+  items: readonly T[],
   now: number,
-  o: { allNow?: boolean; hasMore?: boolean } = {},
-): Grouped => {
-  const buckets = new Map<SectionId, ChatSummary[]>(ORDER.map((id) => [id, []]));
+  o: { allNow?: boolean; hasMore?: boolean; keyOf?: (chat: T) => string } = {},
+): Grouped<T> => {
+  const keyOf = o.keyOf ?? ((chat: T) => chat.sessionId);
+  const buckets = new Map<SectionId, T[]>(ORDER.map((id) => [id, []]));
   for (const chat of items) {
     const id = o.allNow || isNow(chat) ? 'now' : recencySection(chat.lastActivity, now);
     buckets.get(id)!.push(chat);
   }
   const present = ORDER.filter((id) => buckets.get(id)!.length > 0);
-  const rows: ListRow[] = [];
-  const chats: ChatSummary[] = [];
+  const rows: ListRow<T>[] = [];
+  const chats: T[] = [];
   const rowOf: number[] = [];
   const indexOf = new Map<string, number>();
   for (const id of present) {
@@ -111,9 +113,10 @@ export const groupChats = (
       more: !!o.hasMore && id === present.at(-1),
     });
     for (const chat of members) {
-      indexOf.set(chat.sessionId, chats.length);
+      const key = keyOf(chat);
+      indexOf.set(key, chats.length);
       rowOf.push(rows.length);
-      rows.push({ kind: 'chat', key: chat.sessionId, chat, index: chats.length, section: id });
+      rows.push({ kind: 'chat', key, chat, index: chats.length, section: id });
       chats.push(chat);
     }
   }

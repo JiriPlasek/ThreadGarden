@@ -41,7 +41,7 @@ export type AppState = {
    * One scope of per-machine stores per machine. The keys above (`places`,
    * `sessions`, `chats`, …) are This PC's scope.
    */
-  scopes: Pick<Scopes, 'get' | 'all' | 'local'>;
+  scopes: Pick<Scopes, 'get' | 'all' | 'local' | 'observe'>;
 };
 
 export const APP_CONTEXT = Symbol('threadgarden.app');
