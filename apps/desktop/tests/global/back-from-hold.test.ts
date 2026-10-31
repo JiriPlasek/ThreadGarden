@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { HOLDS_ANNOUNCED_KEY, startAttention } from '../../src/lib/notifications';
-import { YourTurnState } from '../../src/lib/state/your-turn.svelte';
 import { setup, summary } from '../layout/harness';
 import type { FakeServer } from '../service/fake-ws';
 
@@ -279,7 +278,8 @@ describe('"Back from hold": viewing the chat clears it', () => {
       });
     });
     await env.app.sessions.reload();
-    const yourTurn = new YourTurnState();
+    // The harness started it like the app does; re-init with a test debounce (init stops it first).
+    const yourTurn = env.app.scopes.local().yourTurn;
     yourTurn.init(env.client, { ...env.app, tabs: env.app.scopes.local().tabs }, { debounceMs: 0 });
     stops.push(yourTurn.stop);
     focus();
@@ -296,7 +296,8 @@ describe('"Back from hold": viewing the chat clears it', () => {
     const env = await setup((server) => {
       server.handlers['chat.markSeen'] = () => ({});
     });
-    const yourTurn = new YourTurnState();
+    // The harness started it like the app does; re-init with a test debounce (init stops it first).
+    const yourTurn = env.app.scopes.local().yourTurn;
     yourTurn.init(
       env.client,
       { ...env.app, tabs: env.app.scopes.local().tabs },

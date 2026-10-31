@@ -65,6 +65,8 @@ export class MachinesState {
   private removals = new Map<string, Promise<void>>();
   private readonly added = new Set<(m: MachineEntry) => void>();
   private readonly removedCbs = new Set<(id: string) => void>();
+  private readonly listedCbs = new Set<() => void>();
+  private everListed = false;
 
   /** This PC first, then the paired machines in the service's order. */
   get list(): MachineEntry[] {
@@ -99,6 +101,17 @@ export class MachinesState {
   onRemoved = (cb: (id: string) => void): (() => void) => {
     this.removedCbs.add(cb);
     return () => this.removedCbs.delete(cb);
+  };
+
+  /** True once the local service has listed the paired machines (`list` is complete). */
+  get listed(): boolean {
+    return this.everListed;
+  }
+
+  /** Called after the local service listed the paired machines (on every local open). */
+  onListed = (cb: () => void): (() => void) => {
+    this.listedCbs.add(cb);
+    return () => this.listedCbs.delete(cb);
   };
 
   pair = async (p: {
@@ -191,6 +204,8 @@ export class MachinesState {
     }
     try {
       this.apply(await this.localApi.request('machines.list', {}), true);
+      this.everListed = true;
+      for (const cb of this.listedCbs) cb();
     } catch {
       // The local link dropped again: the next open retries.
     }

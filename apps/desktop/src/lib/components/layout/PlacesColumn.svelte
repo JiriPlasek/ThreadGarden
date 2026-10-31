@@ -33,7 +33,7 @@
    */
   let { onCollapse }: { onCollapse?: () => void } = $props();
 
-  const { places, interaction, tabs } = useApp();
+  const { places, interaction, tabs, scopes } = useApp();
 
   let showHidden = $state(false);
   /** The "Hide all missing" confirmation is open (v1.2 §4). */
@@ -79,7 +79,8 @@
     },
   ] as const;
 
-  const isSelected = (place: Place): boolean => samePlace(places.selected, place);
+  const isSelected = (place: Place): boolean =>
+    samePlace(places.selected, place, scopes.local().machineId);
   const select = (place: Place): void => places.select(place);
   const quiet = (p: Promise<unknown>): void => void p.catch(() => {});
 

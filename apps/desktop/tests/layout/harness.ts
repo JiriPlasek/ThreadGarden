@@ -20,7 +20,7 @@ import { MachinesState } from '../../src/lib/state/machines.svelte';
 import { PlacesState } from '../../src/lib/state/places.svelte';
 import { machineIdOf } from '../../src/lib/state/refs';
 import { ScheduledState } from '../../src/lib/state/scheduled.svelte';
-import { createScope, makeScope, Scopes } from '../../src/lib/state/scope';
+import { createScope, makeScope, Scopes, wireScope } from '../../src/lib/state/scope';
 import { SessionsState } from '../../src/lib/state/sessions.svelte';
 import { SettingsState } from '../../src/lib/state/settings.svelte';
 import { TabsState } from '../../src/lib/state/tabs.svelte';
@@ -151,7 +151,7 @@ const wire = (
     buckets: new BucketsState(),
     scheduled: new ScheduledState(),
     interaction: new InteractionState(),
-    // Not started: the tests that need "Your turn" start their own (with their own debounce).
+    // Started like the app's; a test that needs another debounce re-inits it (init stops it first).
     yourTurn: new YourTurnState(),
   });
   const scopes = new Scopes(local);
@@ -172,26 +172,22 @@ const wire = (
     machines: new MachinesState(),
     scopes,
   };
+  const chatOptions = { schedule: (cb: () => void) => cb() };
+  // The same order as `app.ts`'s `wire()`.
   app.connection.init(client);
-  app.places.init(client);
-  app.sessions.init(client, app.places);
-  app.chats.init(client, { schedule: (cb) => cb() });
+  wireScope(local, { tabs, settings, agents: app.agents, chats: chatOptions });
   app.tabs.init(client, { localMachineId: () => local.machineId });
   app.settings.init(client);
   app.agents.init(client);
-  app.interaction.init(client);
   // "Restart service" reconnects to whatever the (fake) service connection reports.
   app.lifecycle.init(client, app.agents, app.connection, async (conn) => {
     app.connection.setVersions(conn);
     await client.connect(`ws://fake:${conn.port}`, conn.token);
   });
-  app.buckets.init(client, app.chats);
   app.usage.init(client);
-  app.scheduled.init(client);
   app.analytics.init(client);
-  app.tabs.subscribe(() => app.chats.sync(local.tabs.open, local.tabs.active));
   scopes.follow(app.machines, tabs, (m) =>
-    createScope(m.id, m.client, { tabs, settings, chats: { schedule: (cb) => cb() } }),
+    createScope(m.id, m.client, { tabs, settings, chats: chatOptions }),
   );
   app.machines.init(client, client, {
     relayUrl: (id) => `ws://fake:1/relay?machine=${id}`,
@@ -217,12 +213,14 @@ export const setup = async (configure?: (server: FakeServer) => void) => {
 /**
  * `setup` plus a paired machine `M1` ("Ubuntu PC") whose fake service sits
  * behind the local relay (its device token is in the fake keychain);
- * resolves once M1 is on.
+ * resolves once M1 is on unless `waitForOn` is false.
  */
 export const setupTwoMachines = async (
   o: {
     configure?: (server: FakeServer) => void;
     configureRemote?: (server: FakeServer) => void;
+    /** Resolve once M1 is on (default); false: as soon as the app is wired. */
+    waitForOn?: boolean;
   } = {},
 ) => {
   const server = new FakeServer();
@@ -236,7 +234,8 @@ export const setupTwoMachines = async (
   const client = new ServiceClient({ WebSocketImpl: impl });
   await client.connect('ws://fake:1', 't');
   const app = wire(client, impl, { [M1]: 'device-token' });
-  await vi.waitFor(() => expect(app.machines.get(M1)?.status).toBe('on'));
+  if (o.waitForOn !== false)
+    await vi.waitFor(() => expect(app.machines.get(M1)?.status).toBe('on'));
   const context = new Map<unknown, unknown>([[APP_CONTEXT, app]]);
   return { server, remote, client, app, context };
 };

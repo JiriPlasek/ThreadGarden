@@ -37,7 +37,10 @@ type ScopeStores = Omit<MachineScope, 'machineId' | 'api' | 'tabs'>;
 
 export type ScopeDeps = {
   tabs: TabsState;
-  /** For the machine's notifications (one attention watcher per scope comes with remote chats). */
+  /**
+   * Unused for now: reserved for the machine's notifications (one attention
+   * watcher per scope comes with remote chats, Task 13).
+   */
   settings: SettingsState;
   /** What the agents strip lists ("Your turn" reads it); none for a machine the strip does not cover yet. */
   agents?: Pick<AgentsState, 'items'>;
@@ -67,15 +70,17 @@ export const makeScope = (
  */
 export const wireScope = (scope: MachineScope, deps: ScopeDeps): (() => void) => {
   const { api, places, sessions, chats, interaction, buckets, scheduled, yourTurn } = scope;
-  places.init(api);
+  places.init(api, { localMachineId: deps.tabs.localMachineId });
   sessions.init(api, places);
   chats.init(api, deps.chats);
   interaction.init(api);
   buckets.init(api, chats);
   scheduled.init(api);
   const sync = (): void => chats.sync(scope.tabs.open, scope.tabs.active);
-  const off = deps.tabs.subscribe(sync);
-  // Tabs restored before the machine was known are waiting for it.
+  const offTabs = deps.tabs.subscribe(sync);
+  // Tabs restored before the machine was known, or before its client opened,
+  // are waiting for it: every open (the first one too) syncs again.
+  const offOpen = api.onOpen(sync);
   sync();
   yourTurn.init(api, {
     tabs: scope.tabs,
@@ -84,7 +89,8 @@ export const wireScope = (scope: MachineScope, deps: ScopeDeps): (() => void) =>
     agents: deps.agents ?? NO_AGENTS,
   });
   return () => {
-    off();
+    offTabs();
+    offOpen();
     yourTurn.stop();
   };
 };
@@ -124,13 +130,26 @@ export class Scopes {
 
   /**
    * Keeps a scope per paired machine: created (by `make`) when the machine
-   * appears, dropped when it is removed, after its tabs are closed.
+   * appears, dropped when it is removed, after its tabs are closed. Restored
+   * tabs of machines missing from the first list (removed while the app was
+   * closed) are closed once both the tabs and that list are in.
    */
   follow = (
-    machines: Pick<MachinesState, 'onAdded' | 'onRemoved'>,
-    tabs: Pick<TabsState, 'closeMachine'>,
+    machines: Pick<MachinesState, 'onAdded' | 'onRemoved' | 'onListed' | 'listed' | 'list'>,
+    tabs: Pick<TabsState, 'closeMachine' | 'keepMachines' | 'restored' | 'subscribe'>,
     make: (m: MachineEntry) => MachineScope & { stop?: () => void },
   ): void => {
+    let pruned = false;
+    const prune = (): void => {
+      if (pruned || !machines.listed || !tabs.restored) return;
+      pruned = true;
+      offTabs();
+      offListed();
+      tabs.keepMachines(new Set(machines.list.map((m) => m.id)));
+    };
+    const offTabs = tabs.subscribe(prune);
+    const offListed = machines.onListed(prune);
+    prune();
     machines.onAdded((m) => {
       this.others.get(m.id)?.stop?.();
       this.others.set(m.id, make(m));

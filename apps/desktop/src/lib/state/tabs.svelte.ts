@@ -37,13 +37,16 @@ export class TabsState {
   private behindAnalytics: string | null = null;
 
   private api: Api | null = null;
-  private localMachineId: () => string = () => LOCAL_FALLBACK_ID;
+  private localId: () => string = () => LOCAL_FALLBACK_ID;
   private readonly subscribers = new Set<() => void>();
 
   init = (api: Api, opts: TabsOptions = {}): void => {
     this.api = api;
-    if (opts.localMachineId) this.localMachineId = opts.localMachineId;
+    if (opts.localMachineId) this.localId = opts.localMachineId;
   };
+
+  /** This PC's machine id (`'local'` until the local service said). */
+  localMachineId = (): string => this.localId();
 
   /** Called after the set of open tabs or the active tab changed. */
   subscribe = (cb: () => void): (() => void) => {
@@ -84,7 +87,8 @@ export class TabsState {
 
   /**
    * Loads the persisted layout from the service (`uiState`). Entries stored
-   * before remote machines (bare session ids) are This PC's.
+   * before remote machines (bare session ids), and keys made while This PC's id
+   * was not known (`local/…`), are This PC's.
    */
   restore = async (): Promise<void> => {
     if (!this.api) return;
@@ -92,9 +96,9 @@ export class TabsState {
       const { value } = await this.api.request('uiState.get', { key: TABS_KEY });
       const v = value as Partial<Persisted> | null;
       if (v && Array.isArray(v.open)) {
-        const keys = v.open.filter((x): x is string => typeof x === 'string').map(this.keyOf);
+        const keys = v.open.filter((x): x is string => typeof x === 'string').map(this.storedKey);
         this.open = [...new Set(keys)];
-        const active = typeof v.active === 'string' ? this.keyOf(v.active) : null;
+        const active = typeof v.active === 'string' ? this.storedKey(v.active) : null;
         this.active =
           active !== null && this.open.includes(active) ? active : (this.open[0] ?? null);
       }
@@ -123,6 +127,16 @@ export class TabsState {
 
   close = (chat: ChatRef | string): void => {
     if (this.remove(this.keyOf(chat))) this.changed();
+  };
+
+  /** Closes the tabs of every machine not in `machineIds` (they were removed meanwhile). */
+  keepMachines = (machineIds: ReadonlySet<string>): void => {
+    const keys = this.open.filter((k) => {
+      const id = parseChatKey(k)?.machineId;
+      return id !== undefined && !machineIds.has(id);
+    });
+    for (const key of keys) this.remove(key);
+    if (keys.length > 0) this.changed();
   };
 
   /** Closes every tab of a machine (it was removed). */
@@ -161,6 +175,14 @@ export class TabsState {
     next.splice(Math.max(0, Math.min(toIndex, next.length)), 0, key);
     this.open = next;
     this.changed();
+  };
+
+  /** A stored entry's key now: the `local` fallback becomes This PC's real id. */
+  private storedKey = (stored: string): string => {
+    const ref = parseChatKey(stored);
+    return ref?.machineId === LOCAL_FALLBACK_ID
+      ? chatKey({ machineId: this.localId(), sessionId: ref.sessionId })
+      : this.keyOf(stored);
   };
 
   /** Drops the tab of `key` (without notifying); false when it was not open. */

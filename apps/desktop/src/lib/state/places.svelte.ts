@@ -1,6 +1,7 @@
 import type { Place as WirePlace, Project } from '@threadgarden/protocol';
 import { quietly, type Api } from './api';
 import { ProjectIconsState } from './project-icons.svelte';
+import { LOCAL_FALLBACK_ID } from './refs';
 
 type WireProjectPlace = Extract<WirePlace, { kind: 'project' }>;
 
@@ -42,14 +43,19 @@ export const INCLUDE_OTHER_BUCKETS = ['onHold', 'archived'] as const;
 /** v1.2: "All chats" became Active; `all` (e.g. from an older UI) reads as `active`. */
 const normalize = (place: Place): Place => (place.kind === 'all' ? { kind: 'active' } : place);
 
-/** The same place in the left column (a project's `include` toggle does not count). */
-export const samePlace = (a: Place, b: Place): boolean => {
+/**
+ * The same place in the left column (a project's `include` toggle does not
+ * count). A project without a machine is This PC's (`localMachineId`).
+ */
+export const samePlace = (a: Place, b: Place, localMachineId = LOCAL_FALLBACK_ID): boolean => {
   const x = normalize(a);
   const y = normalize(b);
   return (
     x.kind === y.kind &&
     (x.kind !== 'project' ||
-      (y.kind === 'project' && x.projectId === y.projectId && x.machineId === y.machineId))
+      (y.kind === 'project' &&
+        x.projectId === y.projectId &&
+        (x.machineId ?? localMachineId) === (y.machineId ?? localMachineId)))
   );
 };
 
@@ -67,13 +73,15 @@ export class PlacesState {
   readonly icons = new ProjectIconsState();
 
   private api: Api | null = null;
+  private localMachineId: () => string = () => LOCAL_FALLBACK_ID;
   private readonly subscribers = new Set<() => void>();
   private readonly countWatchers = new Set<(counts: PlaceCounts) => void>();
   private inflight: Promise<void> | null = null;
   private again = false;
 
-  init = (api: Api): void => {
+  init = (api: Api, opts: { localMachineId?: () => string } = {}): void => {
     this.api = api;
+    if (opts.localMachineId) this.localMachineId = opts.localMachineId;
     this.icons.init(api);
     const refresh = () => quietly(this.refresh());
     api.on('projects.changed', refresh);
@@ -100,7 +108,7 @@ export class PlacesState {
 
   /** Selecting a project shows its active chats (the include toggle starts off). */
   select = (place: Place): void => {
-    if (samePlace(this.selected, place)) return;
+    if (samePlace(this.selected, place, this.localMachineId())) return;
     this.selected = normalize(place);
     for (const cb of this.subscribers) cb();
   };

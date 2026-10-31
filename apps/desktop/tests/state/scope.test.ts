@@ -3,8 +3,18 @@ import { relayUrl } from '../../src/lib/state/machines.svelte';
 import { samePlace, wirePlace } from '../../src/lib/state/places.svelte';
 import { chatKey, LOCAL_FALLBACK_ID, parseChatKey } from '../../src/lib/state/refs';
 import { TabsState } from '../../src/lib/state/tabs.svelte';
-import { here, LOCAL, M1, setup, setupTwoMachines, summary } from '../layout/harness';
+import {
+  here,
+  LOCAL,
+  M1,
+  pairedMachine,
+  setup,
+  setupTwoMachines,
+  summary,
+} from '../layout/harness';
 import { FakeServer } from '../service/fake-ws';
+
+const flush = () => new Promise((r) => setTimeout(r, 20));
 
 const opened = (s: FakeServer): string[] =>
   s.calls('chat.open').map((c) => (c.params as { sessionId: string }).sessionId);
@@ -96,6 +106,119 @@ describe('machine scopes', () => {
     await vi.waitFor(() => expect(opened(remote)).toEqual(['s7']));
   });
 
+  /** The layout names M1's chat `s7` (active) and `s8` (background). */
+  const restoredOnM1 = (s: FakeServer): void => {
+    s.handlers['uiState.get'] = (p) =>
+      (p as { key: string }).key === 'tabs'
+        ? { value: { open: [`${M1}/s7`, `${M1}/s8`], active: `${M1}/s7` } }
+        : { value: null };
+  };
+  const summarised = (s: FakeServer): string[] =>
+    s.calls('sessions.summaries').flatMap((c) => (c.params as { sessionIds: string[] }).sessionIds);
+
+  it('restored tabs of a machine still connecting open once it is on', async () => {
+    let unlock!: () => void;
+    const { app, remote } = await setupTwoMachines({
+      waitForOn: false,
+      configure: (s) => {
+        restoredOnM1(s);
+        // M1's relay is not opened until the unlock answers.
+        s.handlers['machines.unlock'] = () => new Promise((r) => (unlock = () => r({})));
+      },
+    });
+    await vi.waitFor(() => expect(app.scopes.get(M1)).toBeDefined());
+    await app.tabs.restore();
+    await flush();
+    expect(app.machines.get(M1)?.status).not.toBe('on');
+    unlock();
+    await vi.waitFor(() => expect(opened(remote)).toEqual(['s7']));
+    const chat = app.scopes.get(M1)!.chats;
+    await vi.waitFor(() => expect(chat.get('s7')?.loaded).toBe(true));
+    expect(chat.get('s7')?.error).toBeNull();
+    await vi.waitFor(() => expect(summarised(remote)).toContain('s8'));
+  });
+
+  it('restored tabs open when the machine is listed (and connects) after the restore', async () => {
+    let list!: () => void;
+    const { app, remote } = await setupTwoMachines({
+      waitForOn: false,
+      configure: (s) => {
+        restoredOnM1(s);
+        s.handlers['machines.list'] = () =>
+          new Promise((r) => (list = () => r([pairedMachine(M1, 'Ubuntu PC')])));
+      },
+    });
+    await app.tabs.restore();
+    expect(app.scopes.get(M1)).toBeUndefined();
+    list();
+    await vi.waitFor(() => expect(opened(remote)).toEqual(['s7']));
+    await vi.waitFor(() => expect(app.scopes.get(M1)!.chats.get('s7')?.loaded).toBe(true));
+    expect(app.scopes.get(M1)!.chats.get('s7')?.error).toBeNull();
+  });
+
+  it('opens a restored chat once, not twice, when its machine reconnects', async () => {
+    const { app, remote } = await setupTwoMachines({
+      configure: restoredOnM1,
+      configureRemote: (s) => {
+        s.handlers['chat.since'] = () => ({ events: [], seq: 1 });
+      },
+    });
+    await app.tabs.restore();
+    await vi.waitFor(() => expect(opened(remote)).toEqual(['s7']));
+    remote.drop(4502);
+    await vi.waitFor(() => expect(app.machines.get(M1)?.status).toBe('on'), { timeout: 3000 });
+    await flush();
+    // The reconnect catches the loaded chat up; it is not opened again.
+    expect(opened(remote)).toEqual(['s7']);
+  });
+
+  it('closes the tabs of machines missing from the first list, only once it arrived', async () => {
+    let list!: () => void;
+    const { app } = await setupTwoMachines({
+      waitForOn: false,
+      configure: (s) => {
+        s.handlers['uiState.get'] = (p) =>
+          (p as { key: string }).key === 'tabs'
+            ? { value: { open: [`${M1}/a`, 'gone/b', 'c'], active: 'gone/b' } }
+            : { value: null };
+        s.handlers['machines.list'] = () =>
+          new Promise((r) => (list = () => r([pairedMachine(M1, 'Ubuntu PC')])));
+      },
+    });
+    await app.tabs.restore();
+    await flush();
+    // Not listed yet: nothing is known to be gone.
+    expect(app.tabs.open).toEqual([`${M1}/a`, 'gone/b', here('c')]);
+    list();
+    await vi.waitFor(() => expect(app.tabs.open).toEqual([`${M1}/a`, here('c')]));
+    expect(app.tabs.active).toBe(here('c'));
+  });
+
+  it('closes them too when the list arrived before the restore', async () => {
+    const { app } = await setupTwoMachines({
+      configure: (s) => {
+        s.handlers['uiState.get'] = (p) =>
+          (p as { key: string }).key === 'tabs'
+            ? { value: { open: ['gone/b', `${M1}/a`], active: `${M1}/a` } }
+            : { value: null };
+      },
+    });
+    await app.tabs.restore();
+    expect(app.tabs.open).toEqual([`${M1}/a`]);
+    // Later tabs of a machine paired afterwards are not touched.
+    app.tabs.openTab({ machineId: 'later', sessionId: 'x' });
+    expect(app.tabs.open).toEqual([`${M1}/a`, 'later/x']);
+  });
+
+  it("maps stored tabs of the 'local' fallback to This PC's id", async () => {
+    const { app } = await setup((s) => {
+      s.handlers['uiState.get'] = () => ({ value: { open: ['local/a', 'b'], active: 'local/a' } });
+    });
+    await app.tabs.restore();
+    expect(app.tabs.open).toEqual([here('a'), here('b')]);
+    expect(app.tabs.active).toBe(here('a'));
+  });
+
   it('migrates stored tabs without a machine id to This PC', async () => {
     const { app } = await setup((s) => {
       s.handlers['uiState.get'] = () => ({ value: { open: ['a', 'b'], active: 'b' } });
@@ -106,8 +229,12 @@ describe('machine scopes', () => {
   });
 
   it('keeps stored machine-qualified tabs as they are', async () => {
-    const { app } = await setup((s) => {
-      s.handlers['uiState.get'] = () => ({ value: { open: [`${M1}/x`, 'a'], active: `${M1}/x` } });
+    const { app } = await setupTwoMachines({
+      configure: (s) => {
+        s.handlers['uiState.get'] = () => ({
+          value: { open: [`${M1}/x`, 'a'], active: `${M1}/x` },
+        });
+      },
     });
     await app.tabs.restore();
     expect(app.tabs.open).toEqual([`${M1}/x`, `${LOCAL}/a`]);
@@ -164,6 +291,11 @@ describe('machine scopes', () => {
     expect(samePlace(a, b)).toBe(false);
     expect(samePlace(a, { ...a, include: ['onHold'] })).toBe(true);
     expect(wirePlace(b)).toEqual({ kind: 'project', projectId: 'p1' });
+    // No machine named means This PC.
+    const bare = { kind: 'project', projectId: 'p1' } as const;
+    expect(samePlace(bare, a, LOCAL)).toBe(true);
+    expect(samePlace(bare, b, LOCAL)).toBe(false);
+    expect(samePlace(bare, { kind: 'project', projectId: 'p1', machineId: 'local' })).toBe(true);
 
     const { app, server } = await setup((s) => {
       s.handlers['sessions.list'] = () => ({ items: [summary('s1')] });
@@ -176,6 +308,11 @@ describe('machine scopes', () => {
         place: { kind: 'project', projectId: 'p1', include: ['onHold', 'archived'] },
       }),
     );
+    // Selecting This PC's p1 without naming the machine is the same place as naming it.
+    app.places.select({ kind: 'project', projectId: 'p1', machineId: LOCAL });
+    const before = app.places.selected;
+    app.places.select(bare);
+    expect(app.places.selected).toBe(before);
     for (const c of server.calls('sessions.list')) {
       expect((c.params as { place: object }).place).not.toHaveProperty('machineId');
     }

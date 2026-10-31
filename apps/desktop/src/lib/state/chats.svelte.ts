@@ -167,6 +167,14 @@ export class ChatsState {
    */
   private readonly peeks = new SvelteMap<string, ChatSummary>();
   private readonly peeking = new Set<string>();
+  /** Chats whose `chat.open` is in flight. */
+  private readonly opening = new Set<string>();
+  /**
+   * Chats whose open failed because the client was not connected: opened again
+   * by the next `sync` (a scope syncs on every open of its client). A relay
+   * client's first open is no reconnect, so `resync` would not catch them.
+   */
+  private readonly offline = new Set<string>();
 
   private api: Api | null = null;
   private schedule: Schedule = defaultSchedule;
@@ -235,7 +243,12 @@ export class ChatsState {
     const wanted = new Set(sessionIds);
     for (const id of [...this.byId.keys()]) if (!wanted.has(id)) this.drop(id);
     for (const id of [...this.peeks.keys()]) if (!wanted.has(id)) this.peeks.delete(id);
-    if (active !== null && wanted.has(active) && !this.byId.has(active)) {
+    for (const id of [...this.offline]) if (!wanted.has(id)) this.offline.delete(id);
+    if (
+      active !== null &&
+      wanted.has(active) &&
+      (!this.byId.has(active) || (this.offline.has(active) && !this.opening.has(active)))
+    ) {
       quietly(this.open(active));
     }
     const unseen = [...wanted].filter(
@@ -250,6 +263,8 @@ export class ChatsState {
   drop = (sessionId: string): void => {
     this.byId.delete(sessionId);
     this.peeks.delete(sessionId);
+    this.offline.delete(sessionId);
+    this.opening.delete(sessionId);
   };
 
   private peek = async (sessionIds: string[]): Promise<void> => {
@@ -279,6 +294,8 @@ export class ChatsState {
       this.byId.set(sessionId, chat);
     }
     chat.error = null;
+    this.offline.delete(sessionId);
+    this.opening.add(sessionId);
     try {
       const r = await api.request('chat.open', { sessionId, tail: OPEN_TAIL });
       if (this.byId.get(sessionId) !== chat) return; // dropped meanwhile
@@ -301,7 +318,10 @@ export class ChatsState {
     } catch (err) {
       if (this.byId.get(sessionId) === chat) {
         chat.error = err instanceof Error ? err.message : String(err);
+        if (err instanceof RequestError && err.code === 'DISCONNECTED') this.offline.add(sessionId);
       }
+    } finally {
+      if (this.byId.get(sessionId) === chat) this.opening.delete(sessionId);
     }
   };
 
@@ -460,7 +480,10 @@ export class ChatsState {
     if (!api) return;
     await Promise.all(
       [...this.byId.values()].map(async (chat) => {
-        if (!chat.loaded) return this.open(chat.sessionId);
+        // An open already under way (e.g. started by a sync on this open) brings it in.
+        if (!chat.loaded) {
+          return this.opening.has(chat.sessionId) ? undefined : this.open(chat.sessionId);
+        }
         chat.resyncing = true;
         try {
           const r = await api.request('chat.since', { sessionId: chat.sessionId, seq: chat.seq });
