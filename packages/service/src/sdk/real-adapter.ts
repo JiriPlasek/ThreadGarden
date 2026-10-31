@@ -170,13 +170,30 @@ class InputQueue implements AsyncIterable<SDKUserMessage> {
 
 type Query = ReturnType<typeof query>;
 
+/**
+ * v1.3 B: the SDK's experimental `/usage` control request (verified against
+ * SDK 0.3.314 `Query`). Its name will change when it is stabilised, so it is
+ * looked up at run time: a session whose SDK lacks it offers no reading.
+ */
+export const USAGE_METHOD = 'usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET';
+
+/** The usage reading of `q`, when its SDK has one; `skipBehaviors` skips the transcript scan. */
+export const usageReader = (q: object): (() => Promise<unknown>) | undefined => {
+  const read: unknown = (q as Record<string, unknown>)[USAGE_METHOD];
+  if (typeof read !== 'function') return undefined;
+  return () => Promise.resolve(read.call(q, { skipBehaviors: true }) as unknown);
+};
+
 class RealSession implements AgentSession {
   private closed = false;
+  readonly usage: (() => Promise<unknown>) | undefined;
 
   constructor(
     private readonly q: Query,
     private readonly input: InputQueue,
-  ) {}
+  ) {
+    this.usage = usageReader(q);
+  }
 
   get messages(): AsyncIterable<SDKMessage> {
     return this.q;

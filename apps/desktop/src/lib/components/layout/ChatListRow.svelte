@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { Bucket, ChatSummary } from '@pahub/protocol';
+  import type { Bucket, ChatSummary, ScheduledSend } from '@pahub/protocol';
   import AlarmClockIcon from '@lucide/svelte/icons/alarm-clock';
   import ArchiveIcon from '@lucide/svelte/icons/archive';
   import InboxIcon from '@lucide/svelte/icons/inbox';
@@ -14,6 +14,7 @@
   import { cn } from '#lib/utils.js';
   import { externalLabel, previewLine, rawStatus } from './chat-info';
   import RunningBadge from './RunningBadge.svelte';
+  import ScheduledBadge from './ScheduledBadge.svelte';
   import StatusIcon, { isYourTurn } from './StatusIcon.svelte';
 
   let {
@@ -29,6 +30,7 @@
     projectName,
     now,
     running = 0,
+    scheduled = [],
     onOpen,
     onRename,
     onTogglePin,
@@ -54,6 +56,8 @@
     now: number;
     /** Running agents and processes (known for chats open in a tab only). */
     running?: number;
+    /** v1.3 B: the chat's scheduled messages (the clock badge). */
+    scheduled?: readonly ScheduledSend[];
     /** A click (with its modifiers: Ctrl/Cmd and Shift select), or "Open" from the menu. */
     onOpen: (chat: ChatSummary, e?: MouseEvent) => void;
     onRename: (chat: ChatSummary) => void;
@@ -107,13 +111,16 @@
               <ArchiveIcon class="text-muted-foreground/70 size-3.5" aria-hidden="true" />
             </span>
           {/if}
+          {#if scheduled.length > 0}
+            <ScheduledBadge sends={scheduled} {now} class="ml-auto" />
+          {/if}
           {#if running > 0}
-            <RunningBadge count={running} class="ml-auto" />
+            <RunningBadge count={running} class={scheduled.length === 0 ? 'ml-auto' : ''} />
           {/if}
           <time
             class={cn(
               'text-muted-foreground shrink-0 text-[0.6875rem] tabular-nums',
-              running === 0 && 'ml-auto',
+              running === 0 && scheduled.length === 0 && 'ml-auto',
             )}
             datetime={chat.lastActivity > 0 ? new Date(chat.lastActivity).toISOString() : undefined}
             title={fullTime(chat.lastActivity)}>{relativeTime(chat.lastActivity, now)}</time

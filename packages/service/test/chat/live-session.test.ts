@@ -1422,3 +1422,68 @@ describe('LiveSession turn ends and activity (v1.1)', () => {
     expect(activity.mock.calls.length).toBe(calls);
   });
 });
+
+// ── v1.3 B: usage limits ─────────────────────────────────────────────────────
+
+describe('LiveSession usage limits', () => {
+  it('reports rate-limit events, refused turns and every result', async () => {
+    const calls: string[] = [];
+    const { adapter, opts } = setup({
+      onRateLimit: (id, info) => calls.push(`event ${id} ${(info as { status: string }).status}`),
+      onLimitError: (id) => calls.push(`refused ${id}`),
+      onTurnResult: (id) => calls.push(`result ${id}`),
+    });
+    const s = LiveSession.create('/proj', { text: 'hi' }, { ...opts, sessionId: 's' });
+    const fake = adapter.lastSession();
+    fake.emit(init('s'));
+    fake.emit(
+      sdk({
+        type: 'rate_limit_event',
+        uuid: 'rl',
+        session_id: 's',
+        rate_limit_info: { status: 'rejected', resetsAt: 1_800_000_000 },
+      }),
+    );
+    fake.emit(
+      sdk({
+        type: 'assistant',
+        uuid: 'a1',
+        session_id: 's',
+        parent_tool_use_id: null,
+        error: 'rate_limit',
+        message: {
+          id: 'msg_a1',
+          role: 'assistant',
+          content: [{ type: 'text', text: "You've hit your limit · resets 3pm" }],
+        },
+      }),
+    );
+    fake.emit(result('r1', { is_error: true }));
+    await settle();
+    expect(calls).toEqual(['event s rejected', 'refused s', 'result s']);
+    // The CLI's own reply about the limit still shows in the chat.
+    expect(s.snapshot(10).items.some((i) => i.kind === 'assistantText')).toBe(true);
+  });
+
+  it('offers the usage reading of its process only when the SDK has one', async () => {
+    const { adapter, opts } = setup();
+    const s = LiveSession.create('/proj', { text: 'hi' }, opts);
+    expect(s.readUsage()).toBeUndefined();
+    const fake = adapter.lastSession();
+    fake.usage = async () => ({ rate_limits_available: false });
+    await expect(s.readUsage()!()).resolves.toEqual({ rate_limits_available: false });
+    s.end();
+    expect(s.readUsage()).toBeUndefined();
+  });
+
+  it('note adds a line of its own to the chat', () => {
+    const { opts } = setup();
+    const s = LiveSession.create('/proj', { text: 'hi' }, opts);
+    s.note('info', 'Sent late');
+    expect(s.snapshot(10).items.at(-1)).toMatchObject({
+      kind: 'system',
+      level: 'info',
+      text: 'Sent late',
+    });
+  });
+});

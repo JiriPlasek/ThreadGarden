@@ -12,11 +12,19 @@ import {
 import { ChatItemsEventSchema, ChatStatusEventSchema, ChatTasksEventSchema } from './events.js';
 import { ChatItemSchema, ImageRefSchema } from './items.js';
 import { ChatTaskSchema } from './tasks.js';
+import { ScheduledSendSchema, UsageStateSchema } from './usage.js';
 
 const empty = z.object({});
 const sessionIdOnly = z.object({ sessionId: z.string() });
 const setValue = z.object({ sessionId: z.string(), value: z.string() });
 const lookupScope = z.object({ sessionId: z.string().optional(), cwd: z.string().optional() });
+
+const scheduledId = z.object({ id: z.string() });
+/** A scheduled send's time: a moment, or when the usage limit resets (plus a margin). */
+const when = {
+  sendAt: z.number().optional(),
+  whenLimitResets: z.literal(true).optional(),
+};
 
 const def = <P extends z.ZodType, R extends z.ZodType>(params: P, result: R) => ({
   params,
@@ -263,6 +271,55 @@ export const methods = {
     }),
     z.object({ archived: z.number() }),
   ),
+  // ── v1.3 B: usage limits and scheduled sends ───────────────────────────────
+  /**
+   * The account's latest known plan usage (from the sessions' rate-limit
+   * events, persisted). `refresh` (the Usage view is open) also asks a running
+   * chat for a fresh reading, at most once a minute and never by starting a
+   * Claude process; a failed reading falls back silently.
+   */
+  'usage.get': def(z.object({ refresh: z.boolean().optional() }), UsageStateSchema),
+  /**
+   * Schedules a message (`chat.send` later): at `sendAt`, or when the usage
+   * limit resets (its reset time plus `LIMIT_RESET_MARGIN_MS`; `NO_RESET_TIME`
+   * when that is not known). `NOT_FOUND` for an unknown chat.
+   */
+  'scheduled.create': def(
+    z
+      .object({
+        sessionId: z.string(),
+        text: z.string(),
+        images: z.array(ImageRefSchema).optional(),
+        ...when,
+      })
+      .refine((p) => p.sendAt !== undefined || p.whenLimitResets === true, {
+        message: 'sendAt or whenLimitResets is required',
+      }),
+    ScheduledSendSchema,
+  ),
+  /** The chat's scheduled sends (every chat's without `sessionId`), oldest due first. */
+  'scheduled.list': def(
+    z.object({ sessionId: z.string().optional() }),
+    z.object({ items: z.array(ScheduledSendSchema) }),
+  ),
+  /** One scheduled send with its images (Edit). `NOT_FOUND` once it was sent or cancelled. */
+  'scheduled.get': def(
+    scheduledId,
+    ScheduledSendSchema.extend({ images: z.array(ImageRefSchema).optional() }),
+  ),
+  /** Changes a scheduled send's text, images or time; a failed one becomes pending again. */
+  'scheduled.update': def(
+    z.object({
+      id: z.string(),
+      text: z.string().optional(),
+      images: z.array(ImageRefSchema).optional(),
+      ...when,
+    }),
+    ScheduledSendSchema,
+  ),
+  'scheduled.cancel': def(scheduledId, empty),
+  /** Sends it now through `chat.send` (its errors, e.g. `RESUME_BLOCKED`, are this call's). */
+  'scheduled.sendNow': def(scheduledId, empty),
 } as const;
 
 export type MethodName = keyof typeof methods;

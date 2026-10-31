@@ -12,9 +12,11 @@ import { connection } from './connection.svelte';
 import { interaction } from './interaction.svelte';
 import { lifecycle } from './lifecycle.svelte';
 import { places } from './places.svelte';
+import { scheduled } from './scheduled.svelte';
 import { sessions } from './sessions.svelte';
 import { settings } from './settings.svelte';
 import { tabs } from './tabs.svelte';
+import { usage } from './usage.svelte';
 import { yourTurn } from './your-turn.svelte';
 
 export const client = new ServiceClient();
@@ -47,6 +49,8 @@ const wire = (): void => {
   interaction.init(client);
   lifecycle.init(client, agents, connection, connectTo);
   buckets.init(client, chats);
+  usage.init(client);
+  scheduled.init(client);
   tabs.subscribe(() => chats.sync(tabs.open, tabs.active));
   startAttention({ api: client, settings, tabs, places });
   yourTurn.init(client, { tabs, chats, sessions, agents });

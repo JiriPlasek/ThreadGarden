@@ -48,7 +48,7 @@ const sampleItems = [
 
 describe('protocol schemas', () => {
   it('exposes the protocol version', () => {
-    expect(PROTOCOL_VERSION).toBe(2);
+    expect(PROTOCOL_VERSION).toBe(3);
   });
 
   it('accepts every ChatItem kind', () => {
@@ -124,6 +124,14 @@ describe('protocol schemas', () => {
       'chat.archiveOlder',
       // v1.3 D: project icons
       'projects.icon',
+      // v1.3 B: usage limits and scheduled sends
+      'usage.get',
+      'scheduled.create',
+      'scheduled.list',
+      'scheduled.get',
+      'scheduled.update',
+      'scheduled.cancel',
+      'scheduled.sendNow',
     ];
     expect(Object.keys(methods).sort()).toEqual([...expected].sort());
     for (const name of expected) {
@@ -148,6 +156,10 @@ describe('protocol schemas', () => {
         'chatFinished',
         // v1.2 B1: buckets
         'chatBackFromHold',
+        // v1.3 B: usage limits and scheduled sends
+        'usage.changed',
+        'scheduled.changed',
+        'scheduledSent',
       ].sort(),
     );
   });

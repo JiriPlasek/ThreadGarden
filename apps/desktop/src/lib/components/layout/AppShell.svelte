@@ -17,6 +17,7 @@
   import ServiceBanner from '#lib/components/ServiceBanner.svelte';
   import SettingsDialog from '#lib/components/SettingsDialog.svelte';
   import SetupScreen from '#lib/components/SetupScreen.svelte';
+  import UsageDialog from '#lib/components/UsageDialog.svelte';
   import { scaleKeyAction } from '#lib/interface-scale.js';
   import { useApp } from '#lib/state/context.js';
   import AgentsStrip from './AgentsStrip.svelte';
@@ -178,3 +179,4 @@
 <SettingsDialog />
 <KeyboardShortcutsDialog />
 <BucketDialogs />
+<UsageDialog />

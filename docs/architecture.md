@@ -94,8 +94,8 @@ offers "Open pahub", "Stop all work…", "Quit pahub (keep agents running)" and
 exits). Quitting the app alone leaves the service and its agents running; the
 next launch reconnects to them.
 
-**Service.** With no live session and no connected client for 30 minutes the
-service exits. When it stops for any other reason (crash, reboot, shutdown
+**Service.** With no live session, no connected client and no pending
+scheduled send (v1.3) for 30 minutes the service exits. When it stops for any other reason (crash, reboot, shutdown
 with live chats), the chats that were live are recorded in `pahub.db`, and the
 next start shows them as interrupted, ready to resume. The conversation itself
 is safe: Claude Code persisted it.
@@ -147,10 +147,16 @@ service and the UI; the service validates every request.
   pahub-side metadata, drafts, UI state, settings, `files.suggest`,
   `work.stopAll`, `service.shutdown` and `system.status`. `chat.markSeen`
   records that the user has seen a chat's latest turn ("Your turn", below).
+  v1.3 (protocol 3) adds `usage.get` (the account's plan usage; `refresh`
+  asks a running chat for a fresh reading) and `scheduled.create`, `.list`,
+  `.get`, `.update`, `.cancel` and `.sendNow` (below).
 - **Events** `{event, data}` are pushed to every client: `chat.items` and
   `chat.status` per chat, plus list-level events (`sessions.changed`,
   `projects.changed`, `external.changed`, `index.progress`). `needsYou` and
   `chatFinished` (a pahub chat ended a turn) tell the UI when to notify.
+  v1.3: `usage.changed` (the usage state), `scheduled.changed` (every
+  scheduled send, without image data) and `scheduledSent` (one went out;
+  `late` when it was due while the service was not running).
 - **Sequencing and resync.** Every `chat.items` / `chat.status` event carries
   a per-chat sequence number, and each chat keeps its last 5,000 events. A
   reconnecting UI asks `chat.since {seq}` for everything after the last seq it
@@ -385,6 +391,46 @@ paint, and the service's settings replace it once connected. A unit test
 cascades the real stylesheets for every theme, style and accent and checks
 WCAG AA (4.5:1) for text pairs and the primary button; the one shortfall is
 the unchanged default light look's muted text on the muted grey (4.34:1).
+
+**Usage limits** (v1.3, `src/usage/usage.ts`). Every live session streams
+`rate_limit_event`s (`rate_limit_info`: `status`, `resetsAt`,
+`rateLimitType`, `utilization`, overage fields); the normalizer renders none
+of them. The service keeps the latest value per window, account-wide (every
+chat is the same account), in `pahub.db` (`usage_limits`, with the time it
+was observed), and broadcasts `usage.changed` when what the UI shows changes.
+Claude Code 2.1.314 sends `resetsAt` in epoch seconds and `utilization` as a
+fraction (read from its bundle: the reset is `Math.floor(Date.now()/1000)+…`
+and its own usage answer multiplies by 100); pahub stores epoch ms and
+percentages, and also accepts milliseconds and ISO times. A turn is refused
+by a limit when its assistant message carries the API error `rate_limit`, or
+a rate-limit event is `rejected` without overage carrying it; the chat stays
+marked (its limit notice) until a later turn goes through or the reset
+passes. With the Usage view open, `usage.get {refresh: true}` asks a live
+session for the SDK's experimental
+`usage_EXPERIMENTAL_MAY_CHANGE_DO_NOT_RELY_ON_THIS_API_YET({skipBehaviors:
+true})`: looked up at run time (an SDK without it offers no reading), at most
+once a minute, 10 s timeout, parsed leniently (`rate_limits` windows,
+`model_scoped`, `extra_usage`, `subscription_type`, `rate_limits_available`);
+any failure or other shape is logged and the event data stands. pahub never
+starts a Claude process to read usage.
+
+**Scheduled sends** (v1.3, `src/usage/scheduled.ts`). Stored in
+`scheduled_sends` (text, images as the composer sent them, `send_at`, state
+`pending` / `sending` / `failed`; sent and cancelled ones are deleted). One
+timer waits for the earliest due send (re-checking at least hourly, and on
+the service's minute tick). A due send goes out through the `chat.send`
+handler itself, so it resumes a chat pahub is not running, behind the same
+resume-safety check. A chat's sends go out in order, one per turn: the next
+waits while the chat works or waits on the user and until the turn the
+previous one started has ended (its `result`). While a window is known to be
+rejected with a reset ahead, a due send moves to that reset plus 30 s
+instead of being refused. One the limit still refuses moves to the new reset
+once (`rescheduled`), then becomes `failed` for the user (Send now, Edit or
+Cancel). A failed send (resume blocked, Claude Code missing, the chat crashed
+mid-turn) keeps its error. At start, sends that fell due meanwhile go out
+marked late (a line in the chat and in the notification says so), and one
+that was `sending` when the service stopped is not sent again (it may have
+gone out): it becomes `failed` for the user to check.
 
 **Fork** calls the SDK's `forkSession(id, {upToMessageId})`, which writes a new
 session file next to the original and leaves the original untouched; the
@@ -716,3 +762,15 @@ Decisions made during the build that change behaviour described in the design:
   separate `tauri.bundle.conf.json` passed with `--config`, because Tauri
   checks at compile time that sidecar binaries exist, which would break
   `cargo test` and `tauri dev` without a fetched sidecar.
+- **v1.3 usage and scheduled sends** (builder's calls on the v1.3 spec §3).
+  Edit puts a scheduled message back into the composer, which then saves it
+  (Save, or Stop editing to put the earlier draft back) rather than
+  cancelling it, so an abandoned edit loses nothing; clicking its time
+  changes the time. While a limit is known to refuse (a rejected window with
+  its reset ahead), a due send waits for that reset instead of going out to
+  be refused; that wait does not use up its one reschedule. A send that was
+  going out when the service stopped becomes failed rather than being sent
+  twice. Which chats a limit refused is kept in memory only (the usage
+  windows are persisted), so a restart clears the notices. The new methods
+  raise the protocol version to 3. There is no keyboard shortcut for Usage;
+  it is in Ctrl/Cmd+K.
