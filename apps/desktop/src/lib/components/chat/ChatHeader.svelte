@@ -15,6 +15,7 @@
   import { fullTime } from '#lib/format/time.js';
   import { baseName, rawStatus } from '#lib/components/layout/chat-info.js';
   import IconButton from '#lib/components/layout/IconButton.svelte';
+  import ProjectIcon from '#lib/components/layout/ProjectIcon.svelte';
   import StatusIcon from '#lib/components/layout/StatusIcon.svelte';
   import { copyText } from '#lib/native.js';
   import { shortcut } from '#lib/shortcuts.js';
@@ -189,8 +190,11 @@
       <StatusIcon status={chat.status} raw={rawStatus(summary)} />
     {/if}
     <h1 class="min-w-0 truncate text-sm font-semibold">{summary?.title ?? 'Loading…'}</h1>
-    {#if project}
-      <span class="text-muted-foreground shrink-0 text-xs">{project}</span>
+    {#if project && summary}
+      <span class="text-muted-foreground flex shrink-0 items-center gap-1.5 text-xs">
+        <ProjectIcon projectId={summary.projectId} name={project} />
+        {project}
+      </span>
     {/if}
     {#if bucket === 'onHold'}
       <span
