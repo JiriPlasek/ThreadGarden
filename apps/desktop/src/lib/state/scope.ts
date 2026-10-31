@@ -78,7 +78,10 @@ export const wireScope = (
   o: { projectsOnly?: boolean } = {},
 ): (() => void) => {
   const { api, places, sessions, chats, interaction, buckets, scheduled, yourTurn } = scope;
-  places.init(api, { localMachineId: deps.tabs.localMachineId });
+  places.init(api, {
+    localMachineId: deps.tabs.localMachineId,
+    machineId: () => scope.machineId,
+  });
   const all = deps.scopes;
   /**
    * This PC leaves a project of another machine to that machine's scope (as

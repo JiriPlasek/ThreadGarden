@@ -79,6 +79,7 @@ const connectTo = async (conn: ServiceConnection): Promise<void> => {
     settings.restoreActivity(),
     places.restoreMissingOpen(),
     machines.restoreCollapsed(),
+    machines.restoreMissingOpen(),
     tabs.restore(),
   ]);
   loaded = true;

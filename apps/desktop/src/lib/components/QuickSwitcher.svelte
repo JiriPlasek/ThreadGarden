@@ -24,6 +24,7 @@
   import { mergeQuickHits, type MachineHit } from '#lib/state/quick-search.js';
   import { chatKey } from '#lib/state/refs.js';
   import type { MachineScope } from '#lib/state/scope.js';
+  import type { QuickHit } from '#lib/state/sessions.svelte.js';
   import { cn } from '#lib/utils.js';
 
   /**
@@ -94,6 +95,8 @@
   let query = $state('');
   let hits = $state.raw<MachineHit[]>([]);
   let active = $state(0);
+  /** The user moved the cursor (arrows or mouse) since the query's first answer. */
+  let moved = false;
   /** The last query sent (trimmed): an edit that does not change it sends nothing. */
   let sent = '';
   /** Number of the newest request; older answers are dropped. */
@@ -111,28 +114,9 @@
     hit,
   });
   /** Hits carry their machine's name while more than one machine is paired. */
-  const multi = $derived(machines.list.length > 1);
+  const multi = $derived(machines.several);
   /** A hit's project icon comes from its machine. */
   const iconsOf = (machineId: string) => (scopes.get(machineId) ?? local).places.icons;
-
-  /**
-   * This PC's answer and every connected paired machine's, merged; a paired
-   * machine that fails is left out (This PC failing fails the search, as before).
-   */
-  const quickSearch = async (q: string): Promise<MachineHit[]> => {
-    const ask = async (s: MachineScope) => ({
-      machineId: s.machineId,
-      hits: await s.sessions.quickSearch(q, QUICK_LIMIT),
-    });
-    const others = scopes.all().filter((s) => s !== local && s.api.status === 'open');
-    const [here, ...rest] = await Promise.allSettled([ask(local), ...others.map(ask)]);
-    if (here!.status === 'rejected') throw here!.reason;
-    const lists = [
-      here!.value,
-      ...rest.flatMap((a) => (a.status === 'fulfilled' ? [a.value] : [])),
-    ];
-    return mergeQuickHits(lists, QUICK_LIMIT);
-  };
 
   /** Chats, then commands; archived chats last (shown as their own group). */
   const main = $derived<Row[]>([
@@ -142,6 +126,12 @@
   const archived = $derived<Row[]>(hits.filter((h) => h.archived).map(chatRow));
   const rows = $derived<Row[]>([...main, ...archived]);
 
+  /**
+   * Asks This PC and every connected paired machine at once. Each answer is
+   * shown as it lands, merged with the ones before it, so a slow machine never
+   * holds back the others; a machine that fails counts as no hits. Answers to
+   * an older query are dropped.
+   */
   const search = (text: string): void => {
     const q = text.trim();
     if (q === sent) return;
@@ -151,16 +141,34 @@
       hits = [];
       return;
     }
-    quickSearch(q).then(
-      (items) => {
-        if (seq !== latest) return;
-        hits = items;
-        active = 0;
-      },
-      () => {
-        if (seq === latest) hits = [];
-      },
-    );
+    const asked: MachineScope[] = [
+      local,
+      ...scopes.all().filter((s) => s !== local && s.api.status === 'open'),
+    ];
+    const answers = new Map<string, QuickHit[]>();
+    const land = (machineId: string, found: QuickHit[]): void => {
+      if (seq !== latest) return;
+      // A later answer keeps the cursor on the row the user moved it to; else it stays on top.
+      if (answers.size === 0) moved = false;
+      const at = moved ? rows[active]?.key : undefined;
+      answers.set(machineId, found);
+      hits = mergeQuickHits(
+        asked.flatMap((s) => {
+          const h = answers.get(s.machineId);
+          return h ? [{ machineId: s.machineId, hits: h }] : [];
+        }),
+        QUICK_LIMIT,
+      );
+      const i = at === undefined ? -1 : rows.findIndex((r) => r.key === at);
+      active = Math.max(i, 0);
+    };
+    for (const s of asked) {
+      const machineId = s.machineId;
+      s.sessions.quickSearch(q, QUICK_LIMIT).then(
+        (found) => land(machineId, found),
+        () => land(machineId, []),
+      );
+    }
   };
 
   const reset = (): void => {
@@ -188,12 +196,14 @@
   const move = (delta: number): void => {
     if (rows.length === 0) return;
     active = (active + delta + rows.length) % rows.length;
+    moved = true;
     document.getElementById(optionId(active))?.scrollIntoView({ block: 'nearest' });
   };
 
   const onInput = (e: Event): void => {
     query = (e.currentTarget as HTMLInputElement).value;
     active = 0;
+    moved = false;
     search(query);
   };
 
@@ -265,7 +275,10 @@
             'flex cursor-pointer items-start gap-2 rounded-md px-2 py-1.5 text-sm',
             i === active && 'bg-accent text-accent-foreground',
           )}
-          onmousemove={() => (active = i)}
+          onmousemove={() => {
+            active = i;
+            moved = true;
+          }}
           onclick={() => choose(row)}
         >
           {#if row.command}

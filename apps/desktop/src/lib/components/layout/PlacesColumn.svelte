@@ -60,12 +60,24 @@
     }
     return out;
   });
-  const multi = $derived(groups.length > 1);
+  /** Grouped by machine: the same test as the machine chips. */
+  const multi = $derived(machines.several);
+
+  /**
+   * A machine's "Missing folders" group is expanded: This PC's as always
+   * (`places.missingOpen`), another machine's in This PC's `uiState` by machine.
+   */
+  const missingOpen = (scope: MachineScope): boolean =>
+    scope === local ? scope.places.missingOpen : machines.missingOpen.includes(scope.machineId);
+  const setMissingOpen = (scope: MachineScope, open: boolean): void => {
+    if (scope === local) scope.places.setMissingOpen(open);
+    else machines.setMissingOpen(scope.machineId, open);
+  };
 
   /** Machines whose "Hidden projects" are shown (by machine id). */
   let showHidden = $state<Record<string, boolean>>({});
-  /** The machine whose missing folders "Hide all missing" asks about (v1.2 §4). */
-  let hidingIn = $state<MachineScope>(local);
+  /** The machine whose missing folders "Hide all missing" asks about (v1.2 §4); raw: compared by identity. */
+  let hidingIn = $state.raw<MachineScope>(local);
   let hidingMissing = $state(false);
   /** Where focus goes after "Hide all missing": its own button is gone by then (by machine id). */
   let hiddenToggles = $state<Record<string, HTMLButtonElement | null>>({});
@@ -356,14 +368,14 @@
                 {...props}
                 type="button"
                 class="text-muted-foreground hover:text-foreground flex h-6 min-w-0 flex-1 items-center gap-1 px-2 text-left text-[0.6875rem]"
-                aria-expanded={scope.places.missingOpen}
+                aria-expanded={missingOpen(scope)}
                 aria-describedby={whyId}
-                onclick={() => scope.places.setMissingOpen(!scope.places.missingOpen)}
+                onclick={() => setMissingOpen(scope, !missingOpen(scope))}
               >
                 <ChevronRightIcon
                   class={cn(
                     'size-3.5 shrink-0 transition-transform',
-                    scope.places.missingOpen && 'rotate-90',
+                    missingOpen(scope) && 'rotate-90',
                   )}
                   aria-hidden="true"
                 />
@@ -386,7 +398,7 @@
         <EyeOffIcon />
       </IconButton>
     </div>
-    {#if scope.places.missingOpen}
+    {#if missingOpen(scope)}
       <ul class="space-y-px opacity-80" aria-label="Missing folders">
         {#each missingHere as project (project.projectId)}
           {@render projectItem(scope, project)}

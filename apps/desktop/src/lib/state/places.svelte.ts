@@ -101,6 +101,8 @@ export class PlacesState {
 
   private api: Api | null = null;
   private localMachineId: () => string = () => LOCAL_FALLBACK_ID;
+  /** The machine of this store's projects (`init`). */
+  private machineId: () => string = () => this.localMachineId();
   private readonly subscribers = new Set<() => void>();
   private readonly countWatchers = new Set<(counts: PlaceCounts) => void>();
   private inflight: Promise<void> | null = null;
@@ -110,9 +112,17 @@ export class PlacesState {
   /** `ownCounts` as the service sent it (what the sum is made of). */
   private own: PlaceCounts = this.ownCounts;
 
-  init = (api: Api, opts: { localMachineId?: () => string } = {}): void => {
+  /**
+   * `machineId`: the machine whose projects this store lists (This PC's when
+   * absent), so its project ids are told apart from another machine's.
+   */
+  init = (
+    api: Api,
+    opts: { localMachineId?: () => string; machineId?: () => string } = {},
+  ): void => {
     this.api = api;
     if (opts.localMachineId) this.localMachineId = opts.localMachineId;
+    this.machineId = opts.machineId ?? this.localMachineId;
     this.icons.init(api);
     const refresh = () => quietly(this.refresh());
     api.on('projects.changed', refresh);
@@ -243,10 +253,18 @@ export class PlacesState {
     await this.refresh();
   };
 
+  /** Whether `projectId` of this store's machine is the selected place. */
+  private isSelected = (projectId: string): boolean =>
+    samePlace(
+      this.selected,
+      { kind: 'project', projectId, machineId: this.machineId() },
+      this.localMachineId(),
+    );
+
   /** Hiding the selected project moves the selection to Active. */
   hideProject = async (projectId: string, hidden: boolean): Promise<void> => {
     await this.api!.request('projects.update', { projectId, hidden });
-    if (hidden && this.selected.kind === 'project' && this.selected.projectId === projectId) {
+    if (hidden && this.isSelected(projectId)) {
       this.select({ kind: 'active' });
     } else {
       for (const cb of this.subscribers) cb();
@@ -267,8 +285,7 @@ export class PlacesState {
         done.add(projectId);
       }
     } finally {
-      const sel = this.selected;
-      if (sel.kind === 'project' && done.has(sel.projectId)) this.select({ kind: 'active' });
+      if ([...done].some(this.isSelected)) this.select({ kind: 'active' });
       else if (done.size > 0) for (const cb of this.subscribers) cb();
       // A failed refresh must not mask a failed hide (the next event refreshes anyway).
       await this.refresh().catch(() => {});

@@ -215,7 +215,7 @@
     namesOn.get(chat.machineId)?.get(chat.projectId) ?? baseName(chat.cwd);
   const spansProjects = $derived(places.selected.kind !== 'project');
   /** Rows of a cross-machine list name their machine while more than one is paired. */
-  const showMachine = $derived(across && machines.list.length > 1);
+  const showMachine = $derived(across && machines.several);
   const placeTitle = $derived.by(() => {
     const p = places.selected;
     if (p.kind === 'needsYou') return 'Needs you';

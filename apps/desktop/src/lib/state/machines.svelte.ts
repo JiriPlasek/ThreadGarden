@@ -34,6 +34,8 @@ export type MachinesOptions = {
 
 /** `uiState` key: the machines whose group in the places column is collapsed (their ids). */
 export const COLLAPSED_KEY = 'machines.collapsed';
+/** `uiState` key: the paired machines whose "Missing folders" group is expanded (their ids). */
+export const MISSING_OPEN_KEY = 'machines.missingOpen';
 
 /** How the UI names a machine: This PC for the local one. */
 export const machineLabel = (m: Pick<MachineEntry, 'local' | 'name'>): string =>
@@ -72,6 +74,11 @@ export class MachinesState {
   private localEntry = $state<MachineEntry | null>(null);
   /** Machines whose group in the places column is collapsed (kept in the local `uiState`). */
   collapsed = $state<string[]>([]);
+  /**
+   * Paired machines whose "Missing folders" group is expanded (kept in the
+   * local `uiState`; This PC's keeps its own `places.missingOpen`).
+   */
+  missingOpen = $state<string[]>([]);
 
   private localApi!: Api;
   private localClient!: ServiceClient;
@@ -94,6 +101,14 @@ export class MachinesState {
 
   get local(): MachineEntry | null {
     return this.localEntry;
+  }
+
+  /**
+   * More than one machine: the places column groups projects by machine and
+   * cross-machine rows carry a machine chip (one test for both).
+   */
+  get several(): boolean {
+    return this.list.length > 1;
   }
 
   get = (id: string): MachineEntry | undefined => this.list.find((m) => m.id === id);
@@ -165,18 +180,40 @@ export class MachinesState {
 
   /** Loads which machine groups are collapsed (none when unknown). */
   restoreCollapsed = async (): Promise<void> => {
-    try {
-      const { value } = await this.localApi.request('uiState.get', { key: COLLAPSED_KEY });
-      if (Array.isArray(value)) this.collapsed = value.filter((v) => typeof v === 'string');
-    } catch {
-      // Every group open is fine.
-    }
+    this.collapsed = (await this.loadIds(COLLAPSED_KEY)) ?? this.collapsed;
   };
 
   setCollapsed = (id: string, collapsed: boolean): void => {
-    if (this.collapsed.includes(id) === collapsed) return;
-    this.collapsed = collapsed ? [...this.collapsed, id] : this.collapsed.filter((x) => x !== id);
-    quietly(this.localApi.request('uiState.set', { key: COLLAPSED_KEY, value: this.collapsed }));
+    const next = this.saveIds(COLLAPSED_KEY, this.collapsed, id, collapsed);
+    if (next) this.collapsed = next;
+  };
+
+  /** Loads which paired machines' "Missing folders" groups are expanded (none when unknown). */
+  restoreMissingOpen = async (): Promise<void> => {
+    this.missingOpen = (await this.loadIds(MISSING_OPEN_KEY)) ?? this.missingOpen;
+  };
+
+  setMissingOpen = (id: string, open: boolean): void => {
+    const next = this.saveIds(MISSING_OPEN_KEY, this.missingOpen, id, open);
+    if (next) this.missingOpen = next;
+  };
+
+  /** A list of machine ids kept in the local `uiState` under `key` (null when unknown). */
+  private loadIds = async (key: string): Promise<string[] | null> => {
+    try {
+      const { value } = await this.localApi.request('uiState.get', { key });
+      return Array.isArray(value) ? value.filter((v) => typeof v === 'string') : null;
+    } catch {
+      return null;
+    }
+  };
+
+  /** `ids` with `id` in or out, stored under `key`; null when nothing changes. */
+  private saveIds = (key: string, ids: string[], id: string, on: boolean): string[] | null => {
+    if (ids.includes(id) === on) return null;
+    const next = on ? [...ids, id] : ids.filter((x) => x !== id);
+    quietly(this.localApi.request('uiState.set', { key, value: next }));
+    return next;
   };
 
   rename = async (id: string, name: string): Promise<void> => {

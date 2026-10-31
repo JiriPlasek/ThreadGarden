@@ -43,7 +43,7 @@
   );
   const canStop = $derived(agents.items.some((a) => a.live));
   /** Agents carry their machine's name while more than one machine is paired. */
-  const multi = $derived(machines.list.length > 1);
+  const multi = $derived(machines.several);
 </script>
 
 <footer class="bg-muted/40 flex h-8 shrink-0 items-center gap-2 border-t pr-1 pl-2 text-xs">
@@ -66,9 +66,13 @@
               'hover:bg-accent focus-visible:ring-ring/50 flex h-6 max-w-60 items-center gap-1.5 rounded px-2 outline-none focus-visible:ring-2',
               chatKey(agent) === tabs.active && 'bg-accent text-accent-foreground',
             )}
-            title={`${agent.title} · ${multi ? `${machineNameOf(machines, agent.machineId)} · ` : ''}${project} ·${statusLabel(agent.status, rawStatus(agent), agent.unread)}${
-              detail ? ` · ${detail}` : ''
-            }`}
+            title={[
+              agent.title,
+              ...(multi ? [machineNameOf(machines, agent.machineId)] : []),
+              project,
+              statusLabel(agent.status, rawStatus(agent), agent.unread),
+              ...(detail ? [detail] : []),
+            ].join(' · ')}
             onclick={() => tabs.openTab({ machineId: agent.machineId, sessionId: agent.sessionId })}
           >
             <StatusIcon status={agent.status} raw={rawStatus(agent)} unread={agent.unread} />
