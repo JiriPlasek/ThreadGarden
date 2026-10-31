@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from '@testing-library/svelte';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { routeFileDrop } from '../../src/lib/components/composer/drop';
@@ -123,6 +123,32 @@ describe('chats on another machine', () => {
     expect(within(thumbs).getAllByRole('listitem')).toHaveLength(1);
   });
 
+  it('a pasted file path is not mentioned in a remote chat', async () => {
+    const { composer } = await renderChat(M1);
+    await waitFor(() => expect(composer()).toBeTruthy());
+    const paste = (text: string) =>
+      fireEvent.paste(composer(), {
+        clipboardData: { files: [], items: [], getData: () => text },
+      });
+    await paste('/home/jiri/tg-cli/src/a.ts');
+    await waitFor(() =>
+      expect(screen.getByRole('status', { name: /notice/i }).textContent?.trim()).toBe(
+        "Files from This PC can't be attached to chats on Ubuntu PC.",
+      ),
+    );
+    expect(composer().value).toBe('');
+  });
+
+  it('a pasted file path is still mentioned in This PC’s chat', async () => {
+    const { composer } = await renderChat(LOCAL);
+    await waitFor(() => expect(composer()).toBeTruthy());
+    await fireEvent.paste(composer(), {
+      clipboardData: { files: [], items: [], getData: () => 'C:\\work\\alpha\\a.ts' },
+    });
+    await waitFor(() => expect(composer().value).toBe('@a.ts '));
+    expect(screen.queryByRole('status', { name: /notice/i })).toBeNull();
+  });
+
   it('dropping a file into This PC’s chat still mentions it', async () => {
     const { composer } = await renderChat(LOCAL);
     await waitFor(() => expect(composer()).toBeTruthy());
@@ -140,6 +166,8 @@ describe('a new chat on another machine', () => {
         chatHandlers(s, { cwd: '/work/alpha', title: 'Local' });
         s.handlers['projects.list'] = () => [project('p1', 'alpha')];
         s.handlers['chat.create'] = () => ({ sessionId: 'local-id' });
+        // This PC offers a model Ubuntu PC does not.
+        s.handlers['chat.models'] = () => [{ value: 'opus', displayName: 'Opus', description: '' }];
       },
       configureRemote: (s) => {
         chatHandlers(s, { cwd: '/home/jiri', title: 'New' });
@@ -193,6 +221,56 @@ describe('a new chat on another machine', () => {
     expect(machine.value).toBe(M1);
     const folder = within(dialog).getByRole('combobox', { name: /folder/i }) as HTMLSelectElement;
     expect(folder.value).toBe('/work/tg-cli');
+  });
+
+  it('Ctrl+N with an unreachable machine’s project selected opens on This PC', async () => {
+    const { app, context, remote } = await twoMachines();
+    await app.places.refresh();
+    const ubuntu = app.scopes.get(M1)!;
+    await waitFor(() => expect(ubuntu.places.projects).toHaveLength(1));
+    app.places.select({ kind: 'project', projectId: 'p9', machineId: M1 });
+    remote.refuse = true;
+    remote.drop();
+    await waitFor(() => expect(app.machines.get(M1)?.status).toBe('unreachable'));
+    render(TabsBar, { context });
+    render(NewChatDialog, { context });
+    await userEvent.keyboard('{Control>}n{/Control}');
+    const dialog = await screen.findByRole('dialog', { name: /new chat/i });
+    const machine = within(dialog).getByRole('combobox', { name: /machine/i }) as HTMLSelectElement;
+    expect(machine.value).toBe(LOCAL);
+    const folder = within(dialog).getByRole('combobox', { name: /folder/i }) as HTMLSelectElement;
+    expect(folder.value).toBe('/work/alpha');
+  });
+
+  it('a machine removed while chosen: the dialog goes back to This PC and its folder', async () => {
+    const { app, context } = await twoMachines();
+    await app.places.refresh();
+    app.interaction.openNewChat();
+    render(NewChatDialog, { context });
+    const dialog = await screen.findByRole('dialog', { name: /new chat/i });
+    const machine = within(dialog).getByRole('combobox', { name: /machine/i }) as HTMLSelectElement;
+    await userEvent.selectOptions(machine, M1);
+    const folder = within(dialog).getByRole('combobox', { name: /folder/i }) as HTMLSelectElement;
+    await waitFor(() => expect(folder.value).toBe('/work/tg-cli'));
+    await app.machines.remove(M1);
+    await waitFor(() => expect(folder.value).toBe('/work/alpha'));
+    expect(within(folder).queryByRole('option', { name: 'Home folder' })).toBeNull();
+    expect(within(folder).queryByRole('option', { name: '/work/tg-cli' })).toBeNull();
+  });
+
+  it('choosing another machine forgets the model chosen on This PC', async () => {
+    const { app, context, remote } = await twoMachines();
+    await app.places.refresh();
+    app.interaction.openNewChat();
+    render(NewChatDialog, { context });
+    const dialog = await screen.findByRole('dialog', { name: /new chat/i });
+    const model = within(dialog).getByRole('combobox', { name: /^model/i }) as HTMLSelectElement;
+    await waitFor(() => expect(within(model).getByRole('option', { name: 'Opus' })).toBeTruthy());
+    await userEvent.selectOptions(model, 'opus');
+    await userEvent.selectOptions(within(dialog).getByRole('combobox', { name: /machine/i }), M1);
+    await userEvent.type(within(dialog).getByRole('textbox', { name: /message/i }), 'hi{Enter}');
+    await waitFor(() => expect(remote.calls('chat.create')).toHaveLength(1));
+    expect(remote.calls('chat.create')[0]!.params).not.toHaveProperty('model');
   });
 
   it('with This PC alone, no machine is asked for', async () => {

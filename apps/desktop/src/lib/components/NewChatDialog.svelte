@@ -51,11 +51,18 @@
       .filter((m) => m.status === 'on' && scopes.get(m.id))
       .map((m) => ({ id: m.id, label: machineLabel(m) })),
   );
-  /** The machine of the selected project place, else This PC. */
-  const selectedMachine = (): string => {
+  /** A machine a chat can start on now: it has its stores and is on. */
+  const usable = (id: string | null | undefined): id is string =>
+    !!id && !!scopes.get(id) && machines.get(id)?.status === 'on';
+  /**
+   * The machine the dialog opens on: the one asked for, else the selected
+   * project place's, when it is on; else This PC.
+   */
+  const startMachine = (): string => {
     const sel = places.selected;
-    const id = sel.kind === 'project' ? sel.machineId : undefined;
-    return id && scopes.get(id) ? id : local.machineId;
+    const want =
+      interaction.newChat.machineId ?? (sel.kind === 'project' ? sel.machineId : undefined);
+    return usable(want) ? want : local.machineId;
   };
 
   const projects = $derived(
@@ -97,7 +104,10 @@
     const open = interaction.newChat.open;
     if (open && !wasOpen) {
       untrack(() => {
-        machineId = interaction.newChat.machineId ?? selectedMachine();
+        const next = startMachine();
+        // A model kept from the last time is only kept on the same machine.
+        if (next !== machineId) model = '';
+        machineId = next;
         cwd = firstFolder();
       });
       error = null;
@@ -106,12 +116,22 @@
     wasOpen = open;
   });
 
-  /** Another machine chosen: its first folder (and its models). */
+  /**
+   * Another machine chosen: its first folder and its own models (a model
+   * chosen for one machine is never sent to another).
+   */
   const chooseMachine = (id: string): void => {
     machineId = id;
     cwd = firstFolder();
     models = [];
+    model = '';
   };
+
+  // The chosen machine was removed while the dialog is open: back to This PC, with its folder.
+  $effect(() => {
+    if (!interaction.newChat.open || scopes.get(machineId)) return;
+    untrack(() => chooseMachine(local.machineId));
+  });
 
   let modelsFor = '';
   $effect(() => {

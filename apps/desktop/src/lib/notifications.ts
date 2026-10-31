@@ -97,7 +97,8 @@ export const startAttention = (deps: AttentionDeps): (() => void) => {
     if (at === null || now() - at > FOCUS_OPENS_WITHIN_MS) return;
     // Finished chats are listed there too, below the ones waiting on an answer.
     places.select({ kind: 'needsYou' });
-    const lists = await Promise.all(
+    // A machine that cannot answer is left out; the others still count.
+    const lists = await Promise.allSettled(
       scopes
         .all()
         .filter((s) => s.api.status === 'open')
@@ -109,7 +110,7 @@ export const startAttention = (deps: AttentionDeps): (() => void) => {
           return items.map((c) => ({ machineId: s.machineId, sessionId: c.sessionId }));
         }),
     );
-    const waiting = lists.flat();
+    const waiting = lists.flatMap((r) => (r.status === 'fulfilled' ? r.value : []));
     if (waiting.length === 1) tabs.openTab(waiting[0]!);
   };
 

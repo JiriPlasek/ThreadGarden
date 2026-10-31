@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FOCUS_OPENS_WITHIN_MS, startAttention } from '../../src/lib/notifications';
 import { here, M1, setup, setupTwoMachines, summary } from '../layout/harness';
+import { RpcFail } from '../service/fake-ws';
 
 type ListParams = { place: { kind: string } };
 
@@ -320,6 +321,40 @@ describe('notifications across machines', () => {
     window.dispatchEvent(new Event('focus'));
     await vi.waitFor(() => expect(app.tabs.active).toBe(`${M1}/s1`));
     expect(app.places.selected).toEqual({ kind: 'needsYou' });
+  });
+
+  it('a machine failing to list Needs you does not stop the click opening This PC’s chat', async () => {
+    const { app, server, notify } = await startTwo({
+      configure: (s) => {
+        s.handlers['sessions.list'] = (p) =>
+          (p as ListParams).place.kind === 'needsYou'
+            ? { items: [summary('s2', { status: 'needsYou', live: true })] }
+            : { items: [] };
+      },
+      configureRemote: (s) => {
+        s.handlers['sessions.list'] = (p) => {
+          if ((p as ListParams).place.kind === 'needsYou') throw new RpcFail('INTERNAL', 'boom');
+          return { items: [] };
+        };
+      },
+    });
+    window.dispatchEvent(new Event('blur'));
+    server.push('needsYou', needsYou('s2'));
+    await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
+    window.dispatchEvent(new Event('focus'));
+    await vi.waitFor(() => expect(app.tabs.active).toBe(here('s2')));
+  });
+
+  it('a removed machine no longer notifies', async () => {
+    const { app, remote, notify } = await startTwo();
+    window.dispatchEvent(new Event('blur'));
+    // The relay socket the removed machine's client listened on.
+    const socket = remote.live!;
+    await app.machines.remove(M1);
+    expect(app.scopes.get(M1)).toBeUndefined();
+    socket.onmessage?.({ data: JSON.stringify({ event: 'needsYou', data: needsYou('s1') }) });
+    await flush();
+    expect(notify).not.toHaveBeenCalled();
   });
 
   it('sets the tray from the sum once, not per machine', async () => {

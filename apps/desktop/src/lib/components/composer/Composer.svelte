@@ -128,6 +128,8 @@
    * are not mentioned (images still go, as bytes).
    */
   const elsewhere = scope !== scopes.local();
+  const filesElsewhere = (): string =>
+    `Files from This PC can't be attached to chats on ${machineNameOf(machines, scope.machineId)}.`;
   const uid = $props.id();
   const listId = `${uid}-list`;
 
@@ -437,7 +439,10 @@
     }
     const pasted = e.clipboardData?.getData?.('text/plain') ?? '';
     const mention = pastedPathMention(pasted, cwd);
-    if (mention) {
+    if (mention && elsewhere) {
+      // A path of This PC's: pasted as plain text, never mentioned on another machine.
+      notice = filesElsewhere();
+    } else if (mention) {
       e.preventDefault();
       void insertText(mention);
     }
@@ -473,7 +478,7 @@
   const dropPaths = async (paths: string[]): Promise<void> => {
     const others = paths.filter((p) => !imageTypeOfPath(p));
     if (others.length > 0 && elsewhere) {
-      notice = `Files from This PC can't be attached to chats on ${machineNameOf(machines, scope.machineId)}.`;
+      notice = filesElsewhere();
     } else if (others.length > 0) {
       await insertText(others.map((p) => mentionForPath(p, cwd)).join(''));
     }
