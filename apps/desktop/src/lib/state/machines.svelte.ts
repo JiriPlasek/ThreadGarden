@@ -59,6 +59,7 @@ export class MachinesState {
   private everOn = new Set<string>();
   private pairing = 0;
   private removing = new Set<string>();
+  private removals = new Map<string, Promise<void>>();
   private readonly added = new Set<(m: MachineEntry) => void>();
   private readonly removedCbs = new Set<(id: string) => void>();
 
@@ -141,7 +142,16 @@ export class MachinesState {
     this.applyOne(m);
   };
 
-  remove = async (id: string): Promise<void> => {
+  remove = (id: string): Promise<void> => {
+    // A second call while one is in flight shares it, so the first `finally` cannot clear the mark early.
+    const running = this.removals.get(id);
+    if (running) return running;
+    const p = this.doRemove(id).finally(() => this.removals.delete(id));
+    this.removals.set(id, p);
+    return p;
+  };
+
+  private doRemove = async (id: string): Promise<void> => {
     // Marked first: a connect already awaiting the keychain or the unlock must not revive the client.
     this.removing.add(id);
     this.paired.find((m) => m.id === id)?.client.close();

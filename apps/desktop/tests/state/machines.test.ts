@@ -281,16 +281,27 @@ describe('MachinesState', () => {
 
   it('remove during an in-flight unlock does not revive the client', async () => {
     await setup([], { [M1]: 'tok' });
-    let release!: () => void;
-    local.handlers['machines.unlock'] = () => new Promise((r) => (release = () => r({})));
+    let releaseUnlock!: () => void;
+    let releaseRemove!: () => void;
+    local.handlers['machines.unlock'] = () => new Promise((r) => (releaseUnlock = () => r({})));
+    local.handlers['machines.remove'] = () =>
+      new Promise((r) => (releaseRemove = () => r({ revoked: true })));
     pairedList = [paired(M1, 'U')];
     local.push('machines.changed', pairedList);
     await vi.advanceTimersByTimeAsync(0);
     expect(local.calls('machines.unlock')).toHaveLength(1);
+    // remove() is under way (entry still listed) when the unlock finishes.
     const pending = machines.remove(M1);
+    const again = machines.remove(M1);
+    expect(again).toBe(pending);
     await vi.advanceTimersByTimeAsync(0);
+    expect(local.calls('machines.remove')).toHaveLength(1);
+    expect(machines.get(M1)).toBeDefined();
+    releaseUnlock();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(remote(M1).sockets).toHaveLength(0);
+    releaseRemove();
     await pending;
-    release();
     await vi.advanceTimersByTimeAsync(1000);
     expect(remote(M1).sockets).toHaveLength(0);
     expect(machines.get(M1)).toBeUndefined();
