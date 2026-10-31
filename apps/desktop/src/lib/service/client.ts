@@ -13,7 +13,8 @@ import {
   type Result,
 } from '@threadgarden/protocol';
 
-export type ClientStatus = 'connecting' | 'open' | 'reconnecting' | 'incompatible';
+/** `closed`: ended by `close()` or by `onClose` returning 'stop'; `connect` revives it. */
+export type ClientStatus = 'connecting' | 'open' | 'reconnecting' | 'incompatible' | 'closed';
 
 /**
  * Rejection of a request; `code` is a protocol error code or DISCONNECTED /
@@ -129,6 +130,7 @@ export class ServiceClient {
     this.ws = null;
     ws?.close();
     this.rejectAll('DISCONNECTED', 'Client closed');
+    this.setStatus('closed');
   };
 
   /** Rejects with `DISCONNECTED` while the socket is down (callers retry) and `TIMEOUT` after the request timeout. */
@@ -266,6 +268,7 @@ export class ServiceClient {
         this.closed = true;
         this.firstConnect?.reject(new RequestError('DISCONNECTED', 'Connection closed'));
         this.firstConnect = null;
+        this.setStatus('closed');
         return;
       }
       this.setStatus(this.hasBeenOpen ? 'reconnecting' : 'connecting');

@@ -38,7 +38,7 @@ const fromLocalStatus = (s: ClientStatus): MachineStatus =>
     ? 'on'
     : s === 'incompatible'
       ? 'incompatible'
-      : s === 'reconnecting'
+      : s === 'reconnecting' || s === 'closed'
         ? 'unreachable'
         : 'connecting';
 
@@ -58,6 +58,7 @@ export class MachinesState {
   private makeClient: (o: ClientOptions) => ServiceClient = (o) => new ServiceClient(o);
   private everOn = new Set<string>();
   private pairing = 0;
+  private removing = new Set<string>();
   private readonly added = new Set<(m: MachineEntry) => void>();
   private readonly removedCbs = new Set<(id: string) => void>();
 
@@ -112,6 +113,8 @@ export class MachinesState {
         await this.localApi
           .request('machines.remove', { machineId: machine.id, revoke: true })
           .catch(() => {});
+        // A machines.changed event may have created the entry meanwhile.
+        this.drop(machine.id);
         throw e;
       }
       const entry = this.ensure(machine);
@@ -139,13 +142,15 @@ export class MachinesState {
   };
 
   remove = async (id: string): Promise<void> => {
-    const entry = this.paired.find((m) => m.id === id);
-    entry?.client.close();
+    // Marked first: a connect already awaiting the keychain or the unlock must not revive the client.
+    this.removing.add(id);
+    this.paired.find((m) => m.id === id)?.client.close();
     try {
       await this.localApi.request('machines.remove', { machineId: id, revoke: true });
     } finally {
       await this.tokens.clear(id).catch(() => {});
       this.drop(id);
+      this.removing.delete(id);
     }
   };
 
@@ -215,7 +220,7 @@ export class MachinesState {
         this.everOn.add(id);
         e.status = 'on';
       } else if (s === 'incompatible') e.status = 'incompatible';
-      else if (e.status === 'on') e.status = 'unreachable';
+      else if (s !== 'closed' && e.status === 'on') e.status = 'unreachable';
     });
     client.onOpen(() => {
       const e = this.paired.find((x) => x.id === id);
@@ -276,9 +281,10 @@ export class MachinesState {
    */
   private connectEntry = (id: string, token?: string): void => {
     void (async () => {
-      if (!this.paired.some((e) => e.id === id)) return;
+      if (this.removing.has(id) || !this.paired.some((e) => e.id === id)) return;
       try {
         const t = token ?? (await this.tokens.get(id));
+        if (this.removing.has(id)) return;
         if (!t) return this.lock(id, true);
         await this.localApi.request('machines.unlock', { machineId: id, token: t });
       } catch {
@@ -286,7 +292,7 @@ export class MachinesState {
         return this.lock(id, false);
       }
       const e = this.paired.find((x) => x.id === id);
-      if (!e) return;
+      if (!e || this.removing.has(id)) return;
       e.status = 'connecting';
       e.client.connect(this.opts.relayUrl(id), this.opts.localToken()).catch(() => {});
     })();

@@ -278,4 +278,62 @@ describe('MachinesState', () => {
     await a;
     expect(machines.get(M1)).toMatchObject({ address: '10.1.1.1', port: 1234 });
   });
+
+  it('remove during an in-flight unlock does not revive the client', async () => {
+    await setup([], { [M1]: 'tok' });
+    let release!: () => void;
+    local.handlers['machines.unlock'] = () => new Promise((r) => (release = () => r({})));
+    pairedList = [paired(M1, 'U')];
+    local.push('machines.changed', pairedList);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(local.calls('machines.unlock')).toHaveLength(1);
+    const pending = machines.remove(M1);
+    await vi.advanceTimersByTimeAsync(0);
+    await pending;
+    release();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(remote(M1).sockets).toHaveLength(0);
+    expect(machines.get(M1)).toBeUndefined();
+  });
+
+  it('pair rollback also drops an entry a machines.changed event created meanwhile', async () => {
+    await setup([]);
+    tokens.set.mockImplementation(async () => {
+      local.push('machines.changed', [paired(M1, 'U')]);
+      await vi.advanceTimersByTimeAsync(0);
+      throw new Error('keychain locked');
+    });
+    local.handlers['machines.pair'] = () => ({ machine: paired(M1, 'U'), token: 'tok' });
+    const added = vi.fn();
+    const removed = vi.fn();
+    machines.onAdded(added);
+    machines.onRemoved(removed);
+    const pending = machines.pair({ address: 'a', code: 'C', deviceName: 'L' });
+    const assertion = expect(pending).rejects.toThrow('keychain locked');
+    await vi.advanceTimersByTimeAsync(0);
+    await assertion;
+    expect(added).toHaveBeenCalledOnce();
+    expect(removed).toHaveBeenCalledWith(M1);
+    expect(machines.get(M1)).toBeUndefined();
+    expect(local.calls('machines.remove')[0]?.params).toEqual({ machineId: M1, revoke: true });
+    expect(remote(M1).sockets).toHaveLength(0);
+  });
+
+  it('a stopped or closed client reports closed, not open', async () => {
+    await setup([paired(M1, 'U')], { [M1]: 'tok' });
+    await vi.advanceTimersByTimeAsync(0);
+    const client = machines.get(M1)!.client;
+    remote(M1).drop(4409);
+    expect(client.status).toBe('closed');
+    expect(machines.get(M1)?.status).toBe('mismatch');
+    const c2 = new ServiceClient({ WebSocketImpl: impl });
+    const p = c2.connect(`ws://127.0.0.1:${LOCAL_PORT}`, 'local-token');
+    await vi.advanceTimersByTimeAsync(0);
+    await p;
+    const seen: string[] = [];
+    c2.onStatus((s) => seen.push(s));
+    c2.close();
+    expect(c2.status).toBe('closed');
+    expect(seen).toEqual(['closed']);
+  });
 });
