@@ -48,5 +48,16 @@ export const ChatTaskSchema = z.object({
   lastTool: z.string().optional(),
   summary: z.string().optional(),
   error: z.string().optional(),
+  /**
+   * The agent's model, as given: the Agent call's `model` input (an alias such
+   * as `sonnet`), else the model id its streamed messages report (v1.3 §2).
+   */
+  model: z.string().optional(),
+  /** The prompt the agent was started with (`task_started.prompt`). */
+  prompt: z.string().optional(),
+  /** Nesting depth of a subagent: 1 when the main thread spawned it. */
+  spawnDepth: z.number().optional(),
+  /** The workflow script's name, for workflow tasks. */
+  workflowName: z.string().optional(),
 });
 export type ChatTask = z.infer<typeof ChatTaskSchema>;
