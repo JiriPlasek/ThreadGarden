@@ -49,6 +49,15 @@ export const methods = {
     }),
     empty,
   ),
+  /**
+   * v1.3: the project's icon (its favicon or logo, found in the project
+   * folder) as a `data:` URL, or null when it has none or its folder is gone.
+   * Cached by the service; ask lazily, for the projects on screen.
+   */
+  'projects.icon': def(
+    z.object({ projectId: z.string() }),
+    z.object({ dataUrl: z.string().nullable() }),
+  ),
   'sessions.list': def(
     z.object({
       place: PlaceSchema,
@@ -71,6 +80,8 @@ export const methods = {
           sessionId: z.string(),
           title: z.string(),
           projectName: z.string(),
+          /** v1.3: the chat's project (for its icon); absent from older services. */
+          projectId: z.string().optional(),
           snippet: z.string().optional(),
           score: z.number(),
           /**

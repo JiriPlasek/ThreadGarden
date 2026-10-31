@@ -58,6 +58,17 @@ describe('mock service', () => {
     expect(projects).toHaveLength(3);
     expect(projects.every((p) => p.exists)).toBe(true);
 
+    // v1.3: some mock projects have an icon (found by the real search in fixtures), others not.
+    const iconOf = async (n: number) => {
+      const id = (projects as unknown as { projectId: string; displayName: string }[]).find(
+        (p) => p.displayName === `proj-${n}`,
+      )!.projectId;
+      return (await c.call<{ dataUrl: string | null }>('projects.icon', { projectId: id })).dataUrl;
+    };
+    expect(await iconOf(0)).toMatch(/^data:image\/svg\+xml;base64,/);
+    expect(await iconOf(1)).toMatch(/^data:image\/svg\+xml;base64,/);
+    expect(await iconOf(2)).toMatch(/^data:image\/svg\+xml;base64,/);
+
     // Plain reply: streamed text, then idle.
     const plain = await c.call<{ sessionId: string }>('chat.create', { cwd: '/work', text: 'hi' });
     await c.waitFor(chatStatus(plain.sessionId, 'idle'), 10_000);

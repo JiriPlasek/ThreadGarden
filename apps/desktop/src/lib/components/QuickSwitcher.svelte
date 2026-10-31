@@ -12,6 +12,7 @@
   import SearchIcon from '@lucide/svelte/icons/search';
   import SettingsIcon from '@lucide/svelte/icons/settings';
   import type { Component } from 'svelte';
+  import ProjectIcon from '#lib/components/layout/ProjectIcon.svelte';
   import * as Dialog from '#lib/components/ui/dialog/index.js';
   import { useApp } from '#lib/state/context.js';
   import { formatShortcut, shortcut, type Combo } from '#lib/shortcuts.js';
@@ -250,9 +251,14 @@
             <span class="flex min-w-0 flex-1 flex-col">
               <span class="flex min-w-0 items-baseline gap-2">
                 <span class="truncate font-medium">{row.hit.title}</span>
-                <span class="text-muted-foreground ml-auto shrink-0 truncate text-xs"
-                  >{row.hit.projectName}</span
+                <span
+                  class="text-muted-foreground ml-auto flex max-w-[50%] shrink-0 items-center gap-1.5 self-center text-xs"
                 >
+                  {#if row.hit.projectId}
+                    <ProjectIcon projectId={row.hit.projectId} name={row.hit.projectName} />
+                  {/if}
+                  <span class="truncate">{row.hit.projectName}</span>
+                </span>
               </span>
               {#if row.hit.snippet}
                 <span class="text-muted-foreground truncate text-xs">{row.hit.snippet}</span>

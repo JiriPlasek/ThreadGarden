@@ -310,7 +310,11 @@ describe('quickSearch', () => {
     const t = await setup(40, 4);
     await t.call('meta.update', { sessionId: 'session-5', customTitle: 'Flux capacitor repair' });
     const r1 = await t.call('search.quick', { query: 'flxcap', limit: 10 });
-    expect(r1.items[0]).toMatchObject({ sessionId: 'session-5', projectName: 'proj-1' });
+    expect(r1.items[0]).toMatchObject({
+      sessionId: 'session-5',
+      projectName: 'proj-1',
+      projectId: '/work/proj-1',
+    });
     const r2 = await t.call('search.quick', { query: 'proj-2', limit: 5 });
     expect(r2.items.length).toBeGreaterThan(0);
     expect(r2.items.length).toBeLessThanOrEqual(5);

@@ -26,11 +26,12 @@
  * `PAHUB_MOCK_TOKEN` (or `--port` / `--token`) fix the port and token.
  */
 import { randomUUID } from 'node:crypto';
-import { appendFile, mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { readDiscovery } from '../discovery.js';
+import { findProjectIcon } from '../history/project-icons.js';
 import { startService, type ServiceHandle } from '../main.js';
 import type {
   OneShotOptions,
@@ -594,6 +595,53 @@ export type MockService = {
   removed: Promise<void>;
 };
 
+/** A rounded square with a letter, as a mock project's favicon. */
+const iconSvg = (fill: string, letter: string): string =>
+  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">` +
+  `<rect width="32" height="32" rx="7" fill="${fill}"/>` +
+  `<text x="16" y="22" font-family="sans-serif" font-size="18" font-weight="700" ` +
+  `text-anchor="middle" fill="#fff">${letter}</text></svg>`;
+
+/**
+ * Icon fixtures for some mock projects (v1.3 §5), laid out the ways real
+ * projects keep them, so the real icon search runs on them. The corpus's
+ * project folders (`/work/proj-N`) are not on disk; their icons live in
+ * `<temp>/projects/proj-N` instead. The other projects get letter tiles.
+ */
+const MOCK_ICONS: { project: number; files: Record<string, string> }[] = [
+  { project: 0, files: { 'favicon.svg': iconSvg('#2563eb', 'P') } },
+  {
+    project: 1,
+    files: {
+      'index.html': '<link rel="icon" type="image/svg+xml" href="/brand.svg">',
+      'public/brand.svg': iconSvg('#0d9488', 'B'),
+    },
+  },
+  {
+    project: 2,
+    files: {
+      'src/app.html': '<link rel="icon" href="%sveltekit.assets%/favicon.svg" />',
+      'static/favicon.svg': iconSvg('#c026d3', 'S'),
+    },
+  },
+  { project: 4, files: { 'apps/web/public/favicon.svg': iconSvg('#ea580c', 'W') } },
+  { project: 7, files: { '.github/logo.svg': iconSvg('#16a34a', 'G') } },
+];
+
+const writeMockIcons = async (root: string): Promise<Map<string, string>> => {
+  const dirs = new Map<string, string>();
+  for (const { project, files } of MOCK_ICONS) {
+    const dir = join(root, 'projects', `proj-${project}`);
+    for (const [rel, body] of Object.entries(files)) {
+      const file = join(dir, ...rel.split('/'));
+      await mkdir(join(file, '..'), { recursive: true });
+      await writeFile(file, body);
+    }
+    dirs.set(`/work/proj-${project}`, dir);
+  }
+  return dirs;
+};
+
 /** Starts the mock service; its temp dirs are removed when it closes. */
 export const startMockService = async (o: MockOptions = {}): Promise<MockService> => {
   const root = await mkdtemp(join(tmpdir(), 'pahub-mock-'));
@@ -607,6 +655,7 @@ export const startMockService = async (o: MockOptions = {}): Promise<MockService
     bigSessionMessages: o.bigSessionMessages ?? 2000,
   });
   for (const [id, s] of corpus.sessions) adapter.sessions.set(id, s);
+  const iconDirs = await writeMockIcons(root);
 
   // One "external" Claude Code session, so the UI's external states and resume block show.
   const externalId = corpus.sessions.keys().next().value;
@@ -632,6 +681,10 @@ export const startMockService = async (o: MockOptions = {}): Promise<MockService
       externalRun: async () => JSON.stringify(externals),
       // The corpus's project folders (/work/proj-N) are not on disk: none is missing.
       folderStat: async () => true,
+      projectIconSearch: async (projectPath) => {
+        const dir = iconDirs.get(projectPath.replace(/\\/g, '/'));
+        return dir ? findProjectIcon(dir) : null;
+      },
       ...(o.port === undefined ? {} : { port: o.port }),
       ...(o.token === undefined ? {} : { token: o.token }),
       installSignalHandlers: o.installSignalHandlers ?? true,

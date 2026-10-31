@@ -4,7 +4,6 @@
   import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
   import EyeIcon from '@lucide/svelte/icons/eye';
   import EyeOffIcon from '@lucide/svelte/icons/eye-off';
-  import FolderIcon from '@lucide/svelte/icons/folder';
   import FolderXIcon from '@lucide/svelte/icons/folder-x';
   import InboxIcon from '@lucide/svelte/icons/inbox';
   import PauseIcon from '@lucide/svelte/icons/pause';
@@ -19,6 +18,7 @@
   import { useApp } from '#lib/state/context.js';
   import { cn } from '#lib/utils.js';
   import IconButton from './IconButton.svelte';
+  import ProjectIcon from './ProjectIcon.svelte';
   import StatusIcon from './StatusIcon.svelte';
 
   /**
@@ -26,6 +26,7 @@
    * and the buckets Active, On hold and Archived, v1.2 §3), then projects in
    * the service's order (pinned, then recent activity). Projects whose folder
    * is gone sit in a collapsed "Missing folders" group below them (v1.1 §4).
+   * Each project shows its icon or a letter tile (v1.3 §5), a pinned one a pin.
    */
   let { onCollapse }: { onCollapse?: () => void } = $props();
 
@@ -117,12 +118,13 @@
           >
             {#if isMissing(project)}
               <FolderXIcon class="text-muted-foreground size-4 shrink-0" aria-hidden="true" />
-            {:else if project.pinned}
-              <PinIcon class="text-muted-foreground size-4 shrink-0" aria-hidden="true" />
             {:else}
-              <FolderIcon class="text-muted-foreground size-4 shrink-0" aria-hidden="true" />
+              <ProjectIcon projectId={project.projectId} name={project.displayName} />
             {/if}
             <span class="min-w-0 truncate">{project.displayName}</span>
+            {#if project.pinned}
+              <PinIcon class="text-muted-foreground size-3 shrink-0" aria-hidden="true" />
+            {/if}
             {#if project.counts.needsYou > 0}
               <!-- The service counts unread chats ("Your turn") here too. -->
               {@render badge(project.counts.needsYou, 'amber', 'Needs you or your turn')}

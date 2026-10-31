@@ -122,6 +122,8 @@ describe('protocol schemas', () => {
       // v1.2 B1: buckets
       'chat.setBucket',
       'chat.archiveOlder',
+      // v1.3 D: project icons
+      'projects.icon',
     ];
     expect(Object.keys(methods).sort()).toEqual([...expected].sort());
     for (const name of expected) {
@@ -489,6 +491,29 @@ describe('protocol schemas', () => {
       expect(sanitizeFontFamily(' ,;{} , ')).toBeNull();
       expect(sanitizeFontFamily('a, b, c, d, e')).toBe('a, b, c, d');
       expect(sanitizeFontFamily('x'.repeat(100))).toBe('x'.repeat(64));
+    });
+  });
+
+  // ── v1.3 D: project icons ─────────────────────────────────────────────────
+
+  describe('v1.3 project icons', () => {
+    it('projects.icon takes a project id and answers a data URL or null', () => {
+      const m = methods['projects.icon'];
+      expect(m.params.parse({ projectId: '/work/a' })).toEqual({ projectId: '/work/a' });
+      expect(m.params.safeParse({}).success).toBe(false);
+      const url = 'data:image/png;base64,AA==';
+      expect(m.result.parse({ dataUrl: url })).toEqual({ dataUrl: url });
+      expect(m.result.parse({ dataUrl: null })).toEqual({ dataUrl: null });
+      expect(m.result.safeParse({}).success).toBe(false);
+    });
+
+    it('search.quick hits may name their project id (optional for older services)', () => {
+      const hit = { sessionId: 's', title: 't', projectName: 'p', score: 1 };
+      const r = methods['search.quick'].result;
+      expect(r.parse({ items: [hit] }).items[0]).not.toHaveProperty('projectId');
+      expect(r.parse({ items: [{ ...hit, projectId: '/work/p' }] }).items[0]?.projectId).toBe(
+        '/work/p',
+      );
     });
   });
 });

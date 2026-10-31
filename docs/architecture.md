@@ -208,6 +208,45 @@ which hides each through `projects.update`). At most two checks run
 at once and one per volume, so a hung network share delays only its own
 folders.
 
+**Project icons** (v1.3). `projects.icon {projectId}` answers the icon a
+project already has as a `data:` URL, or null. The service looks in the
+project's folder (never the Claude config dir), in order: `<link rel="icon">`,
+`shortcut icon` and then `apple-touch-icon` hrefs in `index.html`,
+`public/index.html`, `src/index.html` and `src/app.html` (resolved against
+the html file's folder and against `public/` and `static/`; remote and
+`data:` hrefs are skipped; `%sveltekit.assets%` and `%PUBLIC_URL%` are
+dropped); then fixed paths (`favicon.svg|ico|png`, `public/favicon.*`,
+`static/favicon.*`, `app/favicon.ico`, `app/icon.*`, `src/app/favicon.ico`,
+`src/app/icon.*`, `assets/icon.*`, `icon.png`, `logo.svg`, `public/logo.*`,
+`src-tauri/icons/icon.png`, `.github/logo.*`); then the same fixed paths in
+each folder of `apps/*` and `packages/*`, alphabetically. A file is used only
+when its real path is inside the project's real path (a symlink out of the
+project is refused), it is a regular, non-empty file of at most 512 KB, its
+extension is png, ico, svg, jpg/jpeg, webp or gif, and its first bytes match
+one of those types (SVG: text starting with `<svg`, or `<?xml` containing
+`<svg`; SVG only from a `.svg` file). The MIME type comes from the bytes, so a
+`favicon.ico` that is really a PNG works. An SVG shown through `<img>` runs no
+scripts, and the CSP already allows `data:` images. The search is async and
+makes at most 200 file-system calls; directory listings decide which paths
+exist, so only present files are stat'ed. At most two searches run at once,
+and requests for a project join its search in flight. Answers (null too) are
+cached per project: a cached icon stands while its file keeps its size and
+mtime (one `stat` per request) and the project is searched again after 10
+minutes or when the file changed or vanished. A project whose folder is
+missing (the cached folder check above) answers null without touching the
+disk. The UI asks once a project's icon element scrolls into view (one shared
+IntersectionObserver), applies a burst of answers together on the next frame
+(an answer that changes nothing on screen is dropped), keeps the answers in
+memory (asking again after 10 minutes, on a projects refresh) and
+shows them as rounded images at the row-icon size (1rem: the spec's 16 px,
+scaled with the interface size like the other row icons) in the places
+column, the chat header and the quick switcher (search hits now carry
+`projectId`). Without an icon, or
+while it loads, a project gets a letter tile: the first letter or digit of its
+name (the base of a disambiguated `parent/base` name) in white, drawn as CSS
+content so the row's text stays the name, on one of eight colours picked by a
+hash of the project id, each with at least 4.5:1 contrast to white.
+
 **Catalog and paging.** Lists combine three sources: index rows, pahub's own
 live chats (status, what they wait for) and external sessions. The live and
 external rows (the *overlay*) are small and change constantly, so they are
@@ -424,6 +463,7 @@ CI runs them with `PAHUB_PERF_SLACK=3`. Measured on the development machine
 | `@` suggestions over 200k files | 50 ms | max 17.3 ms |
 | Event-loop delay while building a 200k-file index | 50 ms | max 15.0 ms |
 | Event-loop delay while indexing a 20 MB session | 50 ms | max 9.2 ms (221 ms total) |
+| Event-loop delay while finding the icons of 50 worst-case projects at once | 50 ms | max 17.3 ms (577 ms total) |
 | Service idle memory after indexing 1,000 sessions | 150 MB | 101.6 MB RSS |
 | Switching to an open tab | 50 ms | median 9.5 ms |
 | Opening a history chat | 150 ms | median 22.0 ms |

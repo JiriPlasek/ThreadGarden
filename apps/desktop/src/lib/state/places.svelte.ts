@@ -1,5 +1,6 @@
 import type { Place, Project } from '@pahub/protocol';
 import { quietly, type Api } from './api';
+import { ProjectIconsState } from './project-icons.svelte';
 
 /** `uiState` key: whether the "Missing folders" group of the places column is expanded. */
 export const MISSING_OPEN_KEY = 'places.missingOpen';
@@ -43,6 +44,8 @@ export class PlacesState {
   projects = $state<Project[]>([]);
   /** The "Missing folders" group is expanded (collapsed by default, v1.1 §4). */
   missingOpen = $state(false);
+  /** v1.3: project icons, asked for lazily by the components that show them. */
+  readonly icons = new ProjectIconsState();
 
   private api: Api | null = null;
   private readonly subscribers = new Set<() => void>();
@@ -52,6 +55,7 @@ export class PlacesState {
 
   init = (api: Api): void => {
     this.api = api;
+    this.icons.init(api);
     const refresh = () => quietly(this.refresh());
     api.on('projects.changed', refresh);
     api.on('sessions.changed', refresh);
@@ -112,6 +116,7 @@ export class PlacesState {
           this.projects = projects;
           for (const cb of this.countWatchers) cb(counts);
         } while (this.again);
+        this.icons.revalidate();
       } finally {
         this.inflight = null;
       }

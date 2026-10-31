@@ -15,6 +15,8 @@ export type QuickHit = {
   sessionId: string;
   title: string;
   projectName: string;
+  /** v1.3: for the project's icon in the switcher. */
+  projectId: string;
   snippet?: string;
   score: number;
   archived?: boolean;
@@ -73,6 +75,7 @@ export const createQuickSearch = (
           sessionId: id,
           title: r.title,
           projectName: r.projectName,
+          projectId: r.projectId,
           score,
           ...(snippet ? { snippet } : {}),
           ...(archived ? { archived: true } : {}),
