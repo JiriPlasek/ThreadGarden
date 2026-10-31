@@ -7,7 +7,7 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     include: ['test/real/**/*.real.test.ts'],
-    env: { PAHUB_REAL: '1' },
+    env: { THREADGARDEN_REAL: '1' },
     fileParallelism: false,
     silent: false,
     testTimeout: 300_000,

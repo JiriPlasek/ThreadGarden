@@ -72,7 +72,7 @@ let nonce = randomHex();
  * A placeholder, intact (`<pre>…</pre>`) or as text the HTML parser moved out
  * of its `<pre>`; only intact ones of the current render become code blocks.
  */
-const PLACEHOLDER = /(<pre>)?PAHUB-CODE-([0-9a-f]+)-(\d+)(<\/pre>)?/g;
+const PLACEHOLDER = /(<pre>)?THREADGARDEN-CODE-([0-9a-f]+)-(\d+)(<\/pre>)?/g;
 /** Block content that must never sit inside a link (a click on it would follow the link). */
 const BLOCK_CONTENT =
   'p, pre, div, ul, ol, li, blockquote, table, h1, h2, h3, h4, h5, h6, hr, details, summary';
@@ -82,7 +82,7 @@ marked.use({
   renderer: {
     code({ text, lang }: Tokens.Code): string {
       const i = blocks.push({ text, lang: langOf(lang) }) - 1;
-      return `<pre>PAHUB-CODE-${nonce}-${i}</pre>\n`;
+      return `<pre>THREADGARDEN-CODE-${nonce}-${i}</pre>\n`;
     },
     image({ href, title, text }: Tokens.Image): string {
       if (isInlineImage(href)) {

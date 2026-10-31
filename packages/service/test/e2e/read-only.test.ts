@@ -44,7 +44,7 @@ const snapshot = async (root: string): Promise<Record<string, Entry & { children
 let dir: string;
 let savedEnv: string | undefined;
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'pahub-ro-'));
+  dir = await mkdtemp(join(tmpdir(), 'threadgarden-ro-'));
   savedEnv = process.env.CLAUDE_CONFIG_DIR;
 });
 afterEach(async () => {

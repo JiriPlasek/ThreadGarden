@@ -13,8 +13,8 @@ describe('native (browser stubs)', () => {
   });
 
   it('native stubs return mock connection in browser', async () => {
-    vi.stubEnv('VITE_PAHUB_MOCK_URL', 'ws://127.0.0.1:7357');
-    vi.stubEnv('VITE_PAHUB_MOCK_TOKEN', 'mock-token');
+    vi.stubEnv('VITE_THREADGARDEN_MOCK_URL', 'ws://127.0.0.1:7357');
+    vi.stubEnv('VITE_THREADGARDEN_MOCK_TOKEN', 'mock-token');
     const native = await load();
     expect(native.isTauri).toBe(false);
     // Mock mode has no app/service version pairing: both report the app's version.
@@ -27,10 +27,10 @@ describe('native (browser stubs)', () => {
   });
 
   it('rejects with a clear error when no mock service is configured', async () => {
-    vi.stubEnv('VITE_PAHUB_MOCK_URL', '');
-    vi.stubEnv('VITE_PAHUB_MOCK_TOKEN', '');
+    vi.stubEnv('VITE_THREADGARDEN_MOCK_URL', '');
+    vi.stubEnv('VITE_THREADGARDEN_MOCK_TOKEN', '');
     const native = await load();
-    await expect(native.serviceConnection()).rejects.toThrow(/VITE_PAHUB_MOCK_URL/);
+    await expect(native.serviceConnection()).rejects.toThrow(/VITE_THREADGARDEN_MOCK_URL/);
   });
 
   it('keeps the API key in memory only', async () => {

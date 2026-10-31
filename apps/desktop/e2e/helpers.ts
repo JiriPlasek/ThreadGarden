@@ -4,8 +4,8 @@ import { MOCK_PORT, MOCK_TOKEN } from './env';
 /** Chats in the mock's history: 1,000 generated sessions plus one big one. */
 export const MOCK_CHATS = 1001;
 
-/** Budget multiplier for slower machines (`PAHUB_PERF_SLACK`, CI sets 3 — ruling R3). */
-export const slack = Number(process.env.PAHUB_PERF_SLACK ?? 1);
+/** Budget multiplier for slower machines (`THREADGARDEN_PERF_SLACK`, CI sets 3 — ruling R3). */
+export const slack = Number(process.env.THREADGARDEN_PERF_SLACK ?? 1);
 
 /** Opens the app and waits until the mock's whole history is indexed and listed. */
 export const openApp = async (page: Page): Promise<void> => {
@@ -85,7 +85,7 @@ type Armed = { trigger: 'click' | 'keydown'; done: DoneWhen | null };
  */
 const arm = (page: Page, a: Armed) =>
   page.evaluate(({ trigger, done }) => {
-    const w = window as unknown as { __pahubPerf?: Promise<number> };
+    const w = window as unknown as { __threadgardenPerf?: Promise<number> };
     const holds = (d: DoneWhen): boolean => {
       if (!document.querySelector(d.selector)) return false;
       if (!d.keys) return true;
@@ -96,7 +96,7 @@ const arm = (page: Page, a: Armed) =>
     };
     if (done && holds(done))
       throw new Error(`already done before the interaction: ${done.selector}`);
-    w.__pahubPerf = new Promise<number>((resolve, reject) => {
+    w.__threadgardenPerf = new Promise<number>((resolve, reject) => {
       let t0: number | null = null;
       const finish = () => {
         void document.documentElement.offsetHeight; // style + layout
@@ -142,7 +142,9 @@ const arm = (page: Page, a: Armed) =>
   }, a);
 
 const result = (page: Page): Promise<number> =>
-  page.evaluate(() => (window as unknown as { __pahubPerf: Promise<number> }).__pahubPerf);
+  page.evaluate(
+    () => (window as unknown as { __threadgardenPerf: Promise<number> }).__threadgardenPerf,
+  );
 
 /** Milliseconds from a real click to `done` (see `arm`). */
 export const timeClick = async (

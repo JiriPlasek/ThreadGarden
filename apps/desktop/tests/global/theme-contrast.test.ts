@@ -188,8 +188,8 @@ describe('theme contrast', () => {
     expect(outside).toEqual([]);
   });
 
-  it('prints the ratios when PAHUB_CONTRAST_REPORT is set', () => {
-    if (!process.env.PAHUB_CONTRAST_REPORT) return;
+  it('prints the ratios when THREADGARDEN_CONTRAST_REPORT is set', () => {
+    if (!process.env.THREADGARDEN_CONTRAST_REPORT) return;
     const header = ['theme', 'style', 'accent', ...TEXT_PAIRS.map(([f, b]) => `${f}/${b}`)];
     const rows = combos.map((c) => [c.theme, c.style, c.accent, ...measure(c).map((m) => m.ratio)]);
     console.log([header, ...rows].map((r) => r.join('\t')).join('\n'));

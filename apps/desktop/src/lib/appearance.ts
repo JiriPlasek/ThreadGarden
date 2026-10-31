@@ -55,7 +55,7 @@ export const applyAppearance = (
  * service answers: app.html applies it before the stylesheet's first paint
  * and SettingsState starts from it.
  */
-export const APPEARANCE_CACHE_KEY = 'pahub.appearance';
+export const APPEARANCE_CACHE_KEY = 'threadgarden.appearance';
 
 const storage = (): Storage | null => {
   try {

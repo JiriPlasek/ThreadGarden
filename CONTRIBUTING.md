@@ -41,7 +41,7 @@ The root [README](README.md#development) shows how to run the UI in a browser ag
 | Command                                         | What it runs                                                                                                                              |
 | ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
 | `pnpm test`                                     | Every package's unit and component tests (Vitest), then `pnpm test:perf`                                                                  |
-| `pnpm test:perf`                                | The service performance budgets, one file at a time; `PAHUB_PERF_SLACK` multiplies the budgets (CI uses 3)                                |
+| `pnpm test:perf`                                | The service performance budgets, one file at a time; `THREADGARDEN_PERF_SLACK` multiplies the budgets (CI uses 3)                         |
 | `pnpm test:e2e`                                 | Playwright smoke and UI budget specs in Chromium against the mock service (`pnpm --filter desktop exec playwright install chromium` once) |
 | `pnpm --filter <package> test`                  | One package's tests (`@threadgarden/protocol`, `@threadgarden/service`, `desktop`)                                                        |
 | `cargo test` in `apps/desktop/src-tauri`        | The Rust shell (build the UI first: `pnpm --filter desktop build`)                                                                        |

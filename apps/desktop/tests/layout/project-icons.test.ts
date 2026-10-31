@@ -26,7 +26,7 @@ const luminance = (hex: string): number => {
 
 describe('letter tiles', () => {
   it('use the first letter or digit of the name, upper-cased', () => {
-    expect(tileLetter('pahub')).toBe('P');
+    expect(tileLetter('threadgarden')).toBe('T');
     expect(tileLetter('.dotfiles')).toBe('D');
     expect(tileLetter('_tmp-1')).toBe('T');
     expect(tileLetter('42-things')).toBe('4');

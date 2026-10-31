@@ -11,7 +11,7 @@ import {
 
 let dir: string;
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'pahub-disc-'));
+  dir = await mkdtemp(join(tmpdir(), 'threadgarden-disc-'));
 });
 afterEach(async () => {
   await rm(dir, { recursive: true, force: true });

@@ -19,7 +19,7 @@ let svc: ServiceHandle | undefined;
 let client: TestClient | undefined;
 
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'pahub-titles-'));
+  dir = await mkdtemp(join(tmpdir(), 'threadgarden-titles-'));
 });
 afterEach(async () => {
   await client?.close();

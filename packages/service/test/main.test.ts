@@ -13,7 +13,7 @@ import { generateCorpus } from '../src/testing/corpus.js';
 
 let dir: string;
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'pahub-main-'));
+  dir = await mkdtemp(join(tmpdir(), 'threadgarden-main-'));
 });
 afterEach(async () => {
   await rm(dir, { recursive: true, force: true });

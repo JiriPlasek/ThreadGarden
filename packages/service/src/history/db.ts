@@ -33,10 +33,10 @@ export type SessionRow = {
   customTitle: string | null;
   pinned: boolean;
 } & BucketState &
-  PahubTitles;
+  ThreadgardenTitles;
 
 /** v1.2 C1: Threadgarden's own titles of a chat it started (see `chat/titles.ts`). */
-export type PahubTitles = {
+export type ThreadgardenTitles = {
   /** Provisional title from the first message. */
   autoTitle: string | null;
   /** The small model's title, after the first turn. */
@@ -160,7 +160,7 @@ const toSession = (r: Row): SessionRow => ({
   ...toTitles(r),
 });
 
-const toTitles = (r: Row | undefined): PahubTitles => ({
+const toTitles = (r: Row | undefined): ThreadgardenTitles => ({
   autoTitle: (r?.auto_title as string | null | undefined) ?? null,
   generatedTitle: (r?.generated_title as string | null | undefined) ?? null,
 });
@@ -709,7 +709,7 @@ export class Db implements LiveRegistry {
   /** A chat's pin, bucket and (v1.2 C1) Threadgarden-side titles, whether or not it is indexed. */
   metaOf(
     sessionId: string,
-  ): { pinned: boolean; customTitle: string | null } & BucketState & PahubTitles {
+  ): { pinned: boolean; customTitle: string | null } & BucketState & ThreadgardenTitles {
     const r = this.raw.prepare('SELECT * FROM chat_buckets WHERE session_id = ?').get(sessionId);
     const m = this.raw
       .prepare('SELECT custom_title, pinned FROM meta WHERE session_id = ?')

@@ -70,7 +70,7 @@ export type StartOptions = {
   adapter?: AgentAdapter;
   /** Claude Code's config dir (`CLAUDE_CONFIG_DIR` or `~/.claude`); read-only for Threadgarden. */
   claudeConfigDir?: string;
-  /** Overrides the session host as the source of pahub-owned chats for lists and the poller. */
+  /** Overrides the session host as the source of Threadgarden-owned chats for lists and the poller. */
   live?: { list(): LiveChat[] };
   /**
    * External sessions snapshot. Overrides the built-in poller's (tests, or a

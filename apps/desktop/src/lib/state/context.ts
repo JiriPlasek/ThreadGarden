@@ -35,7 +35,7 @@ export type AppState = {
   analytics: AnalyticsState;
 };
 
-export const APP_CONTEXT = Symbol('pahub.app');
+export const APP_CONTEXT = Symbol('threadgarden.app');
 
 const singletons: AppState = {
   connection,

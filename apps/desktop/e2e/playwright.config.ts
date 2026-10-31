@@ -7,7 +7,7 @@ import { MOCK_PORT, MOCK_TOKEN, UI_PORT } from './env';
  * 1,000 sessions and a scripted fake Claude Code. `pnpm --filter desktop test:e2e`.
  *
  * The UI is a production build served by `vite preview`, built into
- * `build-e2e/` with the mock's address baked in (`VITE_PAHUB_MOCK_*`), so
+ * `build-e2e/` with the mock's address baked in (`VITE_THREADGARDEN_MOCK_*`), so
  * `build/` (what Tauri embeds) is left alone. Fixed port and token, so the
  * build and the mock agree.
  */
@@ -35,7 +35,7 @@ export default defineConfig({
   webServer: [
     {
       command: 'pnpm --filter @threadgarden/service mock',
-      env: { PAHUB_MOCK_PORT: String(MOCK_PORT), PAHUB_MOCK_TOKEN: MOCK_TOKEN },
+      env: { THREADGARDEN_MOCK_PORT: String(MOCK_PORT), THREADGARDEN_MOCK_TOKEN: MOCK_TOKEN },
       // The mock answers plain HTTP with 426 (WebSocket only); the port opening is the signal.
       port: MOCK_PORT,
       reuseExistingServer: false,
@@ -46,9 +46,9 @@ export default defineConfig({
       command: `pnpm build && pnpm exec vite preview --host 127.0.0.1 --port ${UI_PORT} --strictPort`,
       cwd: '..',
       env: {
-        VITE_PAHUB_MOCK_URL: `ws://127.0.0.1:${MOCK_PORT}`,
-        VITE_PAHUB_MOCK_TOKEN: MOCK_TOKEN,
-        PAHUB_UI_OUT: 'build-e2e',
+        VITE_THREADGARDEN_MOCK_URL: `ws://127.0.0.1:${MOCK_PORT}`,
+        VITE_THREADGARDEN_MOCK_TOKEN: MOCK_TOKEN,
+        THREADGARDEN_UI_OUT: 'build-e2e',
       },
       url: UI_URL,
       reuseExistingServer: false,

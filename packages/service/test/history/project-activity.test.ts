@@ -215,7 +215,7 @@ describe('FolderCheck', () => {
   });
 
   it('volumeOf names drive letters, UNC shares and POSIX mount points', () => {
-    expect(volumeOf('C:\\work\\pahub')).toBe('c:');
+    expect(volumeOf('C:\\work\\threadgarden')).toBe('c:');
     expect(volumeOf('\\\\NAS\\Work\\repo')).toBe('//nas/work');
     expect(volumeOf('//nas/work/repo')).toBe('//nas/work');
     expect(volumeOf('/mnt/nas/repo')).toBe('/mnt/nas');
@@ -234,7 +234,7 @@ describe('FolderCheck', () => {
   });
 
   it('the default stat tells directories from missing paths', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'pahub-folders-'));
+    const dir = await mkdtemp(join(tmpdir(), 'threadgarden-folders-'));
     try {
       expect(await folderExists(dir)).toBe(true);
       expect(await folderExists(join(dir, 'nope'))).toBe(false);

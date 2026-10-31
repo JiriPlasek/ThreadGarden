@@ -154,11 +154,11 @@ pnpm format        # Prettier
 - **Mock service:** `pnpm --filter @threadgarden/service mock` starts the real service over a synthetic history (1,000 sessions, 50 projects) with a scripted fake Claude Code, in temp dirs, and prints its port and token. A message containing "perm", "ask" or "plan" raises a permission request, a question or a plan approval; "limit" makes the mock account hit its usage limit for two minutes. Nothing touches your real history.
 - **UI in a browser against the mock:**
   ```sh
-  PAHUB_MOCK_PORT=7357 PAHUB_MOCK_TOKEN=dev pnpm --filter @threadgarden/service mock
-  VITE_PAHUB_MOCK_URL=ws://127.0.0.1:7357 VITE_PAHUB_MOCK_TOKEN=dev pnpm --filter desktop dev
+  THREADGARDEN_MOCK_PORT=7357 THREADGARDEN_MOCK_TOKEN=dev pnpm --filter @threadgarden/service mock
+  VITE_THREADGARDEN_MOCK_URL=ws://127.0.0.1:7357 VITE_THREADGARDEN_MOCK_TOKEN=dev pnpm --filter desktop dev
   ```
   (On Windows PowerShell set the variables with `$env:NAME = 'value'` first.)
-- **Performance budgets:** `pnpm test:perf` (part of `pnpm test`) runs the service budget tests one file at a time. `PAHUB_PERF_SLACK` multiplies every budget (default 1; CI uses 3, since the budgets are set for a developer machine).
+- **Performance budgets:** `pnpm test:perf` (part of `pnpm test`) runs the service budget tests one file at a time. `THREADGARDEN_PERF_SLACK` multiplies every budget (default 1; CI uses 3, since the budgets are set for a developer machine).
 - **End-to-end and UI performance:** `pnpm test:e2e` runs the Playwright specs in Chromium against the mock service (a smoke flow and the UI budgets: tab switch, history chat open, Ctrl+K, composer keystroke). Install the browser once with `pnpm --filter desktop exec playwright install chromium`.
 - **Rust:** in `apps/desktop/src-tauri`, `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test` (build the UI first with `pnpm --filter desktop build`).
 - **Real Claude Code suite:** `pnpm --filter @threadgarden/service test:real` runs the service against your installed `claude` and your login, in throwaway git repos with tiny prompts (a handful of short turns on your account). It is opt-in and never runs in CI. It also checks that nothing under your Claude config dir changed, apart from what your other running Claude Code sessions wrote meanwhile.

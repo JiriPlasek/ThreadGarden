@@ -546,7 +546,7 @@ The budgets in §8 are requirements. The techniques that meet them:
 Automated tests enforce the budgets: `pnpm test:perf` for the service, over a
 synthetic corpus of 1,000 sessions in 50 projects with one 2,000-message
 session, and `pnpm test:e2e` for the UI in Chromium against the mock service.
-CI runs them with `PAHUB_PERF_SLACK=3`. Measured on the development machine
+CI runs them with `THREADGARDEN_PERF_SLACK=3`. Measured on the development machine
 (Windows 11) with slack 1:
 
 | What | Budget | Measured |

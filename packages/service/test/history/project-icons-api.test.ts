@@ -38,7 +38,7 @@ const setup = (o: { missing?: string[]; icons?: { get: () => Promise<string | nu
 
 describe('projects.icon', () => {
   it("answers the icon found in the project's folder", async () => {
-    const root = mkdtempSync(path.join(tmpdir(), 'pahub-icon-api-'));
+    const root = mkdtempSync(path.join(tmpdir(), 'threadgarden-icon-api-'));
     dirs.push(root);
     writeFileSync(path.join(root, 'favicon.ico'), ICO);
     const t = setup();
@@ -49,7 +49,7 @@ describe('projects.icon', () => {
   });
 
   it('answers null for a project without an icon', async () => {
-    const root = mkdtempSync(path.join(tmpdir(), 'pahub-icon-api-'));
+    const root = mkdtempSync(path.join(tmpdir(), 'threadgarden-icon-api-'));
     dirs.push(root);
     const t = setup();
     t.db.upsertProject({ projectId: 'p', path: root, displayName: 'p' });

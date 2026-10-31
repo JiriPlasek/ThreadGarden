@@ -3,7 +3,7 @@
  * Settings dialog changes the tokens at once, without a reload, and the
  * next start paints with it before the service answers.
  *
- * `PAHUB_E2E_SHOTS=<dir>` also saves screenshots of a few combinations there.
+ * `THREADGARDEN_E2E_SHOTS=<dir>` also saves screenshots of a few combinations there.
  */
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { openApp, resetTabs, serviceCall } from './helpers';
@@ -90,7 +90,7 @@ test('a saved accent and dark style apply at once and on the next start', async 
   expect(early).toEqual({ theme: 'dark', accent: 'teal' });
 });
 
-const SHOTS = process.env.PAHUB_E2E_SHOTS;
+const SHOTS = process.env.THREADGARDEN_E2E_SHOTS;
 const COMBOS = [
   { theme: 'light', accent: 'graphite', lightStyle: 'default', darkStyle: 'default' },
   { theme: 'light', accent: 'blue', lightStyle: 'warm', darkStyle: 'default' },
@@ -101,7 +101,7 @@ const COMBOS = [
 ] as const;
 
 test('screenshots of a few combinations', async ({ page }) => {
-  test.skip(!SHOTS, 'set PAHUB_E2E_SHOTS to a directory to take them');
+  test.skip(!SHOTS, 'set THREADGARDEN_E2E_SHOTS to a directory to take them');
   for (const c of COMBOS) {
     await serviceCall('settings.set', { ...DEFAULTS, ...c });
     await openApp(page);

@@ -6,7 +6,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { MAX_ICON_BYTES, ProjectIcons } from '../../src/history/project-icons.js';
 import { slack } from './perf-helpers.js';
 
-const root = mkdtempSync(path.join(tmpdir(), 'pahub-icons-perf-'));
+const root = mkdtempSync(path.join(tmpdir(), 'threadgarden-icons-perf-'));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 
 const put = (rel: string, body: string | Buffer): void => {

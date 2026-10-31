@@ -21,7 +21,7 @@ afterAll(async () => {
 
 describe('service memory', () => {
   it('idle RSS ≤ 150 MB after indexing 1,000 sessions', async () => {
-    dir = await mkdtemp(join(tmpdir(), 'pahub-perf-bundle-'));
+    dir = await mkdtemp(join(tmpdir(), 'threadgarden-perf-bundle-'));
     const outfile = join(dir, 'idle-service.mjs');
     // The same esbuild options as scripts/build.mjs.
     await build({

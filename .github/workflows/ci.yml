@@ -13,7 +13,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       # Perf budgets are measured on the owner's machine; CI runners get 3x slack (Ruling R3).
-      PAHUB_PERF_SLACK: 3
+      THREADGARDEN_PERF_SLACK: 3
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -76,7 +76,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     env:
-      PAHUB_PERF_SLACK: 3
+      THREADGARDEN_PERF_SLACK: 3
     steps:
       - uses: actions/checkout@v4
       - name: Install Tauri system dependencies

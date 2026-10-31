@@ -21,7 +21,7 @@ export const SCALES: readonly number[] = Array.from(
 );
 
 /** Kept in `localStorage` too, so the next start can apply it before the service answers. */
-const CACHE_KEY = 'pahub.interface.scale';
+const CACHE_KEY = 'threadgarden.interface.scale';
 
 /** Rounds to a 10 % step within [80 %, 150 %]; anything that is not a number is 100 %. */
 export const clampScale = (scale: number): number => {

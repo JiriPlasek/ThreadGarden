@@ -1,7 +1,7 @@
 /**
  * Spec §8 UI budgets, measured in the page (see `helpers.ts`): from the real
  * click or key event to the DOM showing the result, plus a style and layout
- * pass. Budgets are multiplied by `PAHUB_PERF_SLACK` (CI: 3, ruling R3).
+ * pass. Budgets are multiplied by `THREADGARDEN_PERF_SLACK` (CI: 3, ruling R3).
  */
 import { expect, test, type Page } from '@playwright/test';
 import {

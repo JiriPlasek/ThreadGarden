@@ -21,7 +21,7 @@ import {
 
 const dirs: string[] = [];
 const tmp = (): string => {
-  const d = mkdtempSync(path.join(tmpdir(), 'pahub-icons-'));
+  const d = mkdtempSync(path.join(tmpdir(), 'threadgarden-icons-'));
   dirs.push(d);
   return d;
 };
@@ -60,7 +60,7 @@ const found = async (root: string): Promise<string | null> => {
 
 /** Whether this machine lets the test create symlinks and read through them. */
 const symlinksWork = ((): boolean => {
-  const d = mkdtempSync(path.join(tmpdir(), 'pahub-icons-link-'));
+  const d = mkdtempSync(path.join(tmpdir(), 'threadgarden-icons-link-'));
   try {
     writeFileSync(path.join(d, 'a'), 'a');
     symlinkSync(path.join(d, 'a'), path.join(d, 'b'));

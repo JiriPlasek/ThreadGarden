@@ -115,8 +115,8 @@ describe('buildSessionEnv', () => {
     expect(buildSessionEnv({ ANTHROPIC_API_KEY: 'from-shell' }, null)).toEqual({
       ANTHROPIC_API_KEY: 'from-shell',
     });
-    expect(buildSessionEnv({ ANTHROPIC_API_KEY: 'from-shell' }, 'pahub')).toEqual({
-      ANTHROPIC_API_KEY: 'pahub',
+    expect(buildSessionEnv({ ANTHROPIC_API_KEY: 'from-shell' }, 'threadgarden')).toEqual({
+      ANTHROPIC_API_KEY: 'threadgarden',
     });
   });
 });

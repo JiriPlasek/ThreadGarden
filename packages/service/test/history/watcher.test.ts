@@ -7,7 +7,7 @@ import { watchProjects } from '../../src/history/watcher.js';
 
 let dir: string;
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'pahub-watch-'));
+  dir = await mkdtemp(join(tmpdir(), 'threadgarden-watch-'));
 });
 afterEach(async () => {
   vi.restoreAllMocks();

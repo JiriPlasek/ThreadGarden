@@ -2,7 +2,7 @@
  * Native (Tauri) features behind one module. Inside the Tauri webview every
  * function calls a Rust command or plugin; in a plain browser (tests, UI work
  * against the mock service) harmless stubs stand in, and the service
- * connection comes from `VITE_PAHUB_MOCK_URL` / `VITE_PAHUB_MOCK_TOKEN`.
+ * connection comes from `VITE_THREADGARDEN_MOCK_URL` / `VITE_THREADGARDEN_MOCK_TOKEN`.
  */
 import { invoke, isTauri as detectTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -26,16 +26,16 @@ export type TrayEvent = 'stop-all' | 'quit-all';
 export const isTauri: boolean = detectTauri();
 
 const mockConnection = (): ServiceConnection => {
-  const url = import.meta.env.VITE_PAHUB_MOCK_URL as string | undefined;
-  const token = import.meta.env.VITE_PAHUB_MOCK_TOKEN as string | undefined;
+  const url = import.meta.env.VITE_THREADGARDEN_MOCK_URL as string | undefined;
+  const token = import.meta.env.VITE_THREADGARDEN_MOCK_TOKEN as string | undefined;
   if (!url || !token) {
     throw new Error(
-      'No Threadgarden service outside the desktop app: set VITE_PAHUB_MOCK_URL and VITE_PAHUB_MOCK_TOKEN (see `pnpm --filter @threadgarden/service mock`)',
+      'No Threadgarden service outside the desktop app: set VITE_THREADGARDEN_MOCK_URL and VITE_THREADGARDEN_MOCK_TOKEN (see `pnpm --filter @threadgarden/service mock`)',
     );
   }
   const port = Number(new URL(url).port);
   if (!Number.isInteger(port) || port <= 0)
-    throw new Error(`VITE_PAHUB_MOCK_URL has no port: ${url}`);
+    throw new Error(`VITE_THREADGARDEN_MOCK_URL has no port: ${url}`);
   // The mock service is not paired with an app build: report the app's own version for both.
   return { port, token, serviceVersion: pkg.version, appVersion: pkg.version };
 };

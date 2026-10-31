@@ -33,8 +33,8 @@
  * `CLAUDE_CONFIG_DIR`), removed on exit. The mock's fake Claude Code writes a
  * placeholder transcript per chat into that fixture, like the real CLI, so the
  * watcher and indexer pick new chats up. On start it prints the discovery
- * record (port, token, …) as one JSON line on stdout. `PAHUB_MOCK_PORT` and
- * `PAHUB_MOCK_TOKEN` (or `--port` / `--token`) fix the port and token.
+ * record (port, token, …) as one JSON line on stdout. `THREADGARDEN_MOCK_PORT` and
+ * `THREADGARDEN_MOCK_TOKEN` (or `--port` / `--token`) fix the port and token.
  */
 import { randomUUID } from 'node:crypto';
 import { appendFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -790,7 +790,7 @@ const writeMockIcons = async (root: string): Promise<Map<string, string>> => {
 
 /** Starts the mock service; its temp dirs are removed when it closes. */
 export const startMockService = async (o: MockOptions = {}): Promise<MockService> => {
-  const root = await mkdtemp(join(tmpdir(), 'pahub-mock-'));
+  const root = await mkdtemp(join(tmpdir(), 'threadgarden-mock-'));
   const dataDir = join(root, 'data');
   const claudeDir = join(root, 'claude');
   await mkdir(join(claudeDir, 'projects'), { recursive: true });
@@ -879,13 +879,13 @@ const isEntry = (): boolean =>
   process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
 
 if (isEntry()) {
-  const portText = option('port', 'PAHUB_MOCK_PORT');
+  const portText = option('port', 'THREADGARDEN_MOCK_PORT');
   const port = portText === undefined ? undefined : Number(portText);
   if (port !== undefined && !(Number.isInteger(port) && port >= 0 && port < 65536)) {
     process.stderr.write(`Invalid port: ${portText}\n`);
     process.exit(1);
   }
-  const token = option('token', 'PAHUB_MOCK_TOKEN');
+  const token = option('token', 'THREADGARDEN_MOCK_TOKEN');
   startMockService({
     ...(port === undefined ? {} : { port }),
     ...(token === undefined ? {} : { token }),

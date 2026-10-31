@@ -13,7 +13,7 @@ import { generateCorpus } from '../../../src/testing/corpus.js';
 const SESSIONS = 1000;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-const dir = await mkdtemp(join(tmpdir(), 'pahub-perf-rss-'));
+const dir = await mkdtemp(join(tmpdir(), 'threadgarden-perf-rss-'));
 const svc = await startService({
   dataDir: join(dir, 'data'),
   claudeConfigDir: join(dir, 'claude'),

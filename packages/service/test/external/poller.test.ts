@@ -107,7 +107,7 @@ describe('ExternalPoller', () => {
     poller.stop();
   });
 
-  it('filters pahub-owned sessions', async () => {
+  it('filters Threadgarden-owned sessions', async () => {
     const { poller } = make(async () => JSON.stringify(SAMPLE), ['525ce1a7']);
     await poller.refresh();
     expect(poller.snapshot().map((e) => e.sessionId)).toEqual(['979fd9f6-4f60', undefined]);

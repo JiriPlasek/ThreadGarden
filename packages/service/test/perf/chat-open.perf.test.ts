@@ -23,7 +23,7 @@ const call = async <T>(method: string, params: unknown): Promise<T> => {
 };
 
 beforeAll(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'pahub-perf-open-'));
+  dir = await mkdtemp(join(tmpdir(), 'threadgarden-perf-open-'));
   svc = await startService({
     dataDir: join(dir, 'data'),
     claudeConfigDir: join(dir, 'claude'),

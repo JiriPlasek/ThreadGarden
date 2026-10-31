@@ -15,7 +15,7 @@ import {
 
 let dir: string;
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'pahub-routing-'));
+  dir = await mkdtemp(join(tmpdir(), 'threadgarden-routing-'));
 });
 afterEach(async () => {
   await rm(dir, { recursive: true, force: true });

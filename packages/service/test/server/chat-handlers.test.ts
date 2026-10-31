@@ -15,7 +15,7 @@ let dir: string;
 let svc: ServiceHandle | undefined;
 
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'pahub-chat-'));
+  dir = await mkdtemp(join(tmpdir(), 'threadgarden-chat-'));
 });
 afterEach(async () => {
   await svc?.close();

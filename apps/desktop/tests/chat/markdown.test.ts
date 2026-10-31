@@ -101,7 +101,7 @@ describe('markdown', () => {
     expect(renderMarkdown('```ts\nx\n```')).toMatch(/<button[^>]*data-copy-code/);
     expect(renderMarkdown('<button data-copy-code>x</button>')).not.toContain('<button');
     // A guessed placeholder cannot smuggle code-block html in.
-    expect(renderMarkdown('<pre>PAHUB-CODE-0</pre>')).not.toContain('code-block');
+    expect(renderMarkdown('<pre>THREADGARDEN-CODE-0</pre>')).not.toContain('code-block');
   });
 
   it('never leaves code blocks or other block content inside a link', () => {
@@ -125,7 +125,7 @@ describe('markdown', () => {
       '<select>\n\n```ts\nx\n```\n\n</select>',
       '<table><tr>\n\n```\nx\n```\n\n</tr></table>',
     ]) {
-      expect(renderMarkdown(md)).not.toContain('PAHUB-CODE');
+      expect(renderMarkdown(md)).not.toContain('THREADGARDEN-CODE');
     }
   });
 

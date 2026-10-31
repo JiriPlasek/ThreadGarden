@@ -116,7 +116,7 @@ const range = (from: number, to: number) =>
 
 describe('buckets: migration', () => {
   it('upgrades an existing v1.1 database; existing chats are active, titles and pins kept', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'pahub-buckets-'));
+    const dir = await mkdtemp(join(tmpdir(), 'threadgarden-buckets-'));
     try {
       const file = join(dir, 'pahub.db');
       const raw = new DatabaseSync(file);
@@ -589,7 +589,7 @@ describe('buckets: chat.archiveOlder', () => {
 
 describe('buckets: persistence', () => {
   it('buckets, holds and back-from-hold survive a restart', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'pahub-buckets-'));
+    const dir = await mkdtemp(join(tmpdir(), 'threadgarden-buckets-'));
     try {
       const file = join(dir, 'pahub.db');
       const first = await setup(12, 3, openDb(file));

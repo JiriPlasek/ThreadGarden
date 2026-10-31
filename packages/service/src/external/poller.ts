@@ -139,7 +139,7 @@ export class ExternalPoller {
     this.schedule(v ? 0 : POLL_HIDDEN_MS);
   }
 
-  /** The sessions running outside Threadgarden (pahub-owned ids excluded). */
+  /** The sessions running outside Threadgarden (Threadgarden-owned ids excluded). */
   snapshot(): ExternalSession[] {
     return this.list.slice();
   }
@@ -201,7 +201,7 @@ export class ExternalPoller {
   }
 
   /**
-   * Runs `claude agents`; pahub-owned sessions are left out. Rejects when
+   * Runs `claude agents`; Threadgarden-owned sessions are left out. Rejects when
    * unusable. Threadgarden's own ids are read once the answer is in, so a session
    * Threadgarden started while the command ran (a chat, a title query) is left out too.
    */

@@ -18,7 +18,7 @@ let svc: ServiceHandle | undefined;
 let client: TestClient | undefined;
 
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'pahub-analytics-'));
+  dir = await mkdtemp(join(tmpdir(), 'threadgarden-analytics-'));
 });
 afterEach(async () => {
   await client?.close();

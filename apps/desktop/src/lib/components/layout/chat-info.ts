@@ -21,4 +21,4 @@ export const externalLabel = (s: Pick<ChatSummary, 'external'>): string =>
 export const tabId = (sessionId: string): string => `tab-${sessionId}`;
 
 /** DOM id of the Analytics tab (v1.3); no session id has this form. */
-export const ANALYTICS_TAB_ID = 'tab-pahub-analytics';
+export const ANALYTICS_TAB_ID = 'tab-threadgarden-analytics';

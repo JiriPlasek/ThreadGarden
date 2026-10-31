@@ -91,7 +91,7 @@ describe('Db turn state', () => {
   });
 
   it('persists across a restart (same pahub.db file)', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'pahub-turns-'));
+    const dir = await mkdtemp(join(tmpdir(), 'threadgarden-turns-'));
     try {
       const file = join(dir, 'pahub.db');
       let db = openDb(file);
@@ -182,7 +182,7 @@ describe('catalog: unread chats and the Needs you place', () => {
   });
 
   it('unread state survives a restart', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'pahub-turns-'));
+    const dir = await mkdtemp(join(tmpdir(), 'threadgarden-turns-'));
     try {
       const file = join(dir, 'pahub.db');
       const first = await setup(12, 3, openDb(file));

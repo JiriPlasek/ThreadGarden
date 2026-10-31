@@ -75,7 +75,7 @@ describe('chat list interaction', () => {
     expect(server.calls('meta.update')[0]!.params).toEqual({ sessionId: 'a', pinned: true });
   });
 
-  it('rename sets a pahub-only title through meta.update', async () => {
+  it('rename sets a Threadgarden-only title through meta.update', async () => {
     const { server, context } = await setup((server) => {
       server.handlers['sessions.list'] = () => ({ items: [summary('a', { title: 'old' })] });
       server.handlers['meta.update'] = () => ({});

@@ -17,7 +17,7 @@ let dir: string;
 const open: { svc: ServiceHandle[]; clients: TestClient[] } = { svc: [], clients: [] };
 
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'pahub-e2e-'));
+  dir = await mkdtemp(join(tmpdir(), 'threadgarden-e2e-'));
 });
 afterEach(async () => {
   for (const c of open.clients.splice(0)) await c.close();
