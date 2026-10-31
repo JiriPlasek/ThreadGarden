@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { AnalyticsRangeSchema, AnalyticsSchema } from './analytics.js';
 import {
   BucketSchema,
   ChatHeaderInfoSchema,
@@ -251,6 +252,15 @@ export const methods = {
       dryRun: z.boolean().optional(),
     }),
     z.object({ archived: z.number() }),
+  ),
+  // ── v1.3 C: analytics ─────────────────────────────────────────────────────
+  /**
+   * Usage statistics of the range, for one project or all, aggregated in SQL
+   * from pahub's own per-session statistics (design §4).
+   */
+  'analytics.get': def(
+    z.object({ range: AnalyticsRangeSchema, projectId: z.string().optional() }),
+    AnalyticsSchema,
   ),
 } as const;
 

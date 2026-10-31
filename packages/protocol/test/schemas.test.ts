@@ -120,6 +120,8 @@ describe('protocol schemas', () => {
       // v1.2 B1: buckets
       'chat.setBucket',
       'chat.archiveOlder',
+      // v1.3 C: analytics
+      'analytics.get',
     ];
     expect(Object.keys(methods).sort()).toEqual([...expected].sort());
     for (const name of expected) {
@@ -396,6 +398,55 @@ describe('protocol schemas', () => {
         autoTitles: false,
       });
       expect(SettingsPatchSchema.safeParse({ autoTitles: 'yes' }).success).toBe(false);
+    });
+  });
+
+  // ── v1.3 C: analytics ─────────────────────────────────────────────────────
+
+  describe('v1.3 analytics', () => {
+    const sample = {
+      range: '7d',
+      from: '2026-10-25',
+      to: '2026-10-31',
+      bucket: 'day',
+      kpis: {
+        chats: 2,
+        messages: 9,
+        outputTokens: 1200,
+        activeDays: 1,
+        busiestProject: { projectId: '/w/a', name: 'a', messages: 9 },
+      },
+      activity: [{ day: '2026-10-31', messages: 9, chatsStarted: 2 }],
+      tokens: {
+        models: ['claude-sonnet'],
+        days: [{ day: '2026-10-31', values: [1200] }],
+        totals: [
+          { model: 'claude-sonnet', input: 5, output: 1200, cacheRead: 9, cacheCreation: 1 },
+        ],
+      },
+      projects: [{ projectId: '/w/a', name: 'a', messages: 9, chats: 2 }],
+      tools: [{ name: 'Read', calls: 3 }],
+      agents: [{ type: 'Explore', calls: 1 }],
+      heatmap: Array.from({ length: 7 }, () => Array<number>(24).fill(0)),
+      topics: [{ word: 'indexer', chats: 2 }],
+      pending: 0,
+    };
+
+    it('analytics.get takes a range and an optional project', () => {
+      const p = methods['analytics.get'].params;
+      expect(p.parse({ range: '30d' })).toEqual({ range: '30d' });
+      expect(p.parse({ range: 'all', projectId: '/w/a' }).projectId).toBe('/w/a');
+      expect(p.safeParse({ range: '14d' }).success).toBe(false);
+      expect(p.safeParse({}).success).toBe(false);
+    });
+
+    it('analytics.get results carry every series; a range without a busiest project is valid', () => {
+      const r = methods['analytics.get'].result;
+      expect(r.parse(sample)).toEqual(sample);
+      const empty = { ...sample, kpis: { ...sample.kpis, busiestProject: null } };
+      expect(r.safeParse(empty).success).toBe(true);
+      expect(r.safeParse({ ...sample, bucket: 'month' }).success).toBe(false);
+      expect(r.safeParse({ ...sample, pending: -1 }).success).toBe(false);
     });
   });
 });
