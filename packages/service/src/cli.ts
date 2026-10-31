@@ -29,10 +29,10 @@ export type Command =
 
 export const NOT_RUNNING =
   'Threadgarden is not running. Start it with: systemctl --user start threadgarden';
-const NOT_LISTENING =
-  'Threadgarden is not listening for devices on this machine. It does when it runs headless ' +
-  '(threadgarden serve --headless) and has a private network address at start; ' +
-  'see journalctl --user -u threadgarden';
+/** The headless listener checks the machine's addresses every minute (main.ts). */
+export const NOT_LISTENING =
+  'Not listening for devices: no private network address yet. Threadgarden checks ' +
+  'again every minute; see ~/.local/share/threadgarden/logs/service.log.';
 
 export const USAGE = `Usage: threadgarden <command>
 
@@ -226,15 +226,18 @@ const runCommand = async (
 ): Promise<number> => {
   switch (cmd.kind) {
     case 'pair': {
-      const [address] = listenAddresses(discovery);
-      if (address === undefined) {
+      const port = discovery.remotePort;
+      const addresses = port === undefined ? [] : (discovery.remoteAddresses ?? []);
+      if (port === undefined || addresses.length === 0) {
         out(NOT_LISTENING);
         return 1;
       }
       const machine = await call('machine.get', {});
       const { code } = await call('pairing.create', {});
       out(`Pairing code: ${code} (valid for ${PAIRING_CODE_TTL_MS / 60_000} minutes)`);
-      out(`Address: ${address}`);
+      // Every one: the first may be docker0's or a VPN's; the owner picks the one they reach.
+      for (const address of addresses) out(`Address: ${address}`);
+      out(`Port: ${port}`);
       out(`Name: ${machine.name}`);
       return 0;
     }

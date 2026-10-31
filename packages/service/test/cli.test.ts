@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PROTOCOL_VERSION } from '@threadgarden/protocol';
-import { NOT_RUNNING, parseArgs, runCli, type Command } from '../src/cli.js';
+import { NOT_LISTENING, NOT_RUNNING, parseArgs, runCli, type Command } from '../src/cli.js';
 import { writeDiscovery } from '../src/discovery.js';
 import { startService, type ServiceHandle } from '../src/main.js';
 import { generateCorpus } from '../src/testing/corpus.js';
@@ -105,7 +105,8 @@ describe('runCli', () => {
       adapter: generateCorpus({ sessions: 1, projects: 1, bigSessionMessages: 0 }),
       installSignalHandlers: false,
       headless: true,
-      remote: { addresses: ['127.0.0.1'], port: 0 },
+      // Two addresses: `pair` lists every one (the first may be docker0 or a VPN's).
+      remote: { addresses: ['127.0.0.1', '::1'], port: 0 },
     });
   });
   afterAll(async () => {
@@ -113,7 +114,7 @@ describe('runCli', () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  it('shows a pairing code, the address and the name', async () => {
+  it('shows a pairing code, every address, the port and the name', async () => {
     expect(await run({ kind: 'pair' })).toBe(0);
     expect(lines.join('\n')).toMatch(
       /Pairing code: [A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4} \(valid for 5 minutes\)/,
@@ -123,7 +124,9 @@ describe('runCli', () => {
       { clientId: 't', origin: 'local' },
     )) as { result: { name: string } };
     expect(lines.slice(1)).toEqual([
-      `Address: 127.0.0.1:${svc.remote!.port}`,
+      'Address: 127.0.0.1',
+      'Address: ::1',
+      `Port: ${svc.remote!.port}`,
       `Name: ${name.result.name}`,
     ]);
   });
@@ -231,8 +234,12 @@ describe('runCli', () => {
     const plain = await startService({ dataDir: local, installSignalHandlers: false });
     try {
       expect(await run({ kind: 'pair' }, local)).toBe(1);
-      expect(lines.join('\n')).toMatch(/not listening for devices/);
-      expect(lines.join('\n')).not.toMatch(/Pairing code/);
+      expect(lines).toEqual([NOT_LISTENING]);
+      // The listener re-checks the addresses every minute and logs to the service log.
+      expect(NOT_LISTENING).toBe(
+        'Not listening for devices: no private network address yet. Threadgarden checks ' +
+          'again every minute; see ~/.local/share/threadgarden/logs/service.log.',
+      );
     } finally {
       await plain.close();
     }
