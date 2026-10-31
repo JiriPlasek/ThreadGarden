@@ -6,6 +6,20 @@ import { defineConfig } from 'vitest/config';
 // Tauri serves the static build; `tauri dev` loads the Vite dev server on this fixed port.
 const DEV_PORT = 1420;
 
+/**
+ * `THREADGARDEN_API_KEY_ONLY=1` makes an API-key-only build (spec §5.5); the
+ * legacy `PAHUB_API_KEY_ONLY=1` still does for one release (spec v1.3 §9).
+ */
+const apiKeyOnlyBuild = (): boolean => {
+  const legacy = process.env.PAHUB_API_KEY_ONLY;
+  if (legacy) {
+    console.warn(
+      'PAHUB_API_KEY_ONLY is deprecated and will be ignored in a later release: set THREADGARDEN_API_KEY_ONLY instead',
+    );
+  }
+  return process.env.THREADGARDEN_API_KEY_ONLY === '1' || legacy === '1';
+};
+
 export default defineConfig({
   plugins: [
     tailwindcss(),
@@ -26,7 +40,7 @@ export default defineConfig({
   ],
   // Build flags (see src/lib/build-flags.ts): baked in at build time.
   define: {
-    __PAHUB_API_KEY_ONLY__: JSON.stringify(process.env.PAHUB_API_KEY_ONLY === '1'),
+    __THREADGARDEN_API_KEY_ONLY__: JSON.stringify(apiKeyOnlyBuild()),
   },
   clearScreen: false,
   server: {

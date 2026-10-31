@@ -20,6 +20,13 @@ const logger = createLogger(dataDir);
 // Installed first, so even a failure during startup is logged rather than fatal.
 installCrashGuards(process, { log: logger, exit: (code) => process.exit(code) });
 if (deprecation) logger.warn(deprecation);
+// Spec v1.3 §9: the build flag's old name, honoured for one release (a bundle has it folded in).
+const legacyApiKeyOnly = process.env.PAHUB_API_KEY_ONLY;
+if (legacyApiKeyOnly) {
+  logger.warn(
+    'PAHUB_API_KEY_ONLY is deprecated and will be ignored in a later release: set THREADGARDEN_API_KEY_ONLY instead',
+  );
+}
 
 startService({
   dataDir,
@@ -31,7 +38,7 @@ startService({
   logger,
   // Spec §5.5. `scripts/build.mjs` bakes the build-time value into the bundle,
   // so a release build's policy cannot be changed through the environment.
-  apiKeyOnly: process.env.PAHUB_API_KEY_ONLY === '1',
+  apiKeyOnly: process.env.THREADGARDEN_API_KEY_ONLY === '1' || legacyApiKeyOnly === '1',
 })
   .then((svc) => svc.onClosed(() => process.exit(0)))
   .catch(async (err: unknown) => {
