@@ -36,6 +36,10 @@ export class ProjectIconsState {
   /** The project's icon as a data URL; null while unknown or when it has none. */
   url = (projectId: string): string | null => this.urls.get(projectId) ?? null;
 
+  /** The icon was asked for (answered or in flight); staleness is `revalidate`'s job. */
+  asked = (projectId: string): boolean =>
+    this.inflight.has(projectId) || this.answeredAt.has(projectId);
+
   /** Asks for the project's icon unless it is known and fresh, asked for, or failed just now. */
   want = (projectId: string): void => {
     this.wanted.add(projectId);

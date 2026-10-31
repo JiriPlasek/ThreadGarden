@@ -37,3 +37,33 @@ export const tileLetter = (displayName: string): string => {
   const ch = Array.from(base).find((c) => /[\p{L}\p{N}]/u.test(c));
   return ch ? ch.toLocaleUpperCase() : '?';
 };
+
+/** Element → what to run once it is on screen; one observer serves every icon. */
+const pending = new Map<Element, () => void>();
+let observer: IntersectionObserver | null = null;
+
+/**
+ * Runs `cb` once `node` is on screen (at once where IntersectionObserver is
+ * missing) and returns the cleanup. One shared observer, so twenty new
+ * quick-switcher rows do not create twenty observers per keystroke.
+ */
+export const whenVisible = (node: Element, cb: () => void): (() => void) => {
+  if (typeof IntersectionObserver === 'undefined') {
+    cb();
+    return () => {};
+  }
+  observer ??= new IntersectionObserver((entries) => {
+    for (const e of entries) {
+      if (!e.isIntersecting) continue;
+      const run = pending.get(e.target);
+      pending.delete(e.target);
+      observer?.unobserve(e.target);
+      run?.();
+    }
+  });
+  pending.set(node, cb);
+  observer.observe(node);
+  return () => {
+    if (pending.delete(node)) observer?.unobserve(node);
+  };
+};

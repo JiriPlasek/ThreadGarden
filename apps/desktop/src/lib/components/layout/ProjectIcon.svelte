@@ -1,7 +1,7 @@
 <script lang="ts">
   import { useApp } from '#lib/state/context.js';
   import { cn } from '#lib/utils.js';
-  import { tileColor, tileLetter } from './project-icon';
+  import { tileColor, tileLetter, whenVisible } from './project-icon';
 
   /**
    * A project's icon (v1.3 §5): its favicon as a rounded image at the row-icon
@@ -26,18 +26,9 @@
   $effect(() => {
     const node = el;
     const id = projectId;
-    if (!node) return;
-    if (typeof IntersectionObserver === 'undefined') {
-      places.icons.want(id);
-      return;
-    }
-    const io = new IntersectionObserver((entries) => {
-      if (!entries.some((e) => e.isIntersecting)) return;
-      io.disconnect();
-      places.icons.want(id);
-    });
-    io.observe(node);
-    return () => io.disconnect();
+    // Asked for (or answered) already: nothing to watch.
+    if (!node || places.icons.asked(id)) return;
+    return whenVisible(node, () => places.icons.want(id));
   });
 </script>
 
