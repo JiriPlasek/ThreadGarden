@@ -142,10 +142,13 @@ export type StartOptions = {
   headless?: boolean;
   /**
    * Headless only: the remote listener's port (default `REMOTE_PORT`; 0 = any
-   * free one) and addresses (default this machine's private IPv4 addresses;
-   * tests pass loopback). Without any address there is no remote listener.
+   * free one) and where it listens. `addresses` fixes the addresses (tests:
+   * loopback; never re-read); otherwise `addressSource` (default this
+   * machine's private IPv4 addresses) is read at start and on every idle tick,
+   * and the listener follows it (Ruling R12). Without any address there is no
+   * remote listener.
    */
-  remote?: { port?: number; addresses?: string[] };
+  remote?: { port?: number; addresses?: string[]; addressSource?: () => string[] };
 };
 
 /** How long shutdown waits for a running index pass to reach a stopping point. */
@@ -231,9 +234,10 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   let indexer: Indexer | undefined;
   let watcher: { close(): void } | undefined;
   let server: Awaited<ReturnType<typeof startWsServer>> | undefined;
+  /** The remote listener (headless) while it listens; see `moveRemote`. */
   let remote: Awaited<ReturnType<typeof startRemoteServer>> | undefined;
-  /** What the remote listener starts with (headless, with a private address). */
-  let listen: { addresses: string[]; tls: TlsIdentity; devices: DeviceRegistry } | undefined;
+  /** What every remote listener starts with (headless, with a database). */
+  let listen: { tls: TlsIdentity; devices: DeviceRegistry } | undefined;
   let poller: ExternalPoller | undefined;
   let projectOrder: ProjectOrderNotifier | undefined;
   let buckets: Buckets | undefined;
@@ -283,6 +287,96 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   /** Waits for the search for `claude` in progress, if any. */
   const whenLocated = (): Promise<void> => located;
 
+  let startedAt = 0;
+  /** `service.json`, with where paired devices reach this service when it listens for them. */
+  const writeOwnDiscovery = (port: number): Promise<void> =>
+    writeDiscovery(dataDir, {
+      pid: process.pid,
+      port,
+      token,
+      version: pkg.version,
+      protocolVersion: PROTOCOL_VERSION,
+      startedAt,
+      ...(remote ? { remotePort: remote.port, remoteAddresses: [...remote.addresses] } : {}),
+    });
+  const addressSource =
+    opts.remote?.addressSource ?? (() => privateListenAddresses(os.networkInterfaces()));
+  /** Where the remote listener should listen now, sorted; none when they cannot be read. */
+  const wantedAddresses = (): string[] => {
+    try {
+      return [...(opts.remote?.addresses ?? addressSource())].sort();
+    } catch (err) {
+      log.error(`network addresses: ${errorText(err)}`);
+      return [];
+    }
+  };
+  /** Counts of a replaced listener's sockets closing late must not count. */
+  let remoteGeneration = 0;
+  /**
+   * Puts the remote listener on `addresses` (sorted; none stops it): the
+   * current one is closed and a new one started with the same port, identity,
+   * registry and router. A failed start is logged; the next tick tries again.
+   */
+  const moveRemote = async (addresses: string[]): Promise<void> => {
+    if (!listen) return;
+    const current = remote ? [...remote.addresses].sort() : [];
+    if (current.length === addresses.length && current.every((a, i) => a === addresses[i])) {
+      return;
+    }
+    const old = remote;
+    remote = undefined;
+    const generation = ++remoteGeneration;
+    remoteClients = 0;
+    if (old) {
+      await step('remote server', () => old.close());
+      log.info(`stopped listening for devices on ${old.addresses.join(', ')}`);
+    }
+    if (addresses.length === 0 || closing) return;
+    const { tls, devices } = listen;
+    try {
+      const started = await startRemoteServer({
+        addresses,
+        port: opts.remote?.port ?? REMOTE_PORT,
+        tls,
+        devices,
+        router,
+        // Pairing sockets only while the owner has a code out (`threadgarden pair`).
+        pairingOpen: () => devices.hasLiveCode(),
+        onClientCountChange: (n) => {
+          if (generation !== remoteGeneration) return;
+          remoteClients = n;
+          lastActive = clock();
+        },
+        // Anyone on the network can break a socket: those stay out of the default log.
+        onError: (err, kind) => {
+          if (kind === 'peer') log.debug(`remote socket: ${errorText(err)}`);
+          else log.error(`remote server: ${errorText(err)}`);
+        },
+      });
+      remote = started;
+      const where = started.addresses.map((a) => `${a}:${started.port}`).join(', ');
+      log.info(`listening for devices on ${where}`);
+    } catch (err) {
+      log.error(`listening for devices on ${addresses.join(', ')} failed: ${errorText(err)}`);
+    }
+  };
+  /** The move in progress, if any (one at a time; `close()` waits for it). */
+  let following: Promise<void> | undefined;
+  /** On every idle tick: the listener follows the machine's addresses (Ruling R12). */
+  const followAddresses = (): void => {
+    const local = server;
+    if (!listen || !local || following || closing) return;
+    following = (async () => {
+      const before = remote;
+      await moveRemote(wantedAddresses());
+      if (remote !== before && !closing) await writeOwnDiscovery(local.port);
+    })()
+      .catch((err: unknown) => log.error(`following network addresses: ${errorText(err)}`))
+      .finally(() => {
+        following = undefined;
+      });
+  };
+
   try {
     if (opts.adapter) {
       const opened = openDb(path.join(dataDir, DB_FILE));
@@ -292,19 +386,15 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       const devices = new DeviceRegistry(opened.raw);
       let tls: TlsIdentity | undefined;
       if (headless) {
-        const addresses = opts.remote?.addresses ?? privateListenAddresses(os.networkInterfaces());
-        if (addresses.length === 0) {
-          log.warn('no private network address: not listening for devices');
-        } else {
-          // Loaded before the handlers exist, so `pair.proof` always has it here.
-          tls = await loadOrCreateTlsIdentity(dataDir, machineOf(opened).name, {
-            onRegenerate: (reason) =>
-              log.warn(
-                `TLS identity was ${reason}; created a new one — paired devices must pair again`,
-              ),
-          });
-          listen = { addresses, tls, devices };
-        }
+        // Loaded up front, whether or not there is an address yet: the handlers
+        // get it once, and `pair.proof` always has it on a headless machine.
+        tls = await loadOrCreateTlsIdentity(dataDir, machineOf(opened).name, {
+          onRegenerate: (reason) =>
+            log.warn(
+              `TLS identity was ${reason}; created a new one — paired devices must pair again`,
+            ),
+        });
+        listen = { tls, devices };
       }
       // machine.*, pairing and devices (v1.4); none of them without a database.
       registerMachineHandlers(router, {
@@ -641,42 +731,19 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       onError: (err) => log.error(`ws server: ${errorText(err)}`),
     });
     if (listen) {
-      const { devices } = listen;
-      remote = await startRemoteServer({
-        addresses: listen.addresses,
-        port: opts.remote?.port ?? REMOTE_PORT,
-        tls: listen.tls,
-        devices,
-        router,
-        // Pairing sockets only while the owner has a code out (`threadgarden pair`).
-        pairingOpen: () => devices.hasLiveCode(),
-        onClientCountChange: (n) => {
-          remoteClients = n;
-          lastActive = clock();
-        },
-        // Anyone on the network can cause these: kept out of the default log.
-        onError: (err) => log.debug(`remote server: ${errorText(err)}`),
-      });
-      const { addresses, port } = remote;
-      log.info(`listening for devices on ${addresses.map((a) => `${a}:${port}`).join(', ')}`);
+      const wanted = wantedAddresses();
+      if (wanted.length === 0) {
+        log.warn('no private network address yet: not listening for devices until one appears');
+      }
+      await moveRemote(wanted);
     }
     const local = server;
-    const devicesServer = remote;
-    broadcastRef.fn = devicesServer
-      ? (e) => {
-          local.broadcast(e);
-          devicesServer.broadcast(e);
-        }
-      : local.broadcast;
-    await writeDiscovery(dataDir, {
-      pid: process.pid,
-      port: server.port,
-      token,
-      version: pkg.version,
-      protocolVersion: PROTOCOL_VERSION,
-      startedAt: clock(),
-      ...(remote ? { remotePort: remote.port, remoteAddresses: remote.addresses } : {}),
-    });
+    broadcastRef.fn = (e) => {
+      local.broadcast(e);
+      remote?.broadcast(e);
+    };
+    startedAt = clock();
+    await writeOwnDiscovery(local.port);
     // Clients can connect now; `claude` is found in the background (§8 cold start).
     if (!claude.current && opts.locateClaude) void relocate();
   } catch (err) {
@@ -690,7 +757,6 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     throw err;
   }
   const wsServer = server;
-  const remoteServer = remote;
   const liveCount = opts.liveCount ?? (() => host?.liveCount() ?? 0);
   // Chats that were live when the service last stopped show as interrupted (§4.2).
   host?.recoverAfterRestart();
@@ -752,7 +818,11 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         await step('watcher', () => watcher?.close());
         // No index write may race the database close below.
         await step('indexer', stopIndexer);
-        await step('remote server', () => remoteServer?.close());
+        // After a move in progress, so the listener it may start is closed too.
+        await step('remote server', async () => {
+          await following;
+          await remote?.close();
+        });
         await step('server', () => wsServer.close());
         await step('discovery', () => removeDiscovery(dataDir));
         await step('database', () => db?.close());
@@ -778,6 +848,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   const timer = setTimer(() => {
     sweepHolds();
     checkScheduled();
+    followAddresses();
     if (liveCount() > 0 || localClients + remoteClients > 0 || sendsPending()) {
       lastActive = clock();
     } else if (!headless && clock() - lastActive >= IDLE_EXIT_MS) {
@@ -810,9 +881,9 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     ...(host ? { host } : {}),
     ...(usage ? { usage } : {}),
     ...(scheduled ? { scheduled } : {}),
-    ...(remoteServer
-      ? { remote: { addresses: remoteServer.addresses, port: remoteServer.port } }
-      : {}),
+    get remote() {
+      return remote ? { addresses: [...remote.addresses], port: remote.port } : undefined;
+    },
     broadcast: (e) => broadcastRef.fn(e),
     close,
     onClosed: (cb) => void closedCallbacks.push(cb),

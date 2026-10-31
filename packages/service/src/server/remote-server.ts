@@ -93,8 +93,12 @@ export const startRemoteServer = async (opts: {
   router: Router;
   /** Paired devices connected now; pairing sockets are not counted. */
   onClientCountChange(n: number): void;
-  /** A server or dispatch failure after startup; the server keeps serving. */
-  onError?(err: unknown): void;
+  /**
+   * A failure after startup; the server keeps serving. `peer`: a socket error
+   * any peer can cause (a broken or oversized frame); `service`: everything
+   * else (the registry, a dispatch, the pairing check, the server itself).
+   */
+  onError?(err: unknown, kind: 'peer' | 'service'): void;
   /**
    * Whether pairing sockets are admitted now (default: always). main.ts admits
    * them only while a pairing code is live; otherwise they are refused with 503.
@@ -112,13 +116,15 @@ export const startRemoteServer = async (opts: {
     if (!isSpecificAddress(address))
       throw new Error(`refusing to listen on ${JSON.stringify(address)}: not one interface`);
   }
-  const report = (err: unknown): void => {
+  const tell = (err: unknown, kind: 'peer' | 'service'): void => {
     try {
-      opts.onError?.(err);
+      opts.onError?.(err, kind);
     } catch {
       // Nothing left to tell.
     }
   };
+  const report = (err: unknown): void => tell(err, 'service');
+  const reportPeer = (err: unknown): void => tell(err, 'peer');
   const pairingTtlMs = opts.pairingTtlMs ?? PAIRING_SOCKET_TTL_MS;
   /** Each paired device's open sockets (event targets; closed on revoke). */
   const deviceSockets = new Map<WebSocket, string>();
@@ -138,12 +144,12 @@ export const startRemoteServer = async (opts: {
   });
 
   const refuse = (ws: WebSocket, code: number, reason: string): void => {
-    dropOnError(ws, report);
+    dropOnError(ws, reportPeer);
     ws.close(code, reason);
   };
 
   const onDevice = (ws: WebSocket, token: string, deviceId: string): void => {
-    dropOnError(ws, report);
+    dropOnError(ws, reportPeer);
     try {
       // Verified again: a revoke between the upgrade and now must still count.
       if (opts.devices.verify(token)?.id !== deviceId) {
@@ -170,7 +176,7 @@ export const startRemoteServer = async (opts: {
   };
 
   const onPairing = (ws: WebSocket): void => {
-    dropOnError(ws, report);
+    dropOnError(ws, reportPeer);
     pairingSockets.add(ws);
     const timer = setTimeout(() => ws.close(PAIRING_TIMEOUT, 'pairing timed out'), pairingTtlMs);
     timer.unref?.();

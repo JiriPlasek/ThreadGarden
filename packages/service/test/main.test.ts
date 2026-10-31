@@ -1,5 +1,6 @@
 import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
+import { createServer, type AddressInfo } from 'node:net';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WebSocket } from 'ws';
@@ -8,7 +9,7 @@ import { acquireInstanceLock, readDiscovery } from '../src/discovery.js';
 import { openDb } from '../src/history/db.js';
 import { createLogger } from '../src/logger.js';
 import { SessionHost } from '../src/chat/session-host.js';
-import { startService } from '../src/main.js';
+import { startService, type ServiceHandle } from '../src/main.js';
 import type { ClaudeFound } from '../src/sdk/claude-path.js';
 import { generateCorpus } from '../src/testing/corpus.js';
 
@@ -509,6 +510,96 @@ describe('startService', () => {
     await svc.close();
   });
 
+  it('follows the machine addresses on the idle tick (Ruling R12)', async () => {
+    let addresses: string[] = [];
+    const timers: (() => void)[] = [];
+    const svc = await startService({
+      ...headless(),
+      remote: { port: 0, addressSource: () => addresses },
+      setInterval: (fn) => {
+        timers.push(fn);
+        return 1 as unknown as NodeJS.Timeout;
+      },
+      clearInterval: () => {},
+    });
+    const data = join(dir, 'data');
+    const tick = () => timers[0]!();
+    const discovered = async () => await readDiscovery(data);
+
+    // No address yet: no listener, but the service runs and can pair later.
+    expect(svc.remote).toBeUndefined();
+    expect(await discovered()).not.toHaveProperty('remotePort');
+    const device = `threadgarden-device.${await pairDevice(svc)}`;
+
+    // An address appears: the listener starts there.
+    addresses = ['127.0.0.1'];
+    tick();
+    await expect.poll(() => svc.remote?.addresses).toEqual(['127.0.0.1']);
+    const first = svc.remote!.port;
+    await expect.poll(async () => (await discovered())?.remoteAddresses).toEqual(['127.0.0.1']);
+    expect((await discovered())?.remotePort).toBe(first);
+    const ws = await openTlsAt('127.0.0.1', first, device);
+    expect(await tlsCall(ws, 'machine.get', {})).toMatchObject({ result: { headless: true } });
+
+    // The address changes: the listener moves; the old address refuses.
+    const dropped = new Promise((r) => ws.once('close', r));
+    addresses = ['::1'];
+    tick();
+    await expect.poll(() => svc.remote?.addresses).toEqual(['::1']);
+    await dropped;
+    await expect(openTlsAt('127.0.0.1', first, device)).rejects.toThrow();
+    const moved = await openTlsAt('::1', svc.remote!.port, device);
+    expect(await tlsCall(moved, 'machine.get', {})).toMatchObject({ result: { headless: true } });
+    moved.close();
+    await expect.poll(async () => (await discovered())?.remoteAddresses).toEqual(['::1']);
+
+    // The same set again: nothing moves.
+    const port = svc.remote!.port;
+    tick();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(svc.remote).toEqual({ addresses: ['::1'], port });
+
+    // The addresses vanish: the listener stops and service.json says so.
+    addresses = [];
+    tick();
+    await expect.poll(() => svc.remote).toBeUndefined();
+    await expect.poll(async () => 'remotePort' in ((await discovered()) ?? {})).toBe(false);
+    expect(await discovered()).toMatchObject({ port: svc.port, token: svc.token });
+    await expect(openTlsAt('::1', port, device)).rejects.toThrow();
+    await svc.close();
+    expect(await discovered()).toBeNull();
+  });
+
+  it('retries a failed listener start on the next tick', async () => {
+    const blocker = createServer();
+    const port = await new Promise<number>((resolve) =>
+      blocker.listen(0, '127.0.0.1', () => resolve((blocker.address() as AddressInfo).port)),
+    );
+    const errors: string[] = [];
+    const timers: (() => void)[] = [];
+    const svc = await startService({
+      ...headless(),
+      remote: { port, addressSource: () => ['127.0.0.1'] },
+      logger: { ...quietLogger(), error: (m) => void errors.push(m) },
+      setInterval: (fn) => {
+        timers.push(fn);
+        return 1 as unknown as NodeJS.Timeout;
+      },
+      clearInterval: () => {},
+    });
+    // The port is taken: the service runs without the listener and says why.
+    expect(svc.remote).toBeUndefined();
+    expect(errors).toEqual([expect.stringMatching(/listening for devices on 127\.0\.0\.1 failed/)]);
+    timers[0]!();
+    await expect.poll(() => errors.length).toBe(2);
+    expect(svc.remote).toBeUndefined();
+    await new Promise<void>((resolve) => blocker.close(() => resolve()));
+    timers[0]!();
+    await expect.poll(() => svc.remote?.port).toBe(port);
+    await expect.poll(async () => (await readDiscovery(join(dir, 'data')))?.remotePort).toBe(port);
+    await svc.close();
+  });
+
   it('warns when the TLS identity had to be created again', async () => {
     const data = join(dir, 'data');
     await mkdir(join(data, 'tls'), { recursive: true });
@@ -536,6 +627,18 @@ const headless = () => ({
   remote: { addresses: ['127.0.0.1'], port: 0 },
   logger: quietLogger(),
 });
+/** Pairs a device through the service's own handlers; its token. */
+const pairDevice = async (svc: ServiceHandle): Promise<string> => {
+  const created = (await svc.router.dispatch(
+    { id: 1, method: 'pairing.create', params: {} },
+    { clientId: 't', origin: 'local' },
+  )) as { result: { code: string } };
+  const claimed = (await svc.router.dispatch(
+    { id: 2, method: 'pair.claim', params: { code: created.result.code, deviceName: 'Laptop' } },
+    { clientId: 'p', origin: 'remote' },
+  )) as { result: { token: string } };
+  return claimed.result.token;
+};
 const quietLogger = () => ({
   debug: () => {},
   info: () => {},
@@ -543,9 +646,11 @@ const quietLogger = () => ({
   error: () => {},
   flush: async () => {},
 });
-const openTls = (port: number, protocol: string) =>
+const openTls = (port: number, protocol: string) => openTlsAt('127.0.0.1', port, protocol);
+const openTlsAt = (host: string, port: number, protocol: string) =>
   new Promise<WebSocket>((resolve, reject) => {
-    const ws = new WebSocket(`wss://127.0.0.1:${port}`, [protocol], { rejectUnauthorized: false });
+    const where = host.includes(':') ? `[${host}]` : host;
+    const ws = new WebSocket(`wss://${where}:${port}`, [protocol], { rejectUnauthorized: false });
     ws.once('open', () => resolve(ws));
     ws.once('error', reject);
   });

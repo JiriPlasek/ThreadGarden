@@ -180,6 +180,26 @@ describe('remote server', () => {
     pairing.close();
   });
 
+  it('tells peer socket errors apart from service failures', async () => {
+    const kinds: string[] = [];
+    const other = await startAnother({ onError: (_err, kind) => kinds.push(kind) });
+    const ws = await openTls(other, 'threadgarden-pair');
+    ws.on('error', () => {});
+    const closed = closeCode(ws);
+    // A masked frame with the reserved opcode 3: a broken frame any peer can send.
+    (ws as unknown as { _socket: { write(b: Buffer): void } })._socket.write(
+      Buffer.from([0x83, 0x80, 0, 0, 0, 0]),
+    );
+    await closed;
+    await expect.poll(() => kinds).toEqual(['peer']);
+    const verify = vi.spyOn(devices, 'verify').mockImplementation(() => {
+      throw new Error('database gone');
+    });
+    expect(await closeCode(await openTls(other, `threadgarden-device.${token}`))).toBe(1011);
+    verify.mockRestore();
+    expect(kinds).toEqual(['peer', 'service']);
+  });
+
   it('never serves the local subprotocol or anything else', async () => {
     await expect(openTls(s, `threadgarden.${token}`)).rejects.toThrow();
     await expect(openTls(s, 'something')).rejects.toThrow();
@@ -358,10 +378,10 @@ describe('remote server', () => {
       pairingOpen: () => {
         throw new Error('boom');
       },
-      onError: (err) => errors.push(err),
+      onError: (err, kind) => errors.push([kind, err]),
     });
     await expect(openTls(gated, 'threadgarden-pair')).rejects.toThrow(/503/);
-    expect(errors).toHaveLength(1);
+    expect(errors).toEqual([['service', expect.any(Error)]]);
     const device = await openTls(gated, `threadgarden-device.${token}`);
     expect(await call(device, 'machine.get', {})).toMatchObject({ result: { id: machineId } });
     device.close();

@@ -164,7 +164,8 @@ export const connectLocal = (port: number, token: string): Promise<LocalConnecti
       if ('error' in msg) p.reject(new CallError(msg.error.message));
       else p.resolve(msg.result);
     });
-    ws.once('error', (err) => {
+    // `on`, not `once`: a second 'error' without a listener would throw.
+    ws.on('error', (err) => {
       const lost = new ConnectionLost(err.message);
       reject(lost);
       failAll(lost);
