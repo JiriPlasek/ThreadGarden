@@ -70,10 +70,12 @@ describe('ProjectIconsState', () => {
     return { api, calls, open: () => onOpen?.() };
   };
   const tick = () => new Promise((r) => setTimeout(r, 0));
+  /** Applies answers at once instead of on the next frame. */
+  const now = (cb: () => void) => cb();
 
   it('asks once per project, keeps the answer and asks again after the TTL', async () => {
     let t = 1_000;
-    const icons = new ProjectIconsState(() => t);
+    const icons = new ProjectIconsState(() => t, now);
     const f = fakeApi(async (id) => ({ dataUrl: id === 'a' ? ICON : null }));
     icons.init(f.api);
     icons.want('a');
@@ -93,7 +95,7 @@ describe('ProjectIconsState', () => {
 
   it('retries a failed request after a pause or on reconnect, keeping the tile meanwhile', async () => {
     let t = 1_000;
-    const icons = new ProjectIconsState(() => t);
+    const icons = new ProjectIconsState(() => t, now);
     let fail = true;
     const f = fakeApi(async () => {
       if (fail) throw new Error('METHOD_NOT_FOUND');
@@ -114,6 +116,27 @@ describe('ProjectIconsState', () => {
     expect(f.calls).toHaveLength(3);
     await tick();
     expect(icons.url('a')).toBe(ICON);
+  });
+
+  it('applies a burst of answers in one frame; "no icon" for a tile changes nothing', async () => {
+    const frames: (() => void)[] = [];
+    const icons = new ProjectIconsState(Date.now, (cb) => frames.push(cb));
+    const f = fakeApi(async (id) => ({ dataUrl: id.startsWith('icon') ? ICON : null }));
+    icons.init(f.api);
+    for (const id of ['icon-1', 'icon-2', 'none-1', 'none-2']) icons.want(id);
+    await tick();
+    expect(frames).toHaveLength(1);
+    expect(icons.url('icon-1')).toBeNull();
+    frames.shift()!();
+    expect(icons.url('icon-1')).toBe(ICON);
+    expect(icons.url('icon-2')).toBe(ICON);
+    // Only null answers: nothing to show differently, no frame asked for.
+    const quiet = new ProjectIconsState(Date.now, (cb) => frames.push(cb));
+    quiet.init(fakeApi(async () => ({ dataUrl: null })).api);
+    quiet.want('x');
+    quiet.want('y');
+    await tick();
+    expect(frames).toHaveLength(0);
   });
 });
 

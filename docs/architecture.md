@@ -222,8 +222,10 @@ cached per project: a cached icon stands while its file keeps its size and
 mtime (one `stat` per request) and the project is searched again after 10
 minutes or when the file changed or vanished. A project whose folder is
 missing (the cached folder check above) answers null without touching the
-disk. The UI asks once a project's icon element scrolls into view, keeps the
-answers in memory (asking again after 10 minutes, on a projects refresh) and
+disk. The UI asks once a project's icon element scrolls into view (one shared
+IntersectionObserver), applies a burst of answers together on the next frame
+(an answer that changes nothing on screen is dropped), keeps the answers in
+memory (asking again after 10 minutes, on a projects refresh) and
 shows them as rounded images at the row-icon size (1rem: the spec's 16 px,
 scaled with the interface size like the other row icons) in the places
 column, the chat header and the quick switcher (search hits now carry

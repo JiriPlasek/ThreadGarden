@@ -6,12 +6,23 @@ export const ICON_TTL_MS = 10 * 60_000;
 /** A failed request is retried no sooner than this. */
 export const ICON_RETRY_MS = 30_000;
 
+export type Schedule = (cb: () => void) => void;
+
+/** The next animation frame (where there is none, about one frame from now). */
+const nextFrame: Schedule = (cb) => {
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => cb());
+  else setTimeout(cb, 16);
+};
+
 /**
  * Project icons (v1.3 §5), asked of the service lazily: a component calls
  * `want(projectId)` once the project is on screen, and reads `url(projectId)`
  * (reactive; null until known and for projects without an icon). Answers are
  * kept for the UI's lifetime and asked for again, for projects that were
  * wanted, after `ICON_TTL_MS` (`revalidate`, run on every projects refresh).
+ * Answers that change what is shown are applied together on the next frame,
+ * so a burst of answers (a new quick-switcher list) costs one update, not one
+ * per answer, and an answer of "no icon" for a tile changes nothing.
  */
 export class ProjectIconsState {
   private readonly urls = new SvelteMap<string, string | null>();
@@ -20,9 +31,15 @@ export class ProjectIconsState {
   private readonly failedAt = new Map<string, number>();
   private readonly inflight = new Set<string>();
   private readonly wanted = new Set<string>();
+  /** Answers waiting for the next frame. */
+  private readonly arrived = new Map<string, string | null>();
+  private flushing = false;
   private api: Api | null = null;
 
-  constructor(private readonly now: () => number = Date.now) {}
+  constructor(
+    private readonly now: () => number = Date.now,
+    private readonly schedule: Schedule = nextFrame,
+  ) {}
 
   init = (api: Api): void => {
     this.api = api;
@@ -56,7 +73,7 @@ export class ProjectIconsState {
         this.inflight.delete(projectId);
         this.failedAt.delete(projectId);
         this.answeredAt.set(projectId, this.now());
-        if (this.urls.get(projectId) !== dataUrl) this.urls.set(projectId, dataUrl);
+        this.apply(projectId, dataUrl);
       },
       () => {
         // An older service without the method, or no connection: the letter tile stays.
@@ -65,6 +82,20 @@ export class ProjectIconsState {
       },
     );
   };
+
+  private apply(projectId: string, dataUrl: string | null): void {
+    if (!this.arrived.has(projectId) && (this.urls.get(projectId) ?? null) === dataUrl) return;
+    this.arrived.set(projectId, dataUrl);
+    if (this.flushing) return;
+    this.flushing = true;
+    this.schedule(() => {
+      this.flushing = false;
+      for (const [id, url] of this.arrived) {
+        if ((this.urls.get(id) ?? null) !== url) this.urls.set(id, url);
+      }
+      this.arrived.clear();
+    });
+  }
 
   /** Asks again for every wanted icon whose answer is stale. */
   revalidate = (): void => {
