@@ -34,6 +34,13 @@ export type ClientOptions = {
   requestTimeoutMs?: number;
   backoffMinMs?: number;
   backoffMaxMs?: number;
+  /** Which `hello` protocol versions to accept; default: exactly ours (a local service). */
+  acceptProtocol?: (v: number) => boolean;
+  /**
+   * Asked with the close code of every socket that closes (not after `close()`);
+   * `'stop'` ends the reconnecting until `connect` is called again. Default `'retry'`.
+   */
+  onClose?: (code: number) => 'retry' | 'stop';
 };
 
 type Pending = {
@@ -44,11 +51,15 @@ type Pending = {
 
 export class ServiceClient {
   status: ClientStatus = 'connecting';
+  /** The last successful `hello` answer (null before the first). */
+  hello: Result<'hello'> | null = null;
 
   private readonly Impl: typeof WebSocket;
   private readonly timeoutMs: number;
   private readonly minMs: number;
   private readonly maxMs: number;
+  private readonly acceptProtocol: (v: number) => boolean;
+  private readonly onCloseCode: (code: number) => 'retry' | 'stop';
   private ws: WebSocket | null = null;
   private url = '';
   private token = '';
@@ -69,6 +80,8 @@ export class ServiceClient {
     this.timeoutMs = opts.requestTimeoutMs ?? 30_000;
     this.minMs = opts.backoffMinMs ?? 250;
     this.maxMs = opts.backoffMaxMs ?? 5_000;
+    this.acceptProtocol = opts.acceptProtocol ?? ((v) => v === PROTOCOL_VERSION);
+    this.onCloseCode = opts.onClose ?? (() => 'retry');
   }
 
   /**
@@ -219,9 +232,10 @@ export class ServiceClient {
       }).then(
         (r) => {
           if (this.ws !== ws) return;
-          if ((r as { protocolVersion?: number }).protocolVersion !== PROTOCOL_VERSION) {
+          if (!this.acceptProtocol((r as { protocolVersion?: number }).protocolVersion ?? -1)) {
             return this.fail(ws);
           }
+          this.hello = r as Result<'hello'>;
           this.attempt = 0;
           const reconnect = this.hasBeenOpen;
           this.hasBeenOpen = true;
@@ -243,11 +257,17 @@ export class ServiceClient {
       );
     };
     ws.onmessage = (e: MessageEvent) => this.onMessage(String(e.data));
-    ws.onclose = () => {
+    ws.onclose = (e?: { code?: number }) => {
       if (this.ws !== ws) return;
       this.ws = null;
       this.rejectAll('DISCONNECTED', 'Connection to the service dropped');
       if (this.closed) return;
+      if (this.onCloseCode(e?.code ?? 1006) === 'stop') {
+        this.closed = true;
+        this.firstConnect?.reject(new RequestError('DISCONNECTED', 'Connection closed'));
+        this.firstConnect = null;
+        return;
+      }
       this.setStatus(this.hasBeenOpen ? 'reconnecting' : 'connecting');
       this.scheduleRetry();
     };

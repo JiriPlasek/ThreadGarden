@@ -279,4 +279,30 @@ describe('ServiceClient', () => {
     expect(chats.get('s1')?.seq).toBe(200);
     expect(chats.get('s1')?.items.map((i) => i.id)).toEqual(['fresh']);
   });
+
+  it('onClose stop ends reconnecting; retry keeps the backoff; hello is kept', async () => {
+    const codes: number[] = [];
+    const c = new ServiceClient({
+      WebSocketImpl: server.Impl,
+      acceptProtocol: (v) => v === PROTOCOL_VERSION || v === 4,
+      onClose: (code) => {
+        codes.push(code);
+        return code === 4409 ? 'stop' : 'retry';
+      },
+    });
+    server.handlers.hello = () => ({ serviceVersion: 'x', protocolVersion: 4 });
+    const p = c.connect('ws://127.0.0.1:1', 'tok');
+    await vi.advanceTimersByTimeAsync(0);
+    await p;
+    expect(c.hello?.protocolVersion).toBe(4);
+    server.drop(4502);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(c.status).toBe('open');
+    server.drop(4409);
+    const sockets = server.sockets.length;
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(codes).toEqual([4502, 4409]);
+    expect(server.sockets).toHaveLength(sockets);
+    c.close();
+  });
 });

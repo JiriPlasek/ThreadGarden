@@ -1,0 +1,301 @@
+import {
+  acceptsRemoteProtocol,
+  RELAY_CLOSE,
+  type MachineInfo,
+  type PairedMachine,
+} from '@threadgarden/protocol';
+import { machineTokens } from '../native';
+import { ServiceClient, type ClientOptions, type ClientStatus } from '../service/client';
+import type { Api } from './api';
+
+export type MachineStatus =
+  'connecting' | 'on' | 'unreachable' | 'locked' | 'incompatible' | 'mismatch' | 'refused';
+
+export type MachineEntry = {
+  id: string;
+  name: string;
+  address: string;
+  port: number;
+  local: boolean;
+  status: MachineStatus;
+  info: MachineInfo | null;
+  client: ServiceClient;
+};
+
+export type MachinesOptions = {
+  /** The local relay's URL for a machine (`ws://127.0.0.1:<port>/relay?machine=<id>`). */
+  relayUrl(machineId: string): string;
+  /** The local service's token, which the relay accepts too. */
+  localToken(): string;
+  tokens?: Pick<typeof machineTokens, 'get' | 'set' | 'clear'>;
+  makeClient?: (o: ClientOptions) => ServiceClient;
+};
+
+const LOCAL_FALLBACK_ID = 'local';
+
+const fromLocalStatus = (s: ClientStatus): MachineStatus =>
+  s === 'open'
+    ? 'on'
+    : s === 'incompatible'
+      ? 'incompatible'
+      : s === 'reconnecting'
+        ? 'unreachable'
+        : 'connecting';
+
+/**
+ * This PC plus every paired machine, each with its own client: a paired
+ * machine's client talks to the local service's relay, which pipes to the
+ * machine over pinned TLS. The UI never leaves loopback.
+ */
+export class MachinesState {
+  private paired = $state<MachineEntry[]>([]);
+  private localEntry = $state<MachineEntry | null>(null);
+
+  private localApi!: Api;
+  private localClient!: ServiceClient;
+  private opts!: MachinesOptions;
+  private tokens: Pick<typeof machineTokens, 'get' | 'set' | 'clear'> = machineTokens;
+  private makeClient: (o: ClientOptions) => ServiceClient = (o) => new ServiceClient(o);
+  private everOn = new Set<string>();
+  private pairing = 0;
+  private readonly added = new Set<(m: MachineEntry) => void>();
+  private readonly removedCbs = new Set<(id: string) => void>();
+
+  /** This PC first, then the paired machines in the service's order. */
+  get list(): MachineEntry[] {
+    return this.localEntry ? [this.localEntry, ...this.paired] : this.paired;
+  }
+
+  get local(): MachineEntry | null {
+    return this.localEntry;
+  }
+
+  get = (id: string): MachineEntry | undefined => this.list.find((m) => m.id === id);
+
+  init = (localApi: Api, localClient: ServiceClient, opts: MachinesOptions): void => {
+    this.localApi = localApi;
+    this.localClient = localClient;
+    this.opts = opts;
+    if (opts.tokens) this.tokens = opts.tokens;
+    if (opts.makeClient) this.makeClient = opts.makeClient;
+    localClient.onStatus((s) => {
+      if (this.localEntry) this.localEntry.status = fromLocalStatus(s);
+    });
+    localClient.onOpen(() => this.onLocalOpen());
+    localApi.on('machines.changed', (list) => this.apply(list, false));
+    if (localClient.status === 'open') void this.onLocalOpen();
+  };
+
+  onAdded = (cb: (m: MachineEntry) => void): (() => void) => {
+    this.added.add(cb);
+    return () => this.added.delete(cb);
+  };
+
+  onRemoved = (cb: (id: string) => void): (() => void) => {
+    this.removedCbs.add(cb);
+    return () => this.removedCbs.delete(cb);
+  };
+
+  pair = async (p: {
+    address: string;
+    port?: number;
+    code: string;
+    deviceName: string;
+  }): Promise<MachineEntry> => {
+    this.pairing++;
+    try {
+      const { machine, token } = await this.localApi.request('machines.pair', p);
+      try {
+        await this.tokens.set(machine.id, token);
+      } catch (e) {
+        // No token in the keychain: the pairing would be unusable, so undo it.
+        await this.localApi
+          .request('machines.remove', { machineId: machine.id, revoke: true })
+          .catch(() => {});
+        throw e;
+      }
+      const entry = this.ensure(machine);
+      this.update(entry, machine);
+      // The service already holds the token (pairing unlocks it).
+      this.connectEntry(entry.id, token);
+      return this.get(machine.id) ?? entry;
+    } finally {
+      this.pairing--;
+    }
+  };
+
+  rename = async (id: string, name: string): Promise<void> => {
+    const m = await this.localApi.request('machines.update', { machineId: id, name });
+    this.applyOne(m);
+  };
+
+  setAddress = async (id: string, address: string, port?: number): Promise<void> => {
+    const m = await this.localApi.request('machines.update', {
+      machineId: id,
+      address,
+      ...(port === undefined ? {} : { port }),
+    });
+    this.applyOne(m);
+  };
+
+  remove = async (id: string): Promise<void> => {
+    const entry = this.paired.find((m) => m.id === id);
+    entry?.client.close();
+    try {
+      await this.localApi.request('machines.remove', { machineId: id, revoke: true });
+    } finally {
+      await this.tokens.clear(id).catch(() => {});
+      this.drop(id);
+    }
+  };
+
+  private onLocalOpen = async (): Promise<void> => {
+    const hello = this.localClient.hello;
+    const machine = hello?.machine ?? null;
+    if (!this.localEntry) {
+      this.localEntry = {
+        id: machine?.id ?? LOCAL_FALLBACK_ID,
+        name: machine?.name ?? 'This PC',
+        address: '127.0.0.1',
+        port: 0,
+        local: true,
+        status: 'on',
+        info: machine,
+        client: this.localClient,
+      };
+    } else {
+      this.localEntry.info = machine;
+      if (machine) {
+        this.localEntry.id = machine.id;
+        this.localEntry.name = machine.name;
+      }
+      this.localEntry.status = 'on';
+    }
+    try {
+      this.apply(await this.localApi.request('machines.list', {}), true);
+    } catch {
+      // The local link dropped again: the next open retries.
+    }
+  };
+
+  /** Brings the entries in line with `list`; `reopen`: unlock and (re)connect all, as after a local (re)start. */
+  private apply = (list: PairedMachine[], reopen: boolean): void => {
+    const ids = new Set(list.map((m) => m.id));
+    for (const e of [...this.paired]) if (!ids.has(e.id)) this.drop(e.id);
+    // Keep the service's order.
+    const order = new Map(list.map((m, i) => [m.id, i]));
+    this.paired.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0));
+    for (const m of list) {
+      const known = this.paired.some((e) => e.id === m.id);
+      const entry = this.ensure(m);
+      const moved = this.update(entry, m);
+      if (reopen || (!known && this.pairing === 0)) this.connectEntry(entry.id);
+      else if (moved) this.connectEntry(entry.id);
+    }
+  };
+
+  private applyOne = (m: PairedMachine): void => {
+    const entry = this.ensure(m);
+    if (this.update(entry, m)) this.connectEntry(entry.id);
+  };
+
+  /** Creates the entry for `m` when missing (no connection yet). */
+  private ensure = (m: PairedMachine): MachineEntry => {
+    const existing = this.paired.find((e) => e.id === m.id);
+    if (existing) return existing;
+    const id = m.id;
+    const client = this.makeClient({
+      acceptProtocol: acceptsRemoteProtocol,
+      onClose: (code) => this.onRelayClose(id, code),
+    });
+    client.onStatus((s) => {
+      const e = this.paired.find((x) => x.id === id);
+      if (!e) return;
+      if (s === 'open') {
+        this.everOn.add(id);
+        e.status = 'on';
+      } else if (s === 'incompatible') e.status = 'incompatible';
+      else if (e.status === 'on') e.status = 'unreachable';
+    });
+    client.onOpen(() => {
+      const e = this.paired.find((x) => x.id === id);
+      if (e) e.info = client.hello?.machine ?? null;
+    });
+    this.paired.push({
+      id,
+      name: m.name,
+      address: m.address,
+      port: m.port,
+      local: false,
+      status: 'connecting',
+      info: null,
+      client,
+    });
+    const entry = this.paired.find((e) => e.id === id)!;
+    for (const cb of this.added) cb(entry);
+    return entry;
+  };
+
+  /** Copies the service's view onto the entry; true when the address or port changed. */
+  private update = (entry: MachineEntry, m: PairedMachine): boolean => {
+    const moved = entry.address !== m.address || entry.port !== m.port;
+    entry.name = m.name;
+    entry.address = m.address;
+    entry.port = m.port;
+    return moved;
+  };
+
+  private drop = (id: string): void => {
+    const i = this.paired.findIndex((m) => m.id === id);
+    if (i < 0) return;
+    this.paired[i]!.client.close();
+    this.paired.splice(i, 1);
+    this.everOn.delete(id);
+    for (const cb of this.removedCbs) cb(id);
+  };
+
+  private onRelayClose = (id: string, code: number): 'retry' | 'stop' => {
+    const e = this.paired.find((x) => x.id === id);
+    const stop = (status: MachineStatus): 'stop' => {
+      if (e) e.status = status;
+      return 'stop';
+    };
+    if (code === RELAY_CLOSE.locked || code === 4401) return stop('locked');
+    if (code === RELAY_CLOSE.mismatch) return stop('mismatch');
+    if (code === RELAY_CLOSE.refused) return stop('refused');
+    if (e) {
+      e.status =
+        code === RELAY_CLOSE.unreachable || this.everOn.has(id) ? 'unreachable' : 'connecting';
+    }
+    return 'retry';
+  };
+
+  /**
+   * Hands the keychain token (or `token`, just paired) to the local service and
+   * (re)connects the machine's relay client. No token: the machine stays locked.
+   */
+  private connectEntry = (id: string, token?: string): void => {
+    void (async () => {
+      if (!this.paired.some((e) => e.id === id)) return;
+      try {
+        const t = token ?? (await this.tokens.get(id));
+        if (!t) return this.lock(id, true);
+        await this.localApi.request('machines.unlock', { machineId: id, token: t });
+      } catch {
+        // Unlock failed (local link down or machine unknown): the next local open retries.
+        return this.lock(id, false);
+      }
+      const e = this.paired.find((x) => x.id === id);
+      if (!e) return;
+      e.status = 'connecting';
+      e.client.connect(this.opts.relayUrl(id), this.opts.localToken()).catch(() => {});
+    })();
+  };
+
+  private lock = (id: string, closeClient: boolean): void => {
+    const e = this.paired.find((x) => x.id === id);
+    if (!e) return;
+    if (closeClient) e.client.close();
+    e.status = 'locked';
+  };
+}

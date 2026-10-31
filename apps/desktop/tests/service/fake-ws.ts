@@ -47,8 +47,13 @@ export class FakeServer {
     this.live?.deliver({ event, data });
   };
 
-  /** Drops the connection like a crashed service would. */
-  drop = (): void => this.live?.serverClose();
+  /** Drops the connection like a crashed service would (or closes it with `code`). */
+  drop = (code = 1006): void => this.live?.serverClose(code);
+
+  /** The URL of the newest connection attempt. */
+  get url(): string | undefined {
+    return this.sockets.at(-1)?.url;
+  }
 
   calls = (method: string): Sent[] => this.sent.filter((s) => s.method === method);
 }
@@ -58,7 +63,7 @@ export class FakeSocket {
   onopen: (() => void) | null = null;
   onmessage: ((e: { data: string }) => void) | null = null;
   onerror: (() => void) | null = null;
-  onclose: (() => void) | null = null;
+  onclose: ((e: { code: number }) => void) | null = null;
 
   constructor(
     private readonly server: FakeServer,
@@ -68,7 +73,7 @@ export class FakeSocket {
     queueMicrotask(() => {
       if (server.refuse) {
         this.onerror?.();
-        this.onclose?.();
+        this.onclose?.({ code: 1006 });
         return;
       }
       this.open = true;
@@ -108,12 +113,23 @@ export class FakeSocket {
   }
 
   close(): void {
-    this.serverClose();
+    this.serverClose(1000);
   }
 
-  serverClose(): void {
+  serverClose(code = 1006): void {
     if (!this.open) return;
     this.open = false;
-    this.onclose?.();
+    this.onclose?.({ code });
   }
 }
+
+/** A `WebSocket` class that hands each connection to the server `pick` chooses by URL. */
+export const routedImpl = (pick: (url: string) => FakeServer): typeof WebSocket =>
+  class {
+    constructor(url: string, protocols?: string | string[]) {
+      return new (pick(url).Impl as unknown as new (u: string, p?: string | string[]) => object)(
+        url,
+        protocols,
+      );
+    }
+  } as unknown as typeof WebSocket;
