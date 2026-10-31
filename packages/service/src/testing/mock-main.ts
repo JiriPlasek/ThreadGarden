@@ -11,7 +11,18 @@
  * - "agent" runs an Explore subagent (an Agent tool call and its task) that
  *   reports progress and completes after about 3 s;
  * - "server" starts a background shell task ("npm run dev") that keeps
- *   running until it is stopped with `chat.stopTask` (or the chat ends).
+ *   running until it is stopped with `chat.stopTask` (or the chat ends);
+ * - "limit" reaches the (mock) account's usage limit for `MOCK_LIMIT_MS`
+ *   (2 min): that turn and every turn until the reset is refused, like the
+ *   CLI does (a rejected `rate_limit_event`, an assistant message with the
+ *   `rate_limit` error, an error result), so "Send when the limit resets"
+ *   can be tried.
+ *
+ * Usage (v1.3 B): every turn reports the mock account's 5-hour window in a
+ * `rate_limit_event` (a little more used each turn, a warning from 80 %), and
+ * sessions answer the experimental usage reading with 5-hour, 7-day and
+ * per-model windows. The service starts with that usage already known, so the
+ * usage meter shows at once.
  *
  * A new chat is named after its first turn (v1.2 C1): the fake small model
  * answers about half a second later with "Mock: " and the first words of the
@@ -55,6 +66,13 @@ const AGENT_STEPS = [
   { tool: 'Read', summary: 'Reading the desktop app layout' },
 ];
 const DEV_SERVER_COMMAND = 'npm run dev';
+/** How long "limit" keeps the mock account refused. */
+export const MOCK_LIMIT_MS = 2 * 60_000;
+/** The mock account's 5-hour window resets this long after the service starts. */
+const MOCK_WINDOW_MS = 3 * 3_600_000 + 12 * 60_000;
+/** 5-hour utilization (a fraction, like the CLI's events) at start, and added per turn. */
+const MOCK_USAGE_START = 0.42;
+const MOCK_USAGE_STEP = 0.03;
 
 const SENTENCES = [
   'This is the pahub mock service answering.',
@@ -114,6 +132,7 @@ class ScriptedSession extends FakeSession {
       },
     ];
     this.account = { subscriptionType: 'max', apiProvider: 'firstParty' };
+    this.usage = async () => this.adapter.usageReading();
     setImmediate(() => this.out(this.init()));
   }
 
@@ -190,6 +209,12 @@ class ScriptedSession extends FakeSession {
     this.abort = new AbortController();
     const started = Date.now();
     const lower = text.toLowerCase();
+    if (lower.includes('limit')) this.adapter.reachLimit();
+    if (this.adapter.limited()) {
+      await this.refusedTurn(started);
+      return;
+    }
+    this.out(this.adapter.rateLimitEvent(this.id));
     if (lower.includes('perm')) await this.permissionTurn();
     else if (lower.includes('ask')) await this.questionTurn();
     else if (lower.includes('plan')) await this.planTurn();
@@ -210,6 +235,46 @@ class ScriptedSession extends FakeSession {
         modelUsage: { [this.model ?? 'default']: { contextWindow: 200_000 } },
         num_turns: 1,
         result: '',
+      }),
+    );
+  }
+
+  /** A turn the usage limit refuses, as the CLI reports one. */
+  private async refusedTurn(started: number): Promise<void> {
+    this.out(this.adapter.rateLimitEvent(this.id));
+    await sleep(DELTA_MS * 3);
+    const reset = new Date(this.adapter.limitedUntil);
+    const at = `${String(reset.getHours()).padStart(2, '0')}:${String(reset.getMinutes()).padStart(2, '0')}`;
+    const uuid = randomUUID();
+    const message = {
+      id: `msg_${randomUUID()}`,
+      role: 'assistant',
+      content: [{ type: 'text', text: `You've hit your usage limit (mock) · resets ${at}` }],
+    };
+    this.out(
+      msg({
+        type: 'assistant',
+        uuid,
+        session_id: this.id,
+        parent_tool_use_id: null,
+        error: 'rate_limit',
+        message,
+      }),
+    );
+    await this.adapter.record(this, { type: 'assistant', uuid, message });
+    this.out(
+      msg({
+        type: 'result',
+        subtype: 'success',
+        uuid: randomUUID(),
+        session_id: this.id,
+        is_error: true,
+        duration_ms: Date.now() - started,
+        total_cost_usd: 0,
+        usage: {},
+        modelUsage: {},
+        num_turns: 1,
+        result: message.content[0]!.text,
       }),
     );
   }
@@ -439,8 +504,77 @@ class ScriptedSession extends FakeSession {
 
 /** FakeAdapter whose sessions follow the script and leave a history behind. */
 class ScriptedAdapter extends FakeAdapter {
+  /** The mock account's 5-hour window (v1.3 B): used fraction and reset time. */
+  private fiveHour = MOCK_USAGE_START;
+  private windowResets = Date.now() + MOCK_WINDOW_MS;
+  /** Until when the mock account is refused ("limit"); 0 when it is not. */
+  limitedUntil = 0;
+
   constructor(private readonly claudeDir: string) {
     super();
+  }
+
+  limited(): boolean {
+    if (this.limitedUntil === 0) return false;
+    if (Date.now() < this.limitedUntil) return true;
+    // The limit reset: a fresh window.
+    this.limitedUntil = 0;
+    this.fiveHour = 0.05;
+    this.windowResets = Date.now() + 5 * 3_600_000;
+    return false;
+  }
+
+  reachLimit(): void {
+    if (this.limited()) return;
+    this.limitedUntil = Date.now() + MOCK_LIMIT_MS;
+    this.fiveHour = 1;
+  }
+
+  /** The `rate_limit_event` a turn starts with; each allowed turn uses a little more. */
+  rateLimitEvent(sessionId: string): SDKMessage {
+    const limited = this.limited();
+    if (!limited) this.fiveHour = Math.min(0.99, this.fiveHour + MOCK_USAGE_STEP);
+    const resetsAt = limited ? this.limitedUntil : this.windowResets;
+    return msg({
+      type: 'rate_limit_event',
+      uuid: randomUUID(),
+      session_id: sessionId,
+      rate_limit_info: {
+        status: limited ? 'rejected' : this.fiveHour >= 0.8 ? 'allowed_warning' : 'allowed',
+        rateLimitType: 'five_hour',
+        utilization: this.fiveHour,
+        // Seconds, like Claude Code 2.1.314.
+        resetsAt: Math.floor(resetsAt / 1000),
+      },
+    });
+  }
+
+  /** The experimental usage reading (`SDKControlGetUsageResponse`) of the mock account. */
+  usageReading(): unknown {
+    this.limited();
+    const iso = (t: number) => new Date(Math.floor(t / 1000) * 1000).toISOString();
+    const weekly = Date.now() + 4 * 24 * 3_600_000;
+    return {
+      session: { total_cost_usd: 0.0123 },
+      subscription_type: 'max',
+      rate_limits_available: true,
+      rate_limits: {
+        five_hour: {
+          utilization: Math.round(this.fiveHour * 100),
+          resets_at: iso(this.limitedUntil || this.windowResets),
+        },
+        seven_day: { utilization: 23, resets_at: iso(weekly) },
+        seven_day_opus: { utilization: 8, resets_at: iso(weekly) },
+        model_scoped: [{ display_name: 'Fable', utilization: 4, resets_at: iso(weekly) }],
+        extra_usage: {
+          is_enabled: false,
+          monthly_limit: null,
+          used_credits: null,
+          utilization: null,
+        },
+      },
+      behaviors: null,
+    };
   }
 
   override start(o: StartOptions): FakeSession {
@@ -556,6 +690,19 @@ export const startMockService = async (o: MockOptions = {}): Promise<MockService
       ...(o.port === undefined ? {} : { port: o.port }),
       ...(o.token === undefined ? {} : { token: o.token }),
       installSignalHandlers: o.installSignalHandlers ?? true,
+    });
+    // The mock account's usage is known from the start (v1.3 B), so the meter shows at once.
+    svc.usage?.observeEvent('mock', {
+      status: 'allowed',
+      rateLimitType: 'five_hour',
+      utilization: MOCK_USAGE_START,
+      resetsAt: Math.floor((Date.now() + MOCK_WINDOW_MS) / 1000),
+    });
+    svc.usage?.observeEvent('mock', {
+      status: 'allowed',
+      rateLimitType: 'seven_day',
+      utilization: 0.23,
+      resetsAt: Math.floor((Date.now() + 4 * 24 * 3_600_000) / 1000),
     });
     const removed = new Promise<void>((resolve) =>
       svc.onClosed(() => {

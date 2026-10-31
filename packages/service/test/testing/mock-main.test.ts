@@ -176,4 +176,55 @@ describe('mock service', () => {
     await c.call('chat.stopTask', { sessionId: server.sessionId, taskId: opened.tasks[0]!.taskId });
     await eventually(() => tasksOf(server.sessionId)?.[0]?.status === 'stopped', 5_000);
   }, 30_000);
+
+  it('v1.3 B: shows usage from the start; "limit" refuses turns until the reset', async () => {
+    mock = await startMockService({
+      sessions: 2,
+      projects: 1,
+      bigSessionMessages: 4,
+      port: await freePort(),
+      token: 'mock-token',
+      installSignalHandlers: false,
+    });
+    const c = (client = await TestClient.connect(mock.svc.port, 'mock-token'));
+    type Usage = {
+      windows: { key: string; utilization?: number; status?: string; source: string }[];
+      refused: { sessionId: string; resetsAt?: number }[];
+      subscriptionType?: string;
+    };
+    const first = await c.call<Usage>('usage.get', {});
+    expect(first.windows.map((w) => [w.key, Math.round(w.utilization ?? 0)])).toEqual([
+      ['five_hour', 42],
+      ['seven_day', 23],
+    ]);
+
+    const s = await c.call<{ sessionId: string }>('chat.create', {
+      cwd: '/work',
+      text: 'use up the limit',
+    });
+    await c.waitFor(chatStatus(s.sessionId, 'idle'), 10_000);
+    const limited = await c.call<Usage>('usage.get', {});
+    expect(limited.windows.find((w) => w.key === 'five_hour')).toMatchObject({
+      status: 'rejected',
+      utilization: 100,
+    });
+    expect(limited.refused).toEqual([
+      expect.objectContaining({ sessionId: s.sessionId, resetsAt: expect.any(Number) }),
+    ]);
+    const reply = itemsOf(c.events, s.sessionId).find((i) => i.kind === 'assistantText');
+    expect((reply as { markdown: string }).markdown).toMatch(/usage limit/);
+
+    // The reading of a running session adds the weekly and per-model windows.
+    const read = await c.call<Usage>('usage.get', { refresh: true });
+    expect(read.subscriptionType).toBe('max');
+    expect(read.windows.map((w) => w.key)).toEqual(
+      expect.arrayContaining(['five_hour', 'seven_day', 'seven_day_opus', 'model:Fable']),
+    );
+    const scheduled = await c.call<{ sendAt: number }>('scheduled.create', {
+      sessionId: s.sessionId,
+      text: 'carry on',
+      whenLimitResets: true,
+    });
+    expect(scheduled.sendAt).toBeGreaterThan(Date.now());
+  }, 30_000);
 });
