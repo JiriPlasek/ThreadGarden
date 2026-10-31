@@ -329,7 +329,6 @@
             <BarList
               label="Title words by chats"
               unit="chats"
-              color="var(--viz-s3)"
               items={data.topics.slice(0, 12).map((t) => ({
                 key: t.word,
                 label: t.word,

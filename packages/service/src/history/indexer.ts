@@ -192,9 +192,10 @@ export class Indexer {
       await yieldLoop();
     }
     this.check();
-    // Deleted (or re-indexed, statistics included) meanwhile: nothing to add.
-    if (this.db.getSession(sessionId))
+    // A session deleted meanwhile keeps no statistics.
+    if (this.db.getSession(sessionId)) {
       this.db.replaceStats(sessionId, stats.result(), STATS_VERSION);
+    }
   }
 
   /**
