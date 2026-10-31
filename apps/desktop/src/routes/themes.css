@@ -130,9 +130,9 @@
   --accent: color-mix(in oklab, var(--primary) 22%, var(--background));
 }
 /*
- * On white, the default muted text (0.556) is 4.34:1 on the muted grey and
- * less on a tinted selected row; with a colour accent it is a little darker,
- * for AA. (Graphite keeps it: the default look stays exactly as it was.)
+ * On white, the default muted text (0.54, layout.css) is 4.64:1 on the muted
+ * grey but less on a tinted selected row; with a colour accent it is a little
+ * darker, for AA.
  */
 [data-theme='light']:not([data-light-style='warm']):is(
     [data-accent='blue'],

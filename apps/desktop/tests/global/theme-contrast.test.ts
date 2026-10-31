@@ -102,18 +102,6 @@ const TEXT_PAIRS: [string, string][] = [
 ];
 const AA = 4.5;
 
-/**
- * The one known shortfall, in the default light look (graphite, default
- * style): shadcn's neutral muted text (0.556) on its muted grey (0.97). The
- * defaults stay exactly as they were before v1.3, so it stays, pinned here
- * to its ratio; every other combination meets AA throughout.
- */
-const BASELINE: Record<string, Record<string, number>> = {
-  'light/default/graphite': {
-    '--muted-foreground on --muted': 4.34,
-    '--muted-foreground on --accent': 4.34,
-  },
-};
 
 const combos = [
   ...LIGHT_STYLES.map((style) => ({ theme: 'light', attr: 'data-light-style', style })),
@@ -170,17 +158,19 @@ describe('theme contrast', () => {
   });
 
   it.each(combos)('$theme / $style / $accent keeps AA for text and the primary button', (c) => {
-    const known = BASELINE[`${c.theme}/${c.style}/${c.accent}`] ?? {};
-    const failing = measure(c).filter((m) => m.ratio < AA && known[m.pair] !== m.ratio);
+    const failing = measure(c).filter((m) => m.ratio < AA);
     expect(failing).toEqual([]);
   });
 
-  it('the default light look keeps its pre-v1.3 values, shortfall included', () => {
+  it('the default light look meets AA for muted text too (0.54, was 0.556 before v1.3)', () => {
     const c = combos.find(
       (x) => x.theme === 'light' && x.style === 'default' && x.accent === 'graphite',
     )!;
     const measured = Object.fromEntries(measure(c).map((m) => [m.pair, m.ratio]));
-    expect(measured).toMatchObject(BASELINE['light/default/graphite']!);
+    expect(measured).toMatchObject({
+      '--muted-foreground on --muted': 4.64,
+      '--muted-foreground on --accent': 4.64,
+    });
   });
 
   it('keeps every new colour inside sRGB (no gamut clipping changes the maths)', () => {

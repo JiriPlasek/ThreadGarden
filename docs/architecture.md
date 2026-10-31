@@ -435,8 +435,9 @@ none, so the default look is the stylesheet as it was. The UI keeps a copy of
 these settings in `localStorage`: `app.html` applies it before the first
 paint, and the service's settings replace it once connected. A unit test
 cascades the real stylesheets for every theme, style and accent and checks
-WCAG AA (4.5:1) for text pairs and the primary button; the one shortfall is
-the unchanged default light look's muted text on the muted grey (4.34:1).
+WCAG AA (4.5:1) for text pairs and the primary button in all of them. (The
+default light muted text is 0.54, darkened in v1.3 from shadcn's 0.556, which
+was 4.34:1 on the muted grey.)
 
 **Usage limits** (v1.3, `src/usage/usage.ts`). Every live session streams
 `rate_limit_event`s (`rate_limit_info`: `status`, `resetsAt`,
