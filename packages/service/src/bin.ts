@@ -5,8 +5,13 @@
  * that import `startService` never start a second, real service — in a bundle
  * every module shares one `import.meta.url`, so an "am I the entry?" check
  * inside `main.ts` would fire there too.
+ *
+ * Without arguments (how the desktop app runs it) it serves; a headless
+ * install's `threadgarden` command passes `serve --headless` or one of the
+ * CLI commands (`cli.ts`).
  */
 import os from 'node:os';
+import { parseArgs, runCli, type Command } from './cli.js';
 import { resolveClaudeConfigDir, resolveDataDirs } from './config.js';
 import { installCrashGuards } from './crash-guard.js';
 import { createLogger } from './logger.js';
@@ -14,38 +19,61 @@ import { startService } from './main.js';
 import { findInstalledClaude } from './sdk/claude-path.js';
 import { RealAdapter } from './sdk/real-adapter.js';
 
-const home = os.homedir();
-const { dataDir, legacyDir, deprecation } = resolveDataDirs(process.env, process.platform, home);
-const logger = createLogger(dataDir);
-// Installed first, so even a failure during startup is logged rather than fatal.
-installCrashGuards(process, { log: logger, exit: (code) => process.exit(code) });
-if (deprecation) logger.warn(deprecation);
-// Spec v1.3 §9: the build flag's old name, honoured for one release (a bundle has it folded in).
-const legacyApiKeyOnly = process.env.PAHUB_API_KEY_ONLY;
-if (legacyApiKeyOnly) {
-  logger.warn(
-    'PAHUB_API_KEY_ONLY is deprecated and will be ignored in a later release: set THREADGARDEN_API_KEY_ONLY instead',
+const serve = (command: Extract<Command, { kind: 'serve' }>): void => {
+  const home = os.homedir();
+  const { dataDir, legacyDir, deprecation } = resolveDataDirs(process.env, process.platform, home);
+  const logger = createLogger(dataDir);
+  // Installed first, so even a failure during startup is logged rather than fatal.
+  installCrashGuards(process, { log: logger, exit: (code) => process.exit(code) });
+  if (deprecation) logger.warn(deprecation);
+  // Spec v1.3 §9: the build flag's old name, honoured for one release (a bundle has it folded in).
+  const legacyApiKeyOnly = process.env.PAHUB_API_KEY_ONLY;
+  if (legacyApiKeyOnly) {
+    logger.warn(
+      'PAHUB_API_KEY_ONLY is deprecated and will be ignored in a later release: set THREADGARDEN_API_KEY_ONLY instead',
+    );
+  }
+
+  startService({
+    dataDir,
+    // Spec v1.3 §9: pahub's database is copied over once.
+    legacyDataDir: legacyDir,
+    claudeConfigDir: resolveClaudeConfigDir(process.env, home),
+    adapter: new RealAdapter(),
+    locateClaude: findInstalledClaude,
+    logger,
+    // Spec §5.5. `scripts/build.mjs` bakes the build-time value into the bundle,
+    // so a release build's policy cannot be changed through the environment.
+    apiKeyOnly: process.env.THREADGARDEN_API_KEY_ONLY === '1' || legacyApiKeyOnly === '1',
+    // v1.4: a headless install (`threadgarden serve --headless [--port <port>]`).
+    ...(command.headless
+      ? { headless: true, remote: command.port === undefined ? {} : { port: command.port } }
+      : {}),
+  })
+    .then((svc) => svc.onClosed(() => process.exit(0)))
+    .catch(async (err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err);
+      // Nobody reads a detached service's stderr: the log is where this shows.
+      logger.error(`start failed: ${message}`);
+      await logger.flush();
+      process.stderr.write(`${message}\n`);
+      process.exit(1);
+    });
+};
+
+const command = parseArgs(process.argv.slice(2));
+if (command.kind === 'serve') {
+  serve(command);
+} else {
+  const { dataDir } = resolveDataDirs(process.env, process.platform, os.homedir());
+  runCli(command, { dataDir, out: (s) => void process.stdout.write(`${s}\n`) }).then(
+    (code) => {
+      // Not process.exit(): it could cut off output still being written to a pipe.
+      process.exitCode = code;
+    },
+    (err: unknown) => {
+      process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
+      process.exitCode = 1;
+    },
   );
 }
-
-startService({
-  dataDir,
-  // Spec v1.3 §9: pahub's database is copied over once.
-  legacyDataDir: legacyDir,
-  claudeConfigDir: resolveClaudeConfigDir(process.env, home),
-  adapter: new RealAdapter(),
-  locateClaude: findInstalledClaude,
-  logger,
-  // Spec §5.5. `scripts/build.mjs` bakes the build-time value into the bundle,
-  // so a release build's policy cannot be changed through the environment.
-  apiKeyOnly: process.env.THREADGARDEN_API_KEY_ONLY === '1' || legacyApiKeyOnly === '1',
-})
-  .then((svc) => svc.onClosed(() => process.exit(0)))
-  .catch(async (err: unknown) => {
-    const message = err instanceof Error ? err.message : String(err);
-    // Nobody reads a detached service's stderr: the log is where this shows.
-    logger.error(`start failed: ${message}`);
-    await logger.flush();
-    process.stderr.write(`${message}\n`);
-    process.exit(1);
-  });

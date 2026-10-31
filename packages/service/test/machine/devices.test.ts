@@ -104,6 +104,23 @@ describe('device registry', () => {
     expect(seen).toEqual([deviceId]);
     expect(r.list()).toEqual([]);
   });
+  it('tells whether a code is live without giving it away', () => {
+    let now = 100;
+    const r = registry({ now: () => now });
+    expect(r.hasLiveCode()).toBe(false);
+    r.claim(r.createPairingCode().code, 'x');
+    expect(r.hasLiveCode()).toBe(false); // spent
+    const { expiresAt } = r.createPairingCode();
+    expect(r.hasLiveCode()).toBe(true);
+    now = expiresAt;
+    expect(r.hasLiveCode()).toBe(true);
+    now = expiresAt + 1;
+    expect(r.hasLiveCode()).toBe(false); // expired
+    now = 100;
+    r.createPairingCode();
+    for (let i = 0; i < 5; i++) r.claim('AAAA-AAAA-AAAA', 'x');
+    expect(r.hasLiveCode()).toBe(false); // killed
+  });
   it('replaces the live code when a new one is created', () => {
     const r = registry();
     const a = r.createPairingCode().code;

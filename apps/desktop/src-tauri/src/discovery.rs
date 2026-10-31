@@ -203,6 +203,16 @@ mod tests {
     }
 
     #[test]
+    fn ignores_the_fields_of_a_headless_service() {
+        let headless = SAMPLE.replace(
+            "}",
+            r#","remotePort":47380,"remoteAddresses":["192.168.1.20"]}"#,
+        );
+        assert_eq!(parse_discovery(&headless), parse_discovery(SAMPLE));
+        assert!(parse_discovery(&headless).is_some());
+    }
+
+    #[test]
     fn rejects_malformed_discovery() {
         assert_eq!(parse_discovery(""), None);
         assert_eq!(parse_discovery("{\"pid\":1}"), None);

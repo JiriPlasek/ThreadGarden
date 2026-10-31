@@ -18,6 +18,8 @@ export const PAIRING_MAX_PAYLOAD = 4096;
 export const PAIRING_MAX_SOCKETS = 4;
 /** A pairing socket is closed after this long, paired or not. */
 export const PAIRING_SOCKET_TTL_MS = 60_000;
+/** TCP connections each address's server holds at once (TLS handshakes included); more are dropped. */
+export const REMOTE_MAX_CONNECTIONS = 64;
 
 const UNAUTHORIZED = 4401;
 const REVOKED = 4403;
@@ -93,6 +95,11 @@ export const startRemoteServer = async (opts: {
   onClientCountChange(n: number): void;
   /** A server or dispatch failure after startup; the server keeps serving. */
   onError?(err: unknown): void;
+  /**
+   * Whether pairing sockets are admitted now (default: always). main.ts admits
+   * them only while a pairing code is live; otherwise they are refused with 503.
+   */
+  pairingOpen?(): boolean;
   /** Tests: how long a pairing socket stays open (default `PAIRING_SOCKET_TTL_MS`). */
   pairingTtlMs?: number;
 }): Promise<{
@@ -179,6 +186,17 @@ export const startRemoteServer = async (opts: {
     });
   };
 
+  /** Pairing is admitted while it is open and below the socket cap; a failing check refuses it. */
+  const pairingAdmitted = (): boolean => {
+    if (pairingSockets.size >= PAIRING_MAX_SOCKETS) return false;
+    try {
+      return opts.pairingOpen?.() ?? true;
+    } catch (err) {
+      report(err);
+      return false;
+    }
+  };
+
   const onUpgrade = (req: IncomingMessage, socket: Duplex, head: Buffer): void => {
     const protocol = offeredProtocol(req);
     if (protocol?.startsWith(DEVICE_PREFIX)) {
@@ -200,7 +218,7 @@ export const startRemoteServer = async (opts: {
         return;
       }
     } else if (protocol === PAIR_PROTOCOL) {
-      if (pairingSockets.size >= PAIRING_MAX_SOCKETS) {
+      if (!pairingAdmitted()) {
         socket.on('error', () => socket.destroy());
         socket.once('finish', () => socket.destroy());
         socket.end(
@@ -222,6 +240,7 @@ export const startRemoteServer = async (opts: {
       const https = createServer({ key: opts.tls.keyPem, cert: opts.tls.certPem }, (_req, res) => {
         res.writeHead(426, { Connection: 'close', Upgrade: 'websocket' }).end();
       });
+      https.maxConnections = REMOTE_MAX_CONNECTIONS;
       https.on('upgrade', onUpgrade);
       servers.push(https);
       // The first address picks the port (0 = any free one); the others share it.

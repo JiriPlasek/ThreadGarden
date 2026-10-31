@@ -24,6 +24,8 @@ import { Catalog, UNTITLED_TITLE, titleFor, type LiveChat } from './history/cata
 import { openDb, type Db } from './history/db.js';
 import { DeviceRegistry } from './machine/devices.js';
 import { loadMachineIdentity } from './machine/identity.js';
+import { privateListenAddresses } from './machine/interfaces.js';
+import { loadOrCreateTlsIdentity, type TlsIdentity } from './machine/tls.js';
 import { Indexer } from './history/indexer.js';
 import { FolderCheck, ProjectOrderNotifier } from './history/project-activity.js';
 import { ProjectIcons, type FoundIcon } from './history/project-icons.js';
@@ -40,6 +42,7 @@ import { registerFileHandlers } from './server/handlers/files.js';
 import { machineFor, registerMachineHandlers } from './server/handlers/machines.js';
 import { registerHistoryHandlers } from './server/handlers/history.js';
 import { registerUsageHandlers } from './server/handlers/usage.js';
+import { REMOTE_PORT, startRemoteServer } from './server/remote-server.js';
 import { Router } from './server/router.js';
 import { startWsServer } from './server/ws-server.js';
 import { ScheduledSends } from './usage/scheduled.js';
@@ -130,6 +133,19 @@ export type StartOptions = {
    * on the installed Claude Code's own sign-in.
    */
   apiKeyOnly?: boolean;
+  /**
+   * v1.4 headless (a machine desktops pair with): the service never exits when
+   * idle (holds and scheduled sends are still looked after), listens for paired
+   * devices over TLS and says `headless` in `hello.machine`. Needs `adapter`
+   * (devices live in the database). Default: neither, as on a desktop.
+   */
+  headless?: boolean;
+  /**
+   * Headless only: the remote listener's port (default `REMOTE_PORT`; 0 = any
+   * free one) and addresses (default this machine's private IPv4 addresses;
+   * tests pass loopback). Without any address there is no remote listener.
+   */
+  remote?: { port?: number; addresses?: string[] };
 };
 
 /** How long shutdown waits for a running index pass to reach a stopping point. */
@@ -144,6 +160,9 @@ export type ServiceHandle = {
   /** v1.3 B: plan usage and scheduled sends (present when an adapter was given). */
   usage?: UsageTracker;
   scheduled?: ScheduledSends;
+  /** v1.4: where paired devices reach this service (headless, with a private address only). */
+  remote?: { addresses: string[]; port: number };
+  /** Sends an event to every local client and paired device. */
   broadcast: (e: { event: string; data: unknown }) => void;
   close(): Promise<void>;
   onClosed(cb: () => void): void;
@@ -155,6 +174,8 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   const setTimer = opts.setInterval ?? ((fn, ms) => setInterval(fn, ms));
   const clearTimer = opts.clearInterval ?? ((t) => clearInterval(t));
   const log = opts.logger ?? createLogger(dataDir);
+  const headless = opts.headless === true;
+  if (headless && !opts.adapter) throw new Error('A headless service needs history (an adapter)');
 
   await mkdir(dataDir, { recursive: true });
   if (opts.legacyDataDir !== undefined) {
@@ -165,7 +186,9 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
 
   const token = opts.token ?? randomBytes(32).toString('hex');
   const router = new Router(log);
-  let clientCount = 0;
+  /** Connected clients: local ones and paired devices. */
+  let localClients = 0;
+  let remoteClients = 0;
   let lastActive = clock();
   let closing: Promise<void> | null = null;
   const closedCallbacks: (() => void)[] = [];
@@ -185,7 +208,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       id,
       name,
       platform: process.platform as MachineInfo['platform'],
-      headless: false,
+      headless,
       home: os.homedir(),
       capabilities: [...CAPABILITIES],
     };
@@ -208,6 +231,9 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   let indexer: Indexer | undefined;
   let watcher: { close(): void } | undefined;
   let server: Awaited<ReturnType<typeof startWsServer>> | undefined;
+  let remote: Awaited<ReturnType<typeof startRemoteServer>> | undefined;
+  /** What the remote listener starts with (headless, with a private address). */
+  let listen: { addresses: string[]; tls: TlsIdentity; devices: DeviceRegistry } | undefined;
   let poller: ExternalPoller | undefined;
   let projectOrder: ProjectOrderNotifier | undefined;
   let buckets: Buckets | undefined;
@@ -261,11 +287,31 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     if (opts.adapter) {
       const opened = openDb(path.join(dataDir, DB_FILE));
       db = opened;
+      // One registry for the handlers and the remote listener: the live pairing
+      // code and the revoke listeners belong to it.
+      const devices = new DeviceRegistry(opened.raw);
+      let tls: TlsIdentity | undefined;
+      if (headless) {
+        const addresses = opts.remote?.addresses ?? privateListenAddresses(os.networkInterfaces());
+        if (addresses.length === 0) {
+          log.warn('no private network address: not listening for devices');
+        } else {
+          // Loaded before the handlers exist, so `pair.proof` always has it here.
+          tls = await loadOrCreateTlsIdentity(dataDir, machineOf(opened).name, {
+            onRegenerate: (reason) =>
+              log.warn(
+                `TLS identity was ${reason}; created a new one — paired devices must pair again`,
+              ),
+          });
+          listen = { addresses, tls, devices };
+        }
+      }
       // machine.*, pairing and devices (v1.4); none of them without a database.
       registerMachineHandlers(router, {
         db: opened,
-        devices: new DeviceRegistry(opened.raw),
+        devices,
         identity: () => machineOf(opened),
+        ...(tls ? { tls } : {}),
       });
     }
     const found = claude.current;
@@ -589,12 +635,39 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       router,
       ...(opts.port === undefined ? {} : { port: opts.port }),
       onClientCountChange: (n) => {
-        clientCount = n;
+        localClients = n;
         lastActive = clock();
       },
       onError: (err) => log.error(`ws server: ${errorText(err)}`),
     });
-    broadcastRef.fn = server.broadcast;
+    if (listen) {
+      const { devices } = listen;
+      remote = await startRemoteServer({
+        addresses: listen.addresses,
+        port: opts.remote?.port ?? REMOTE_PORT,
+        tls: listen.tls,
+        devices,
+        router,
+        // Pairing sockets only while the owner has a code out (`threadgarden pair`).
+        pairingOpen: () => devices.hasLiveCode(),
+        onClientCountChange: (n) => {
+          remoteClients = n;
+          lastActive = clock();
+        },
+        // Anyone on the network can cause these: kept out of the default log.
+        onError: (err) => log.debug(`remote server: ${errorText(err)}`),
+      });
+      const { addresses, port } = remote;
+      log.info(`listening for devices on ${addresses.map((a) => `${a}:${port}`).join(', ')}`);
+    }
+    const local = server;
+    const devicesServer = remote;
+    broadcastRef.fn = devicesServer
+      ? (e) => {
+          local.broadcast(e);
+          devicesServer.broadcast(e);
+        }
+      : local.broadcast;
     await writeDiscovery(dataDir, {
       pid: process.pid,
       port: server.port,
@@ -602,6 +675,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       version: pkg.version,
       protocolVersion: PROTOCOL_VERSION,
       startedAt: clock(),
+      ...(remote ? { remotePort: remote.port, remoteAddresses: remote.addresses } : {}),
     });
     // Clients can connect now; `claude` is found in the background (§8 cold start).
     if (!claude.current && opts.locateClaude) void relocate();
@@ -609,12 +683,14 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     await step('poller', () => poller?.stop());
     await step('watcher', () => watcher?.close());
     await step('indexer', () => indexer?.stop());
+    await step('remote server', () => remote?.close());
     await step('server', () => server?.close());
     await step('database', () => db?.close());
     await step('lock', () => lock.release());
     throw err;
   }
   const wsServer = server;
+  const remoteServer = remote;
   const liveCount = opts.liveCount ?? (() => host?.liveCount() ?? 0);
   // Chats that were live when the service last stopped show as interrupted (§4.2).
   host?.recoverAfterRestart();
@@ -676,6 +752,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         await step('watcher', () => watcher?.close());
         // No index write may race the database close below.
         await step('indexer', stopIndexer);
+        await step('remote server', () => remoteServer?.close());
         await step('server', () => wsServer.close());
         await step('discovery', () => removeDiscovery(dataDir));
         await step('database', () => db?.close());
@@ -697,11 +774,13 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       return true; // when unsure, stay: exiting would miss a send
     }
   };
+  // A headless service belongs to its machine: it never exits on its own.
   const timer = setTimer(() => {
     sweepHolds();
     checkScheduled();
-    if (liveCount() > 0 || clientCount > 0 || sendsPending()) lastActive = clock();
-    else if (clock() - lastActive >= IDLE_EXIT_MS) {
+    if (liveCount() > 0 || localClients + remoteClients > 0 || sendsPending()) {
+      lastActive = clock();
+    } else if (!headless && clock() - lastActive >= IDLE_EXIT_MS) {
       log.info('idle for 30 minutes, exiting');
       void close();
     }
@@ -731,7 +810,10 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     ...(host ? { host } : {}),
     ...(usage ? { usage } : {}),
     ...(scheduled ? { scheduled } : {}),
-    broadcast: wsServer.broadcast,
+    ...(remoteServer
+      ? { remote: { addresses: remoteServer.addresses, port: remoteServer.port } }
+      : {}),
+    broadcast: (e) => broadcastRef.fn(e),
     close,
     onClosed: (cb) => void closedCallbacks.push(cb),
   };

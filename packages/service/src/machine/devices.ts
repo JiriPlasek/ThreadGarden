@@ -71,6 +71,11 @@ export class DeviceRegistry {
       .digest('hex');
   }
 
+  /** Whether a pairing code is live now (the remote listener admits pairing sockets only then). */
+  hasLiveCode(): boolean {
+    return this.liveCode() !== null;
+  }
+
   /** Spends the live code on a new device. A wrong code counts against the live one; the fifth kills it. */
   claim(
     code: string,

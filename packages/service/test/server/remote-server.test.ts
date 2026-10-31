@@ -1,6 +1,7 @@
 import { createHmac, randomBytes } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { request } from 'node:https';
+import { connect, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { MachineInfo } from '@threadgarden/protocol';
@@ -14,6 +15,7 @@ import {
   PAIRING_MAX_PAYLOAD,
   PAIRING_MAX_SOCKETS,
   PAIRING_SOCKET_TTL_MS,
+  REMOTE_MAX_CONNECTIONS,
   REMOTE_PORT,
   startRemoteServer,
 } from '../../src/server/remote-server.js';
@@ -333,6 +335,65 @@ describe('remote server', () => {
       })
       .toBe(true);
     for (const ws of [...open, device]) ws.close();
+  });
+
+  it('refuses pairing sockets with 503 while pairing is closed', async () => {
+    let open = false;
+    const gated = await startAnother({ pairingOpen: () => open });
+    await expect(openTls(gated, 'threadgarden-pair')).rejects.toThrow(/503/);
+    // Devices are not held back.
+    const device = await openTls(gated, `threadgarden-device.${token}`);
+    expect(await call(device, 'machine.get', {})).toMatchObject({ result: { id: machineId } });
+    open = true;
+    const pairing = await openTls(gated, 'threadgarden-pair');
+    expect(await call(pairing, 'hello', { protocolVersion: 5, client: 'p' })).toMatchObject({
+      result: { serviceVersion: 't' },
+    });
+    for (const ws of [pairing, device]) ws.close();
+  });
+
+  it('refuses pairing (503) and keeps serving when the pairing check throws', async () => {
+    const errors: unknown[] = [];
+    const gated = await startAnother({
+      pairingOpen: () => {
+        throw new Error('boom');
+      },
+      onError: (err) => errors.push(err),
+    });
+    await expect(openTls(gated, 'threadgarden-pair')).rejects.toThrow(/503/);
+    expect(errors).toHaveLength(1);
+    const device = await openTls(gated, `threadgarden-device.${token}`);
+    expect(await call(device, 'machine.get', {})).toMatchObject({ result: { id: machineId } });
+    device.close();
+  });
+
+  it(`accepts at most ${REMOTE_MAX_CONNECTIONS} connections per address`, async () => {
+    expect(REMOTE_MAX_CONNECTIONS).toBe(64);
+    const sockets: Socket[] = [];
+    try {
+      for (let i = 0; i < REMOTE_MAX_CONNECTIONS; i++) {
+        sockets.push(
+          await new Promise<Socket>((resolve, reject) => {
+            const sock = connect(s.port, '127.0.0.1', () => resolve(sock));
+            sock.once('error', reject);
+          }),
+        );
+      }
+      await expect(openTls(s, `threadgarden-device.${token}`)).rejects.toThrow();
+      for (const sock of sockets.splice(0)) sock.destroy();
+      await expect
+        .poll(async () => {
+          try {
+            (await openTls(s, `threadgarden-device.${token}`)).close();
+            return true;
+          } catch {
+            return false;
+          }
+        })
+        .toBe(true);
+    } finally {
+      for (const sock of sockets) sock.destroy();
+    }
   });
 
   it('closes a pairing socket when its time is up', async () => {

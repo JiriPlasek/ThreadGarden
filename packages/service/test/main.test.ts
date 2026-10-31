@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -407,7 +407,160 @@ describe('startService', () => {
     expect(await readDiscovery(dir)).not.toBeNull();
     await svc.close();
   });
+
+  it('never exits on idle when headless', async () => {
+    let now = 0;
+    const timers: (() => void)[] = [];
+    const svc = await startService({
+      ...headless(),
+      liveCount: () => 0,
+      clock: () => now,
+      setInterval: (fn) => {
+        timers.push(fn);
+        return 1 as unknown as NodeJS.Timeout;
+      },
+      clearInterval: () => {},
+    });
+    const closed = vi.fn();
+    svc.onClosed(closed);
+    const check = vi.spyOn(svc.scheduled!, 'check');
+    now = 31 * 60_000;
+    timers[0]!();
+    now = 120 * 60_000;
+    timers[0]!();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(closed).not.toHaveBeenCalled();
+    expect(await readDiscovery(join(dir, 'data'))).not.toBeNull();
+    // Holds and scheduled sends are still looked after.
+    expect(check).toHaveBeenCalledTimes(2);
+    await svc.close();
+  });
+
+  it('starts the remote listener only when headless', async () => {
+    const plain = await startService({ ...headless(), headless: false });
+    expect(plain.remote).toBeUndefined();
+    expect(await readDiscovery(join(dir, 'data'))).not.toHaveProperty('remotePort');
+    const nonce = 'a'.repeat(64);
+    // Without a listener there is nothing to prove.
+    expect(
+      await plain.router.dispatch(
+        { id: 1, method: 'pair.proof', params: { nonce } },
+        { clientId: 'p', origin: 'remote' },
+      ),
+    ).toMatchObject({ error: { code: 'NOT_LISTENING' } });
+    await plain.close();
+
+    const svc = await startService(headless());
+    expect(svc.remote).toEqual({ addresses: ['127.0.0.1'], port: expect.any(Number) });
+    expect(svc.remote!.port).toBeGreaterThan(0);
+    expect(await readDiscovery(join(dir, 'data'))).toMatchObject({
+      remotePort: svc.remote!.port,
+      remoteAddresses: ['127.0.0.1'],
+    });
+    const hello = (await rpc(svc.port, svc.token, 'hello', {
+      protocolVersion: PROTOCOL_VERSION,
+      client: 't',
+    })) as { result: { machine: { headless: boolean } } };
+    expect(hello.result.machine.headless).toBe(true);
+
+    // Pairing is closed until a code is live.
+    await expect(openTls(svc.remote!.port, 'threadgarden-pair')).rejects.toThrow(/503/);
+    const { result: created } = (await rpc(svc.port, svc.token, 'pairing.create', {})) as {
+      result: { code: string };
+    };
+    const pairing = await openTls(svc.remote!.port, 'threadgarden-pair');
+    const proof = await tlsCall(pairing, 'pair.proof', { nonce });
+    expect(proof.result.proof).toMatch(/^[0-9a-f]{64}$/);
+    const claimed = await tlsCall(pairing, 'pair.claim', {
+      code: created.code,
+      deviceName: 'Laptop',
+    });
+    pairing.close();
+    // One registry: the device paired over TLS is listed locally.
+    expect(await rpc(svc.port, svc.token, 'devices.list', {})).toMatchObject({
+      result: [{ id: claimed.result.deviceId, name: 'Laptop' }],
+    });
+
+    // Events reach paired devices as well as local clients.
+    const device = await openTls(svc.remote!.port, `threadgarden-device.${claimed.result.token}`);
+    const seen = new Promise<unknown>((resolve) =>
+      device.on('message', (d) => {
+        const msg = JSON.parse(String(d)) as { event?: string };
+        if (msg.event === 'test.event') resolve(msg);
+      }),
+    );
+    svc.broadcast({ event: 'test.event', data: { n: 1 } });
+    expect(await seen).toEqual({ event: 'test.event', data: { n: 1 } });
+    const deviceClosed = new Promise((r) => device.once('close', r));
+    await svc.close();
+    await deviceClosed;
+    expect(await readDiscovery(join(dir, 'data'))).toBeNull();
+  });
+
+  it('starts headless without the remote listener when there is no private address', async () => {
+    const warnings: string[] = [];
+    const svc = await startService({
+      ...headless(),
+      remote: { addresses: [], port: 0 },
+      logger: { ...quietLogger(), warn: (m) => void warnings.push(m) },
+    });
+    expect(svc.remote).toBeUndefined();
+    expect(warnings.some((w) => /no private network address/i.test(w))).toBe(true);
+    await svc.close();
+  });
+
+  it('warns when the TLS identity had to be created again', async () => {
+    const data = join(dir, 'data');
+    await mkdir(join(data, 'tls'), { recursive: true });
+    await writeFile(join(data, 'tls', 'cert.pem'), 'not a certificate');
+    const warnings: string[] = [];
+    const svc = await startService({
+      ...headless(),
+      logger: { ...quietLogger(), warn: (m) => void warnings.push(m) },
+    });
+    expect(svc.remote).toBeDefined();
+    expect(warnings).toContain(
+      'TLS identity was missing; created a new one — paired devices must pair again',
+    );
+    await svc.close();
+  });
 });
+
+/** A headless service with history, listening for devices on loopback (tests only). */
+const headless = () => ({
+  dataDir: join(dir, 'data'),
+  claudeConfigDir: join(dir, 'claude-missing'),
+  adapter: generateCorpus({ sessions: 1, projects: 1, bigSessionMessages: 0 }),
+  installSignalHandlers: false,
+  headless: true,
+  remote: { addresses: ['127.0.0.1'], port: 0 },
+  logger: quietLogger(),
+});
+const quietLogger = () => ({
+  debug: () => {},
+  info: () => {},
+  warn: () => {},
+  error: () => {},
+  flush: async () => {},
+});
+const openTls = (port: number, protocol: string) =>
+  new Promise<WebSocket>((resolve, reject) => {
+    const ws = new WebSocket(`wss://127.0.0.1:${port}`, [protocol], { rejectUnauthorized: false });
+    ws.once('open', () => resolve(ws));
+    ws.once('error', reject);
+  });
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- loosely typed JSON results in tests
+const tlsCall = (ws: WebSocket, method: string, params: unknown): Promise<{ result?: any }> =>
+  new Promise((resolve) => {
+    const onMessage = (d: unknown) => {
+      const msg = JSON.parse(String(d)) as { id?: number; result?: unknown };
+      if (msg.id !== 7) return;
+      ws.off('message', onMessage);
+      resolve(msg);
+    };
+    ws.on('message', onMessage);
+    ws.send(JSON.stringify({ id: 7, method, params }));
+  });
 
 describe('createLogger', () => {
   it('writes info to logs/ and hides debug by default', async () => {
