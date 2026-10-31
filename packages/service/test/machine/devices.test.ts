@@ -1,4 +1,4 @@
-import { createHmac } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -31,7 +31,7 @@ describe('device registry', () => {
     const { code } = r.createPairingCode();
     t += 5 * 60_000 + 1;
     expect(r.claim(code, 'x')).toEqual({ error: 'PAIRING_EXPIRED' });
-    expect(r.proof(code, 'fp')).toBeNull();
+    expect(r.proof('fp', 'n')).toBeNull();
   });
   it('kills the code after five wrong claims', () => {
     const r = registry();
@@ -39,13 +39,42 @@ describe('device registry', () => {
     for (let i = 0; i < 5; i++) r.claim('AAAA-AAAA-AAAA', 'x');
     expect(r.claim(code, 'x')).toEqual({ error: 'PAIRING_INVALID' });
   });
-  it('proves the code over the certificate fingerprint', () => {
+  it('proves the live code over the certificate fingerprint and the nonce', () => {
     const r = registry();
     const { code } = r.createPairingCode();
-    expect(r.proof(code, 'AA:BB')).toBe(
-      createHmac('sha256', code.replaceAll('-', '')).update('AA:BB').digest('hex'),
+    expect(r.proof('AA:BB', 'n1')).toBe(
+      createHmac('sha256', code.replaceAll('-', '')).update('AA:BB\nn1').digest('hex'),
     );
-    expect(r.proof('AAAA-AAAA-AAAA', 'AA:BB')).toBeNull();
+    expect(r.proof('AA:BB', 'n2')).not.toBe(r.proof('AA:BB', 'n1'));
+  });
+  it('has no proof before a code exists or once it is consumed or killed', () => {
+    const r = registry();
+    expect(r.proof('AA:BB', 'n')).toBeNull();
+    r.claim(r.createPairingCode().code, 'x');
+    expect(r.proof('AA:BB', 'n')).toBeNull();
+    r.createPairingCode();
+    for (let i = 0; i < 5; i++) r.claim('AAAA-AAAA-AAAA', 'x');
+    expect(r.proof('AA:BB', 'n')).toBeNull();
+  });
+  it('accepts a claim at exactly the expiry time', () => {
+    let now = 100;
+    const r = registry({ now: () => now });
+    const { code, expiresAt } = r.createPairingCode();
+    now = expiresAt;
+    expect(r.claim(code, 'x')).toMatchObject({ token: expect.any(String) });
+  });
+  it('still accepts the right code after four wrong claims', () => {
+    const r = registry();
+    const { code } = r.createPairingCode();
+    for (let i = 0; i < 4; i++) r.claim('AAAA-AAAA-AAAA', 'x');
+    expect(r.claim(code, 'x')).toMatchObject({ token: expect.any(String) });
+  });
+  it('reports a non-matching code against an expired one as invalid', () => {
+    let now = 100;
+    const r = registry({ now: () => now });
+    r.createPairingCode();
+    now += 5 * 60_000 + 1;
+    expect(r.claim('AAAA-AAAA-AAAA', 'x')).toEqual({ error: 'PAIRING_INVALID' });
   });
   it('stores only token hashes and revokes', () => {
     const r = registry();
@@ -53,13 +82,27 @@ describe('device registry', () => {
       token: string;
       deviceId: string;
     };
-    expect(JSON.stringify(db.prepare('SELECT * FROM devices').all())).not.toContain(token);
+    const rows = db.prepare('SELECT * FROM devices').all() as { token_hash: string }[];
+    expect(JSON.stringify(rows)).not.toContain(token);
+    expect(rows[0]?.token_hash).toBe(createHash('sha256').update(token).digest('hex'));
     const seen: string[] = [];
     r.onRevoke((id) => seen.push(id));
     expect(r.revoke(deviceId)).toBe(true);
     expect(r.verify(token)).toBeNull();
     expect(seen).toEqual([deviceId]);
     expect(r.revoke(deviceId)).toBe(false);
+  });
+  it('calls every revoke listener even when one throws', () => {
+    const r = registry();
+    const { deviceId } = r.claim(r.createPairingCode().code, 'x') as { deviceId: string };
+    const seen: string[] = [];
+    r.onRevoke(() => {
+      throw new Error('boom');
+    });
+    r.onRevoke((id) => seen.push(id));
+    expect(r.revoke(deviceId)).toBe(true);
+    expect(seen).toEqual([deviceId]);
+    expect(r.list()).toEqual([]);
   });
   it('replaces the live code when a new one is created', () => {
     const r = registry();

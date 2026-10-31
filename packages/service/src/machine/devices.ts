@@ -58,12 +58,17 @@ export class DeviceRegistry {
     return { code: `${raw.slice(0, 4)}-${raw.slice(4, 8)}-${raw.slice(8)}`, expiresAt };
   }
 
-  /** HMAC of the certificate fingerprint keyed by the live code, or null when the code is not live. */
-  proof(code: string, fingerprint256: string): string | null {
+  /**
+   * HMAC of the certificate fingerprint and a client nonce, keyed by the live
+   * code; null when no code is live. It never takes a code from the caller, so
+   * it cannot be used to guess one (only claim() can, and it counts failures).
+   */
+  proof(fingerprint256: string, nonce: string): string | null {
     const live = this.liveCode();
-    const key = normalise(code);
-    if (!live || !sameSecret(live.normalised, key)) return null;
-    return createHmac('sha256', key).update(fingerprint256).digest('hex');
+    if (!live) return null;
+    return createHmac('sha256', live.normalised)
+      .update(`${fingerprint256}\n${nonce}`)
+      .digest('hex');
   }
 
   /** Spends the live code on a new device. A wrong code counts against the live one; the fifth kills it. */
@@ -93,14 +98,11 @@ export class DeviceRegistry {
   }
 
   verify(token: string): Device | null {
-    const hash = sha256(token).toString('hex');
+    // Looked up by the sha256 of the token: an indexed equality on a hash leaks nothing useful.
     const row = this.db
-      .prepare(
-        'SELECT id, name, created_at, last_seen, token_hash FROM devices WHERE token_hash = ?',
-      )
-      .get(hash) as (DeviceRow & { token_hash: string }) | undefined;
-    if (!row || !sameSecret(row.token_hash, hash)) return null;
-    return toDevice(row);
+      .prepare('SELECT id, name, created_at, last_seen FROM devices WHERE token_hash = ?')
+      .get(sha256(token).toString('hex')) as DeviceRow | undefined;
+    return row ? toDevice(row) : null;
   }
 
   touch(deviceId: string): void {
@@ -117,7 +119,15 @@ export class DeviceRegistry {
   revoke(deviceId: string): boolean {
     const removed =
       Number(this.db.prepare('DELETE FROM devices WHERE id = ?').run(deviceId).changes) > 0;
-    if (removed) for (const cb of [...this.revokeListeners]) cb(deviceId);
+    if (removed) {
+      for (const cb of [...this.revokeListeners]) {
+        try {
+          cb(deviceId);
+        } catch {
+          // The row is gone; one failing listener must not stop the others.
+        }
+      }
+    }
     return removed;
   }
 
