@@ -33,6 +33,14 @@ export type MachinesOptions = {
 };
 
 /** A machine's relay on the local service (the UI never connects anywhere but loopback). */
+/** How the UI names a machine: This PC for the local one. */
+export const machineLabel = (m: Pick<MachineEntry, 'local' | 'name'>): string =>
+  m.local ? THIS_PC : m.name;
+
+/** The names of the machines that are on (This PC first), e.g. for "Stop all work". */
+export const onMachineNames = (machines: Pick<MachinesState, 'list'>): string[] =>
+  machines.list.filter((m) => m.status === 'on').map(machineLabel);
+
 export const relayUrl = (localPort: number, machineId: string): string =>
   `ws://127.0.0.1:${localPort}/relay?machine=${encodeURIComponent(machineId)}`;
 

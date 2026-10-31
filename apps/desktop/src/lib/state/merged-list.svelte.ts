@@ -6,14 +6,44 @@
  */
 import { compareChats, type ChatSummary, type Result } from '@threadgarden/protocol';
 import { quietly } from './api';
-import type { MachinesState } from './machines.svelte';
+import { machineLabel, type MachinesState } from './machines.svelte';
 import { wirePlace, type Place } from './places.svelte';
-import { chatKey, THIS_PC } from './refs';
+import { chatKey } from './refs';
 import type { MachineScope, Scopes } from './scope';
 import { PAGE_SIZE } from './sessions.svelte';
 
 /** A chat and the machine it lives on. */
 export type MachineChat = ChatSummary & { machineId: string };
+
+/**
+ * Whether `place` is listed across machines (a `MergedList`): Needs you,
+ * Running and the buckets, once a machine is paired. A project is listed by
+ * its machine's `sessions`, as is everything while This PC is alone.
+ */
+export const listedAcross = (place: Place, scopes: Pick<Scopes, 'all'>): boolean =>
+  place.kind !== 'project' && scopes.all().length > 1;
+
+/**
+ * Asks "Archive all older than 30 days" of `place` (Active or a project): a
+ * project on its machine; Active on This PC and every connected paired
+ * machine (one confirmation with the summed count, each machine archives its own).
+ */
+export const askArchiveOlderIn = (
+  place: Place,
+  scopes: Pick<Scopes, 'all' | 'get' | 'local'>,
+): Promise<void> => {
+  if (place.kind === 'project') {
+    const scope =
+      (place.machineId === undefined ? undefined : scopes.get(place.machineId)) ?? scopes.local();
+    return scope.buckets.askArchiveOlder(place.projectId);
+  }
+  const here = scopes.local();
+  const along = scopes
+    .all()
+    .filter((s) => s !== here && s.api.status === 'open')
+    .map((s) => s.buckets);
+  return here.buckets.askArchiveOlder(undefined, along);
+};
 
 type Order = (a: ChatSummary, b: ChatSummary) => number;
 
@@ -103,16 +133,26 @@ export class MergedList {
   }
 
   /**
-   * Names of the machines whose chats are missing: not on, their list
-   * failed, or they appeared since (a machine that goes leaves it at once).
+   * Names of the machines whose chats are missing: unreachable (or otherwise
+   * not on), their list failed, or they appeared since. A machine still
+   * connecting is not named, and one that goes leaves the list at once.
    */
   get skipped(): string[] {
     const listed = this.listed;
     if (!listed) return [];
     return this.scopes()
-      .filter((s) => !listed.has(s.machineId))
+      .filter((s) => !listed.has(s.machineId) && !this.connecting(s))
       .map(this.nameOf);
   }
+
+  /** The first answer is in (until then the list has nothing to show). */
+  get answered(): boolean {
+    return this.listed !== null;
+  }
+
+  /** Still connecting (not reached yet, nothing failed): not named as missing. */
+  private connecting = (scope: MachineScope): boolean =>
+    this.machines?.get(scope.machineId)?.status === 'connecting';
 
   private isOn = (scope: MachineScope): boolean => {
     const m = this.machines?.get(scope.machineId);
@@ -121,7 +161,7 @@ export class MergedList {
 
   private nameOf = (scope: MachineScope): string => {
     const m = this.machines?.get(scope.machineId);
-    return !m ? scope.machineId : m.local ? THIS_PC : m.name;
+    return m ? machineLabel(m) : scope.machineId;
   };
 
   private params = (limit: number, cursor?: string) => ({

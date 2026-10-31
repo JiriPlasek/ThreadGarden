@@ -10,7 +10,12 @@
   import { rowPx } from '#lib/interface-scale.js';
   import { ARCHIVE_OLDER_DAYS } from '#lib/state/buckets.svelte.js';
   import { useApp } from '#lib/state/context.js';
-  import { MergedList, type MachineChat } from '#lib/state/merged-list.svelte.js';
+  import {
+    askArchiveOlderIn,
+    listedAcross,
+    MergedList,
+    type MachineChat,
+  } from '#lib/state/merged-list.svelte.js';
   import { includesOtherBuckets } from '#lib/state/places.svelte.js';
   import { chatKey } from '#lib/state/refs.js';
   import type { MachineScope } from '#lib/state/scope.js';
@@ -60,11 +65,13 @@
     places.selected.kind === 'project' ? scopeOf(places.selected.machineId) : local,
   );
 
-  /** The cross-machine place's list while a machine is paired (else This PC's `sessions`). */
+  /** Listed across machines (`merged`), else by the place's machine's `sessions`. */
+  const across = $derived(listedAcross(places.selected, scopes));
+  /** The cross-machine place's list while a machine is paired. */
   let merged = $state<MergedList | null>(null);
   $effect(() => {
     const place = places.selected;
-    if (place.kind === 'project' || scopes.all().length < 2) return;
+    if (!across) return;
     // Only the place and the set of machines make a new list (it follows the rest itself).
     return untrack(() => {
       const list = new MergedList(() => scopes.all(), place, { machines });
@@ -101,16 +108,24 @@
     }
   });
 
-  const shown = $derived(merged ?? placeScope.sessions);
+  // Across machines, nothing shows until the merged list's first answer (This
+  // PC's `sessions` does not load such a place then).
   const items = $derived.by((): MachineChat[] => {
-    if (merged) return merged.items;
+    if (across) return merged?.answered ? merged.items : [];
     const machineId = placeScope.machineId;
     return placeScope.sessions.items.map((c) => ({ ...c, machineId }));
   });
-  const hasMore = $derived(
-    merged ? merged.nextAvailable : placeScope.sessions.nextCursor !== undefined,
+  const loading = $derived(
+    across ? !merged?.answered || merged.loading : placeScope.sessions.loading,
   );
-  const skipped = $derived(merged?.skipped ?? []);
+  const error = $derived(across ? (merged?.error ?? null) : placeScope.sessions.error);
+  const hasMore = $derived(
+    across ? !!merged?.nextAvailable : placeScope.sessions.nextCursor !== undefined,
+  );
+  const loadMore = (): void => {
+    void (across ? merged?.loadMore() : placeScope.sessions.loadMore());
+  };
+  const skipped = $derived(across ? (merged?.skipped ?? []) : []);
   const keyOf = (chat: MachineChat): string => chatKey(chat);
 
   /**
@@ -224,10 +239,9 @@
         places.selected.kind === 'all' ||
         places.selected.kind === 'project'),
   );
-  /** In Active, This PC's chats (each machine tidies its own). */
+  /** A project's machine; in Active, every connected machine. */
   const archiveOlder = (): void => {
-    const p = places.selected;
-    void placeScope.buckets.askArchiveOlder(p.kind === 'project' ? p.projectId : undefined);
+    void askArchiveOlderIn(places.selected, scopes);
   };
 
   /** This PC's rows keep their plain id; another machine's add the machine. */
@@ -512,9 +526,9 @@
     </label>
   </div>
 
-  {#if shown.error}
+  {#if error}
     <p class="text-destructive px-3 pb-2 text-xs" role="alert">
-      Could not load chats: {shown.error}
+      Could not load chats: {error}
     </p>
   {/if}
 
@@ -587,12 +601,12 @@
     rowHeight={heightOf}
     key={(r) => r.key}
     isSticky={(r) => r.kind === 'header'}
-    onEndReached={() => void shown.loadMore()}
+    onEndReached={loadMore}
     role="listbox"
     aria-label="{placeTitle} chats"
     aria-multiselectable="true"
     aria-activedescendant={cursorIndex >= 0 ? rowId(grouped.chats[cursorIndex]!) : undefined}
-    aria-busy={shown.loading}
+    aria-busy={loading}
     tabindex={0}
     onkeydown={onListKey}
     class="focus-visible:ring-ring/50 min-h-0 flex-1 overflow-y-auto pb-1 outline-none [scrollbar-width:thin] focus-visible:ring-2 focus-visible:ring-inset"
@@ -631,7 +645,7 @@
     {/snippet}
   </VirtualList>
 
-  {#if items.length === 0 && !shown.loading}
+  {#if items.length === 0 && !loading}
     <p
       class="text-muted-foreground pointer-events-none absolute inset-x-0 top-28 px-4 text-center text-xs"
     >

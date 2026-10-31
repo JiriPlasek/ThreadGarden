@@ -4,6 +4,8 @@
   import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
   import { Button } from '#lib/components/ui/button/index.js';
   import { useApp } from '#lib/state/context.js';
+  import { stopAllDescription } from '#lib/state/lifecycle.svelte.js';
+  import { onMachineNames } from '#lib/state/machines.svelte.js';
   import { chatKey } from '#lib/state/refs.js';
   import type { MachineScope } from '#lib/state/scope.js';
   import { cn } from '#lib/utils.js';
@@ -16,12 +18,13 @@
    * Bottom strip (spec §6.1, Ruling R21): every live Threadgarden chat and every active
    * external session from every project, needs-you → working → idle. Clicking one
    * opens (or focuses) its tab; a chat with running background tasks shows its
-   * "N running" pill (Ruling R29). "Stop all work" (enabled while any Threadgarden chat of
-   * This PC is live; it closes idle ones too) sits behind a confirmation. v1.3 B: the
+   * "N running" pill (Ruling R29). "Stop all work" (enabled while any Threadgarden chat is
+   * live; it closes idle ones too) sits behind a confirmation. v1.3 B: the
    * usage meter sits before it (hidden while nothing is known). With paired
-   * machines, every connected machine's agents are listed; each opens on its machine.
+   * machines, every connected machine's agents are listed (each opens on its
+   * machine), and "Stop all work" stops the work of every connected machine.
    */
-  const { agents, tabs, scopes } = useApp();
+  const { agents, tabs, scopes, machines } = useApp();
   const local = scopes.local();
 
   let confirming = $state(false);
@@ -38,7 +41,7 @@
         ]),
     ),
   );
-  const canStop = $derived(agents.local.some((a) => a.live));
+  const canStop = $derived(agents.items.some((a) => a.live));
 </script>
 
 <footer class="bg-muted/40 flex h-8 shrink-0 items-center gap-2 border-t pr-1 pl-2 text-xs">
@@ -98,7 +101,7 @@
 <ConfirmDialog
   bind:open={confirming}
   title="Stop all work?"
-  description="Every chat running in Threadgarden is interrupted and closed, with its background agents and processes. Sessions running in a terminal are not affected, and any chat can be resumed later."
+  description={stopAllDescription(onMachineNames(machines))}
   confirmLabel="Stop all work"
   destructive
   onConfirm={async () => {

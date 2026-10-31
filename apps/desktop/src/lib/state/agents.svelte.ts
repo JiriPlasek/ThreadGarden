@@ -48,10 +48,7 @@ export class AgentsState {
       { paired: true },
     );
 
-  /**
-   * This PC's agents: what "Stop all work", restarting the service and
-   * quitting stop (each acts on This PC's service only).
-   */
+  /** This PC's agents: what restarting the service and quitting stop (This PC's service only). */
   get local(): MachineChat[] {
     const id = this.localFeed?.machineId();
     return this.items.filter((a) => a.machineId === id);
@@ -64,13 +61,22 @@ export class AgentsState {
     );
   };
 
-  /** Stops the work on This PC (see `local`). */
+  /**
+   * "Stop all work": stops the work on This PC and every connected machine
+   * (each asked at once); a failure is rethrown once every machine answered.
+   */
   stopAll = async (): Promise<number> => {
-    const feed = this.localFeed;
-    if (!feed) return 0;
-    const { stopped } = await feed.api.request('work.stopAll', {});
-    quietly(this.refreshFeed(feed));
-    return stopped;
+    const feeds = this.feeds.filter((f) => f.local || f.api.status === 'open');
+    const done = await Promise.allSettled(
+      feeds.map(async (feed) => {
+        const { stopped } = await feed.api.request('work.stopAll', {});
+        quietly(this.refreshFeed(feed));
+        return stopped;
+      }),
+    );
+    const failed = done.find((r) => r.status === 'rejected');
+    if (failed) throw failed.reason;
+    return done.reduce((n, r) => n + (r.status === 'fulfilled' ? r.value : 0), 0);
   };
 
   private add = (api: Api, machineId: () => string, local: boolean): Feed => {

@@ -43,7 +43,7 @@ const wire = (): void => {
   wired = true;
   connection.init(client);
   // This PC's places, sessions, chats, buckets, scheduled sends and "Your turn".
-  wireScope(localScope, { tabs, settings, agents });
+  wireScope(localScope, { tabs, settings, agents, scopes });
   tabs.init(client, { localMachineId: () => localScope.machineId });
   settings.init(client);
   agents.init(client, { machineId: () => localScope.machineId });

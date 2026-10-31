@@ -6,11 +6,12 @@
 import { SvelteMap } from 'svelte/reactivity';
 import { ServiceClient } from '../service/client';
 import type { AgentsState } from './agents.svelte';
-import type { Api } from './api';
+import { quietly, type Api } from './api';
 import { buckets, BucketsState } from './buckets.svelte';
 import { chats, ChatsState, type ChatsOptions } from './chats.svelte';
 import { interaction, InteractionState } from './interaction.svelte';
 import type { MachineEntry, MachinesState } from './machines.svelte';
+import { listedAcross } from './merged-list.svelte';
 import { places, PlacesState } from './places.svelte';
 import { machineIdOf } from './refs';
 import { scheduled, ScheduledState } from './scheduled.svelte';
@@ -45,6 +46,11 @@ export type ScopeDeps = {
   /** What the agents strip lists ("Your turn" reads this machine's rows of it). */
   agents?: Pick<AgentsState, 'items'>;
   chats?: ChatsOptions;
+  /**
+   * This PC's: all scopes. While a machine is paired, the cross-machine
+   * places are listed across machines, not by This PC's `sessions`.
+   */
+  scopes?: Pick<Scopes, 'all' | 'observe'>;
 };
 
 /** A scope around existing store instances; `machineId` is read on every use. */
@@ -66,10 +72,23 @@ export const makeScope = (
  * Inits a scope's stores the way the app always has, and keeps its open chats
  * following the machine's tabs; returns a function that stops it.
  */
-export const wireScope = (scope: MachineScope, deps: ScopeDeps): (() => void) => {
+export const wireScope = (
+  scope: MachineScope,
+  deps: ScopeDeps,
+  o: { projectsOnly?: boolean } = {},
+): (() => void) => {
   const { api, places, sessions, chats, interaction, buckets, scheduled, yourTurn } = scope;
   places.init(api, { localMachineId: deps.tabs.localMachineId });
-  sessions.init(api, places);
+  const all = deps.scopes;
+  sessions.init(api, places, {
+    lists: o.projectsOnly
+      ? (p) => p.kind === 'project'
+      : all
+        ? (p) => !listedAcross(p, all)
+        : undefined,
+  });
+  // The last paired machine gone: This PC lists every place again.
+  const offScopes = all?.observe(() => () => quietly(sessions.reload()), { paired: true });
   chats.init(api, deps.chats);
   interaction.init(api);
   buckets.init(api, chats);
@@ -94,6 +113,7 @@ export const wireScope = (scope: MachineScope, deps: ScopeDeps): (() => void) =>
   return () => {
     offTabs();
     offOpen();
+    offScopes?.();
     yourTurn.stop();
   };
 };
@@ -113,7 +133,8 @@ export const createScope = (
     interaction: new InteractionState(),
     yourTurn: new YourTurnState(),
   });
-  const stop = wireScope(scope, deps);
+  // Its `sessions` lists its projects; the other places are listed across machines.
+  const stop = wireScope(scope, deps, { projectsOnly: true });
   return Object.assign(scope, { stop });
 };
 

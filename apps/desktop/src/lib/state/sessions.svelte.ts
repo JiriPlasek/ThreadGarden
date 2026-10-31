@@ -1,6 +1,6 @@
 import type { ChatSummary, Result } from '@threadgarden/protocol';
 import { quietly, type Api } from './api';
-import { wirePlace, type PlacesState } from './places.svelte';
+import { wirePlace, type Place, type PlacesState } from './places.svelte';
 
 export const PAGE_SIZE = 50;
 
@@ -17,9 +17,13 @@ export class SessionsState {
   private places: PlacesState | null = null;
   private generation = 0;
 
-  init = (api: Api, places: PlacesState): void => {
+  /** Whether this list loads a place (others are listed elsewhere, e.g. across machines). */
+  private lists: (place: Place) => boolean = () => true;
+
+  init = (api: Api, places: PlacesState, o: { lists?: (place: Place) => boolean } = {}): void => {
     this.api = api;
     this.places = places;
+    if (o.lists) this.lists = o.lists;
     places.subscribe(() => quietly(this.reload()));
     const refetch = () => quietly(this.refetch());
     api.on('sessions.changed', refetch);
@@ -109,6 +113,11 @@ export class SessionsState {
     const { api, places } = this;
     if (!api || !places) return;
     const gen = ++this.generation;
+    if (!this.lists(places.selected)) {
+      // Listed elsewhere: nothing is asked (and an answer still in flight is dropped).
+      this.loading = false;
+      return;
+    }
     const limit = keepLoaded ? Math.max(PAGE_SIZE, this.items.length) : PAGE_SIZE;
     this.loading = true;
     try {
@@ -130,7 +139,7 @@ export class SessionsState {
 
   loadMore = async (): Promise<void> => {
     const { api, places, nextCursor } = this;
-    if (!api || !places || !nextCursor || this.loading) return;
+    if (!api || !places || !nextCursor || this.loading || !this.lists(places.selected)) return;
     const gen = this.generation;
     this.loading = true;
     try {

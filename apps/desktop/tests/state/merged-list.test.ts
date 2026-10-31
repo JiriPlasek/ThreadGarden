@@ -1,11 +1,14 @@
 import type { ChatSummary } from '@threadgarden/protocol';
-import { render, screen, waitFor } from '@testing-library/svelte';
+import { render, screen, waitFor, within } from '@testing-library/svelte';
+import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
+import AgentsStrip from '../../src/lib/components/layout/AgentsStrip.svelte';
 import ChatList from '../../src/lib/components/layout/ChatList.svelte';
 import { startAttention } from '../../src/lib/notifications';
-import { MergedList } from '../../src/lib/state/merged-list.svelte';
+import { askArchiveOlderIn, MergedList } from '../../src/lib/state/merged-list.svelte';
 import type { Place } from '../../src/lib/state/places.svelte';
-import { LOCAL, M1, setupTwoMachines, summary } from '../layout/harness';
+import BucketsHarness from '../layout/BucketsHarness.svelte';
+import { LOCAL, M1, project, setupTwoMachines, summary } from '../layout/harness';
 import { RpcFail, type FakeServer } from '../service/fake-ws';
 
 type ListParams = { place: { kind: string }; limit: number; cursor?: string; query?: string };
@@ -277,5 +280,204 @@ describe('the chat list across machines', () => {
     const row = await screen.findByRole('option');
     row.click();
     expect(app.tabs.active).toBe(`${M1}/r1`);
+  });
+});
+
+type SetParams = { sessionIds: string[]; bucket: string };
+
+/** Calls of `method` whose params match `pick` (the stores of a machine share its server). */
+const callsOf = (
+  server: FakeServer,
+  method: string,
+  pick: (p: ListParams) => boolean = () => true,
+) => server.calls(method).filter((c) => pick(c.params as ListParams));
+
+describe('moving another machine’s chats (fix round 1)', () => {
+  /** M1 lists `items` everywhere and answers bucket moves; This PC lists nothing. */
+  const remoteList = (items: ChatSummary[], configure?: (s: FakeServer) => void) =>
+    setupTwoMachines({
+      configureRemote: (s) => {
+        s.handlers['sessions.list'] = () => ({ items });
+        s.handlers['chat.setBucket'] = (p) => ({
+          updated: (p as SetParams).sessionIds.length,
+          skipped: [],
+        });
+        configure?.(s);
+      },
+    });
+
+  const cursorOnFirst = async (): Promise<void> => {
+    const list = screen.getByRole('listbox');
+    await waitFor(() => expect(within(list).getAllByRole('option')).toHaveLength(1));
+    list.focus();
+    await userEvent.keyboard('{ArrowDown}');
+  };
+
+  it('H holds a chat of Ubuntu PC through Ubuntu PC', async () => {
+    const { context, server, remote } = await remoteList([at('r1', 20, { title: 'remote chat' })]);
+    render(BucketsHarness, { context });
+    await cursorOnFirst();
+    await userEvent.keyboard('h');
+    const dialog = await screen.findByRole('dialog', { name: 'Put on hold' });
+    expect(within(dialog).getByText(/remote chat/)).toBeTruthy();
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
+    await waitFor(() =>
+      expect(callsOf(remote, 'chat.setBucket').map((c) => c.params as SetParams)).toMatchObject([
+        { sessionIds: ['r1'], bucket: 'onHold' },
+      ]),
+    );
+    expect(server.calls('chat.setBucket')).toHaveLength(0);
+  });
+
+  it('E on a live chat of Ubuntu PC asks to end it there, then archives it there', async () => {
+    let ended = false;
+    const { context, server, remote } = await remoteList(
+      [at('r1', 20, { live: true, status: 'idle' })],
+      (s) => {
+        s.handlers['chat.setBucket'] = (p) => {
+          const { sessionIds } = p as SetParams;
+          return ended
+            ? { updated: 1, skipped: [] }
+            : { updated: 0, skipped: [{ sessionId: sessionIds[0], reason: 'LIVE' }] };
+        };
+        s.handlers['chat.end'] = () => {
+          ended = true;
+          return {};
+        };
+      },
+    );
+    render(BucketsHarness, { context });
+    await cursorOnFirst();
+    await userEvent.keyboard('e');
+    const dialog = await screen.findByRole('alertdialog');
+    expect(within(dialog).getByText('End this chat and archive it?')).toBeTruthy();
+    await userEvent.click(within(dialog).getByRole('button', { name: 'End and archive' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(remote.calls('chat.end')).toHaveLength(1);
+    expect(remote.calls('chat.setBucket')).toHaveLength(2);
+    expect(server.calls('chat.end')).toHaveLength(0);
+    expect(server.calls('chat.setBucket')).toHaveLength(0);
+  });
+
+  it("shows Ubuntu PC's notice, naming the machine", async () => {
+    const { context } = await remoteList([at('r1', 20)], (s) => {
+      s.handlers['chat.setBucket'] = () => {
+        throw new RpcFail('INTERNAL', 'disk full');
+      };
+    });
+    render(BucketsHarness, { context });
+    await cursorOnFirst();
+    await userEvent.keyboard('e');
+    expect(
+      await screen.findByText('Ubuntu PC: Could not archive the chat: disk full'),
+    ).toBeTruthy();
+  });
+
+  it('archives older chats in Active on every connected machine, after one summed count', async () => {
+    const older = (n: number) => () => ({ archived: n });
+    const { context, app, server, remote } = await setupTwoMachines({
+      configure: (s) => (s.handlers['chat.archiveOlder'] = older(3)),
+      configureRemote: (s) => (s.handlers['chat.archiveOlder'] = older(4)),
+    });
+    render(BucketsHarness, { context });
+    await askArchiveOlderIn({ kind: 'active' }, app.scopes);
+    const dialog = await screen.findByRole('alertdialog');
+    expect(within(dialog).getByText('Archive 7 chats older than 30 days?')).toBeTruthy();
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Archive 7 chats' }));
+    await waitFor(() => expect(app.buckets.notice).toBe('Archived 7 chats.'));
+    for (const s of [server, remote]) {
+      expect(s.calls('chat.archiveOlder').map((c) => c.params)).toEqual([
+        { olderThanDays: 30, dryRun: true },
+        { olderThanDays: 30 },
+      ]);
+    }
+  });
+});
+
+describe('Stop all work across machines (fix round 1)', () => {
+  it('stops every connected machine and says so; restart and quit stay This PC’s', async () => {
+    const { context, app, server, remote } = await setupTwoMachines({
+      configure: (s) => (s.handlers['work.stopAll'] = () => ({ stopped: 0 })),
+      configureRemote: (s) => {
+        s.handlers['work.stopAll'] = () => ({ stopped: 1 });
+        s.handlers['sessions.list'] = (p) =>
+          (p as ListParams).place.kind === 'running'
+            ? { items: [at('w', 5, { status: 'working', live: true, title: 'remote work' })] }
+            : { items: [] };
+      },
+    });
+    render(AgentsStrip, { context });
+    const stop = await screen.findByRole('button', { name: 'Stop all work' });
+    // Only Ubuntu PC runs something: the button is enabled all the same.
+    await waitFor(() => expect((stop as HTMLButtonElement).disabled).toBe(false));
+    await userEvent.click(stop);
+    const dialog = await screen.findByRole('alertdialog');
+    expect(dialog.textContent).toContain(
+      'Every chat running in Threadgarden on This PC and Ubuntu PC is interrupted and closed',
+    );
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Stop all work' }));
+    await waitFor(() => expect(remote.calls('work.stopAll')).toHaveLength(1));
+    expect(server.calls('work.stopAll')).toHaveLength(1);
+    expect(app.lifecycle.runningEverywhere.map((a) => a.sessionId)).toEqual(['w']);
+    expect(app.lifecycle.running).toEqual([]);
+  });
+});
+
+describe('what the merged list shows and asks (fix round 1)', () => {
+  it('does not name a machine that is still connecting', async () => {
+    const { app } = await setupTwoMachines({
+      waitForOn: false,
+      configureRemote: (s) => s.silent.add('hello'),
+    });
+    await vi.waitFor(() => expect(app.machines.get(M1)?.status).toBe('connecting'));
+    const list = new MergedList(
+      () => app.scopes.all(),
+      { kind: 'active' },
+      {
+        machines: app.machines,
+      },
+    );
+    await list.reload();
+    expect(list.skipped).toEqual([]);
+    app.machines.get(M1)!.status = 'unreachable';
+    expect(list.skipped).toEqual(['Ubuntu PC']);
+  });
+
+  it("leaves the cross-machine places to the merged list: This PC's and M1's own lists do not ask", async () => {
+    const { app, server, remote } = await setupTwoMachines({
+      configure: (s) => (s.handlers['projects.list'] = () => [project('p1', 'alpha')]),
+    });
+    const listed = (s: FakeServer, kind: string) =>
+      callsOf(s, 'sessions.list', (p) => p.place.kind === kind && p.limit === 50).length;
+    // Lists of 50 for Active are only ever a `sessions` (or merged list) page.
+    expect(listed(remote, 'active')).toBe(0);
+    app.places.select({ kind: 'running' });
+    await flush();
+    expect(listed(server, 'running')).toBe(0);
+    // A project is still This PC's to list.
+    app.places.select({ kind: 'project', projectId: 'p1' });
+    await vi.waitFor(() => expect(listed(server, 'project')).toBe(1));
+    // Alone again, This PC lists every place.
+    app.places.select({ kind: 'running' });
+    await app.machines.remove(M1);
+    await vi.waitFor(() => expect(listed(server, 'running')).toBe(1));
+  });
+
+  it('shows nothing of This PC alone while the merged list waits for its first answer', async () => {
+    let release!: () => void;
+    const { context, remote } = await setupTwoMachines({
+      configure: (s) => (s.handlers['sessions.list'] = paged([at('s1', 30)])),
+    });
+    remote.handlers['sessions.list'] = (p) =>
+      (p as ListParams).limit === 50
+        ? new Promise((resolve) => (release = () => resolve({ items: [at('r1', 20)] })))
+        : { items: [] };
+    render(ChatList, { context });
+    expect(screen.queryAllByRole('option')).toHaveLength(0);
+    await flush();
+    expect(screen.queryAllByRole('option')).toHaveLength(0);
+    expect(screen.getByRole('listbox').getAttribute('aria-busy')).toBe('true');
+    release();
+    await waitFor(() => expect(screen.getAllByRole('option')).toHaveLength(2));
   });
 });

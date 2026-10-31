@@ -9,6 +9,7 @@
     pickProblem,
     toDateTimeLocal,
   } from '#lib/format/hold.js';
+  import type { BucketsState } from '#lib/state/buckets.svelte.js';
   import { useApp } from '#lib/state/context.js';
 
   /**
@@ -16,8 +17,10 @@
    * a picked date and time, or no date, plus an optional note. A small dialog
    * rather than an anchored popover, as it opens from menus, the bulk bar and
    * the H key alike. A chat already on hold starts from its current hold.
+   * `buckets`: the machine's whose chats are held (This PC's by default).
    */
-  const { buckets } = useApp();
+  const app = useApp();
+  let { buckets = app.buckets }: { buckets?: BucketsState } = $props();
 
   type Choice = 'tomorrow' | 'nextWeek' | 'pick' | 'none';
 

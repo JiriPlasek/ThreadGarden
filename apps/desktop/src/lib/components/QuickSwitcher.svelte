@@ -19,6 +19,7 @@
   import { useApp } from '#lib/state/context.js';
   import { formatShortcut, shortcut, type Combo } from '#lib/shortcuts.js';
   import { ARCHIVE_OLDER_DAYS } from '#lib/state/buckets.svelte.js';
+  import { askArchiveOlderIn } from '#lib/state/merged-list.svelte.js';
   import type { QuickHit } from '#lib/state/sessions.svelte.js';
   import { cn } from '#lib/utils.js';
 
@@ -32,7 +33,7 @@
    * and in Active or a project "Archive chats older than 30 days…". Archived
    * matches come last, in their own "Archived" group (v1.2 §3).
    */
-  const { interaction, sessions, tabs, lifecycle, places, buckets, usage, scopes } = useApp();
+  const { interaction, sessions, tabs, lifecycle, places, usage, scopes } = useApp();
 
   type Command = {
     id: string;
@@ -48,12 +49,11 @@
   const archiveOlderCommand = $derived.by((): Command | null => {
     const p = places.selected;
     if (p.kind !== 'active' && p.kind !== 'all' && p.kind !== 'project') return null;
-    const projectId = p.kind === 'project' ? p.projectId : undefined;
     return {
       id: 'archive-older',
       label: `Archive chats older than ${ARCHIVE_OLDER_DAYS} days…`,
       icon: ArchiveIcon,
-      run: () => void buckets.askArchiveOlder(projectId),
+      run: () => void askArchiveOlderIn(p, scopes),
     };
   });
 

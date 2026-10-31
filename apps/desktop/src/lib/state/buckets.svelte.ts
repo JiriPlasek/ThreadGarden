@@ -49,12 +49,17 @@ export class BucketsState {
   holding = $state.raw<{ targets: BucketTarget[]; onSaved?: () => void } | null>(null);
   /** "End this chat and archive it?" is asked about this chat (Threadgarden runs it). */
   ending = $state.raw<BucketTarget | null>(null);
-  /** The archive-older confirmation, with the count of a dry run. */
+  /**
+   * The archive-older confirmation, with the count of a dry run (summed over
+   * the machines asked along, see `askArchiveOlder`).
+   */
   archivingOlder = $state.raw<{ projectId?: string; count: number } | null>(null);
   /** What the last move could not do (chats the service skipped, a failure). */
   notice = $state<string | null>(null);
 
   private api: Api | null = null;
+  /** The machines (this one first) with chats to archive in the open confirmation. */
+  private olderOn: readonly BucketsState[] = [];
   private chats: Pick<ChatsState, 'end'> | null = null;
 
   init = (api: Api, chats: Pick<ChatsState, 'end'>): void => {
@@ -115,37 +120,64 @@ export class BucketsState {
   /**
    * "Archive all older than 30 days" of a project, or of Active when
    * `projectId` is undefined: counts first (dry run) for the confirmation.
+   * `along`: other machines' buckets whose Active is tidied too (Active
+   * across machines); the confirmation counts them all, and a machine that
+   * cannot count is left out (unless none can).
    */
-  askArchiveOlder = async (projectId: string | undefined): Promise<void> => {
-    const api = this.api;
-    if (!api) return;
-    try {
-      const { archived } = await api.request('chat.archiveOlder', {
-        ...(projectId !== undefined ? { projectId } : {}),
-        olderThanDays: ARCHIVE_OLDER_DAYS,
-        dryRun: true,
-      });
-      if (archived === 0) {
-        this.notice = `No chats older than ${ARCHIVE_OLDER_DAYS} days to archive (running, waiting and unread chats stay).`;
-        return;
-      }
-      this.archivingOlder = { ...(projectId !== undefined ? { projectId } : {}), count: archived };
-    } catch (err) {
-      this.notice = `Could not count the older chats: ${message(err)}`;
+  askArchiveOlder = async (
+    projectId: string | undefined,
+    along: readonly BucketsState[] = [],
+  ): Promise<void> => {
+    if (!this.api) return;
+    const all = [this, ...along];
+    const counts = await Promise.allSettled(all.map((b) => b.archiveOlderOn(projectId, true)));
+    const parts = counts.flatMap((r, i) =>
+      r.status === 'fulfilled' && r.value > 0 ? [{ buckets: all[i]!, count: r.value }] : [],
+    );
+    const failed = counts.find((r) => r.status === 'rejected');
+    if (parts.length === 0) {
+      this.notice = failed
+        ? `Could not count the older chats: ${message(failed.reason)}`
+        : `No chats older than ${ARCHIVE_OLDER_DAYS} days to archive (running, waiting and unread chats stay).`;
+      return;
     }
+    this.olderOn = parts.map((p) => p.buckets);
+    this.archivingOlder = {
+      ...(projectId !== undefined ? { projectId } : {}),
+      count: parts.reduce((n, p) => n + p.count, 0),
+    };
   };
 
-  /** The confirmed archive-older; a failure is rethrown (the confirmation shows it). */
+  /**
+   * The confirmed archive-older: each machine archives its own. A failure is
+   * rethrown (the confirmation shows it; trying again archives what is left).
+   */
   archiveOlder = async (): Promise<void> => {
     const o = this.archivingOlder;
     if (!o || !this.api) return;
-    const { archived } = await this.api.request('chat.archiveOlder', {
-      ...(o.projectId !== undefined ? { projectId: o.projectId } : {}),
-      olderThanDays: ARCHIVE_OLDER_DAYS,
-    });
+    const done = await Promise.allSettled(
+      this.olderOn.map((b) => b.archiveOlderOn(o.projectId, false)),
+    );
+    const failed = done.find((r) => r.status === 'rejected');
+    if (failed) throw failed.reason;
+    const archived = done.reduce((n, r) => n + (r.status === 'fulfilled' ? r.value : 0), 0);
     this.archivingOlder = null;
     // Time passed since the count (chats were read, or started running): say what happened.
     this.notice = `Archived ${chatsWord(archived)}.`;
+  };
+
+  /** `chat.archiveOlder` on this machine; `dryRun`: counts only. */
+  private archiveOlderOn = async (
+    projectId: string | undefined,
+    dryRun: boolean,
+  ): Promise<number> => {
+    if (!this.api) throw new Error('Not connected to the Threadgarden service');
+    const { archived } = await this.api.request('chat.archiveOlder', {
+      ...(projectId !== undefined ? { projectId } : {}),
+      olderThanDays: ARCHIVE_OLDER_DAYS,
+      ...(dryRun ? { dryRun: true } : {}),
+    });
+    return archived;
   };
 
   cancelArchiveOlder = (): void => {

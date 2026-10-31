@@ -175,7 +175,7 @@ const wire = (
   const chatOptions = { schedule: (cb: () => void) => cb() };
   // The same order as `app.ts`'s `wire()`.
   app.connection.init(client);
-  wireScope(local, { tabs, settings, agents: app.agents, chats: chatOptions });
+  wireScope(local, { tabs, settings, agents: app.agents, chats: chatOptions, scopes });
   app.tabs.init(client, { localMachineId: () => local.machineId });
   app.settings.init(client);
   app.agents.init(client, { machineId: () => local.machineId });
