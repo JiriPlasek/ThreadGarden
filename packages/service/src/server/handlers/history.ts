@@ -1,5 +1,9 @@
-/** Router handlers for places, projects, search, chat metadata, buckets, drafts and settings. */
+/**
+ * Router handlers for places, projects, search, chat metadata, buckets,
+ * analytics (v1.3), drafts and settings.
+ */
 import type { EventMsg, SettingsPatch } from '@pahub/protocol';
+import { queryAnalytics } from '../../history/analytics.js';
 import { Buckets } from '../../history/buckets.js';
 import type { Catalog } from '../../history/catalog.js';
 import type { Db } from '../../history/db.js';
@@ -67,6 +71,16 @@ export const registerHistoryHandlers = (router: Router, deps: HistoryHandlerDeps
       projectId: p.projectId,
       olderThanDays: p.olderThanDays,
       ...(p.dryRun ? { dryRun: true } : {}),
+    }),
+  );
+
+  // ── v1.3 C: analytics ──
+  router.register('analytics.get', async (p) =>
+    queryAnalytics(db, {
+      range: p.range,
+      projectId: p.projectId,
+      now: now(),
+      chats: () => catalog.corpus(),
     }),
   );
 

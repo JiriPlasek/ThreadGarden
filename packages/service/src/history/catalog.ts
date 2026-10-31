@@ -222,7 +222,7 @@ const PREVIEW_MAX = 140;
 const previewOf = (r: SessionRow): string =>
   (clean(r.firstPrompt) || clean(r.summary)).replace(/\s+/g, ' ').slice(0, PREVIEW_MAX);
 
-const baseName = (p: string): string => p.split(/[\\/]/).filter(Boolean).at(-1) ?? p;
+export const baseName = (p: string): string => p.split(/[\\/]/).filter(Boolean).at(-1) ?? p;
 
 const fromRow = (r: SessionRow, unread = false): ChatSummary => ({
   sessionId: r.sessionId,
