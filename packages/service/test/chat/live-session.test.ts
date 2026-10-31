@@ -955,6 +955,34 @@ describe('LiveSession tasks', () => {
     expect(s.tasks()).toEqual(lastTasks(events));
   });
 
+  it("publishes an agent's model from the messages its subagent streams", async () => {
+    const { adapter, timers, events, opts } = setup();
+    const s = LiveSession.create('/p', { text: 'go' }, opts);
+    const fake = adapter.lastSession();
+    await settle();
+    fake.emit(started('a1', { task_type: 'local_agent', tool_use_id: 'toolu_1', prompt: 'Look' }));
+    fake.emit(
+      sdk({
+        type: 'assistant',
+        uuid: 'sub1',
+        session_id: 's',
+        parent_tool_use_id: 'toolu_1',
+        message: {
+          id: 'api-sub',
+          role: 'assistant',
+          model: 'claude-haiku-5',
+          content: [{ type: 'tool_use', id: 'toolu_r', name: 'Read', input: { file_path: 'a' } }],
+        },
+      }),
+    );
+    await settle();
+    timers.advance(33);
+    expect(lastTasks(events)).toEqual([
+      expect.objectContaining({ taskId: 'a1', model: 'claude-haiku-5', prompt: 'Look' }),
+    ]);
+    expect(s.tasks()).toEqual(lastTasks(events));
+  });
+
   it('tracks tasks even when rendering a task message throws', async () => {
     const { adapter, timers, events, opts } = setup();
     const s = LiveSession.create('/p', { text: 'go' }, opts);

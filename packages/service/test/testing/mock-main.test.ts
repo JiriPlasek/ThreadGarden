@@ -123,7 +123,13 @@ describe('mock service', () => {
       installSignalHandlers: false,
     });
     const c = (client = await TestClient.connect(mock.svc.port, 'mock-token'));
-    type Task = { taskId: string; kind: string; status: string; description: string };
+    type Task = {
+      taskId: string;
+      kind: string;
+      status: string;
+      description: string;
+      model?: string;
+    };
     const tasksOf = (sessionId: string): Task[] | undefined =>
       c.events
         .filter(
@@ -143,15 +149,28 @@ describe('mock service', () => {
       kind: 'agent',
       subagentType: 'Explore',
       toolUseId: expect.any(String),
+      model: 'haiku',
+      prompt: expect.any(String),
     });
     await eventually(
       () => (tasksOf(agent.sessionId)?.[0] as { tokens?: number } | undefined)?.tokens,
       5_000,
     );
+    // Its nested subagent, whose model only its streamed messages tell.
+    await eventually(() => tasksOf(agent.sessionId)?.[1]?.model === 'claude-sonnet-4-5', 5_000);
+    expect(tasksOf(agent.sessionId)?.[1]).toMatchObject({
+      parentTaskId: tasksOf(agent.sessionId)?.[0]?.taskId,
+      spawnDepth: 2,
+    });
     await eventually(() => tasksOf(agent.sessionId)?.[0]?.status === 'completed', 8_000);
+    expect(tasksOf(agent.sessionId)?.[1]?.status).toBe('completed');
     await c.waitFor(chatStatus(agent.sessionId, 'idle'), 5_000);
     const calls = itemsOf(c.events, agent.sessionId).filter((i) => i.kind === 'toolCall');
-    expect(calls).toEqual([expect.objectContaining({ name: 'Agent', status: 'ok' })]);
+    expect(calls).toEqual([
+      expect.objectContaining({ name: 'Agent', status: 'ok' }),
+      expect.objectContaining({ name: 'Agent', status: 'ok', parentToolUseId: expect.any(String) }),
+      expect.objectContaining({ name: 'Grep', status: 'ok', parentToolUseId: expect.any(String) }),
+    ]);
 
     // "server": a background shell that keeps running after the turn ends.
     const server = await c.call<{ sessionId: string }>('chat.create', {

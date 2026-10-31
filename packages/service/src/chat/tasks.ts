@@ -30,6 +30,15 @@
  * of one task sort in the order the runs opened. A `task_started` with a new
  * run id restarts the row; frames naming an older run are late and ignored.
  *
+ * Agent details (v1.3 §2): `task_started` carries the prompt, spawn depth and
+ * workflow name. The model is on no task frame: it is the `model` input of
+ * the Agent call that started the task (`tool_use_id`), else the
+ * `message.model` of the first assistant message the subagent streams
+ * (`parent_tool_use_id` naming that call); when a later streamed message
+ * reports another model, that one is shown. These messages and the task's own
+ * frames arrive in either order, so what they said is remembered per tool use
+ * id (bounded) and applied whenever a task names that id.
+ *
  * Ambient tasks (`ambient: true`: housekeeping and live-update watchers, which
  * the SDK says hosts should exclude from activity indicators) are never listed.
  *
@@ -43,6 +52,13 @@ import type { ChatTask, ChatTaskKind, ChatTaskStatus } from '@pahub/protocol';
 export const MAX_TASKS = 200;
 /** Bound of the remembered ambient task ids (only used to ignore their later frames). */
 const MAX_AMBIENT = 1_000;
+/** Bound of the Agent calls whose model is remembered. */
+const MAX_MODELS = 1_000;
+/**
+ * Longest prompt kept: every `chat.tasks` event carries the whole list, so a
+ * prompt with a pasted log in it must not be copied into each one in full.
+ */
+export const MAX_PROMPT = 16_000;
 
 type Rec = Record<string, unknown>;
 
@@ -59,6 +75,9 @@ const AGENT_TYPES: ReadonlySet<string> = new Set([
   'remote_agent',
   'in_process_teammate',
 ]);
+/** Tools whose call starts a subagent (`Task` is the name older CLIs use). */
+const AGENT_TOOLS: ReadonlySet<string> = new Set(['Agent', 'Task']);
+
 /** Background shells (`run_in_background` Bash) and monitors. */
 const SHELL_TYPES: ReadonlySet<string> = new Set(['local_bash', 'monitor_mcp', 'monitor_ws']);
 
@@ -127,6 +146,24 @@ export const taskRunning = (t: ChatTask): boolean =>
 export const runningCount = (tasks: readonly ChatTask[]): number =>
   tasks.reduce((n, t) => (taskRunning(t) ? n + 1 : n), 0);
 
+/** What the messages of one Agent call said about its subagent's model. */
+type ModelSeen = { input?: string; first?: string; last?: string };
+
+/** The call's input model, else the first streamed one; a streamed model that changed since wins. */
+const modelOf = (s: ModelSeen): string | undefined =>
+  s.last !== undefined && s.last !== s.first ? s.last : (s.input ?? s.first);
+
+/** A streamed model id; placeholders such as `<synthetic>` (CLI-made error messages) are not models. */
+const streamedModel = (v: unknown): string | undefined => {
+  const s = nonEmpty(v);
+  return s === undefined || s.startsWith('<') ? undefined : s;
+};
+
+const clampPrompt = (v: unknown): string | undefined => {
+  const s = nonEmpty(v);
+  return s === undefined || s.length <= MAX_PROMPT ? s : `${s.slice(0, MAX_PROMPT)}…`;
+};
+
 type Entry = {
   /** The live record, edited in place (always through `edit`). */
   task: ChatTask;
@@ -142,6 +179,8 @@ export type TaskTrackerOptions = { now: () => number; max?: number };
 export class TaskTracker {
   private readonly entries = new Map<string, Entry>();
   private readonly ambient = new Set<string>();
+  /** Agent call `tool_use` id → what its messages said about the model. */
+  private readonly models = new Map<string, ModelSeen>();
   private readonly max: number;
 
   constructor(private readonly opts: TaskTrackerOptions) {
@@ -167,11 +206,13 @@ export class TaskTracker {
     const had = this.entries.size > 0;
     this.entries.clear();
     this.ambient.clear();
+    this.models.clear();
     return had;
   }
 
   /** Folds one SDK message in; true when it may have changed the list. */
   apply(m: unknown): boolean {
+    if (isRec(m) && m.type === 'assistant') return this.assistant(m);
     if (!isRec(m) || m.type !== 'system') return false;
     switch (m.subtype) {
       case 'task_started':
@@ -207,6 +248,11 @@ export class TaskTracker {
     const parentTaskId = str(m.parent_task_id) ?? prev?.task.parentTaskId;
     const backgrounded =
       typeof m.is_backgrounded === 'boolean' ? m.is_backgrounded : prev?.task.backgrounded;
+    // A new run is the same agent resumed: its prompt and model carry over.
+    const prompt = clampPrompt(m.prompt) ?? prev?.task.prompt;
+    const spawnDepth = num(m.spawn_depth) ?? prev?.task.spawnDepth;
+    const workflowName = nonEmpty(m.workflow_name) ?? prev?.task.workflowName;
+    const model = prev?.task.model;
     // Same run (e.g. first seen in the level): merge; a new run or an ended task restarts.
     const sameRun =
       prev !== undefined &&
@@ -229,13 +275,19 @@ export class TaskTracker {
       ...(backgrounded === undefined ? {} : { backgrounded }),
       ...(parentTaskId === undefined ? {} : { parentTaskId }),
       startedAt: sameRun ? prev.task.startedAt : this.opts.now(),
+      ...(model === undefined ? {} : { model }),
+      ...(prompt === undefined ? {} : { prompt }),
+      ...(spawnDepth === undefined ? {} : { spawnDepth }),
+      ...(workflowName === undefined ? {} : { workflowName }),
     };
-    this.put(id, {
+    const entry: Entry = {
       task,
       snap: undefined,
       runId: runId ?? prev?.runId,
       inLevel: sameRun ? prev.inLevel : false,
-    });
+    };
+    this.put(id, entry);
+    this.syncModel(entry);
     return true;
   }
 
@@ -267,6 +319,7 @@ export class TaskTracker {
     if (description !== undefined) t.description = description;
     const toolUseId = str(m.tool_use_id);
     if (toolUseId !== undefined) t.toolUseId ??= toolUseId;
+    this.syncModel(e);
     applyUsage(t, m.usage);
     const lastTool = nonEmpty(m.last_tool_name);
     if (lastTool !== undefined) t.lastTool = lastTool;
@@ -312,6 +365,69 @@ export class TaskTracker {
     const summary = nonEmpty(m.summary);
     if (summary !== undefined) t.summary = summary;
     applyUsage(t, m.usage);
+    return true;
+  }
+
+  // ── models ──────────────────────────────────────────────────────────────
+
+  /**
+   * An assistant message: remembers the `model` input of its Agent calls and
+   * the model a subagent's message (`parent_tool_use_id`) streamed with, then
+   * updates the tasks those calls started. True when a task's model changed.
+   */
+  private assistant(m: Rec): boolean {
+    const message = isRec(m.message) ? m.message : undefined;
+    if (!message) return false;
+    const touched = new Set<string>();
+    if (Array.isArray(message.content)) {
+      for (const b of message.content) {
+        if (!isRec(b) || b.type !== 'tool_use' || !AGENT_TOOLS.has(str(b.name) ?? '')) continue;
+        const id = str(b.id);
+        const input = isRec(b.input) ? b.input : undefined;
+        const model = nonEmpty(input?.model);
+        // A fork ignores the input and always runs on its parent's model.
+        if (!id || model === undefined || input?.subagent_type === 'fork') continue;
+        this.seen(id).input = model;
+        touched.add(id);
+      }
+    }
+    const parent = nonEmpty(m.parent_tool_use_id);
+    const streamed = streamedModel(message.model);
+    if (parent !== undefined && streamed !== undefined) {
+      const s = this.seen(parent);
+      s.first ??= streamed;
+      s.last = streamed;
+      touched.add(parent);
+    }
+    if (touched.size === 0) return false;
+    let changed = false;
+    for (const e of this.entries.values()) {
+      const id = e.task.toolUseId;
+      if (id !== undefined && touched.has(id)) changed = this.syncModel(e) || changed;
+    }
+    return changed;
+  }
+
+  private seen(toolUseId: string): ModelSeen {
+    let s = this.models.get(toolUseId);
+    if (!s) {
+      s = {};
+      this.models.set(toolUseId, s);
+      if (this.models.size > MAX_MODELS) {
+        const oldest = this.models.keys().next().value;
+        if (oldest !== undefined) this.models.delete(oldest);
+      }
+    }
+    return s;
+  }
+
+  /** Sets the task's model from what its Agent call's messages said; true when it changed. */
+  private syncModel(e: Entry): boolean {
+    const id = e.task.toolUseId;
+    const s = id === undefined ? undefined : this.models.get(id);
+    const model = s ? modelOf(s) : undefined;
+    if (model === undefined || model === e.task.model) return false;
+    this.edit(e).model = model;
     return true;
   }
 

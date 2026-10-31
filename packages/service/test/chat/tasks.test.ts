@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  MAX_PROMPT,
   MAX_TASKS,
   TaskTracker,
   taskKind,
@@ -456,5 +457,145 @@ describe('TaskTracker', () => {
     t.apply(level([]));
     expect(t.list()[0]).toBe(a2);
     expect(t.get('b')).toMatchObject({ status: 'unknown' });
+  });
+});
+
+/** An assistant message (main thread unless `parent` names the Agent call it ran inside). */
+const assistant = (content: unknown[], o: { parent?: string; model?: string } = {}) =>
+  sdk({
+    type: 'assistant',
+    uuid: `as-${Math.random()}`,
+    session_id: 's',
+    parent_tool_use_id: o.parent ?? null,
+    message: {
+      id: 'msg',
+      role: 'assistant',
+      ...(o.model === undefined ? {} : { model: o.model }),
+      content,
+    },
+  });
+const agentCall = (id: string, input: Record<string, unknown>, name = 'Agent') => ({
+  type: 'tool_use',
+  id,
+  name,
+  input: { description: 'd', prompt: 'p', ...input },
+});
+const read = { type: 'tool_use', id: 'toolu_read', name: 'Read', input: { file_path: 'a' } };
+
+describe('TaskTracker: agent details (v1.3 §2)', () => {
+  it('keeps prompt, spawn depth and workflow name from task_started', () => {
+    const t = new TaskTracker({ now: () => 1 });
+    t.apply(
+      started('a1', {
+        task_type: 'local_agent',
+        subagent_type: 'Explore',
+        prompt: 'Map the main parts of this project.',
+        spawn_depth: 2,
+      }),
+    );
+    t.apply(started('w1', { task_type: 'local_workflow', workflow_name: 'spec', description: '' }));
+    expect(t.get('a1')).toMatchObject({
+      prompt: 'Map the main parts of this project.',
+      spawnDepth: 2,
+    });
+    expect(t.get('w1')).toMatchObject({ workflowName: 'spec', description: 'spec' });
+    // Odd values are ignored, not thrown on.
+    t.apply(started('a2', { prompt: 42, spawn_depth: 'deep', workflow_name: '' }));
+    const a2 = t.get('a2')!;
+    expect(a2).not.toHaveProperty('prompt');
+    expect(a2).not.toHaveProperty('spawnDepth');
+    expect(a2).not.toHaveProperty('workflowName');
+    // A huge prompt is clamped: every chat.tasks event carries it.
+    t.apply(started('a3', { prompt: 'x'.repeat(MAX_PROMPT + 10) }));
+    expect(t.get('a3')?.prompt).toBe(`${'x'.repeat(MAX_PROMPT)}…`);
+  });
+
+  it('takes the model from the Agent call that started the task', () => {
+    const t = new TaskTracker({ now: () => 1 });
+    // The call comes before its task_started; nothing changes in the list yet.
+    expect(t.apply(assistant([agentCall('toolu_1', { model: 'haiku' })]))).toBe(false);
+    t.apply(started('a1', { task_type: 'local_agent', tool_use_id: 'toolu_1' }));
+    expect(t.get('a1')?.model).toBe('haiku');
+    // The legacy tool name counts too; a fork ignores the input and inherits.
+    t.apply(assistant([agentCall('toolu_2', { model: 'opus' }, 'Task')]));
+    t.apply(started('a2', { task_type: 'local_agent', tool_use_id: 'toolu_2' }));
+    expect(t.get('a2')?.model).toBe('opus');
+    t.apply(assistant([agentCall('toolu_3', { model: 'opus', subagent_type: 'fork' })]));
+    t.apply(started('a3', { task_type: 'local_agent', tool_use_id: 'toolu_3' }));
+    expect(t.get('a3')).not.toHaveProperty('model');
+  });
+
+  it('else takes the model of the first message the subagent streams', () => {
+    const t = new TaskTracker({ now: () => 1 });
+    t.apply(assistant([agentCall('toolu_1', {})]));
+    t.apply(started('a1', { task_type: 'local_agent', tool_use_id: 'toolu_1' }));
+    expect(t.get('a1')).not.toHaveProperty('model');
+    // Main-thread messages never set a subagent's model.
+    expect(t.apply(assistant([read], { model: 'claude-opus-5-5' }))).toBe(false);
+    expect(t.apply(assistant([read], { parent: 'toolu_1', model: 'claude-sonnet-5' }))).toBe(true);
+    expect(t.get('a1')?.model).toBe('claude-sonnet-5');
+    // The same model again changes nothing (the snapshot stays shared).
+    const snap = t.get('a1');
+    expect(t.apply(assistant([read], { parent: 'toolu_1', model: 'claude-sonnet-5' }))).toBe(false);
+    expect(t.get('a1')).toBe(snap);
+    // A later message with another model updates it.
+    expect(t.apply(assistant([read], { parent: 'toolu_1', model: 'claude-haiku-5' }))).toBe(true);
+    expect(t.get('a1')?.model).toBe('claude-haiku-5');
+  });
+
+  it('an input model wins over the first streamed one, until the streamed model changes', () => {
+    const t = new TaskTracker({ now: () => 1 });
+    t.apply(assistant([agentCall('toolu_1', { model: 'sonnet' })]));
+    t.apply(started('a1', { task_type: 'local_agent', tool_use_id: 'toolu_1' }));
+    t.apply(assistant([read], { parent: 'toolu_1', model: 'claude-sonnet-5' }));
+    expect(t.get('a1')?.model).toBe('sonnet');
+    t.apply(assistant([read], { parent: 'toolu_1', model: 'claude-haiku-5' }));
+    expect(t.get('a1')?.model).toBe('claude-haiku-5');
+  });
+
+  it('remembers streamed models seen before the task, and Agent calls made inside subagents', () => {
+    const t = new TaskTracker({ now: () => 1 });
+    t.apply(assistant([read], { parent: 'toolu_1', model: 'claude-sonnet-5' }));
+    t.apply(progress('a1', { tool_use_id: 'toolu_1', subagent_type: 'Explore' }));
+    expect(t.get('a1')?.model).toBe('claude-sonnet-5');
+    // A nested spawn: the Agent call is a subagent's own message.
+    t.apply(assistant([agentCall('toolu_9', { model: 'haiku' })], { parent: 'toolu_1' }));
+    t.apply(
+      started('a9', {
+        task_type: 'local_agent',
+        tool_use_id: 'toolu_9',
+        parent_task_id: 'a1',
+        spawn_depth: 2,
+      }),
+    );
+    expect(t.get('a9')).toMatchObject({ model: 'haiku', parentTaskId: 'a1', spawnDepth: 2 });
+  });
+
+  it('ignores malformed assistant messages; clear forgets remembered models', () => {
+    const t = new TaskTracker({ now: () => 1 });
+    for (const m of [
+      sdk({ type: 'assistant' }),
+      sdk({ type: 'assistant', message: { content: 'text' } }),
+      sdk({ type: 'assistant', message: { content: [null, 7, { type: 'tool_use' }] } }),
+      assistant([agentCall('toolu_1', { model: 5 })]),
+      assistant([read], { parent: 'toolu_1', model: '' }),
+      // The CLI's own error messages say `<synthetic>`, which is no model.
+      assistant([read], { parent: 'toolu_1', model: '<synthetic>' }),
+    ]) {
+      expect(t.apply(m)).toBe(false);
+    }
+    t.apply(assistant([agentCall('toolu_2', { model: 'haiku' })]));
+    t.clear();
+    t.apply(started('a2', { task_type: 'local_agent', tool_use_id: 'toolu_2' }));
+    expect(t.get('a2')).not.toHaveProperty('model');
+  });
+
+  it('a new run of a task keeps its prompt and model', () => {
+    const t = new TaskTracker({ now: () => 1 });
+    t.apply(assistant([agentCall('toolu_1', { model: 'haiku' })]));
+    t.apply(started('a1', { tool_use_id: 'toolu_1', prompt: 'Look', run_id: 'r1' }));
+    t.apply(notification('a1', 'completed', { run_id: 'r1' }));
+    t.apply(started('a1', { run_id: 'r2' }));
+    expect(t.get('a1')).toMatchObject({ status: 'running', model: 'haiku', prompt: 'Look' });
   });
 });
