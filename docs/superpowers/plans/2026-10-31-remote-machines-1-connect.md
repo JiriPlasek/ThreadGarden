@@ -167,10 +167,10 @@ git commit -am "feat(protocol)!: protocol 5 with machine identity in hello"
 - Produces:
   - Migration step (comment `// remote machines: paired devices`): `CREATE TABLE IF NOT EXISTS devices (id TEXT PRIMARY KEY, name TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE, created_at INTEGER NOT NULL, last_seen INTEGER)`.
   - `DeviceSchema = z.object({ id: z.string(), name: z.string(), createdAt: z.number(), lastSeen: z.number().nullable() })`.
-  - `class DeviceRegistry { constructor(db: DatabaseSync, opts?: { now?: () => number; random?: (n: number) => Buffer }); createPairingCode(): { code: string; expiresAt: number }; proof(code: string, fingerprint256: string): string | null; claim(code: string, deviceName: string): { deviceId: string; token: string } | { error: 'PAIRING_INVALID' | 'PAIRING_EXPIRED' }; verify(token: string): Device | null; touch(deviceId: string): void; list(): Device[]; revoke(deviceId: string): boolean; onRevoke(cb: (deviceId: string) => void): () => void }`.
+  - `class DeviceRegistry { constructor(db: DatabaseSync, opts?: { now?: () => number; random?: (n: number) => Buffer }); createPairingCode(): { code: string; expiresAt: number }; proof(fingerprint256: string, nonce: string): string | null; claim(code: string, deviceName: string): { deviceId: string; token: string } | { error: 'PAIRING_INVALID' | 'PAIRING_EXPIRED' }; verify(token: string): Device | null; touch(deviceId: string): void; list(): Device[]; revoke(deviceId: string): boolean; onRevoke(cb: (deviceId: string) => void): () => void }`.
   - Constants: `PAIRING_CODE_TTL_MS = 5 * 60_000`, `PAIRING_MAX_FAILURES = 5`, `PAIRING_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'`, code length 12, shown and accepted as `XXXX-XXXX-XXXX` (dashes, spaces and case ignored on input).
 
-`proof(code, fp)` returns `HMAC-SHA256(key = normalised code, msg = fp)` as hex when the code is live, else `null`. The client checks it before it sends the code (Task 6), so a man in the middle presenting its own certificate cannot produce a valid proof. Tokens are 32 random bytes as hex; only `sha256(token)` is stored; `verify` compares hashes with `timingSafeEqual`. Only one pairing code is live at a time; creating a new one replaces the old. A failed claim counts against the live code; the fifth failure deletes it.
+`proof(fp, nonce)` returns `HMAC-SHA256(key = the live code, normalised, msg = `${fp}\n${nonce}`)` as hex when a code is live, else `null`. It never takes a code from the caller (ledger Ruling R7): the client sends only a random nonce, computes the same HMAC over the fingerprint it observed with the code the owner typed, and sends the code (with `pair.claim`) only when they match (Task 6). A man in the middle presenting its own certificate cannot produce a valid proof without the code, and a proof it relays from the real machine is bound to the real certificate, so the client's check fails. Tokens are 32 random bytes as hex; only `sha256(token)` is stored; `verify` compares hashes with `timingSafeEqual`. Only one pairing code is live at a time; creating a new one replaces the old. A failed claim counts against the live code; the fifth failure deletes it.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -188,7 +188,7 @@ it('expires codes after 5 minutes', () => {
   const { code } = r.createPairingCode();
   t += 5 * 60_000 + 1;
   expect(r.claim(code, 'x')).toEqual({ error: 'PAIRING_EXPIRED' });
-  expect(r.proof(code, 'fp')).toBeNull();
+  expect(r.proof('fp', 'n')).toBeNull();
 });
 it('kills the code after five wrong claims', () => {
   const r = registry();
@@ -196,10 +196,16 @@ it('kills the code after five wrong claims', () => {
   for (let i = 0; i < 5; i++) r.claim('AAAA-AAAA-AAAA', 'x');
   expect(r.claim(code, 'x')).toEqual({ error: 'PAIRING_INVALID' });
 });
-it('proves the code over the certificate fingerprint', () => {
+it('proves the live code over the certificate fingerprint and the nonce', () => {
   const r = registry();
   const { code } = r.createPairingCode();
-  expect(r.proof(code, 'AA:BB')).toBe(createHmac('sha256', code.replaceAll('-', '')).update('AA:BB').digest('hex'));
+  expect(r.proof('AA:BB', 'n1')).toBe(createHmac('sha256', code.replaceAll('-', '')).update('AA:BB\nn1').digest('hex'));
+  expect(r.proof('AA:BB', 'n2')).not.toBe(r.proof('AA:BB', 'n1'));
+});
+it('has no proof once the code is consumed or killed', () => {
+  const r = registry();
+  r.claim(r.createPairingCode().code, 'x');
+  expect(r.proof('AA:BB', 'n')).toBeNull();
 });
 it('stores only token hashes and revokes', () => {
   const r = registry();
@@ -274,7 +280,7 @@ it('listens only on private IPv4 addresses', () => {
 - Produces:
   - `type HandlerCtx = { clientId: string; origin: 'local' | 'remote'; deviceId?: string }`.
   - `Router.register(m, h, opts?: { localOnly?: boolean })`; dispatching a local-only method with `origin: 'remote'` answers `{ code: 'FORBIDDEN' }`. Local-only in this plan: `pairing.create`, `devices.list`, `devices.revoke`, `machine.rename`, `service.shutdown`, `auth.setApiKey`, and every `machines.*` method (Task 6).
-  - Methods: `pairing.create` (`{}` → `{ code, expiresAt }`), `devices.list` (`{}` → `Device[]`), `devices.revoke` (`{ deviceId }` → `{ revoked: boolean }`), `pair.proof` (`{ code }` → `{ proof: string, machine: MachineInfo }`), `pair.claim` (`{ code, deviceName }` → `{ deviceId, token, machine: MachineInfo }`).
+  - Methods: `pairing.create` (`{}` → `{ code, expiresAt }`), `devices.list` (`{}` → `Device[]`), `devices.revoke` (`{ deviceId }` → `{ revoked: boolean }`), `pair.proof` (`{ nonce: z.string().regex(/^[0-9a-f]{64}$/) }` → `{ proof: string | null, machine: MachineInfo }`), `pair.claim` (`{ code, deviceName }` → `{ deviceId, token, machine: MachineInfo }`).
   - `startRemoteServer(opts: { addresses: string[]; port: number; tls: TlsIdentity; devices: DeviceRegistry; router: Router; onClientCountChange(n: number): void; onError?(err: unknown): void }): Promise<{ addresses: string[]; port: number; broadcast(e: EventMsg): void; close(): Promise<void> }>`. Default port `REMOTE_PORT = 47380`.
   - Subprotocols on the remote listener: `threadgarden-device.<token>` (full protocol, `origin: 'remote'`, `deviceId` set, every event broadcast to it) and `threadgarden-pair` (only `hello`, `pair.proof` and `pair.claim`; any other method answers `FORBIDDEN`; no events). Anything else closes with 4401. A revoked device's sockets close with **4403** at once (`devices.onRevoke`).
   - `pair.proof` uses the listener's own `tls.fingerprint256`.
@@ -293,8 +299,9 @@ it('serves the full protocol to a paired device with origin remote', async () =>
 it('pairs: proof, then claim, on the pairing subprotocol only', async () => {
   const { code } = devices.createPairingCode();
   const ws = await openTls(s, 'threadgarden-pair');
-  const { result } = await call(ws, 'pair.proof', { code });
-  expect(result.proof).toBe(createHmac('sha256', code.replaceAll('-', '')).update(tls.fingerprint256).digest('hex'));
+  const nonce = randomBytes(32).toString('hex');
+  const { result } = await call(ws, 'pair.proof', { nonce });
+  expect(result.proof).toBe(createHmac('sha256', code.replaceAll('-', '')).update(`${tls.fingerprint256}\n${nonce}`).digest('hex'));
   expect((await call(ws, 'pair.claim', { code, deviceName: 'Gaming PC' })).result.token).toMatch(/^[0-9a-f]{64}$/);
   expect(await call(ws, 'machine.get', {})).toMatchObject({ error: { code: 'FORBIDDEN' } });
 });
@@ -363,7 +370,7 @@ it('starts the remote listener only when headless', async () => { /* headless wi
   - Migration step (`// remote machines: machines this one connects to`): `CREATE TABLE IF NOT EXISTS machines (id TEXT PRIMARY KEY, name TEXT NOT NULL, address TEXT NOT NULL, port INTEGER NOT NULL, cert_pem TEXT NOT NULL, fingerprint TEXT NOT NULL, added_at INTEGER NOT NULL, sort INTEGER NOT NULL DEFAULT 0)`.
   - `PairedMachineSchema = z.object({ id, name, address, port: z.number(), fingerprint: z.string(), addedAt: z.number(), unlocked: z.boolean() })` (`cert_pem` stays in the service).
   - `class PairedMachines { constructor(db); list(): PairedMachine[]; get(id): (PairedMachine & { certPem: string }) | null; add(m): void; update(id, patch: { name?: string; address?: string; port?: number }): PairedMachine; remove(id): void; unlock(id, token): void; token(id): string | null }` — tokens in memory only, like the API key.
-  - `pairWithMachine(opts: { address: string; port: number; code: string; deviceName: string; timeoutMs?: number }): Promise<{ machine: MachineInfo; certPem: string; fingerprint: string; token: string }>` errors (as `ServiceError` codes): `PAIRING_UNREACHABLE`, `PAIRING_PROOF_FAILED` (proof absent or wrong: the code is never sent), `PAIRING_INVALID`, `PAIRING_EXPIRED`. Steps: connect `wss` with `rejectUnauthorized: false` and subprotocol `threadgarden-pair`; read the peer certificate (`socket.getPeerCertificate(true)`, convert `raw` to PEM, `fingerprint256`); `pair.proof { code }`; compare with the local HMAC in constant time; only then `pair.claim`.
+  - `pairWithMachine(opts: { address: string; port: number; code: string; deviceName: string; timeoutMs?: number }): Promise<{ machine: MachineInfo; certPem: string; fingerprint: string; token: string }>` errors (as `ServiceError` codes): `PAIRING_UNREACHABLE`, `PAIRING_PROOF_FAILED` (proof absent or wrong: the code is never sent), `PAIRING_INVALID`, `PAIRING_EXPIRED`. Steps: connect `wss` with `rejectUnauthorized: false` and subprotocol `threadgarden-pair`; read the peer certificate (`socket.getPeerCertificate(true)`, convert `raw` to PEM, `fingerprint256`); `pair.proof { nonce }` with a fresh `randomBytes(32)` hex nonce — the code is never sent here (ledger Ruling R7); compute `HMAC-SHA256(normalised code, `${observedFingerprint}\n${nonce}`)` locally and compare with the answer in constant time (a `null` or different proof → `PAIRING_PROOF_FAILED`); only then `pair.claim { code, deviceName }`.
   - Methods (all local-only): `machines.list` (`{}` → `PairedMachine[]`), `machines.pair` (`{ address, port?: number (default 47380), code, deviceName }` → `{ machine: PairedMachine; token: string }`; stores the machine, unlocks it, returns the token once so the UI can put it in the keychain), `machines.unlock` (`{ machineId, token }` → `{}`), `machines.update` (`{ machineId, name?, address?, port? }` → `PairedMachine`), `machines.remove` (`{ machineId, revoke: boolean }` → `{}`; with `revoke`, it first tries `devices.revoke` for its own device on the remote over a short-lived link, ignoring failure). Event `machines.changed` (`PairedMachine[]`).
   - **Relay.** The local server accepts `GET /relay?machine=<id>` with the local token subprotocol (`threadgarden.<token>`). It opens a `RemoteLink` to the machine: `wss://<address>:<port>` with subprotocol `threadgarden-device.<token>`, `ca: [certPem]`, `checkServerIdentity: (_h, cert) => cert.fingerprint256 === fingerprint ? undefined : new Error('PIN_MISMATCH')`. Frames are piped verbatim both ways; the relay never parses them. Close codes to the UI: **4404** unknown or locked machine, **4409** certificate mismatch (the token was not sent: verification happens in the TLS handshake before the upgrade request), **4403** the remote refused the token, **4502** unreachable or the link dropped. A UI close closes the link and vice versa.
   - The relay counts as a client for the local idle exit.
@@ -379,9 +386,11 @@ it('pairs with a headless machine and relays its protocol', async () => {
   expect(token).toMatch(/^[0-9a-f]{64}$/);
 });
 it('never sends the code when the proof does not match the certificate', async () => {
-  // a fake pairing server whose pair.proof answers with a proof for another fingerprint
+  // a fake pairing server (its own certificate) that relays pair.proof to the real headless machine,
+  // so the proof it returns is bound to the real machine's fingerprint, not to the fake's
   await expect(pairWithMachine({ address: '127.0.0.1', port: fake.port, code, deviceName: 'x' })).rejects.toMatchObject({ code: 'PAIRING_PROOF_FAILED' });
   expect(fake.calls('pair.claim')).toHaveLength(0);
+  expect(JSON.stringify(fake.received())).not.toContain(code.replaceAll('-', '').slice(0, 4));
 });
 it('closes 4409 and sends no token when another machine answers at the address', async () => {
   await localCall(local, 'machines.update', { machineId, port: otherHeadless.remote!.port });
