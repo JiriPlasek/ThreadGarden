@@ -11,6 +11,7 @@ import { SettingsSchema, type Bucket, type Settings, type SettingsPatch } from '
 import type { LiveRegistry } from '../chat/live-session.js';
 import type { SDKSessionInfo } from '../sdk/adapter.js';
 import { migrate } from './migrations.js';
+import { localDay, type SessionStats } from './stats.js';
 
 export type SessionRow = {
   sessionId: string;
@@ -99,6 +100,19 @@ const notIn = (column: string, values: string[] | undefined, where: string[], pa
   where.push(`${column} NOT IN (${values.map(() => '?').join(',')})`);
   params.push(...values);
 };
+
+/** v1.3 analytics: every table of the per-session statistics and their sums. */
+export const STATS_TABLES = [
+  'stats_sessions',
+  'stats_days',
+  'stats_hours',
+  'stats_tools',
+  'stats_agents',
+  'stats_all_days',
+  'stats_all_hours',
+  'stats_all_tools',
+  'stats_all_agents',
+] as const;
 
 /** FTS rows hold at most this many characters, so one insert never blocks long. */
 export const FTS_CHUNK_CHARS = 32 * 1024;
@@ -410,6 +424,146 @@ export class Db implements LiveRegistry {
     return out;
   }
 
+  // --- statistics (v1.3 C analytics) ---------------------------------------------
+  //
+  // One session's statistics (`history/stats.ts`) are replaced as a whole, in
+  // one transaction, so a query never sees half of them. The `stats_all_*`
+  // sums lose the session's old figures and gain its new ones in the same
+  // transaction.
+
+  /** Replaces the session's statistics and marks them gathered at `version`. */
+  replaceStats(sessionId: string, stats: SessionStats, version: number): void {
+    this.inTransaction(() => {
+      this.deleteStatsRows(sessionId);
+      const first = stats.firstAt;
+      const last = stats.lastAt;
+      const messages = stats.days.reduce((n, d) => n + d.userMessages + d.assistantMessages, 0);
+      this.raw
+        .prepare(
+          `INSERT INTO stats_sessions (session_id, version, first_at, last_at, first_day,
+             last_day, messages)
+           VALUES (?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(session_id) DO UPDATE SET version = excluded.version,
+             first_at = excluded.first_at, last_at = excluded.last_at,
+             first_day = excluded.first_day, last_day = excluded.last_day,
+             messages = excluded.messages`,
+        )
+        .run(
+          sessionId,
+          version,
+          first,
+          last,
+          first === null ? null : localDay(first),
+          last === null ? null : localDay(last),
+          messages,
+        );
+      const day = this.raw.prepare(
+        `INSERT INTO stats_days (session_id, day, model, user_messages, assistant_messages,
+           input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      );
+      for (const d of stats.days) {
+        day.run(
+          sessionId,
+          d.day,
+          d.model,
+          d.userMessages,
+          d.assistantMessages,
+          d.inputTokens,
+          d.outputTokens,
+          d.cacheReadTokens,
+          d.cacheCreationTokens,
+        );
+      }
+      const hour = this.raw.prepare(
+        'INSERT INTO stats_hours (session_id, day, hour, messages) VALUES (?, ?, ?, ?)',
+      );
+      for (const h of stats.hours) hour.run(sessionId, h.day, h.hour, h.messages);
+      const tool = this.raw.prepare(
+        'INSERT INTO stats_tools (session_id, day, tool, calls) VALUES (?, ?, ?, ?)',
+      );
+      for (const t of stats.tools) tool.run(sessionId, t.day, t.name, t.calls);
+      const agent = this.raw.prepare(
+        'INSERT INTO stats_agents (session_id, day, agent_type, calls) VALUES (?, ?, ?, ?)',
+      );
+      for (const a of stats.agents) agent.run(sessionId, a.day, a.type, a.calls);
+      this.sumStats(sessionId, 1);
+    });
+  }
+
+  /**
+   * Indexed sessions without statistics of `version` (the backfill's work),
+   * newest first, leaving out `skip`.
+   */
+  sessionsNeedingStats(version: number, limit: number, skip: readonly string[] = []): string[] {
+    const where: string[] = [];
+    const params: string[] = [];
+    notIn('s.session_id', [...skip], where, params);
+    return this.raw
+      .prepare(
+        `SELECT s.session_id FROM sessions s
+         LEFT JOIN stats_sessions st ON st.session_id = s.session_id
+         WHERE s.indexed_modified IS NOT NULL AND (st.version IS NULL OR st.version < ?)
+         ${where.length ? `AND ${where.join(' AND ')}` : ''}
+         ORDER BY s.last_modified DESC, s.session_id LIMIT ?`,
+      )
+      .all(version, ...params, limit)
+      .map((r) => r.session_id as string);
+  }
+
+  /** How many indexed sessions still lack statistics of `version`. */
+  countSessionsNeedingStats(version: number): number {
+    const r = this.raw
+      .prepare(
+        `SELECT COUNT(*) AS n FROM sessions s
+         LEFT JOIN stats_sessions st ON st.session_id = s.session_id
+         WHERE s.indexed_modified IS NOT NULL AND (st.version IS NULL OR st.version < ?)`,
+      )
+      .get(version);
+    return Number(r?.n ?? 0);
+  }
+
+  /** Takes the session's rows out of the `stats_all_*` sums, then deletes them. */
+  private deleteStatsRows(sessionId: string): void {
+    this.sumStats(sessionId, -1);
+    for (const table of ['stats_days', 'stats_hours', 'stats_tools', 'stats_agents']) {
+      this.raw.prepare(`DELETE FROM ${table} WHERE session_id = ?`).run(sessionId);
+    }
+  }
+
+  /** Adds (`sign` 1) or subtracts (-1) the session's rows to the `stats_all_*` sums. */
+  private sumStats(sessionId: string, sign: 1 | -1): void {
+    const s = sign === 1 ? '' : '-';
+    const run = (sql: string) => this.raw.prepare(sql).run(sessionId);
+    run(
+      `INSERT INTO stats_all_days (day, model, messages, input_tokens, output_tokens,
+         cache_read_tokens, cache_creation_tokens)
+       SELECT day, model, ${s}(user_messages + assistant_messages), ${s}input_tokens,
+         ${s}output_tokens, ${s}cache_read_tokens, ${s}cache_creation_tokens
+       FROM stats_days WHERE session_id = ?
+       ON CONFLICT(day, model) DO UPDATE SET messages = messages + excluded.messages,
+         input_tokens = input_tokens + excluded.input_tokens,
+         output_tokens = output_tokens + excluded.output_tokens,
+         cache_read_tokens = cache_read_tokens + excluded.cache_read_tokens,
+         cache_creation_tokens = cache_creation_tokens + excluded.cache_creation_tokens`,
+    );
+    run(
+      `INSERT INTO stats_all_hours (day, hour, messages)
+       SELECT day, hour, ${s}messages FROM stats_hours WHERE session_id = ?
+       ON CONFLICT(day, hour) DO UPDATE SET messages = messages + excluded.messages`,
+    );
+    run(
+      `INSERT INTO stats_all_tools (day, tool, calls)
+       SELECT day, tool, ${s}calls FROM stats_tools WHERE session_id = ?
+       ON CONFLICT(day, tool) DO UPDATE SET calls = calls + excluded.calls`,
+    );
+    run(
+      `INSERT INTO stats_all_agents (day, agent_type, calls)
+       SELECT day, agent_type, ${s}calls FROM stats_agents WHERE session_id = ?
+       ON CONFLICT(day, agent_type) DO UPDATE SET calls = calls + excluded.calls`,
+    );
+  }
+
   // --- removal ----------------------------------------------------------------
 
   allSessionIds(): string[] {
@@ -431,6 +585,8 @@ export class Db implements LiveRegistry {
       this.raw.prepare('DELETE FROM turn_state WHERE session_id = ?').run(sessionId);
       this.raw.prepare('DELETE FROM fts_gen WHERE session_id = ?').run(sessionId);
       this.deleteFtsRowids(this.ftsRows(sessionId).map((r) => r.rowid));
+      this.deleteStatsRows(sessionId);
+      this.raw.prepare('DELETE FROM stats_sessions WHERE session_id = ?').run(sessionId);
       this.raw.exec('COMMIT');
     } catch (e) {
       this.raw.exec('ROLLBACK');

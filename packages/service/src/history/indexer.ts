@@ -8,6 +8,7 @@ import {
   projectPathFor,
   type GitCommonDir,
 } from './projects.js';
+import { STATS_VERSION, StatsCollector } from './stats.js';
 
 /**
  * Cap on indexed text per session, in characters (~2 MB of mostly-ASCII text).
@@ -23,6 +24,8 @@ const BATCH = 20;
 /** Messages extracted between event-loop yields. */
 const SLICE = 100;
 const DELETE_BATCH = 8;
+/** Sessions per turn of the statistics backfill (v1.3), between which refreshes may run. */
+export const BACKFILL_BATCH = 4;
 const UNKNOWN_PROJECT = '(unknown)';
 
 const yieldLoop = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
@@ -50,7 +53,10 @@ export type IndexerOptions = {
   gitCommonDir?: GitCommonDir;
   maxTextChars?: number;
   /** Called when one session fails to sync; the sync carries on with the rest. */
-  onError?: (error: unknown, context: { sessionId: string; step: 'refresh' | 'sync' }) => void;
+  onError?: (
+    error: unknown,
+    context: { sessionId: string; step: 'refresh' | 'sync' | 'stats' },
+  ) => void;
   /**
    * Sessions not to re-index right now (a pahub chat mid-turn: its transcript
    * grows with every streamed message). Their refreshes wait for
@@ -72,6 +78,12 @@ export class Indexer {
   private readonly deferred = new Set<string>();
   private running: Promise<void> = Promise.resolve();
   private stopped = false;
+  /** The statistics backfill in progress (v1.3), if any. */
+  private backfilling: Promise<void> | null = null;
+  /** Set by a full sync that found sessions without statistics. */
+  private backfillDue = false;
+  /** Sessions whose statistics could not be read; skipped by the backfill from then on. */
+  private readonly statsFailed = new Set<string>();
 
   constructor(
     private readonly adapter: AgentAdapter,
@@ -95,14 +107,94 @@ export class Indexer {
     return this.running;
   }
 
-  /** Upserts every session's metadata and (re)indexes the ones that changed. */
+  /**
+   * Upserts every session's metadata and (re)indexes the ones that changed.
+   * Then (v1.3) sessions indexed before statistics existed get theirs in the
+   * background (`backfillStats`); the returned promise does not wait for that.
+   */
   fullSync(): Promise<void> {
-    return this.serial(async () => {
+    const done = this.serial(async () => {
       const all = await this.adapter.listSessions();
       this.check();
       await this.process(all, true);
       this.removeVanished(new Set(all.map((i) => i.sessionId)));
+      this.backfillDue = this.db.sessionsNeedingStats(STATS_VERSION, 1).length > 0;
     });
+    void done.then(
+      () => {
+        if (!this.backfillDue || this.stopped) return;
+        void this.backfillStats().catch((e: unknown) =>
+          this.onError(e, { sessionId: '', step: 'stats' }),
+        );
+      },
+      () => {},
+    );
+    return done;
+  }
+
+  /**
+   * v1.3 analytics: gathers the statistics of indexed sessions that have none
+   * of the current version (sessions indexed by an older pahub), reading each
+   * through the SDK once and leaving its full-text index alone. It runs
+   * `BACKFILL_BATCH` sessions per turn of the indexer's queue, so refreshes
+   * (a chat that changed) run between batches, and yields between slices of
+   * messages like indexing does. Resolves when no session is left (or the
+   * indexer stopped); a call while it runs returns the running pass.
+   */
+  backfillStats(): Promise<void> {
+    this.backfilling ??= (async () => {
+      try {
+        let more = true;
+        while (more && !this.stopped) {
+          more = false;
+          await this.serial(async () => {
+            more = await this.backfillBatch();
+          });
+          await yieldLoop();
+        }
+      } finally {
+        this.backfilling = null;
+      }
+    })();
+    return this.backfilling;
+  }
+
+  /** One batch of the backfill; true when more sessions may be waiting. */
+  private async backfillBatch(): Promise<boolean> {
+    const skip = [...this.statsFailed, ...this.deferred];
+    const ids = this.db.sessionsNeedingStats(STATS_VERSION, BACKFILL_BATCH, skip);
+    for (const id of ids) {
+      this.check();
+      // A chat mid-turn is indexed (statistics included) once its turn ends.
+      if (this.deferWhile(id)) {
+        this.deferred.add(id);
+        continue;
+      }
+      try {
+        await this.gatherStats(id);
+      } catch (e) {
+        if (e instanceof Stopped) throw e;
+        this.statsFailed.add(id); // not retried until the next service start
+        this.onError(e, { sessionId: id, step: 'stats' });
+      }
+    }
+    return ids.length === BACKFILL_BATCH;
+  }
+
+  private async gatherStats(sessionId: string): Promise<void> {
+    const row = this.db.getSession(sessionId);
+    if (!row) return;
+    const messages = await this.adapter.getSessionMessages(sessionId);
+    const stats = new StatsCollector(row.createdAt ?? row.lastModified);
+    for (let start = 0; start < messages.length; start += SLICE) {
+      this.check();
+      stats.add(messages.slice(start, start + SLICE));
+      await yieldLoop();
+    }
+    this.check();
+    // Deleted (or re-indexed, statistics included) meanwhile: nothing to add.
+    if (this.db.getSession(sessionId))
+      this.db.replaceStats(sessionId, stats.result(), STATS_VERSION);
   }
 
   /**
@@ -241,9 +333,13 @@ export class Indexer {
     const parts: string[] = [];
     let total = 0;
     const messages = await this.adapter.getSessionMessages(id);
+    // v1.3 analytics: statistics come from the same walk, no second read.
+    const stats = new StatsCollector(info.createdAt ?? info.lastModified);
     for (let start = 0; start < messages.length; start += SLICE) {
       this.check();
-      const text = extractText(messages.slice(start, start + SLICE));
+      const slice = messages.slice(start, start + SLICE);
+      stats.add(slice);
+      const text = extractText(slice);
       if (text.length > 0) {
         parts.push(text);
         total += text.length;
@@ -261,6 +357,7 @@ export class Indexer {
       await yieldLoop();
     }
     this.check();
+    this.db.replaceStats(id, stats.result(), STATS_VERSION);
     const stage = this.db.stageFts(id);
     try {
       for (const chunk of chunkText(parts.join('\n'))) {
