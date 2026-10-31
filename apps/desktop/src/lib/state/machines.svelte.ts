@@ -6,7 +6,7 @@ import {
 } from '@threadgarden/protocol';
 import { machineTokens } from '../native';
 import { ServiceClient, type ClientOptions, type ClientStatus } from '../service/client';
-import type { Api } from './api';
+import { quietly, type Api } from './api';
 import { LOCAL_FALLBACK_ID, THIS_PC } from './refs';
 
 export type MachineStatus =
@@ -32,15 +32,24 @@ export type MachinesOptions = {
   makeClient?: (o: ClientOptions) => ServiceClient;
 };
 
-/** A machine's relay on the local service (the UI never connects anywhere but loopback). */
+/** `uiState` key: the machines whose group in the places column is collapsed (their ids). */
+export const COLLAPSED_KEY = 'machines.collapsed';
+
 /** How the UI names a machine: This PC for the local one. */
 export const machineLabel = (m: Pick<MachineEntry, 'local' | 'name'>): string =>
   m.local ? THIS_PC : m.name;
+
+/** How the UI names the machine `id` (This PC for one it does not know, e.g. before its service answered). */
+export const machineNameOf = (machines: Pick<MachinesState, 'get'>, id: string): string => {
+  const m = machines.get(id);
+  return m ? machineLabel(m) : THIS_PC;
+};
 
 /** The names of the machines that are on (This PC first), e.g. for "Stop all work". */
 export const onMachineNames = (machines: Pick<MachinesState, 'list'>): string[] =>
   machines.list.filter((m) => m.status === 'on').map(machineLabel);
 
+/** A machine's relay on the local service (the UI never connects anywhere but loopback). */
 export const relayUrl = (localPort: number, machineId: string): string =>
   `ws://127.0.0.1:${localPort}/relay?machine=${encodeURIComponent(machineId)}`;
 
@@ -61,6 +70,8 @@ const fromLocalStatus = (s: ClientStatus): MachineStatus =>
 export class MachinesState {
   private paired = $state<MachineEntry[]>([]);
   private localEntry = $state<MachineEntry | null>(null);
+  /** Machines whose group in the places column is collapsed (kept in the local `uiState`). */
+  collapsed = $state<string[]>([]);
 
   private localApi!: Api;
   private localClient!: ServiceClient;
@@ -150,6 +161,22 @@ export class MachinesState {
     } finally {
       this.pairing--;
     }
+  };
+
+  /** Loads which machine groups are collapsed (none when unknown). */
+  restoreCollapsed = async (): Promise<void> => {
+    try {
+      const { value } = await this.localApi.request('uiState.get', { key: COLLAPSED_KEY });
+      if (Array.isArray(value)) this.collapsed = value.filter((v) => typeof v === 'string');
+    } catch {
+      // Every group open is fine.
+    }
+  };
+
+  setCollapsed = (id: string, collapsed: boolean): void => {
+    if (this.collapsed.includes(id) === collapsed) return;
+    this.collapsed = collapsed ? [...this.collapsed, id] : this.collapsed.filter((x) => x !== id);
+    quietly(this.localApi.request('uiState.set', { key: COLLAPSED_KEY, value: this.collapsed }));
   };
 
   rename = async (id: string, name: string): Promise<void> => {

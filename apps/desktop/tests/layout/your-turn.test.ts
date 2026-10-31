@@ -94,7 +94,7 @@ describe('projects: order and missing folders (v1.1 §4)', () => {
       ];
     });
     render(PlacesColumn, { context });
-    const list = await screen.findByRole('list', { name: 'Projects' });
+    const list = await screen.findByRole('list', { name: 'This PC' });
     await waitFor(() => expect(within(list).getAllByRole('listitem')).toHaveLength(3));
     const names = within(list)
       .getAllByRole('button')
@@ -114,7 +114,7 @@ describe('projects: order and missing folders (v1.1 §4)', () => {
     render(PlacesColumn, { context });
     const toggle = await screen.findByRole('button', { name: /missing folders \(2\)/i });
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
-    const list = screen.getByRole('list', { name: 'Projects' });
+    const list = screen.getByRole('list', { name: 'This PC' });
     expect(
       within(list)
         .getAllByRole('button')

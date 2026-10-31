@@ -16,6 +16,7 @@
     MergedList,
     type MachineChat,
   } from '#lib/state/merged-list.svelte.js';
+  import { machineNameOf } from '#lib/state/machines.svelte.js';
   import { includesOtherBuckets } from '#lib/state/places.svelte.js';
   import { chatKey } from '#lib/state/refs.js';
   import type { MachineScope } from '#lib/state/scope.js';
@@ -213,6 +214,8 @@
   const projectNameOf = (chat: MachineChat): string =>
     namesOn.get(chat.machineId)?.get(chat.projectId) ?? baseName(chat.cwd);
   const spansProjects = $derived(places.selected.kind !== 'project');
+  /** Rows of a cross-machine list name their machine while more than one is paired. */
+  const showMachine = $derived(across && machines.list.length > 1);
   const placeTitle = $derived.by(() => {
     const p = places.selected;
     if (p.kind === 'needsYou') return 'Needs you';
@@ -628,6 +631,7 @@
           cursor={r.key === cursor}
           active={r.key === tabs.active}
           projectName={spansProjects ? projectNameOf(chat) : undefined}
+          machineName={showMachine ? machineNameOf(machines, chat.machineId) : undefined}
           {now}
           running={scope.chats.get(chat.sessionId)?.running ?? chat.runningTasks ?? 0}
           scheduled={scope.scheduled.forChat(chat.sessionId)}

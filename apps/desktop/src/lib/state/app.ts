@@ -78,6 +78,7 @@ const connectTo = async (conn: ServiceConnection): Promise<void> => {
     settings.restoreScale(),
     settings.restoreActivity(),
     places.restoreMissingOpen(),
+    machines.restoreCollapsed(),
     tabs.restore(),
   ]);
   loaded = true;

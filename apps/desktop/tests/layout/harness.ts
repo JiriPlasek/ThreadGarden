@@ -1,5 +1,6 @@
 import {
   PROTOCOL_VERSION,
+  RELAY_CLOSE,
   type ChatStatus,
   type ChatSummary,
   type MachineInfo,
@@ -223,6 +224,11 @@ export const setupTwoMachines = async (
     configureRemote?: (server: FakeServer) => void;
     /** Resolve once M1 is on (default); false: as soon as the app is wired. */
     waitForOn?: boolean;
+    /**
+     * M1's state once it was on (default `on`): the others close its relay
+     * with the code the local service uses for them.
+     */
+    m1Status?: 'on' | 'mismatch' | 'refused' | 'locked';
   } = {},
 ) => {
   const server = new FakeServer();
@@ -238,6 +244,11 @@ export const setupTwoMachines = async (
   const app = wire(client, impl, { [M1]: 'device-token' });
   if (o.waitForOn !== false)
     await vi.waitFor(() => expect(app.machines.get(M1)?.status).toBe('on'));
+  const status = o.m1Status ?? 'on';
+  if (status !== 'on') {
+    remote.drop(RELAY_CLOSE[status]);
+    await vi.waitFor(() => expect(app.machines.get(M1)?.status).toBe(status));
+  }
   const context = new Map<unknown, unknown>([[APP_CONTEXT, app]]);
   return { server, remote, client, app, context };
 };

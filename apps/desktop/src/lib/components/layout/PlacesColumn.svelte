@@ -18,8 +18,12 @@
   import * as Tooltip from '#lib/components/ui/tooltip/index.js';
   import { samePlace, type Place } from '#lib/state/places.svelte.js';
   import { useApp } from '#lib/state/context.js';
+  import type { MachineEntry } from '#lib/state/machines.svelte.js';
+  import { THIS_PC } from '#lib/state/refs.js';
+  import type { MachineScope } from '#lib/state/scope.js';
   import { cn } from '#lib/utils.js';
   import IconButton from './IconButton.svelte';
+  import MachineHeading from './MachineHeading.svelte';
   import ProjectIcon from './ProjectIcon.svelte';
   import StatusIcon from './StatusIcon.svelte';
 
@@ -30,29 +34,99 @@
    * is gone sit in a collapsed "Missing folders" group below them (v1.1 §4).
    * Each project shows its icon or a letter tile (v1.3 §5), a pinned one a pin.
    * Analytics (v1.3 §4), below Running, opens its view in the main pane.
+   *
+   * Machines (layout A): Needs you, Running, Analytics and the buckets stay on
+   * top and cover every machine. Below them, one group per machine (This PC
+   * first): a `MachineHeading` with its name and state, which collapses the
+   * group (remembered), then that machine's projects with their own "Missing
+   * folders" and "Hidden projects"; pinning and hiding act on the project's
+   * machine. With This PC alone there is no group: the projects sit under a
+   * plain "This PC" heading, as they always sat under "Projects".
    */
   let { onCollapse }: { onCollapse?: () => void } = $props();
 
-  const { places, interaction, tabs, scopes } = useApp();
+  const { places, interaction, tabs, scopes, machines } = useApp();
+  const local = scopes.local();
 
-  let showHidden = $state(false);
-  /** The "Hide all missing" confirmation is open (v1.2 §4). */
+  type Group = { machine: MachineEntry | undefined; scope: MachineScope };
+
+  /** This PC first (also before its service said who it is), then the paired machines. */
+  const groups = $derived.by((): Group[] => {
+    const here = machines.get(local.machineId) ?? machines.local ?? undefined;
+    const out: Group[] = [{ machine: here, scope: local }];
+    for (const m of machines.list) {
+      const scope = m.local ? undefined : scopes.get(m.id);
+      if (scope && scope !== local) out.push({ machine: m, scope });
+    }
+    return out;
+  });
+  const multi = $derived(groups.length > 1);
+
+  /** Machines whose "Hidden projects" are shown (by machine id). */
+  let showHidden = $state<Record<string, boolean>>({});
+  /** The machine whose missing folders "Hide all missing" asks about (v1.2 §4). */
+  let hidingIn = $state<MachineScope>(local);
   let hidingMissing = $state(false);
-  /** Where focus goes after "Hide all missing": its own button is gone by then. */
-  let hiddenToggle = $state<HTMLButtonElement | null>(null);
+  /** Where focus goes after "Hide all missing": its own button is gone by then (by machine id). */
+  let hiddenToggles = $state<Record<string, HTMLButtonElement | null>>({});
 
   const MISSING_WHY = 'Claude Code still has these chats, but their folders were deleted.';
 
   /** `exists` is optional for a service without it: such folders count as present. */
   const isMissing = (p: Project): boolean => p.exists === false;
 
-  const visible = $derived(places.projects.filter((p) => !p.hidden && !isMissing(p)));
-  const missing = $derived(places.projects.filter((p) => !p.hidden && isMissing(p)));
-  const hidden = $derived(
-    places.projects
+  const visibleIn = (scope: MachineScope): Project[] =>
+    scope.places.projects.filter((p) => !p.hidden && !isMissing(p));
+  const missingIn = (scope: MachineScope): Project[] =>
+    scope.places.projects.filter((p) => !p.hidden && isMissing(p));
+  const hiddenIn = (scope: MachineScope): Project[] =>
+    scope.places.projects
       .filter((p) => p.hidden)
-      .sort((a, b) => a.displayName.localeCompare(b.displayName)),
-  );
+      .sort((a, b) => a.displayName.localeCompare(b.displayName));
+  /** The missing folders "Hide all missing" asks about. */
+  const missing = $derived(missingIn(hidingIn));
+
+  /** A project place; another machine's names its machine (This PC's stays as it always was). */
+  const projectPlace = (scope: MachineScope, projectId: string): Place =>
+    scope === local
+      ? { kind: 'project', projectId }
+      : { kind: 'project', projectId, machineId: scope.machineId };
+
+  /**
+   * After hiding projects of another machine: its own places store moved its
+   * own selection; the column's selection (This PC's) moves to Active here.
+   */
+  const leaveHidden = (scope: MachineScope, projectIds: readonly string[]): void => {
+    if (scope === local) return;
+    const sel = places.selected;
+    if (
+      sel.kind === 'project' &&
+      sel.machineId === scope.machineId &&
+      projectIds.includes(sel.projectId)
+    ) {
+      places.select({ kind: 'active' });
+    }
+  };
+  const toggleHidden = (scope: MachineScope, project: Project): void => {
+    const hide = !project.hidden;
+    quiet(
+      scope.places.hideProject(project.projectId, hide).then(() => {
+        if (hide) leaveHidden(scope, [project.projectId]);
+      }),
+    );
+  };
+  const hideMissing = async (scope: MachineScope, projectIds: string[]): Promise<void> => {
+    try {
+      await scope.places.hideProjects(projectIds);
+    } finally {
+      // Those it hid before a failure stay hidden (it re-fetched its projects).
+      const hidden = new Set(scope.places.projects.filter((p) => p.hidden).map((p) => p.projectId));
+      leaveHidden(
+        scope,
+        projectIds.filter((id) => hidden.has(id)),
+      );
+    }
+  };
 
   /** The bucket places (v1.2 §3); Active replaces "All chats" (`all` from an older service). */
   const BUCKETS = [
@@ -106,8 +180,8 @@
   {/if}
 {/snippet}
 
-{#snippet projectItem(project: Project)}
-  {@const place = { kind: 'project', projectId: project.projectId } as const}
+{#snippet projectItem(scope: MachineScope, project: Project)}
+  {@const place = projectPlace(scope, project.projectId)}
   <li>
     <ContextMenu.Root>
       <ContextMenu.Trigger>
@@ -123,7 +197,11 @@
             {#if isMissing(project)}
               <FolderXIcon class="text-muted-foreground size-4 shrink-0" aria-hidden="true" />
             {:else}
-              <ProjectIcon projectId={project.projectId} name={project.displayName} />
+              <ProjectIcon
+                projectId={project.projectId}
+                name={project.displayName}
+                icons={scope.places.icons}
+              />
             {/if}
             <span class="min-w-0 truncate">{project.displayName}</span>
             {#if project.pinned}
@@ -141,14 +219,11 @@
       <ContextMenu.Content class="min-w-40">
         <ContextMenu.Item
           class="py-1 text-xs"
-          onSelect={() => quiet(places.pinProject(project.projectId, !project.pinned))}
+          onSelect={() => quiet(scope.places.pinProject(project.projectId, !project.pinned))}
         >
           {#if project.pinned}<PinOffIcon /> Unpin project{:else}<PinIcon /> Pin project{/if}
         </ContextMenu.Item>
-        <ContextMenu.Item
-          class="py-1 text-xs"
-          onSelect={() => quiet(places.hideProject(project.projectId, !project.hidden))}
-        >
+        <ContextMenu.Item class="py-1 text-xs" onSelect={() => toggleHidden(scope, project)}>
           {#if project.hidden}<EyeIcon /> Show project{:else}<EyeOffIcon /> Hide project{/if}
         </ContextMenu.Item>
       </ContextMenu.Content>
@@ -223,87 +298,126 @@
       {/each}
     </ul>
 
-    <h3
-      class="text-muted-foreground px-2 pt-4 pb-1 text-[0.6875rem] font-medium tracking-wide uppercase"
-      id="places-projects"
-    >
-      Projects
-    </h3>
-    {#if visible.length === 0}
-      <p class="text-muted-foreground px-2 text-xs">No projects yet.</p>
-    {/if}
-    <ul class="space-y-px" aria-labelledby="places-projects">
-      {#each visible as project (project.projectId)}
-        {@render projectItem(project)}
-      {/each}
-    </ul>
-
-    {#if missing.length > 0}
-      <div class="mt-3 flex items-center gap-1 pr-1">
-        <Tooltip.Provider delayDuration={400}>
-          <Tooltip.Root>
-            <Tooltip.Trigger>
-              {#snippet child({ props })}
-                <button
-                  {...props}
-                  type="button"
-                  class="text-muted-foreground hover:text-foreground flex h-6 min-w-0 flex-1 items-center gap-1 px-2 text-left text-[0.6875rem]"
-                  aria-expanded={places.missingOpen}
-                  aria-describedby="places-missing-why"
-                  onclick={() => places.setMissingOpen(!places.missingOpen)}
-                >
-                  <ChevronRightIcon
-                    class={cn(
-                      'size-3.5 shrink-0 transition-transform',
-                      places.missingOpen && 'rotate-90',
-                    )}
-                    aria-hidden="true"
-                  />
-                  <span class="truncate">Missing folders ({missing.length})</span>
-                </button>
-              {/snippet}
-            </Tooltip.Trigger>
-            <Tooltip.Content side="right" class="max-w-60 px-2 py-1">{MISSING_WHY}</Tooltip.Content>
-          </Tooltip.Root>
-        </Tooltip.Provider>
-        <span id="places-missing-why" hidden>{MISSING_WHY}</span>
-        <IconButton label="Hide all missing" side="right" onclick={() => (hidingMissing = true)}>
-          <EyeOffIcon />
-        </IconButton>
-      </div>
-      {#if places.missingOpen}
-        <ul class="space-y-px opacity-80" aria-label="Missing folders">
-          {#each missing as project (project.projectId)}
-            {@render projectItem(project)}
-          {/each}
-        </ul>
+    {#each groups as group (group.scope.machineId)}
+      {@const id = group.scope.machineId}
+      {@const collapsed = machines.collapsed.includes(id)}
+      {#if multi && group.machine}
+        <div role="group" aria-label={group.machine.local ? THIS_PC : group.machine.name}>
+          <MachineHeading
+            machine={group.machine}
+            {collapsed}
+            onToggle={() => machines.setCollapsed(id, !collapsed)}
+          />
+          {#if !collapsed}
+            {@render projects(group.scope)}
+          {/if}
+        </div>
+      {:else}
+        <h3
+          class="text-muted-foreground px-2 pt-4 pb-1 text-[0.6875rem] font-medium tracking-wide uppercase"
+          id="places-projects"
+        >
+          {THIS_PC}
+        </h3>
+        {@render projects(group.scope)}
       {/if}
-    {/if}
-
-    {#if hidden.length > 0}
-      <button
-        bind:this={hiddenToggle}
-        type="button"
-        class="text-muted-foreground hover:text-foreground mt-3 flex h-6 items-center gap-1 px-2 text-[0.6875rem]"
-        aria-expanded={showHidden}
-        onclick={() => (showHidden = !showHidden)}
-      >
-        <ChevronRightIcon
-          class={cn('size-3.5 transition-transform', showHidden && 'rotate-90')}
-          aria-hidden="true"
-        />
-        Hidden projects ({hidden.length})
-      </button>
-      {#if showHidden}
-        <ul class="space-y-px opacity-80">
-          {#each hidden as project (project.projectId)}
-            {@render projectItem(project)}
-          {/each}
-        </ul>
-      {/if}
-    {/if}
+    {/each}
   </div>
 </nav>
+
+<!-- A machine's projects, its missing folders and its hidden projects. -->
+{#snippet projects(scope: MachineScope)}
+  {@const id = scope.machineId}
+  {@const visible = visibleIn(scope)}
+  {@const missingHere = missingIn(scope)}
+  {@const hidden = hiddenIn(scope)}
+  {@const hiddenShown = showHidden[id] ?? false}
+  {@const whyId = scope === local ? 'places-missing-why' : `places-missing-why-${id}`}
+  {#if visible.length === 0}
+    <p class="text-muted-foreground px-2 text-xs">No projects yet.</p>
+  {/if}
+  <ul
+    class="space-y-px"
+    aria-labelledby={multi ? undefined : 'places-projects'}
+    aria-label={multi ? 'Projects' : undefined}
+  >
+    {#each visible as project (project.projectId)}
+      {@render projectItem(scope, project)}
+    {/each}
+  </ul>
+
+  {#if missingHere.length > 0}
+    <div class="mt-3 flex items-center gap-1 pr-1">
+      <Tooltip.Provider delayDuration={400}>
+        <Tooltip.Root>
+          <Tooltip.Trigger>
+            {#snippet child({ props })}
+              <button
+                {...props}
+                type="button"
+                class="text-muted-foreground hover:text-foreground flex h-6 min-w-0 flex-1 items-center gap-1 px-2 text-left text-[0.6875rem]"
+                aria-expanded={scope.places.missingOpen}
+                aria-describedby={whyId}
+                onclick={() => scope.places.setMissingOpen(!scope.places.missingOpen)}
+              >
+                <ChevronRightIcon
+                  class={cn(
+                    'size-3.5 shrink-0 transition-transform',
+                    scope.places.missingOpen && 'rotate-90',
+                  )}
+                  aria-hidden="true"
+                />
+                <span class="truncate">Missing folders ({missingHere.length})</span>
+              </button>
+            {/snippet}
+          </Tooltip.Trigger>
+          <Tooltip.Content side="right" class="max-w-60 px-2 py-1">{MISSING_WHY}</Tooltip.Content>
+        </Tooltip.Root>
+      </Tooltip.Provider>
+      <span id={whyId} hidden>{MISSING_WHY}</span>
+      <IconButton
+        label="Hide all missing"
+        side="right"
+        onclick={() => {
+          hidingIn = scope;
+          hidingMissing = true;
+        }}
+      >
+        <EyeOffIcon />
+      </IconButton>
+    </div>
+    {#if scope.places.missingOpen}
+      <ul class="space-y-px opacity-80" aria-label="Missing folders">
+        {#each missingHere as project (project.projectId)}
+          {@render projectItem(scope, project)}
+        {/each}
+      </ul>
+    {/if}
+  {/if}
+
+  {#if hidden.length > 0}
+    <button
+      bind:this={hiddenToggles[id]}
+      type="button"
+      class="text-muted-foreground hover:text-foreground mt-3 flex h-6 items-center gap-1 px-2 text-[0.6875rem]"
+      aria-expanded={hiddenShown}
+      onclick={() => (showHidden[id] = !hiddenShown)}
+    >
+      <ChevronRightIcon
+        class={cn('size-3.5 transition-transform', hiddenShown && 'rotate-90')}
+        aria-hidden="true"
+      />
+      Hidden projects ({hidden.length})
+    </button>
+    {#if hiddenShown}
+      <ul class="space-y-px opacity-80">
+        {#each hidden as project (project.projectId)}
+          {@render projectItem(scope, project)}
+        {/each}
+      </ul>
+    {/if}
+  {/if}
+{/snippet}
 
 <ConfirmDialog
   bind:open={hidingMissing}
@@ -312,6 +426,10 @@
     ? '1 project'
     : `${missing.length} projects`} whose folder was deleted will move to Hidden projects. Their chats stay in Claude Code, and you can show the projects again from there."
   confirmLabel={missing.length === 1 ? 'Hide 1 project' : `Hide ${missing.length} projects`}
-  onConfirm={() => places.hideProjects(missing.map((p) => p.projectId))}
-  focusAfterConfirm={() => hiddenToggle}
+  onConfirm={() =>
+    hideMissing(
+      hidingIn,
+      missing.map((p) => p.projectId),
+    )}
+  focusAfterConfirm={() => hiddenToggles[hidingIn.machineId] ?? null}
 />

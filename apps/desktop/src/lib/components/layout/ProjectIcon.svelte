@@ -1,5 +1,6 @@
 <script lang="ts">
   import { useApp } from '#lib/state/context.js';
+  import type { ProjectIconsState } from '#lib/state/project-icons.svelte.js';
   import { cn } from '#lib/utils.js';
   import { tileColor, tileLetter, whenVisible } from './project-icon';
 
@@ -8,27 +9,29 @@
    * size (1rem, scaling with the interface size), or a
    * letter tile while unknown and for projects without one. Decorative: the
    * project's name is always shown next to it. The icon is asked for once the
-   * element scrolls into view.
+   * element scrolls into view. `icons`: the project's machine's (This PC's by default).
    */
   let {
     projectId,
     name,
+    icons: given,
     class: className = '',
-  }: { projectId: string; name: string; class?: string } = $props();
+  }: { projectId: string; name: string; icons?: ProjectIconsState; class?: string } = $props();
 
   const { places } = useApp();
+  const icons = $derived(given ?? places.icons);
 
   let el = $state<HTMLSpanElement | null>(null);
   /** An image that failed to decode falls back to the tile. */
   let broken = $state<string | null>(null);
-  const url = $derived(places.icons.url(projectId));
+  const url = $derived(icons.url(projectId));
 
   $effect(() => {
     const node = el;
     const id = projectId;
     // Asked for (or answered) already: nothing to watch.
-    if (!node || places.icons.asked(id)) return;
-    return whenVisible(node, () => places.icons.want(id));
+    if (!node || icons.asked(id)) return;
+    return whenVisible(node, () => icons.want(id));
   });
 </script>
 

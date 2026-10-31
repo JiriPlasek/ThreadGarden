@@ -19,8 +19,11 @@
   import { useApp } from '#lib/state/context.js';
   import { formatShortcut, shortcut, type Combo } from '#lib/shortcuts.js';
   import { ARCHIVE_OLDER_DAYS } from '#lib/state/buckets.svelte.js';
+  import { machineNameOf } from '#lib/state/machines.svelte.js';
   import { askArchiveOlderIn } from '#lib/state/merged-list.svelte.js';
-  import type { QuickHit } from '#lib/state/sessions.svelte.js';
+  import { mergeQuickHits, type MachineHit } from '#lib/state/quick-search.js';
+  import { chatKey } from '#lib/state/refs.js';
+  import type { MachineScope } from '#lib/state/scope.js';
   import { cn } from '#lib/utils.js';
 
   /**
@@ -32,8 +35,13 @@
    * "Settings", "Keyboard shortcuts",
    * and in Active or a project "Archive chats older than 30 days…". Archived
    * matches come last, in their own "Archived" group (v1.2 §3).
+   *
+   * Machines: every connected machine is searched at once (`QUICK_LIMIT`
+   * each), the answers merged by the service's score and cut to `QUICK_LIMIT`;
+   * a hit opens on its machine, and carries a machine chip while more than one
+   * machine is paired.
    */
-  const { interaction, sessions, tabs, lifecycle, places, usage, scopes } = useApp();
+  const { interaction, tabs, lifecycle, places, usage, scopes, machines } = useApp();
 
   type Command = {
     id: string;
@@ -43,7 +51,7 @@
     /** Shown at the end of the row: the key that does the same from anywhere. */
     keys?: Combo;
   };
-  type Row = { key: string; hit: QuickHit; command?: never } | { key: string; command: Command };
+  type Row = { key: string; hit: MachineHit; command?: never } | { key: string; command: Command };
 
   /** The tidy action applies to Active or to the selected project. */
   const archiveOlderCommand = $derived.by((): Command | null => {
@@ -84,7 +92,7 @@
 
   let input = $state<HTMLInputElement | null>(null);
   let query = $state('');
-  let hits = $state.raw<QuickHit[]>([]);
+  let hits = $state.raw<MachineHit[]>([]);
   let active = $state(0);
   /** The last query sent (trimmed): an edit that does not change it sends nothing. */
   let sent = '';
@@ -96,7 +104,36 @@
     const q = query.trim().toLowerCase();
     return q ? all.filter((c) => c.label.toLowerCase().includes(q)) : all;
   });
-  const chatRow = (hit: QuickHit): Row => ({ key: `chat:${hit.sessionId}`, hit });
+  const local = scopes.local();
+  /** This PC's rows keep their plain key; another machine's add the machine. */
+  const chatRow = (hit: MachineHit): Row => ({
+    key: hit.machineId === local.machineId ? `chat:${hit.sessionId}` : `chat:${chatKey(hit)}`,
+    hit,
+  });
+  /** Hits carry their machine's name while more than one machine is paired. */
+  const multi = $derived(machines.list.length > 1);
+  /** A hit's project icon comes from its machine. */
+  const iconsOf = (machineId: string) => (scopes.get(machineId) ?? local).places.icons;
+
+  /**
+   * This PC's answer and every connected paired machine's, merged; a paired
+   * machine that fails is left out (This PC failing fails the search, as before).
+   */
+  const quickSearch = async (q: string): Promise<MachineHit[]> => {
+    const ask = async (s: MachineScope) => ({
+      machineId: s.machineId,
+      hits: await s.sessions.quickSearch(q, QUICK_LIMIT),
+    });
+    const others = scopes.all().filter((s) => s !== local && s.api.status === 'open');
+    const [here, ...rest] = await Promise.allSettled([ask(local), ...others.map(ask)]);
+    if (here!.status === 'rejected') throw here!.reason;
+    const lists = [
+      here!.value,
+      ...rest.flatMap((a) => (a.status === 'fulfilled' ? [a.value] : [])),
+    ];
+    return mergeQuickHits(lists, QUICK_LIMIT);
+  };
+
   /** Chats, then commands; archived chats last (shown as their own group). */
   const main = $derived<Row[]>([
     ...hits.filter((h) => !h.archived).map(chatRow),
@@ -114,7 +151,7 @@
       hits = [];
       return;
     }
-    sessions.quickSearch(q, QUICK_LIMIT).then(
+    quickSearch(q).then(
       (items) => {
         if (seq !== latest) return;
         hits = items;
@@ -143,7 +180,7 @@
     if (!row) return;
     setOpen(false);
     if (row.command) row.command.run();
-    else tabs.openTab({ machineId: scopes.local().machineId, sessionId: row.hit.sessionId });
+    else tabs.openTab({ machineId: row.hit.machineId, sessionId: row.hit.sessionId });
   };
 
   const optionId = (i: number): string => `quick-option-${i}`;
@@ -259,8 +296,17 @@
                 <span
                   class="text-muted-foreground ml-auto flex max-w-[50%] shrink-0 items-center gap-1.5 self-center text-xs"
                 >
+                  {#if multi}
+                    <span class="bg-muted shrink-0 truncate rounded px-1 text-[0.6875rem]"
+                      >{machineNameOf(machines, row.hit.machineId)}</span
+                    >
+                  {/if}
                   {#if row.hit.projectId}
-                    <ProjectIcon projectId={row.hit.projectId} name={row.hit.projectName} />
+                    <ProjectIcon
+                      projectId={row.hit.projectId}
+                      name={row.hit.projectName}
+                      icons={iconsOf(row.hit.machineId)}
+                    />
                   {/if}
                   <span class="truncate">{row.hit.projectName}</span>
                 </span>

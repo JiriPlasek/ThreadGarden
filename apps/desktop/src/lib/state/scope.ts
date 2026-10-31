@@ -12,7 +12,7 @@ import { chats, ChatsState, type ChatsOptions } from './chats.svelte';
 import { interaction, InteractionState } from './interaction.svelte';
 import type { MachineEntry, MachinesState } from './machines.svelte';
 import { listedAcross } from './merged-list.svelte';
-import { places, PlacesState } from './places.svelte';
+import { places, PlacesState, type Place } from './places.svelte';
 import { machineIdOf } from './refs';
 import { scheduled, ScheduledState } from './scheduled.svelte';
 import { sessions, SessionsState } from './sessions.svelte';
@@ -80,11 +80,20 @@ export const wireScope = (
   const { api, places, sessions, chats, interaction, buckets, scheduled, yourTurn } = scope;
   places.init(api, { localMachineId: deps.tabs.localMachineId });
   const all = deps.scopes;
+  /**
+   * This PC leaves a project of another machine to that machine's scope (as
+   * the chat list does, a project of a machine without one is This PC's).
+   */
+  const elsewhere = (p: Place): boolean =>
+    p.kind === 'project' &&
+    p.machineId !== undefined &&
+    p.machineId !== scope.machineId &&
+    !!all?.all().some((s) => s.machineId === p.machineId);
   sessions.init(api, places, {
     lists: o.projectsOnly
       ? (p) => p.kind === 'project'
       : all
-        ? (p) => !listedAcross(p, all)
+        ? (p) => !elsewhere(p) && !listedAcross(p, all)
         : undefined,
   });
   // The last paired machine gone: This PC lists every place again.

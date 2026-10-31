@@ -5,7 +5,7 @@
   import { Button } from '#lib/components/ui/button/index.js';
   import { useApp } from '#lib/state/context.js';
   import { stopAllDescription } from '#lib/state/lifecycle.svelte.js';
-  import { onMachineNames } from '#lib/state/machines.svelte.js';
+  import { machineNameOf, onMachineNames } from '#lib/state/machines.svelte.js';
   import { chatKey } from '#lib/state/refs.js';
   import type { MachineScope } from '#lib/state/scope.js';
   import { cn } from '#lib/utils.js';
@@ -42,6 +42,8 @@
     ),
   );
   const canStop = $derived(agents.items.some((a) => a.live));
+  /** Agents carry their machine's name while more than one machine is paired. */
+  const multi = $derived(machines.list.length > 1);
 </script>
 
 <footer class="bg-muted/40 flex h-8 shrink-0 items-center gap-2 border-t pr-1 pl-2 text-xs">
@@ -64,13 +66,18 @@
               'hover:bg-accent focus-visible:ring-ring/50 flex h-6 max-w-60 items-center gap-1.5 rounded px-2 outline-none focus-visible:ring-2',
               chatKey(agent) === tabs.active && 'bg-accent text-accent-foreground',
             )}
-            title={`${agent.title} · ${project} · ${statusLabel(agent.status, rawStatus(agent), agent.unread)}${
+            title={`${agent.title} · ${multi ? `${machineNameOf(machines, agent.machineId)} · ` : ''}${project} ·${statusLabel(agent.status, rawStatus(agent), agent.unread)}${
               detail ? ` · ${detail}` : ''
             }`}
             onclick={() => tabs.openTab({ machineId: agent.machineId, sessionId: agent.sessionId })}
           >
             <StatusIcon status={agent.status} raw={rawStatus(agent)} unread={agent.unread} />
             <span class="truncate">{agent.title}</span>
+            {#if multi}
+              <span class="bg-muted max-w-24 shrink-0 truncate rounded px-1 text-[0.6875rem]"
+                >{machineNameOf(machines, agent.machineId)}</span
+              >
+            {/if}
             <span class="text-muted-foreground max-w-24 shrink-0 truncate">{project}</span>
             {#if running > 0}
               <RunningBadge count={running} />

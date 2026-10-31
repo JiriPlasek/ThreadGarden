@@ -28,6 +28,7 @@
     cursor = false,
     active,
     projectName,
+    machineName,
     now,
     running = 0,
     scheduled = [],
@@ -53,6 +54,8 @@
     active: boolean;
     /** Shown when the place spans projects; omitted inside a project. */
     projectName?: string;
+    /** The chat's machine, shown in cross-machine lists while more than one machine is paired. */
+    machineName?: string;
     now: number;
     /** Running agents and processes (known for chats open in a tab only). */
     running?: number;
@@ -129,6 +132,11 @@
         <div
           class="text-muted-foreground flex min-w-0 items-center gap-1.5 pl-5.5 text-xs leading-4"
         >
+          {#if machineName}
+            <span class="bg-muted max-w-[30%] shrink-0 truncate rounded px-1 text-[0.6875rem]"
+              >{machineName}</span
+            >
+          {/if}
           {#if projectName}
             <span class="bg-muted max-w-[45%] shrink-0 truncate rounded px-1 text-[0.6875rem]"
               >{projectName}</span
