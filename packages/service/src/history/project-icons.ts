@@ -75,7 +75,10 @@ export const sniffImage = (buf: Buffer): IconMime | null => {
   const head = buf.subarray(0, 12).toString('latin1');
   if (head.startsWith('GIF87a') || head.startsWith('GIF89a')) return 'image/gif';
   if (head.startsWith('RIFF') && head.slice(8, 12) === 'WEBP') return 'image/webp';
-  const text = buf.toString('utf8').replace(/^\uFEFF/, '').trimStart();
+  const text = buf
+    .toString('utf8')
+    .replace(/^\uFEFF/, '')
+    .trimStart();
   if (text.startsWith('<svg')) return 'image/svg+xml';
   if (text.startsWith('<?xml') && text.includes('<svg')) return 'image/svg+xml';
   return null;
