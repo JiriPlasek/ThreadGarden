@@ -274,7 +274,9 @@ describe('running background tasks (service, Ruling R29)', () => {
       text: 'Start the dev server',
     });
     const fake = adapter.lastSession();
-    fake.emit(started('b1', { task_type: 'local_bash', description: 'npm run dev' }));
+    fake.emit(
+      started('b1', { task_type: 'local_bash', description: 'npm run dev', is_backgrounded: true }),
+    );
     fake.emit(result('r1'));
     await c.waitFor(chatStatus(sessionId, 'idle'));
     const running = async () =>

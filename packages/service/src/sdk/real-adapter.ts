@@ -21,6 +21,7 @@ import type {
   AgentAdapter,
   AgentSession,
   ModelInfo,
+  OneShotOptions,
   Options,
   PageOptions,
   PermissionMode,
@@ -88,6 +89,43 @@ export const buildQueryOptions = (o: StartOptions): Options => {
   if (o.permissionMode !== undefined) opts.permissionMode = o.permissionMode;
   return opts;
 };
+
+// ── v1.2 C1: chat titles ──
+
+/**
+ * SDK options for a one-shot question (title generation), verified against
+ * SDK 0.3.314 `Options`:
+ * - `persistSession: false` — no transcript under `<config dir>/projects`
+ *   (the `claude` process still keeps Claude Code's own runtime state, like
+ *   every session: e.g. its entry in the `claude agents` list while it runs);
+ * - `sessionId` — pahub's fresh UUID, so the poller leaves that entry out;
+ * - `settingSources: []` — the SDK isolation mode: no settings files, hooks,
+ *   plugins or CLAUDE.md;
+ * - `tools: []` disables every built-in tool, and `strictMcpConfig` without
+ *   `mcpServers` leaves no MCP tool either;
+ * - `maxTurns: 1`, thinking off, a plain string system prompt.
+ * `claude`, the environment (pahub's API key included) and the folder are
+ * the user's sessions' own; settings that could route requests elsewhere
+ * skip the query instead (Ruling R33, `chat/title-routing.ts`).
+ */
+export const buildOneShotOptions = (
+  o: OneShotOptions,
+  abortController: AbortController,
+): Options => ({
+  cwd: o.cwd,
+  pathToClaudeCodeExecutable: o.claudePath,
+  env: o.env,
+  model: o.model,
+  systemPrompt: o.systemPrompt,
+  persistSession: false,
+  settingSources: [],
+  tools: [],
+  strictMcpConfig: true,
+  maxTurns: 1,
+  thinking: { type: 'disabled' },
+  sessionId: o.sessionId,
+  abortController,
+});
 
 /** Unbounded single-consumer queue the SDK reads user messages from. */
 class InputQueue implements AsyncIterable<SDKUserMessage> {
@@ -216,5 +254,34 @@ export class RealAdapter implements AgentAdapter {
       id,
       o.upToMessageId === undefined ? {} : { upToMessageId: o.upToMessageId },
     );
+  }
+
+  /**
+   * v1.2 C1: one string-prompt query (`buildOneShotOptions`); resolves with
+   * the success result's text. Rejects on an error result, an assistant
+   * message that carried an API error (Claude Code reports those as a
+   * synthetic reply, whose text must never become a title), a stream without
+   * a result or an abort. The process is closed either way.
+   */
+  async oneShot(o: OneShotOptions): Promise<string> {
+    if (o.signal.aborted) throw new Error('one-shot query aborted');
+    const abort = new AbortController();
+    const q = this.sdk.query({ prompt: o.prompt, options: buildOneShotOptions(o, abort) });
+    const onAbort = (): void => abort.abort();
+    o.signal.addEventListener('abort', onAbort, { once: true });
+    let apiError: string | undefined;
+    try {
+      for await (const m of q) {
+        if (m.type === 'assistant' && m.error !== undefined) apiError ??= m.error;
+        if (m.type !== 'result') continue;
+        if (apiError !== undefined) throw new Error(`one-shot query failed: ${apiError}`);
+        if (m.subtype === 'success' && !m.is_error) return m.result;
+        throw new Error(`one-shot query failed: ${m.subtype}`);
+      }
+      throw new Error('one-shot query ended with no result');
+    } finally {
+      o.signal.removeEventListener('abort', onAbort);
+      q.close();
+    }
   }
 }

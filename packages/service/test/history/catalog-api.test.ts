@@ -337,3 +337,35 @@ describe('quickSearch', () => {
     expect(sessions).toHaveBeenCalled();
   });
 });
+
+// ── v1.2 C1: chat titles ──
+
+describe('v1.2 chat titles in the catalog', () => {
+  it('v1.2: an unindexed live chat shows its pahub titles everywhere at once', async () => {
+    const t = await setup();
+    t.setLive([lc('new-chat', '/work/proj-0', 'working')]);
+    const fresh = () => t.catalog.summary('new-chat')!.title;
+    expect(fresh()).toBe('Untitled chat');
+    t.db.setAutoTitle('new-chat', 'Fix the login bug.');
+    expect(fresh()).toBe('Fix the login bug.');
+    const listed = await t.call('sessions.list', { place: { kind: 'running' }, limit: 50 });
+    expect(listed.items[0].title).toBe('Fix the login bug.');
+    const quick = await t.call('search.quick', { query: 'login bug', limit: 10 });
+    expect(quick.items.map((i: Any) => i.sessionId)).toContain('new-chat');
+    t.db.setGeneratedTitle('new-chat', 'Safari login redirect');
+    expect(fresh()).toBe('Safari login redirect');
+    t.db.setCustomTitle('new-chat', 'Mine');
+    expect(fresh()).toBe('Mine');
+  });
+
+  it('v1.2: a title change of an indexed chat reaches the cached search corpus', async () => {
+    const t = await setup();
+    // Build the cache first.
+    await t.call('search.quick', { query: 'session', limit: 1 });
+    t.db.setGeneratedTitle('session-3', 'Zebra crossing redesign');
+    t.catalog.titleChanged('session-3');
+    const quick = await t.call('search.quick', { query: 'zebra crossing', limit: 10 });
+    expect(quick.items.map((i: Any) => i.sessionId)).toEqual(['session-3']);
+    expect(t.catalog.summary('session-3')!.title).toBe('Zebra crossing redesign');
+  });
+});

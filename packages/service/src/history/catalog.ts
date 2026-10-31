@@ -17,26 +17,46 @@ export type TitleParts = {
   sdkTitle?: string | null;
   summary?: string | null;
   firstPrompt?: string | null;
+  // ── v1.2 C1: chat titles (pahub's own, `chat/titles.ts`) ──
+  /** The small model's title of a chat pahub started. */
+  generatedTitle?: string | null;
+  /** The provisional title from its first message. */
+  autoTitle?: string | null;
 };
 
 export const FIRST_PROMPT_MAX = 80;
+
+/** What a chat without any title is called. */
+export const UNTITLED_TITLE = 'Untitled chat';
 
 const clean = (s: string | null | undefined): string => (s ?? '').trim();
 
 /** Non-custom titles are whitespace-collapsed and cut to 80 chars; a custom title is kept as typed. */
 const short = (s: string): string => s.replace(/\s+/g, ' ').slice(0, FIRST_PROMPT_MAX);
 
-/** pahub custom title → SDK title → summary → first prompt. */
+/**
+ * The user's custom title → (v1.2 C1) the generated title → Claude Code's
+ * own title → its summary → (v1.2 C1) the provisional title → the first
+ * prompt.
+ *
+ * The SDK's summary is no title of Claude Code's own when the chat has none
+ * (its titles arrive as `sdkTitle`): it is the last prompt, else the first.
+ * So a summary equal to the first prompt ranks as the first prompt, and a
+ * chat pahub named (a provisional title) ignores the summary altogether,
+ * keeping a stable name instead of following its latest message.
+ */
 export const titleFor = (s: TitleParts): string => {
   const custom = clean(s.customTitle);
   if (custom) return custom;
-  const sdk = clean(s.sdkTitle);
-  if (sdk) return short(sdk);
-  const summary = clean(s.summary);
-  if (summary) return short(summary);
-  const prompt = clean(s.firstPrompt);
-  if (prompt) return short(prompt);
-  return 'Untitled chat';
+  const prompt = short(clean(s.firstPrompt));
+  const summary = short(clean(s.summary));
+  for (const t of [s.generatedTitle, s.sdkTitle]) {
+    const title = short(clean(t));
+    if (title) return title;
+  }
+  const auto = short(clean(s.autoTitle));
+  if (summary && summary !== prompt && !auto) return summary;
+  return auto || prompt || UNTITLED_TITLE;
 };
 
 // ── session catalog ──────────────────────────────────────────────────────────
@@ -271,6 +291,17 @@ export class Catalog {
     if (!this.cache) return;
     const ids = new Set(sessionIds);
     for (const r of this.cache.rows) if (ids.has(r.sessionId)) r.bucket = bucket;
+  }
+
+  /**
+   * v1.2 C1: pahub's title of `sessionId` changed. Updates its cached corpus
+   * row in place (unindexed chats are not cached: they are read fresh).
+   */
+  titleChanged(sessionId: string): void {
+    const cached = this.cache?.rows.find((r) => r.sessionId === sessionId);
+    if (!cached) return;
+    const row = this.db.getSession(sessionId);
+    if (row) cached.title = titleFor(row);
   }
 
   /**
@@ -518,10 +549,11 @@ export class Catalog {
     title: string | undefined,
   ): ChatSummary {
     if (row) return fromRow(row);
-    const { pinned, ...bucket } = this.db.metaOf(sessionId);
+    const { pinned, ...meta } = this.db.metaOf(sessionId);
     return {
       sessionId,
-      title: titleFor({ sdkTitle: title }),
+      // pahub's own titles (v1.2 C1); an external session's name is Claude Code's.
+      title: titleFor({ ...meta, sdkTitle: title }),
       projectId: this.projectIdOfCwd(cwd),
       cwd,
       status: 'unknown',
@@ -531,7 +563,7 @@ export class Catalog {
       live: false,
       external: null,
       unread: false,
-      ...bucketFields(bucket),
+      ...bucketFields(meta),
     };
   }
 

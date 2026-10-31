@@ -1,8 +1,9 @@
 /**
  * pahub's own SQLite store (`node:sqlite`, WAL). It holds the history index,
  * pahub-side titles/pins, drafts, settings, UI state, the live-session
- * registry, the seen/turn-ended times behind "Your turn" and the chats'
- * buckets (v1.2). It never touches Claude Code's data.
+ * registry, the seen/turn-ended times behind "Your turn", the chats'
+ * buckets (v1.2) and pahub's own chat titles (v1.2 C1). It never touches
+ * Claude Code's data.
  */
 import './sqlite-warning.js';
 import { DatabaseSync } from 'node:sqlite';
@@ -24,7 +25,16 @@ export type SessionRow = {
   fileSize: number | null;
   customTitle: string | null;
   pinned: boolean;
-} & BucketState;
+} & BucketState &
+  PahubTitles;
+
+/** v1.2 C1: pahub's own titles of a chat it started (see `chat/titles.ts`). */
+export type PahubTitles = {
+  /** Provisional title from the first message. */
+  autoTitle: string | null;
+  /** The small model's title, after the first turn. */
+  generatedTitle: string | null;
+};
 
 /** v1.2: a chat's bucket (pahub's own metadata). */
 export type BucketState = {
@@ -127,6 +137,12 @@ const toSession = (r: Row): SessionRow => ({
   customTitle: (r.custom_title as string | null) ?? null,
   pinned: r.pinned === 1,
   ...toBucketState(r),
+  ...toTitles(r),
+});
+
+const toTitles = (r: Row | undefined): PahubTitles => ({
+  autoTitle: (r?.auto_title as string | null | undefined) ?? null,
+  generatedTitle: (r?.generated_title as string | null | undefined) ?? null,
 });
 
 const toBucketState = (r: Row | undefined): BucketState => {
@@ -144,8 +160,10 @@ const toBucketState = (r: Row | undefined): BucketState => {
 const WITH_BUCKET = `sessions s LEFT JOIN chat_buckets b ON b.session_id = s.session_id`;
 
 const SESSION_SELECT = `SELECT s.*, m.custom_title AS custom_title, COALESCE(m.pinned, 0) AS pinned,
-    b.bucket AS bucket, b.hold_until AS hold_until, b.hold_note AS hold_note, b.back_at AS back_at
-  FROM ${WITH_BUCKET} LEFT JOIN meta m ON m.session_id = s.session_id`;
+    b.bucket AS bucket, b.hold_until AS hold_until, b.hold_note AS hold_note, b.back_at AS back_at,
+    ct.auto_title AS auto_title, ct.generated_title AS generated_title
+  FROM ${WITH_BUCKET} LEFT JOIN meta m ON m.session_id = s.session_id
+  LEFT JOIN chat_titles ct ON ct.session_id = s.session_id`;
 
 export class Db implements LiveRegistry {
   constructor(readonly raw: DatabaseSync) {}
@@ -496,15 +514,51 @@ export class Db implements LiveRegistry {
     );
   }
 
+  // --- titles (v1.2 C1) ----------------------------------------------------------
+  //
+  // pahub's own names for chats it starts, kept apart from the user's custom
+  // title; never written to Claude Code's data.
+
+  /** The provisional title (from the first message); `null` clears it. */
+  setAutoTitle(sessionId: string, title: string | null): void {
+    this.raw
+      .prepare(
+        `INSERT INTO chat_titles (session_id, auto_title) VALUES (?, ?)
+         ON CONFLICT(session_id) DO UPDATE SET auto_title = excluded.auto_title`,
+      )
+      .run(sessionId, title?.trim() || null);
+  }
+
+  /** The small model's title; `null` clears it. */
+  setGeneratedTitle(sessionId: string, title: string | null): void {
+    this.raw
+      .prepare(
+        `INSERT INTO chat_titles (session_id, generated_title) VALUES (?, ?)
+         ON CONFLICT(session_id) DO UPDATE SET generated_title = excluded.generated_title`,
+      )
+      .run(sessionId, title?.trim() || null);
+  }
+
   // --- buckets (v1.2) -------------------------------------------------------------
   //
   // A chat's bucket lives in `chat_buckets` (kept when a transcript
   // disappears, like titles); a chat without a row there is active.
 
-  /** A chat's pin and bucket, whether or not it is indexed. */
-  metaOf(sessionId: string): { pinned: boolean } & BucketState {
+  /** A chat's pin, bucket and (v1.2 C1) pahub-side titles, whether or not it is indexed. */
+  metaOf(
+    sessionId: string,
+  ): { pinned: boolean; customTitle: string | null } & BucketState & PahubTitles {
     const r = this.raw.prepare('SELECT * FROM chat_buckets WHERE session_id = ?').get(sessionId);
-    return { pinned: this.isSessionPinned(sessionId), ...toBucketState(r) };
+    const m = this.raw
+      .prepare('SELECT custom_title, pinned FROM meta WHERE session_id = ?')
+      .get(sessionId);
+    const t = this.raw.prepare('SELECT * FROM chat_titles WHERE session_id = ?').get(sessionId);
+    return {
+      pinned: m?.pinned === 1,
+      customTitle: (m?.custom_title as string | null | undefined) ?? null,
+      ...toBucketState(r),
+      ...toTitles(t),
+    };
   }
 
   /**

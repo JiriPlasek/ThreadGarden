@@ -4,7 +4,8 @@
  * `canUseTool` callback the code under test passed to `start()`, `end()` stops
  * the stream (optionally with an error, like a crashed `claude` process).
  * `stopTask()` only records the call (or rejects with `stopTaskError`); a test
- * emits the resulting `task_notification` itself.
+ * emits the resulting `task_notification` itself. `oneShot()` records the
+ * request and answers with `oneShotReply` (v1.2 C1).
  */
 import { randomUUID } from 'node:crypto';
 import type {
@@ -13,6 +14,7 @@ import type {
   AgentSession,
   CanUseTool,
   ModelInfo,
+  OneShotOptions,
   PageOptions,
   PermissionMode,
   PermissionResult,
@@ -151,6 +153,12 @@ export class FakeAdapter implements AgentAdapter {
   readonly sessions = new Map<string, { info: SDKSessionInfo; messages: SessionMessage[] }>();
   readonly started: FakeSession[] = [];
   readonly forks: { sessionId: string; upToMessageId?: string; newSessionId: string }[] = [];
+  /** v1.2 C1: every `oneShot` request, in order. */
+  readonly oneShots: OneShotOptions[] = [];
+  /** Answers `oneShot`; by default it fails, as if no model were reachable. */
+  oneShotReply: (o: OneShotOptions) => Promise<string> = async () => {
+    throw new Error('FakeAdapter: no one-shot reply scripted');
+  };
 
   start(o: StartOptions): FakeSession {
     const s = new FakeSession(o);
@@ -193,5 +201,10 @@ export class FakeAdapter implements AgentAdapter {
     });
     this.forks.push({ sessionId: id, upToMessageId: o.upToMessageId, newSessionId });
     return { sessionId: newSessionId };
+  }
+
+  oneShot(o: OneShotOptions): Promise<string> {
+    this.oneShots.push(o);
+    return this.oneShotReply(o);
   }
 }

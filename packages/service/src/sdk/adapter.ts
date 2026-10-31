@@ -56,6 +56,30 @@ export type StartOptions = {
 
 export type PageOptions = { limit?: number; offset?: number };
 
+// ── v1.2 C1: chat titles ──
+
+/**
+ * A one-shot, tool-less question to a model through Claude Code (title
+ * generation): one turn, no transcript, no settings loaded.
+ */
+export type OneShotOptions = {
+  prompt: string;
+  systemPrompt: string;
+  /** A model alias Claude Code's `--model` accepts (e.g. `haiku`) or a model id. */
+  model: string;
+  cwd: string;
+  /** The same environment as the user's sessions (pahub's API key included). */
+  env: Record<string, string | undefined>;
+  claudePath: string;
+  /** Aborts the query (timeout, service shutdown). */
+  signal: AbortSignal;
+  /**
+   * The query's session id (a fresh UUID): its process shows in Claude Code's
+   * session list while it runs, and pahub leaves it out of external chats.
+   */
+  sessionId: string;
+};
+
 export interface AgentSession {
   /** Single-consumer stream of everything the SDK emits; ends when the session ends. */
   readonly messages: AsyncIterable<SDKMessage>;
@@ -77,4 +101,6 @@ export interface AgentAdapter {
   getSessionInfo(id: string): Promise<SDKSessionInfo | undefined>;
   getSessionMessages(id: string, o?: PageOptions): Promise<SessionMessage[]>;
   forkSession(id: string, o: { upToMessageId?: string }): Promise<{ sessionId: string }>;
+  /** v1.2 C1: the model's answer to a one-shot question; rejects on any failure. */
+  oneShot(o: OneShotOptions): Promise<string>;
 }

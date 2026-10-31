@@ -213,6 +213,20 @@
       <label class={checkClass}>
         <input type="checkbox" bind:checked={form.notifyOnFinish} /> Notify when a chat finishes
       </label>
+      <div class="grid gap-0.5">
+        <label class={checkClass}>
+          <input
+            type="checkbox"
+            bind:checked={form.autoTitles}
+            aria-describedby="settings-auto-titles-hint"
+          /> Name new chats automatically (uses a small model)
+        </label>
+        <!-- Ruling R33: titles never go around the provider the user's settings choose. -->
+        <p id="settings-auto-titles-hint" class="text-muted-foreground pl-6 text-xs">
+          Skipped when your Claude settings route requests elsewhere (env, apiKeyHelper, cloud
+          credentials).
+        </p>
+      </div>
       <label class={checkClass}>
         <input type="checkbox" bind:checked={form.enterToSend} /> Enter sends the message (Shift+Enter
         for a new line)

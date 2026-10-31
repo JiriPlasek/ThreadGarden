@@ -200,12 +200,15 @@ export class ExternalPoller {
     }
   }
 
-  /** Runs `claude agents`; pahub-owned sessions are left out. Rejects when unusable. */
+  /**
+   * Runs `claude agents`; pahub-owned sessions are left out. Rejects when
+   * unusable. pahub's own ids are read once the answer is in, so a session
+   * pahub started while the command ran (a chat, a title query) is left out too.
+   */
   private async fetch(): Promise<ExternalSession[]> {
+    const output = await this.run(AGENTS_ARGS);
     const own = this.ownIds();
-    return parseAgents(await this.run(AGENTS_ARGS)).filter(
-      (e) => e.sessionId === undefined || !own.has(e.sessionId),
-    );
+    return parseAgents(output).filter((e) => e.sessionId === undefined || !own.has(e.sessionId));
   }
 
   private async poll(): Promise<void> {

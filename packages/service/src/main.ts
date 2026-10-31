@@ -7,12 +7,14 @@ import pkg from '../package.json' with { type: 'json' };
 import { nextSeqEpoch, seqBaseForEpoch } from './chat/event-log.js';
 import { realTimers, type Timers } from './chat/live-session.js';
 import { SessionHost } from './chat/session-host.js';
+import { RoutingSettingsCheck, routingSettingsPaths } from './chat/title-routing.js';
+import { ChatTitles } from './chat/titles.js';
 import { resolveClaudeConfigDir } from './config.js';
 import { acquireInstanceLock, removeDiscovery, writeDiscovery } from './discovery.js';
 import { FileIndex } from './files/file-index.js';
 import { ExternalPoller, makeClaudeRunner, type ExternalSession } from './external/poller.js';
 import { Buckets } from './history/buckets.js';
-import { Catalog, titleFor, type LiveChat } from './history/catalog.js';
+import { Catalog, UNTITLED_TITLE, titleFor, type LiveChat } from './history/catalog.js';
 import { openDb, type Db } from './history/db.js';
 import { Indexer } from './history/indexer.js';
 import { FolderCheck, ProjectOrderNotifier } from './history/project-activity.js';
@@ -155,6 +157,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   let poller: ExternalPoller | undefined;
   let projectOrder: ProjectOrderNotifier | undefined;
   let buckets: Buckets | undefined;
+  let titles: ChatTitles | undefined;
   let startSync: (() => void) | undefined;
   const live = (): { list(): LiveChat[] } | undefined => opts.live ?? host;
   const claudeRunner = opts.claudeRunner ?? makeClaudeRunner;
@@ -220,7 +223,12 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         run,
         // Only *live* pahub chats are pahub's own processes. A paused or failed
         // chat has none, so one that is running now runs in a terminal (§4.4).
-        () => new Set((live()?.list() ?? []).filter((c) => c.live).map((c) => c.sessionId)),
+        // v1.2 C1: so are the title queries pahub runs (`claude` lists them while they run).
+        () =>
+          new Set([
+            ...(live()?.list() ?? []).filter((c) => c.live).map((c) => c.sessionId),
+            ...(titles?.runningIds() ?? []),
+          ]),
         (e) => {
           // v1.2: archived chats running elsewhere return to Active first.
           if (e.event === 'external.changed') {
@@ -261,6 +269,8 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         ...(opts.folderStat ? { stat: opts.folderStat } : {}),
       });
       const projectOrderRef: { current?: ProjectOrderNotifier } = {};
+      /** v1.2 C1: set once the catalog exists (after the session host). */
+      const titlesRef: { current?: ChatTitles } = {};
       const sessionHost = new SessionHost({
         adapter,
         registry: opened,
@@ -276,7 +286,11 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         getSettings: () => opened.getSettings(),
         describe: (id) => {
           const row = opened.getSession(id);
-          if (!row) return {};
+          if (!row) {
+            // Not indexed yet: pahub's own title of it, if any (v1.2 C1).
+            const title = titleFor(opened.metaOf(id));
+            return title === UNTITLED_TITLE ? {} : { title };
+          }
           const project = opened.listProjects().find((p) => p.projectId === row.projectId);
           return {
             title: titleFor(row),
@@ -289,6 +303,8 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         onTurnEnded: (id, at) => {
           opened.setTurnEnded(id, at);
           emitChat({ event: 'sessions.changed', data: { sessionIds: [id] } });
+          // v1.2 C1: a new chat's first turn is over: it gets its generated title.
+          titlesRef.current?.turnEnded(id);
         },
         // v1.1 §4: live activity may reorder the projects.
         onActivity: () => projectOrderRef.current?.notify(),
@@ -338,6 +354,32 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         folderExists: (p) => folders.exists(p),
       });
       catalogRef.current = cat;
+      const routing = new RoutingSettingsCheck();
+      const chatTitles = new ChatTitles({
+        db: opened,
+        adapter,
+        enabled: () => opened.getSettings().autoTitles,
+        // Exactly when a chat could start (`API_KEY_REQUIRED`, `CLAUDE_MISSING`).
+        run: () => {
+          const c = claude.current;
+          if ((opts.apiKeyOnly === true && apiKey === null) || !c || !('path' in c)) {
+            return undefined;
+          }
+          return {
+            claudePath: c.path,
+            env: buildSessionEnv(opts.sessionEnv ?? process.env, apiKey),
+          };
+        },
+        firstReply: (id) => sessionHost.get(id)?.firstReplyText() ?? '',
+        // Ruling R33: never around the provider the user's settings choose.
+        routedElsewhere: (cwd) => routing.check(routingSettingsPaths(claudeDir, cwd)),
+        titleChanged: (id) => cat.titleChanged(id),
+        emit: (e) => broadcastRef.fn(e),
+        debug: (m) => log.debug(m),
+        now: clock,
+      });
+      titles = chatTitles;
+      titlesRef.current = chatTitles;
       const bucketList = new Buckets({
         db: opened,
         catalog: cat,
@@ -380,6 +422,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         emit: (e) => emitChat(e),
         onError,
         now: clock,
+        titles: chatTitles,
       });
       watcher = watchProjects(
         path.join(claudeDir, 'projects'),
@@ -489,6 +532,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         // Live sessions end with the process; the registry still lists them,
         // so the next start shows them as interrupted (§4.2).
         await step('sessions', () => host?.dispose());
+        await step('titles', () => titles?.dispose());
         await step('project order', () => projectOrder?.dispose());
         await step('poller', () => poller?.stop());
         await step('watcher', () => watcher?.close());

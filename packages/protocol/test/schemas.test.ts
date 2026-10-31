@@ -381,4 +381,21 @@ describe('protocol schemas', () => {
       expect(events.chatBackFromHold.safeParse({ sessionId: 's' }).success).toBe(false);
     });
   });
+
+  // ── v1.2 C1: chat titles ──────────────────────────────────────────────────
+
+  describe('v1.2 chat titles', () => {
+    it('autoTitles defaults to true, also for settings stored before it existed', () => {
+      expect(settingsDefaults.autoTitles).toBe(true);
+      expect(SettingsSchema.parse({ notifications: false }).autoTitles).toBe(true);
+    });
+
+    it('autoTitles is patchable on its own and must be a boolean', () => {
+      expect(SettingsPatchSchema.parse({ autoTitles: false })).toEqual({ autoTitles: false });
+      expect(methods['settings.set'].params.parse({ autoTitles: false })).toEqual({
+        autoTitles: false,
+      });
+      expect(SettingsPatchSchema.safeParse({ autoTitles: 'yes' }).success).toBe(false);
+    });
+  });
 });

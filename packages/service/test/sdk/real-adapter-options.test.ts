@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import type { CanUseTool, StartOptions } from '../../src/sdk/adapter.js';
-import { buildQueryOptions, buildSessionEnv } from '../../src/sdk/real-adapter.js';
+import type { CanUseTool, OneShotOptions, StartOptions } from '../../src/sdk/adapter.js';
+import {
+  buildOneShotOptions,
+  buildQueryOptions,
+  buildSessionEnv,
+} from '../../src/sdk/real-adapter.js';
 
 const canUseTool: CanUseTool = async () => ({ behavior: 'allow' });
 
@@ -114,5 +118,73 @@ describe('buildSessionEnv', () => {
     expect(buildSessionEnv({ ANTHROPIC_API_KEY: 'from-shell' }, 'pahub')).toEqual({
       ANTHROPIC_API_KEY: 'pahub',
     });
+  });
+});
+
+// ── v1.2 C1: chat titles ──
+
+describe('buildOneShotOptions (title generation)', () => {
+  const oneShot: OneShotOptions = {
+    prompt: 'Title this conversation',
+    systemPrompt: 'Reply with only a title',
+    model: 'haiku',
+    cwd: '/work/proj',
+    env: { PATH: '/usr/bin', ANTHROPIC_API_KEY: 'sk-x' },
+    claudePath: '/home/u/.local/bin/claude',
+    signal: new AbortController().signal,
+    sessionId: '0b0e8f6a-1111-4222-8333-944455556666',
+  };
+
+  it('never persists a transcript, loads no settings and allows no tools, for one turn', () => {
+    const ac = new AbortController();
+    const o = buildOneShotOptions(oneShot, ac);
+    // SDK 0.3.314 Options.persistSession: false: nothing saved under ~/.claude/projects.
+    expect(o.persistSession).toBe(false);
+    // settingSources: [] is the SDK isolation mode (no settings, hooks or CLAUDE.md).
+    expect(o.settingSources).toEqual([]);
+    // tools: [] disables every built-in tool; strictMcpConfig without mcpServers: no MCP tools.
+    expect(o.tools).toEqual([]);
+    expect(o.strictMcpConfig).toBe(true);
+    expect(o).not.toHaveProperty('mcpServers');
+    expect(o).not.toHaveProperty('allowedTools');
+    expect(o.maxTurns).toBe(1);
+    expect(o.model).toBe('haiku');
+    expect(o.systemPrompt).toBe('Reply with only a title');
+    expect(o.thinking).toEqual({ type: 'disabled' });
+    expect(o.abortController).toBe(ac);
+  });
+
+  it('runs under the known session id pahub gave it (so the external poller can leave it out)', () => {
+    const o = buildOneShotOptions(oneShot, new AbortController());
+    expect(o.sessionId).toBe('0b0e8f6a-1111-4222-8333-944455556666');
+    expect(o).not.toHaveProperty('resume');
+  });
+
+  it("runs like the user's sessions: same claude, environment (API key included) and folder", () => {
+    const o = buildOneShotOptions(oneShot, new AbortController());
+    expect(o.pathToClaudeCodeExecutable).toBe('/home/u/.local/bin/claude');
+    expect(o.env).toEqual({ PATH: '/usr/bin', ANTHROPIC_API_KEY: 'sk-x' });
+    expect(o.cwd).toBe('/work/proj');
+  });
+
+  it('sets exactly the documented keys and nothing else', () => {
+    const o = buildOneShotOptions(oneShot, new AbortController());
+    expect(Object.keys(o).sort()).toEqual(
+      [
+        'abortController',
+        'cwd',
+        'env',
+        'maxTurns',
+        'model',
+        'pathToClaudeCodeExecutable',
+        'persistSession',
+        'sessionId',
+        'settingSources',
+        'strictMcpConfig',
+        'systemPrompt',
+        'thinking',
+        'tools',
+      ].sort(),
+    );
   });
 });

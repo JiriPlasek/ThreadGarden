@@ -137,6 +137,14 @@ const settingsFields = {
   externalPolling: z.boolean(),
   /** v1.1: desktop notification when a chat finishes a turn while not looked at. */
   notifyOnFinish: z.boolean(),
+  // ── v1.2 C1: chat titles ──
+  /**
+   * Name new chats automatically: after a chat's first turn a small model
+   * (Claude Code's `haiku`) suggests a short title, shown until the user
+   * renames the chat. Off: the chat keeps its provisional title (its first
+   * sentence).
+   */
+  autoTitles: z.boolean(),
 };
 
 export const SettingsSchema = z.object({
@@ -148,6 +156,8 @@ export const SettingsSchema = z.object({
   startOnLogin: settingsFields.startOnLogin.default(false),
   externalPolling: settingsFields.externalPolling.default(true),
   notifyOnFinish: settingsFields.notifyOnFinish.default(true),
+  // ── v1.2 C1: chat titles ──
+  autoTitles: settingsFields.autoTitles.default(true),
 });
 export type Settings = z.infer<typeof SettingsSchema>;
 

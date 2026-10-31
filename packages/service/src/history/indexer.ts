@@ -212,6 +212,11 @@ export class Indexer {
       this.db.markIndexed(info);
     }
     const after = this.db.getSession(info.sessionId);
+    // v1.2 C1: a new Claude Code title (e.g. a /rename in the terminal) is the
+    // user's newer choice; pahub's generated title would otherwise outrank it.
+    if (before && after?.sdkTitle && before.sdkTitle !== after.sdkTitle && after.generatedTitle) {
+      this.db.setGeneratedTitle(info.sessionId, null);
+    }
     return (
       stale ||
       !before ||
