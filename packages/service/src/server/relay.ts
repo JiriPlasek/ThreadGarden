@@ -6,6 +6,12 @@ import { DEVICE_PROTOCOL_PREFIX } from '../machine/pairing-client.js';
 
 /** How long a relay waits for its link to the machine before closing the UI socket 4502. */
 export const RELAY_LINK_TIMEOUT_MS = 10_000;
+/**
+ * How often an open link is pinged. A link whose pong has not come back by
+ * the next ping is dead (a Wi-Fi drop sends no close): it is terminated and
+ * the UI socket closed 4502, so the UI reconnects.
+ */
+export const RELAY_PING_MS = 15_000;
 
 /** The remote listener's close codes for a token it refuses: unknown (4401) and revoked (4403). */
 const REMOTE_REFUSED: ReadonlySet<number> = new Set([4401, 4403]);
@@ -62,12 +68,24 @@ export const createRelay = (deps: {
   machines: { get(id: string): StoredMachine | null; token(id: string): string | null };
   /** Default `RELAY_LINK_TIMEOUT_MS`. */
   linkTimeoutMs?: number;
-  /** A link that never opened (for a debug log: the machine and why, never a frame or token). */
+  /** Default `RELAY_PING_MS`. */
+  pingMs?: number;
+  /**
+   * A link that never opened or stopped answering pings (for a debug log: the
+   * machine and why, never a frame or token).
+   */
   onLinkFailed?: (machineId: string, err: unknown) => void;
 }): Relay => {
   const relays = new Map<WebSocket, { machineId: string; end(code: number): void }>();
+  /** Set by `close()`: the service is stopping, no new links. */
+  let closed = false;
+  const pingMs = deps.pingMs ?? RELAY_PING_MS;
 
   const attach = (ui: WebSocket, machineId: string | null): void => {
+    if (closed) {
+      ui.close(1001, 'shutting down');
+      return;
+    }
     const machine = machineId === null ? null : deps.machines.get(machineId);
     const token = machine ? deps.machines.token(machine.id) : null;
     if (!machine || token === null) {
@@ -93,10 +111,12 @@ export const createRelay = (deps: {
     let ended = false;
     const waiting: { data: RawData; binary: boolean }[] = [];
     let waitingBytes = 0;
+    let pinger: ReturnType<typeof setInterval> | undefined;
 
     const end = (code: number): void => {
       if (ended) return;
       ended = true;
+      clearInterval(pinger);
       relays.delete(ui);
       waiting.length = 0;
       ui.close(code, REASONS[code] ?? '');
@@ -119,9 +139,25 @@ export const createRelay = (deps: {
     ui.on('close', () => end(1000));
 
     remote.on('open', () => {
+      if (ended) return;
       linked = true;
       for (const f of waiting.splice(0)) remote.send(f.data, { binary: f.binary });
       waitingBytes = 0;
+      let answered = true;
+      remote.on('pong', () => {
+        answered = true;
+      });
+      pinger = setInterval(() => {
+        if (!answered) {
+          deps.onLinkFailed?.(machine.id, new Error('no pong: the link is dead'));
+          remote.terminate();
+          end(RELAY_CLOSE.unreachable);
+          return;
+        }
+        answered = false;
+        remote.ping();
+      }, pingMs);
+      pinger.unref?.();
     });
     remote.on('message', (data, binary) => {
       if (ui.readyState === ui.OPEN) ui.send(data, { binary });
@@ -142,6 +178,7 @@ export const createRelay = (deps: {
       for (const r of [...relays.values()]) if (r.machineId === machineId) r.end(code);
     },
     close: () => {
+      closed = true;
       for (const r of [...relays.values()]) r.end(1001);
     },
   };

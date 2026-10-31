@@ -1,12 +1,18 @@
+import { X509Certificate } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { createServer, type AddressInfo, type Socket } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { PairedMachine } from '@threadgarden/protocol';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { generate } from 'selfsigned';
 import { WebSocket } from 'ws';
+import { openDb } from '../../src/history/db.js';
+import { DeviceRegistry } from '../../src/machine/devices.js';
+import { PairedMachines } from '../../src/machine/paired-machines.js';
 import { startService, type ServiceHandle, type StartOptions } from '../../src/main.js';
-import { createRelay } from '../../src/server/relay.js';
+import { registerMachineHandlers } from '../../src/server/handlers/machines.js';
+import { RELAY_PING_MS, createRelay } from '../../src/server/relay.js';
 import { Router } from '../../src/server/router.js';
 import { startWsServer } from '../../src/server/ws-server.js';
 import { generateCorpus } from '../../src/testing/corpus.js';
@@ -225,18 +231,24 @@ describe('machines and the relay', () => {
     const ws = await openRelay(local, machine.id);
     expect(await call(ws, 'machine.get', {})).toMatchObject({ result: { id: machine.id } });
     const closed = closeCode(ws);
-    await localCall(local, 'machines.remove', { machineId: machine.id, revoke: true });
+    expect(
+      await localCall(local, 'machines.remove', { machineId: machine.id, revoke: true }),
+    ).toEqual({ revoked: true });
     expect((await remoteDevices()).map((d) => d.name)).not.toContain('Removed');
     expect(await localCall(local, 'machines.list', {})).toEqual([]);
     expect(await closed).toBe(4404);
     expect(await closeCode(await openRelay(local, machine.id))).toBe(4404);
     // Removing again is harmless.
-    await localCall(local, 'machines.remove', { machineId: machine.id, revoke: true });
+    expect(
+      await localCall(local, 'machines.remove', { machineId: machine.id, revoke: true }),
+    ).toEqual({ revoked: false });
   });
 
   it('removes without revoking: the remote keeps the device', async () => {
     const { machine } = await pair(local, 'Kept');
-    await localCall(local, 'machines.remove', { machineId: machine.id, revoke: false });
+    expect(
+      await localCall(local, 'machines.remove', { machineId: machine.id, revoke: false }),
+    ).toEqual({ revoked: false });
     expect(await localCall(local, 'machines.list', {})).toEqual([]);
     expect((await remoteDevices()).map((d) => d.name)).toContain('Kept');
   });
@@ -245,8 +257,69 @@ describe('machines and the relay', () => {
     const gone = await startHeadless('gone-before-remove');
     const { machine } = await pair(local, 'Unreachable', gone);
     await gone.close();
-    await localCall(local, 'machines.remove', { machineId: machine.id, revoke: true });
+    expect(
+      await localCall(local, 'machines.remove', { machineId: machine.id, revoke: true }),
+    ).toEqual({ revoked: false });
     expect(await localCall(local, 'machines.list', {})).toEqual([]);
+  });
+
+  it('removes a locked machine without asking it to revoke', async () => {
+    const { machine } = await pair(local, 'Locked remove');
+    await local.close();
+    local = await startService(base(localDir));
+    expect(
+      await localCall(local, 'machines.remove', { machineId: machine.id, revoke: true }),
+    ).toEqual({ revoked: false });
+    expect((await remoteDevices()).map((d) => d.name)).toContain('Locked remove');
+  });
+
+  it('forgets the machine before asking it to revoke: no relay opens meanwhile', async () => {
+    const db = openDb(join(await mkdtemp(join(dir, 'handlers-')), 'db'));
+    cleanup.push(async () => db.close());
+    const paired = new PairedMachines(db.raw);
+    paired.add({
+      id: 'm-1',
+      name: 'Ubuntu PC',
+      address: '127.0.0.1',
+      port: 1,
+      certPem: 'pem',
+      fingerprint: 'fp',
+      deviceId: 'd-1',
+      addedAt: 0,
+    });
+    paired.unlock('m-1', 'a'.repeat(64));
+    const router = new Router();
+    const relay = createRelay({ machines: paired });
+    const dropped: [string, number][] = [];
+    const seenDuringRevoke: unknown[] = [];
+    registerMachineHandlers(router, {
+      db,
+      devices: new DeviceRegistry(db.raw),
+      identity: () => ({
+        id: 'self',
+        name: 'This PC',
+        platform: 'linux',
+        headless: false,
+        home: '',
+        capabilities: [],
+      }),
+      paired,
+      relay: { drop: (id, code) => void dropped.push([id, code]) },
+      unpair: async (o) => {
+        // A UI relay arriving now is refused: the machine and its token are gone.
+        const ui = { close: (code: number) => seenDuringRevoke.push(code) };
+        relay.attach(ui as unknown as WebSocket, 'm-1');
+        seenDuringRevoke.push(paired.get('m-1'), paired.token('m-1'), dropped.length, o.token);
+        return true;
+      },
+    });
+    const res = await router.dispatch(
+      { id: 1, method: 'machines.remove', params: { machineId: 'm-1', revoke: true } },
+      { clientId: 'c', origin: 'local' },
+    );
+    expect(res).toEqual({ id: 1, result: { revoked: true } });
+    expect(seenDuringRevoke).toEqual([4404, null, null, 1, 'a'.repeat(64)]);
+    expect(dropped).toEqual([['m-1', 4404]]);
   });
 
   it('refuses to pair with itself or with a machine already paired', async () => {
@@ -479,6 +552,118 @@ describe('relay', () => {
     });
     expect(await closeCode(await openRelayAt(bare.port, 't', 'm-1'))).toBe(4404);
     await bare.close();
+  });
+
+  it('closes 4502 when the machine stops answering pings, and keeps a live link', async () => {
+    expect(RELAY_PING_MS).toBe(15_000);
+    const relayTo = async (machine: FakeMachine) => {
+      const r = createRelay({
+        machines: {
+          get: (id) =>
+            id === 'm-1'
+              ? {
+                  id,
+                  name: 'Fake',
+                  address: '127.0.0.1',
+                  port: machine.port,
+                  fingerprint: machine.tls.fingerprint256,
+                  certPem: machine.tls.certPem,
+                  deviceId: 'd',
+                  addedAt: 0,
+                  unlocked: true,
+                }
+              : null,
+          token: () => TOKEN,
+        },
+        pingMs: 50,
+      });
+      const srv = await startWsServer({
+        token: 't',
+        router: new Router(),
+        relay: r,
+        onClientCountChange: () => {},
+      });
+      cleanup.push(async () => {
+        r.close();
+        await srv.close();
+      });
+      return srv;
+    };
+    // A live machine answers pings: the relay outlives several intervals.
+    const liveServer = await relayTo(fake);
+    const live = await openRelayAt(liveServer.port, 't', 'm-1');
+    await new Promise((r) => setTimeout(r, 300));
+    live.send('still here');
+    expect(await nextFrame(live)).toEqual({ data: 'still here', binary: false });
+    live.close();
+
+    // A machine whose network dropped: no close, no pong.
+    const deaf = await startFakeMachine(dir, () => {}, { autoPong: false });
+    cleanup.push(() => deaf.close());
+    const deafServer = await relayTo(deaf);
+    const ui = await openRelayAt(deafServer.port, 't', 'm-1');
+    await expect.poll(() => deaf.upgradeRequests().length).toBe(1);
+    expect(await closeCode(ui)).toBe(4502);
+    // The dead link is let go as well.
+    await expect.poll(() => deaf.closed(), { timeout: 2_000 }).toBe(1);
+  });
+
+  it('closes 4502, not 4409, when the pinned certificate fails only its dates', async () => {
+    // The paired machine itself, with the pinned certificate, as seen by a
+    // clock that is off: an expired certificate.
+    const pems = await generate([{ name: 'commonName', value: 'ubuntu-pc' }], {
+      keyType: 'ec',
+      curve: 'P-256',
+      algorithm: 'sha256',
+      notBeforeDate: new Date(Date.now() - 3 * 86_400_000),
+      notAfterDate: new Date(Date.now() - 86_400_000),
+    });
+    const expired = await startFakeMachine(dir, () => {}, {
+      tls: {
+        keyPem: pems.private,
+        certPem: pems.cert,
+        fingerprint256: new X509Certificate(pems.cert).fingerprint256,
+      },
+    });
+    cleanup.push(() => expired.close());
+    const failures: unknown[] = [];
+    const r = createRelay({
+      machines: {
+        get: (id) => ({
+          id,
+          name: 'Fake',
+          address: '127.0.0.1',
+          port: expired.port,
+          fingerprint: expired.tls.fingerprint256,
+          certPem: expired.tls.certPem,
+          deviceId: 'd',
+          addedAt: 0,
+          unlocked: true,
+        }),
+        token: () => TOKEN,
+      },
+      onLinkFailed: (_id, err) => failures.push(err),
+    });
+    const srv = await startWsServer({
+      token: 't',
+      router: new Router(),
+      relay: r,
+      onClientCountChange: () => {},
+    });
+    cleanup.push(async () => {
+      r.close();
+      await srv.close();
+    });
+    expect(await closeCode(await openRelayAt(srv.port, 't', 'm-1'))).toBe(4502);
+    expect(String(failures[0])).toContain('CERT_HAS_EXPIRED');
+    // Still nothing was sent to it.
+    expect(expired.upgradeRequests()).toHaveLength(0);
+  });
+
+  it('refuses new relays once closed', async () => {
+    relay.close();
+    expect(await closeCode(await open())).toBe(1001);
+    expect(fake.connections()).toBe(0);
   });
 
   it('drops the relays of one machine on request, and every link on close', async () => {

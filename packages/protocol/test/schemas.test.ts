@@ -657,6 +657,12 @@ describe('protocol schemas', () => {
       expect(events['machines.changed'].parse([m])).toEqual([m]);
     });
 
+    it('machines.remove answers whether the machine revoked this device', () => {
+      const r = methods['machines.remove'].result;
+      expect(r.parse({ revoked: true })).toEqual({ revoked: true });
+      expect(r.safeParse({}).success).toBe(false);
+    });
+
     it('names the relay close codes', () => {
       expect(RELAY_CLOSE).toEqual({
         locked: 4404,

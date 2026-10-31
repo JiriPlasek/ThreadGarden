@@ -113,10 +113,15 @@ export const methods = {
     PairedMachineSchema,
   ),
   /**
-   * Forgets a machine (its relays close with 4404). With `revoke`, it first
-   * asks the machine to revoke this device, when reachable; a failure is ignored.
+   * Forgets a machine (its relays close with 4404). With `revoke`, it then
+   * asks the machine to revoke this device, when reachable; a failure is
+   * ignored. `revoked`: the machine confirmed it (false when not asked: no
+   * `revoke`, the machine locked or unknown, or it could not be reached).
    */
-  'machines.remove': def(z.object({ machineId: z.string(), revoke: z.boolean() }), empty),
+  'machines.remove': def(
+    z.object({ machineId: z.string(), revoke: z.boolean() }),
+    z.object({ revoked: z.boolean() }),
+  ),
   /** v1.2: `active`, `onHold`, `archived` per bucket; `all` (= `active`) stays for older UIs. */
   'places.counts': def(
     empty,

@@ -175,22 +175,23 @@ const registerPairedMachineHandlers = (
     'machines.remove',
     async ({ machineId, revoke }) => {
       const machine = paired.get(machineId);
-      if (!machine) return {};
-      deps.relay?.drop(machineId, RELAY_CLOSE.locked);
+      if (!machine) return { revoked: false };
       const token = paired.token(machineId);
-      // Best effort: the machine forgets this device if it can be reached (needs the token).
-      if (revoke && token !== null) {
-        await unpair({
-          address: machine.address,
-          port: machine.port,
-          pin: { certPem: machine.certPem, fingerprint: machine.fingerprint },
-          token,
-          deviceId: machine.deviceId,
-        });
-      }
+      // Forgotten first, token included, then its relays closed: a relay
+      // opened while the machine is asked to revoke finds nothing (4404).
       paired.remove(machineId);
+      deps.relay?.drop(machineId, RELAY_CLOSE.locked);
       changed();
-      return {};
+      // Best effort: the machine forgets this device if it can be reached (needs the token).
+      if (!revoke || token === null) return { revoked: false };
+      const revoked = await unpair({
+        address: machine.address,
+        port: machine.port,
+        pin: { certPem: machine.certPem, fingerprint: machine.fingerprint },
+        token,
+        deviceId: machine.deviceId,
+      });
+      return { revoked };
     },
     local,
   );

@@ -32,8 +32,11 @@ export type FakeMachine = {
 export const startFakeMachine = async (
   dir: string,
   onSocket: (ws: WebSocket, protocol: string) => void = () => {},
+  /** `autoPong: false`: pings go unanswered, like a machine whose network dropped. */
+  opts: { autoPong?: boolean; tls?: TlsIdentity } = {},
 ): Promise<FakeMachine> => {
-  const tls = await loadOrCreateTlsIdentity(await mkdtemp(join(dir, 'fake-')), 'impostor');
+  const tls =
+    opts.tls ?? (await loadOrCreateTlsIdentity(await mkdtemp(join(dir, 'fake-')), 'impostor'));
   const upgrades: IncomingHttpHeaders[] = [];
   const frames: { data: string; binary: boolean }[] = [];
   let connections = 0;
@@ -42,6 +45,7 @@ export const startFakeMachine = async (
   const wss = new WebSocketServer({
     noServer: true,
     handleProtocols: (protocols) => [...protocols][0] ?? false,
+    autoPong: opts.autoPong ?? true,
   });
   const https = createServer({ key: tls.keyPem, cert: tls.certPem });
   https.on('connection', () => connections++);

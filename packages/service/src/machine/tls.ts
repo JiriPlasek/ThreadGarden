@@ -6,6 +6,8 @@ import { generate } from 'selfsigned';
 export type TlsIdentity = { keyPem: string; certPem: string; fingerprint256: string };
 
 const VALIDITY_YEARS = 20;
+/** How far a new certificate's validity starts in the past (clock skew between machines). */
+const BACKDATE_MS = 24 * 60 * 60_000;
 
 const writePrivate = async (target: string, data: string): Promise<void> => {
   const tmp = `${target}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`;
@@ -69,12 +71,17 @@ export const loadOrCreateTlsIdentity = async (
   // An unusable identity is replaced, never fatal; devices must re-pair against the new pin.
   if (existing.kind === 'bad') opts?.onRegenerate?.(existing.reason);
 
-  const notAfterDate = new Date();
+  const now = Date.now();
+  const notAfterDate = new Date(now);
   notAfterDate.setFullYear(notAfterDate.getFullYear() + VALIDITY_YEARS);
+  // Valid from a day ago: a device whose clock is behind this machine's must
+  // not find a brand-new certificate "not yet valid" (devices check the dates).
+  const notBeforeDate = new Date(now - BACKDATE_MS);
   const pems = await generate([{ name: 'commonName', value: commonName }], {
     keyType: 'ec',
     curve: 'P-256',
     algorithm: 'sha256',
+    notBeforeDate,
     notAfterDate,
   });
 

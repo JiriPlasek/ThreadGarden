@@ -32,6 +32,20 @@ const linkUrl = (address: string, port: number): string =>
 
 const PIN_MISMATCH = 'PIN_MISMATCH';
 
+/** OpenSSL's certificate date errors: a clock problem, not another machine. */
+const DATE_ERRORS: ReadonlySet<string> = new Set(['CERT_NOT_YET_VALID', 'CERT_HAS_EXPIRED']);
+
+/**
+ * Why a TLS handshake that failed verification failed, from the socket's
+ * `authorizationError`: a certificate date error (one clock or the other is
+ * off) is `unreachable`, with the reason; anything else (the chain to the
+ * pinned certificate, the fingerprint) is `pin`. Either way nothing was sent.
+ */
+export const classifyVerifyFailure = (authorizationError: string): LinkError =>
+  DATE_ERRORS.has(authorizationError)
+    ? new LinkError('unreachable', `certificate date check failed (${authorizationError})`)
+    : new LinkError('pin', 'the machine presented another certificate');
+
 /**
  * A WebSocket to another machine's listener over TLS. The TLS connection is
  * made here, and handed to the HTTP client only once its handshake succeeded:
@@ -84,8 +98,9 @@ export const openLink = (opts: {
     socket.on('error', (err) => {
       if (handedOver) return;
       // Set only when the certificate failed verification (chain or pin).
-      if (socket.authorizationError !== undefined && socket.authorizationError !== null) {
-        fail(new LinkError('pin', 'the machine presented another certificate'));
+      const verifyError: unknown = socket.authorizationError;
+      if (verifyError !== undefined && verifyError !== null) {
+        fail(classifyVerifyFailure(String(verifyError)));
       } else {
         fail(new LinkError('unreachable', err.message));
       }

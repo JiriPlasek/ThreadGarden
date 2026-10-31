@@ -26,6 +26,16 @@ describe('loadOrCreateTlsIdentity', () => {
     };
   };
 
+  it('backdates a new certificate by a day and keeps it valid for 20 years', async () => {
+    const before = Date.now();
+    const cert = new X509Certificate((await loadOrCreateTlsIdentity(dir, 'ubuntu-pc')).certPem);
+    // A device whose clock is behind still finds it valid.
+    expect(Date.parse(cert.validFrom)).toBeLessThanOrEqual(before - 23 * 60 * 60_000);
+    const years = (Date.parse(cert.validTo) - before) / (365.25 * 24 * 60 * 60_000);
+    expect(years).toBeGreaterThan(19.9);
+    expect(years).toBeLessThan(20.1);
+  });
+
   it('creates the identity once, private files, and reuses it', async () => {
     const { reasons, run } = await regenReasons();
     const a = await run();
