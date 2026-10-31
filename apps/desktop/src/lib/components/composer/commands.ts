@@ -40,7 +40,10 @@ const mapped: MenuCommand[] = [
 ];
 
 const terminalOnly: [name: string, reason: string][] = [
-  ['config', "Claude Code's terminal settings screen; edit settings.json, or Threadgarden's own settings"],
+  [
+    'config',
+    "Claude Code's terminal settings screen; edit settings.json, or Threadgarden's own settings",
+  ],
   ['login', 'Sign in by running `claude` in a terminal; Threadgarden uses that sign-in'],
   ['logout', 'Sign out by running `claude` in a terminal'],
   ['doctor', 'Run `claude doctor` in a terminal'],

@@ -375,8 +375,8 @@
         {#if settings.hasApiKey}
           A key is stored in the OS credential store; chats Threadgarden starts use API billing.
         {:else if buildFlags.apiKeyOnly}
-          This build of Threadgarden runs chats only on an Anthropic API key (API billing). Add your key to
-          start or continue chats; history stays browsable without one.
+          This build of Threadgarden runs chats only on an Anthropic API key (API billing). Add your
+          key to start or continue chats; history stays browsable without one.
         {:else}
           No key: chats use the sign-in of your Claude Code installation.
         {/if}

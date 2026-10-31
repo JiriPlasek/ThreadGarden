@@ -529,7 +529,10 @@ export class LiveSession {
       }
       // Defence in depth: bypass suggestions are filtered out when the request arrives.
       if (isBypassSuggestion(chosen)) {
-        throw new ServiceError('INVALID_PARAMS', 'Threadgarden does not apply bypassPermissions rules');
+        throw new ServiceError(
+          'INVALID_PARAMS',
+          'Threadgarden does not apply bypassPermissions rules',
+        );
       }
     }
     if (d.decision === 'deny') {

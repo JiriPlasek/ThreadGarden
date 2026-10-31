@@ -48,7 +48,8 @@
   {@const running = lifecycle.running}
   {#if connection.status === 'incompatible'}
     <p class="text-muted-foreground text-sm">
-      Threadgarden can't list the agents of a service with another protocol; any it runs are stopped.
+      Threadgarden can't list the agents of a service with another protocol; any it runs are
+      stopped.
     </p>
   {:else if running.length === 0}
     <p class="text-muted-foreground text-sm">No agents are running in Threadgarden.</p>

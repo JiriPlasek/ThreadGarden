@@ -24,8 +24,8 @@
     <div role="alert" class="flex max-w-md flex-col items-start gap-3">
       <h1 class="text-base font-semibold">The Threadgarden service is an older version</h1>
       <p class="text-muted-foreground text-sm" data-testid="status">
-        It speaks a different protocol than this app, so Threadgarden cannot use it. Restart the Threadgarden
-        service to update; chats it runs can be resumed afterwards.
+        It speaks a different protocol than this app, so Threadgarden cannot use it. Restart the
+        Threadgarden service to update; chats it runs can be resumed afterwards.
       </p>
       <Button size="sm" onclick={restart}>
         <RefreshCwIcon aria-hidden="true" /> Restart service
@@ -43,8 +43,8 @@
         : 'The Threadgarden service is an older version'}</span
     >
     <span class="min-w-0 truncate"
-      >({connection.serviceVersion}; this app is {connection.appVersion}). Restart the Threadgarden service
-      to update.</span
+      >({connection.serviceVersion}; this app is {connection.appVersion}). Restart the Threadgarden
+      service to update.</span
     >
     <Button variant="outline" size="xs" class="ml-auto shrink-0" onclick={restart}>
       <RefreshCwIcon aria-hidden="true" /> Restart service

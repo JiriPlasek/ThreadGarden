@@ -76,7 +76,13 @@ describe('ScheduledSends', () => {
     expect(sent).toEqual([{ sessionId: 'a', text: 'Go on', images: [IMG] }]);
     expect(s.list('a')[0]?.state).toBe('sending');
     expect(sentEvents()).toEqual([
-      { sessionId: 'a', title: 'Chat a', projectName: 'Threadgarden', late: false, dueAt: T0 + 5 * MIN },
+      {
+        sessionId: 'a',
+        title: 'Chat a',
+        projectName: 'Threadgarden',
+        late: false,
+        dueAt: T0 + 5 * MIN,
+      },
     ]);
     s.turnEnded('a', false);
     expect(s.list()).toEqual([]);

@@ -134,7 +134,11 @@ it('a full service lifecycle leaves the Claude config dir untouched', async () =
     // fork
     await c.call('chat.fork', { sessionId: 's1', upToItemId: 's1-u0' });
     // Threadgarden-side metadata, drafts, settings
-    await c.call('meta.update', { sessionId: 's3', customTitle: 'Renamed in Threadgarden', pinned: true });
+    await c.call('meta.update', {
+      sessionId: 's3',
+      customTitle: 'Renamed in Threadgarden',
+      pinned: true,
+    });
     await c.call('projects.list', {});
     await c.call('drafts.set', { key: 's1', text: 'draft' });
     await c.call('settings.set', { idleReclaimMinutes: 5 });

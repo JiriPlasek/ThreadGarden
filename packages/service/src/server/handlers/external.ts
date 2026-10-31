@@ -82,7 +82,8 @@ export const registerExternalHandlers = (router: Router, deps: ExternalHandlerDe
       );
     }
     const entry = list.find((e) => e.sessionId === p.sessionId);
-    if (!entry) throw new ServiceError('NOT_EXTERNAL', 'This chat is not running outside Threadgarden.');
+    if (!entry)
+      throw new ServiceError('NOT_EXTERNAL', 'This chat is not running outside Threadgarden.');
     if (entry.kind !== 'background' || !entry.shortId || !SHORT_ID.test(entry.shortId)) {
       throw new ServiceError('NOT_STOPPABLE', 'This chat is running in a terminal. Stop it there.');
     }

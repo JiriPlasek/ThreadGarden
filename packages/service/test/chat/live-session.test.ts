@@ -282,7 +282,10 @@ describe('LiveSession', () => {
     await settle();
     const id = s.pendingRequests()[0]!.id;
     s.respond('d1', { decision: 'deny' });
-    await expect(plain).resolves.toEqual({ behavior: 'deny', message: 'Denied by user in Threadgarden' });
+    await expect(plain).resolves.toEqual({
+      behavior: 'deny',
+      message: 'Denied by user in Threadgarden',
+    });
     expect(latest(events, id)).toMatchObject({ state: 'denied' });
 
     const reasoned = fake.requestPermission('Write', { file_path: 'y' }, { requestId: 'd2' });
@@ -1358,7 +1361,9 @@ describe('LiveSession turn ends and activity (v1.1)', () => {
   });
 
   it('names the chat with describe when it can', async () => {
-    const ctx = setup({ describe: () => ({ title: 'Indexed title', projectName: 'Threadgarden' }) });
+    const ctx = setup({
+      describe: () => ({ title: 'Indexed title', projectName: 'Threadgarden' }),
+    });
     const s = LiveSession.create('/work/proj', { text: 'hi' }, ctx.opts);
     ctx.adapter.lastSession().emit(result('r1'));
     await settle();

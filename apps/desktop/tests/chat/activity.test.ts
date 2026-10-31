@@ -315,12 +315,16 @@ describe('activity panel', () => {
 
   it('history and external chats say activity is for chats running in Threadgarden', async () => {
     const { panel } = await renderChat({ status: 'history' });
-    expect(panel()!.textContent).toContain('Activity is available for chats running in Threadgarden');
+    expect(panel()!.textContent).toContain(
+      'Activity is available for chats running in Threadgarden',
+    );
   });
 
   it('an external chat says so too', async () => {
     const { panel } = await renderChat({ status: 'working', external: true });
-    expect(panel()!.textContent).toContain('Activity is available for chats running in Threadgarden');
+    expect(panel()!.textContent).toContain(
+      'Activity is available for chats running in Threadgarden',
+    );
   });
 
   it('the toggle hides it, remembers that in uiState, and Ctrl+. shows it again', async () => {
