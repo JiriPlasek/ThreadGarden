@@ -22,7 +22,8 @@ import { ExternalPoller, makeClaudeRunner, type ExternalSession } from './extern
 import { Buckets } from './history/buckets.js';
 import { Catalog, UNTITLED_TITLE, titleFor, type LiveChat } from './history/catalog.js';
 import { openDb, type Db } from './history/db.js';
-import { loadMachineIdentity, renameMachine } from './machine/identity.js';
+import { DeviceRegistry } from './machine/devices.js';
+import { loadMachineIdentity } from './machine/identity.js';
 import { Indexer } from './history/indexer.js';
 import { FolderCheck, ProjectOrderNotifier } from './history/project-activity.js';
 import { ProjectIcons, type FoundIcon } from './history/project-icons.js';
@@ -36,9 +37,10 @@ import { buildSessionEnv } from './sdk/real-adapter.js';
 import { registerChatHandlers } from './server/handlers/chat.js';
 import { makeResumeChecker, registerExternalHandlers } from './server/handlers/external.js';
 import { registerFileHandlers } from './server/handlers/files.js';
+import { registerMachineHandlers } from './server/handlers/machines.js';
 import { registerHistoryHandlers } from './server/handlers/history.js';
 import { registerUsageHandlers } from './server/handlers/usage.js';
-import { Router, ServiceError } from './server/router.js';
+import { Router } from './server/router.js';
 import { startWsServer } from './server/ws-server.js';
 import { ScheduledSends } from './usage/scheduled.js';
 import { UsageTracker } from './usage/usage.js';
@@ -177,9 +179,8 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   };
 
   /** This machine's identity; it lives in the database, so there is none without one. */
-  const machineInfo = (): MachineInfo | undefined => {
-    if (!db) return undefined;
-    const { id, name } = loadMachineIdentity(db, os.hostname());
+  const machineOf = (d: Db): MachineInfo => {
+    const { id, name } = loadMachineIdentity(d, os.hostname());
     return {
       id,
       name,
@@ -189,24 +190,11 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       capabilities: [...CAPABILITIES],
     };
   };
-  router.register('hello', async () => {
-    const machine = machineInfo();
-    return {
-      serviceVersion: pkg.version,
-      protocolVersion: PROTOCOL_VERSION,
-      ...(machine ? { machine } : {}),
-    };
-  });
-  router.register('machine.get', async () => {
-    const machine = machineInfo();
-    if (!machine) throw new ServiceError('NO_DATABASE', 'This service has no machine identity');
-    return machine;
-  });
-  router.register('machine.rename', async ({ name }) => {
-    if (!db) throw new ServiceError('NO_DATABASE', 'This service has no machine identity');
-    renameMachine(db, name);
-    return machineInfo()!;
-  });
+  router.register('hello', async () => ({
+    serviceVersion: pkg.version,
+    protocolVersion: PROTOCOL_VERSION,
+    ...(db ? { machine: machineOf(db) } : {}),
+  }));
 
   const broadcastRef: { fn: (e: EventMsg) => void } = { fn: () => {} };
   /** v1.2: runs once the catalog exists (the poller is created before it). */
@@ -270,7 +258,16 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   const whenLocated = (): Promise<void> => located;
 
   try {
-    if (opts.adapter) db = openDb(path.join(dataDir, DB_FILE));
+    if (opts.adapter) {
+      const opened = openDb(path.join(dataDir, DB_FILE));
+      db = opened;
+      // machine.*, pairing and devices (v1.4); none of them without a database.
+      registerMachineHandlers(router, {
+        db: opened,
+        devices: new DeviceRegistry(opened.raw),
+        identity: () => machineOf(opened),
+      });
+    }
     const found = claude.current;
     noteProblem(found);
 
@@ -577,10 +574,14 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       now: clock,
     });
 
-    router.register('auth.setApiKey', async (p) => {
-      apiKey = p.key === null || p.key.trim() === '' ? null : p.key.trim();
-      return {};
-    });
+    router.register(
+      'auth.setApiKey',
+      async (p) => {
+        apiKey = p.key === null || p.key.trim() === '' ? null : p.key.trim();
+        return {};
+      },
+      { localOnly: true },
+    );
     router.register('work.stopAll', async () => ({ stopped: host?.stopAll() ?? 0 }));
 
     server = await startWsServer({
@@ -708,11 +709,15 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   timer.unref?.();
 
   // Quit Threadgarden completely (§4.2): stop all work, then the service.
-  router.register('service.shutdown', async () => {
-    host?.stopAll();
-    setImmediate(() => void close());
-    return {};
-  });
+  router.register(
+    'service.shutdown',
+    async () => {
+      host?.stopAll();
+      setImmediate(() => void close());
+      return {};
+    },
+    { localOnly: true },
+  );
 
   if (opts.installSignalHandlers ?? true) {
     for (const sig of ['SIGINT', 'SIGTERM'] as const) process.once(sig, () => void close());

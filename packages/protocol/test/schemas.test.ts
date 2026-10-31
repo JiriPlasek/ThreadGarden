@@ -139,6 +139,11 @@ describe('protocol schemas', () => {
       // v1.4: machines
       'machine.get',
       'machine.rename',
+      'pairing.create',
+      'devices.list',
+      'devices.revoke',
+      'pair.proof',
+      'pair.claim',
     ];
     expect(Object.keys(methods).sort()).toEqual([...expected].sort());
     for (const name of expected) {
@@ -582,6 +587,28 @@ describe('protocol schemas', () => {
       expect(r.safeParse(empty).success).toBe(true);
       expect(r.safeParse({ ...sample, bucket: 'month' }).success).toBe(false);
       expect(r.safeParse({ ...sample, pending: -1 }).success).toBe(false);
+    });
+  });
+
+  // ── v1.4: pairing ─────────────────────────────────────────────────────────
+
+  describe('v1.4 pairing', () => {
+    it('pair.proof takes only a 64-hex-character nonce, never a code', () => {
+      const p = methods['pair.proof'].params;
+      expect(p.safeParse({ nonce: 'a'.repeat(64) }).success).toBe(true);
+      expect(p.safeParse({ nonce: 'A'.repeat(64) }).success).toBe(false);
+      expect(p.safeParse({ nonce: 'a'.repeat(63) }).success).toBe(false);
+      expect(p.parse({ nonce: 'a'.repeat(64), code: 'AAAA-AAAA-AAAA' })).toEqual({
+        nonce: 'a'.repeat(64),
+      });
+    });
+
+    it('pair.claim trims the device name and caps it at 60 characters', () => {
+      const p = methods['pair.claim'].params;
+      expect(p.parse({ code: 'AAAA-AAAA-AAAA', deviceName: '  Den ' }).deviceName).toBe('Den');
+      expect(p.safeParse({ code: 'x', deviceName: '   ' }).success).toBe(false);
+      expect(p.safeParse({ code: 'x', deviceName: 'x'.repeat(60) }).success).toBe(true);
+      expect(p.safeParse({ code: 'x', deviceName: 'x'.repeat(61) }).success).toBe(false);
     });
   });
 });

@@ -63,7 +63,10 @@ const start = async (adapter: FakeAdapter, over: Partial<StartOptions> = {}) => 
 
 let nextId = 1;
 const call = (method: string, params: unknown) =>
-  svc!.router.dispatch({ id: nextId++, method, params }, { clientId: 't' }) as Promise<{
+  svc!.router.dispatch(
+    { id: nextId++, method, params },
+    { clientId: 't', origin: 'local' },
+  ) as Promise<{
     result?: unknown;
     error?: { code: string; message: string };
   }>;

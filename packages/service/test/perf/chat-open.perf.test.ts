@@ -17,7 +17,10 @@ let svc: ServiceHandle;
 const adapter = generateCorpus({ sessions: 20, projects: 2, bigSessionMessages: 2000 });
 
 const call = async <T>(method: string, params: unknown): Promise<T> => {
-  const r = await svc.router.dispatch({ id: 1, method, params }, { clientId: 'perf' });
+  const r = await svc.router.dispatch(
+    { id: 1, method, params },
+    { clientId: 'perf', origin: 'local' },
+  );
   if ('error' in r) throw new Error(`${method}: ${r.error.code} ${r.error.message}`);
   return r.result as T;
 };

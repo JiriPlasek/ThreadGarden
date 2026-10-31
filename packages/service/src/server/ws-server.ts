@@ -1,12 +1,7 @@
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { WebSocketServer, type WebSocket } from 'ws';
-import {
-  MAX_REQUEST_BYTES,
-  RequestSchema,
-  type EventMsg,
-  type Request,
-  type Response,
-} from '@threadgarden/protocol';
+import { MAX_REQUEST_BYTES, type EventMsg } from '@threadgarden/protocol';
+import { dropOnError, sendFrame, serveFrames } from './frames.js';
 import type { Router } from './router.js';
 
 const HOST = '127.0.0.1';
@@ -71,42 +66,24 @@ export const startWsServer = async (opts: {
   // An 'error' event without a listener throws; after listening, errors are reported.
   wss.on('error', report);
 
-  const send = (ws: WebSocket, msg: Response | EventMsg) => {
-    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg));
-  };
-
   wss.on('connection', (ws) => {
+    dropOnError(ws);
     const offered = tokenOf(ws.protocol);
     if (offered === null || !tokenMatches(offered, opts.token)) {
       ws.close(UNAUTHORIZED, 'unauthorized');
       return;
     }
-    const clientId = randomUUID();
     clients.add(ws);
     opts.onClientCountChange(clients.size);
-    ws.on('message', (data) => {
-      let req: Request;
-      try {
-        req = RequestSchema.parse(JSON.parse(String(data)));
-      } catch {
-        send(ws, { id: 0, error: { code: 'INVALID_PARAMS', message: 'Malformed request' } });
-        return;
-      }
-      const { id } = req;
-      void opts.router
-        .dispatch(req, { clientId })
-        .catch((err: unknown): Response => {
-          report(err);
-          return { id, error: { code: 'INTERNAL', message: 'Internal error' } };
-        })
-        .then((res) => send(ws, res))
-        .catch(report);
+    serveFrames(ws, {
+      router: opts.router,
+      ctx: { clientId: randomUUID(), origin: 'local' },
+      report,
     });
     ws.on('close', () => {
       clients.delete(ws);
       opts.onClientCountChange(clients.size);
     });
-    ws.on('error', () => ws.terminate());
   });
 
   const addr = wss.address();
@@ -116,7 +93,7 @@ export const startWsServer = async (opts: {
     port: addr.port,
     address: addr.address,
     broadcast: (e) => {
-      for (const ws of clients) send(ws, e);
+      for (const ws of clients) sendFrame(ws, e);
     },
     close: () =>
       new Promise<void>((resolve) => {

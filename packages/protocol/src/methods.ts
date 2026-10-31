@@ -12,7 +12,7 @@ import {
 } from './chat.js';
 import { ChatItemsEventSchema, ChatStatusEventSchema, ChatTasksEventSchema } from './events.js';
 import { ChatItemSchema, ImageRefSchema } from './items.js';
-import { MachineInfoSchema } from './machines.js';
+import { DeviceSchema, MachineInfoSchema } from './machines.js';
 import { ChatTaskSchema } from './tasks.js';
 import { ScheduledSendSchema, UsageStateSchema } from './usage.js';
 
@@ -46,6 +46,27 @@ export const methods = {
   /** v1.4: this machine's identity. */
   'machine.get': def(empty, MachineInfoSchema),
   'machine.rename': def(z.object({ name: z.string().trim().min(1).max(40) }), MachineInfoSchema),
+  /** v1.4, local only: a one-time code (`XXXX-XXXX-XXXX`, 5 minutes) that pairs one device. */
+  'pairing.create': def(empty, z.object({ code: z.string(), expiresAt: z.number() })),
+  /** v1.4, local only: the devices paired with this machine. */
+  'devices.list': def(empty, z.array(DeviceSchema)),
+  /** v1.4, local only: unpairs a device; its open connections close with 4403. */
+  'devices.revoke': def(z.object({ deviceId: z.string() }), z.object({ revoked: z.boolean() })),
+  /**
+   * v1.4, pairing: HMAC-SHA256 of `<certificate fingerprint>
+<nonce>` keyed by
+   * the live pairing code, so the client can check it reached the machine that
+   * showed the code before sending it. `proof` is null when no code is live.
+   */
+  'pair.proof': def(
+    z.object({ nonce: z.string().regex(/^[0-9a-f]{64}$/) }),
+    z.object({ proof: z.string().nullable(), machine: MachineInfoSchema }),
+  ),
+  /** v1.4, pairing: spends the code on a device token. Errors: `PAIRING_INVALID`, `PAIRING_EXPIRED`. */
+  'pair.claim': def(
+    z.object({ code: z.string().max(64), deviceName: z.string().trim().min(1).max(60) }),
+    z.object({ deviceId: z.string(), token: z.string(), machine: MachineInfoSchema }),
+  ),
   /** v1.2: `active`, `onHold`, `archived` per bucket; `all` (= `active`) stays for older UIs. */
   'places.counts': def(
     empty,

@@ -23,7 +23,10 @@ const svc = await startService({
   installSignalHandlers: false,
 });
 const call = async (method: string): Promise<Record<string, number>> => {
-  const r = await svc.router.dispatch({ id: 1, method, params: {} } as never, { clientId: 'rss' });
+  const r = await svc.router.dispatch({ id: 1, method, params: {} } as never, {
+    clientId: 'rss',
+    origin: 'local',
+  });
   if ('error' in r) throw new Error(`${method}: ${r.error.message}`);
   return r.result as Record<string, number>;
 };

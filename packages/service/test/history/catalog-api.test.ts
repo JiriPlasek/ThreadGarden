@@ -28,7 +28,10 @@ const setup = async (sessions = 12, projects = 3) => {
   const router = new Router();
   registerHistoryHandlers(router, { db, catalog, quickSearch: createQuickSearch(db, catalog) });
   const call = async (method: string, params: unknown = {}): Promise<Any> => {
-    const r = await router.dispatch({ id: 1, method, params } as never, { clientId: 'c' });
+    const r = await router.dispatch({ id: 1, method, params } as never, {
+      clientId: 'c',
+      origin: 'local',
+    });
     if ('error' in r) throw new Error(`${r.error.code}: ${r.error.message}`);
     return r.result as Any;
   };

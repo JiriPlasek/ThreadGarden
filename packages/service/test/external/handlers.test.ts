@@ -32,7 +32,10 @@ const setup = (run: () => Promise<string>, withPoller = true) => {
     now: () => NOW,
   });
   const call = async (method: string, params: unknown = {}) => {
-    const r = await router.dispatch({ id: 1, method, params } as never, { clientId: 'c' });
+    const r = await router.dispatch({ id: 1, method, params } as never, {
+      clientId: 'c',
+      origin: 'local',
+    });
     if ('error' in r) throw new Error(`${r.error.code}: ${r.error.message}`);
     return r.result as Record<string, unknown>;
   };
@@ -72,7 +75,7 @@ describe('external handlers', () => {
     const call = async (sessionId: string) => {
       const r = await router.dispatch(
         { id: 1, method: 'chat.resumeCheck', params: { sessionId } } as never,
-        { clientId: 'c' },
+        { clientId: 'c', origin: 'local' },
       );
       return 'result' in r ? r.result : r;
     };
@@ -156,7 +159,7 @@ describe('external.stop', () => {
     const stop = async (sessionId: string) => {
       const r = await router.dispatch(
         { id: 1, method: 'external.stop', params: { sessionId } } as never,
-        { clientId: 'c' },
+        { clientId: 'c', origin: 'local' },
       );
       return 'result' in r ? { ok: r.result } : { code: r.error.code, message: r.error.message };
     };
@@ -209,7 +212,7 @@ describe('external.stop', () => {
     });
     const r = await router.dispatch(
       { id: 1, method: 'external.stop', params: { sessionId: 'bg' } } as never,
-      { clientId: 'c' },
+      { clientId: 'c', origin: 'local' },
     );
     expect('error' in r && r.error.code).toBe('EXTERNAL_UNAVAILABLE');
   });
