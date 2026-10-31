@@ -176,7 +176,7 @@ const wire = (
   const chatOptions = { schedule: (cb: () => void) => cb() };
   // The same order as `app.ts`'s `wire()`.
   app.connection.init(client);
-  wireScope(local, { tabs, settings, agents: app.agents, chats: chatOptions, scopes });
+  wireScope(local, { tabs, agents: app.agents, chats: chatOptions, scopes });
   app.tabs.init(client, { localMachineId: () => local.machineId });
   app.settings.init(client);
   app.agents.init(client, { machineId: () => local.machineId });
@@ -190,7 +190,7 @@ const wire = (
   app.places.follow(scopes);
   app.agents.follow(scopes);
   scopes.follow(app.machines, tabs, (m) =>
-    createScope(m.id, m.client, { tabs, settings, agents: app.agents, chats: chatOptions }),
+    createScope(m.id, m.client, { tabs, agents: app.agents, chats: chatOptions }),
   );
   app.machines.init(client, client, {
     relayUrl: (id) => `ws://fake:1/relay?machine=${id}`,

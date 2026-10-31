@@ -9,7 +9,7 @@ import ChatListRow from '../../src/lib/components/layout/ChatListRow.svelte';
 import TabsBar from '../../src/lib/components/layout/TabsBar.svelte';
 import { runningTasks } from '../../src/lib/state/chats.svelte';
 import { ACTIVITY_KEY } from '../../src/lib/state/settings.svelte';
-import { setup, summary } from '../layout/harness';
+import { LOCAL, setup, summary } from '../layout/harness';
 import { RpcFail, type FakeServer } from '../service/fake-ws';
 import { manyItems, tool, user } from './fixtures';
 
@@ -77,7 +77,10 @@ const renderChat = async (o: Options = {}) => {
     o.configure?.(server);
   });
   env.app.tabs.openTab(SID);
-  const view = render(ChatView, { props: { sessionId: SID }, context: env.context });
+  const view = render(ChatView, {
+    props: { ref: { machineId: LOCAL, sessionId: SID } },
+    context: env.context,
+  });
   await waitFor(() => expect(env.app.chats.get(SID)?.loaded).toBe(true));
   const panel = () => screen.queryByRole('region', { name: 'Activity' });
   return { ...env, view, panel };
@@ -414,7 +417,7 @@ describe('activity panel', () => {
     );
     // Another chat view (a chat with tasks, a chat switch) follows the same setting.
     view.unmount();
-    render(ChatView, { props: { sessionId: SID }, context });
+    render(ChatView, { props: { ref: { machineId: LOCAL, sessionId: SID } }, context });
     expect(panel()).toBeNull();
     app.settings.setActivityOpen(true);
     await waitFor(() => expect(panel()).toBeTruthy());

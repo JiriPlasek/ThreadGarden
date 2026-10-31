@@ -11,6 +11,7 @@ import {
   mentionText,
   slashAt,
 } from '../../src/lib/components/composer/input';
+import { LOCAL } from '../layout/harness';
 import { CWD, fill, pushStatus, renderChat, SID } from './helpers';
 
 type SendParams = { sessionId: string; text: string; images?: unknown[] };
@@ -165,7 +166,7 @@ describe('composer', () => {
     expect(sets).toBeLessThanOrEqual(2); // debounced, not one write per keystroke
 
     view.unmount();
-    render(ChatView, { props: { sessionId: SID }, context });
+    render(ChatView, { props: { ref: { machineId: LOCAL, sessionId: SID } }, context });
     await waitFor(() =>
       expect((screen.getByRole('textbox', { name: /message/i }) as HTMLTextAreaElement).value).toBe(
         'half-written thought',

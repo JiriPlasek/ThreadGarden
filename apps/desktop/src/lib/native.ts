@@ -90,15 +90,16 @@ export const machineTokens = {
 
 /**
  * Shows an OS notification. The notification plugin cannot report clicks back
- * (ruling R26): `sessionId` rides along in `extra` for platforms that might, and
- * `notifications.ts` opens the chat when the window gains focus soon after.
+ * (ruling R26): the chat's key (`machineId/sessionId`, see `chatKey`) rides
+ * along in `extra` for platforms that might, and `notifications.ts` opens the
+ * chat when the window gains focus soon after.
  */
-export const notify = async (title: string, body: string, sessionId: string): Promise<void> => {
+export const notify = async (title: string, body: string, chatKey: string): Promise<void> => {
   if (!isTauri) return;
   const n = await import('@tauri-apps/plugin-notification');
   let granted = await n.isPermissionGranted();
   if (!granted) granted = (await n.requestPermission()) === 'granted';
-  if (granted) n.sendNotification({ title, body, extra: { sessionId } });
+  if (granted) n.sendNotification({ title, body, extra: { chatKey } });
 };
 
 export const copyText = async (s: string): Promise<void> => {

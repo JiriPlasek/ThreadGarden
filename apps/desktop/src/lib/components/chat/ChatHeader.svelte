@@ -20,7 +20,8 @@
   import { copyText } from '#lib/native.js';
   import { shortcut } from '#lib/shortcuts.js';
   import { taskRunning, type ChatState } from '#lib/state/chats.svelte.js';
-  import { useApp } from '#lib/state/context.js';
+  import { useApp, useScope } from '#lib/state/context.js';
+  import { machineNameOf } from '#lib/state/machines.svelte.js';
   import { endSessionWarning } from './end-session';
   import { tokens, usd } from './format';
   import RunningTaskList from './RunningTaskList.svelte';
@@ -46,7 +47,11 @@
     onToggleActivity?: () => void;
   } = $props();
 
-  const { chats, places, buckets } = useApp();
+  const { machines } = useApp();
+  /** The chat's machine: its chat, project and bucket stores. */
+  const { chats, places, buckets, machineId } = useScope();
+  /** With more than one machine, the header names the chat's machine. */
+  const machineName = $derived(machines.several ? machineNameOf(machines, machineId) : null);
 
   /** Ruling R11: Threadgarden never offers bypassPermissions. */
   const PERMISSION_MODES = [
@@ -190,9 +195,15 @@
       <StatusIcon status={chat.status} raw={rawStatus(summary)} />
     {/if}
     <h1 class="min-w-0 truncate text-sm font-semibold">{summary?.title ?? 'Loading…'}</h1>
+    {#if machineName}
+      <span
+        class="bg-muted text-muted-foreground max-w-40 shrink-0 truncate rounded px-1.5 text-xs leading-5"
+        title="Runs on {machineName}">{machineName}</span
+      >
+    {/if}
     {#if project && summary}
       <span class="text-muted-foreground flex shrink-0 items-center gap-1.5 text-xs">
-        <ProjectIcon projectId={summary.projectId} name={project} />
+        <ProjectIcon projectId={summary.projectId} name={project} icons={places.icons} />
         {project}
       </span>
     {/if}

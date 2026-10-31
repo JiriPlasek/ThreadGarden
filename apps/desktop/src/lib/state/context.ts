@@ -13,7 +13,7 @@ import { lifecycle, type LifecycleState } from './lifecycle.svelte';
 import { machines, type MachinesState } from './machines.svelte';
 import { places, type PlacesState } from './places.svelte';
 import { scheduled, type ScheduledState } from './scheduled.svelte';
-import { scopes, type Scopes } from './scope';
+import { scopes, type MachineScope, type Scopes } from './scope';
 import { sessions, type SessionsState } from './sessions.svelte';
 import { settings, type SettingsState } from './settings.svelte';
 import { tabs, type TabsState } from './tabs.svelte';
@@ -66,3 +66,17 @@ const singletons: AppState = {
 
 /** Must be called during component initialisation. */
 export const useApp = (): AppState => getContext<AppState | undefined>(APP_CONTEXT) ?? singletons;
+
+/**
+ * The machine scope of what is around a component: a chat, and the new-chat
+ * dialog's composer, are shown inside their machine's scope.
+ */
+export const SCOPE_CONTEXT = Symbol('threadgarden.scope');
+
+/**
+ * The per-machine stores (`chats`, `buckets`, `scheduled`, `interaction`,
+ * `places`, …) of the machine the component is shown for; This PC's outside
+ * any machine scope. Must be called during component initialisation.
+ */
+export const useScope = (): MachineScope =>
+  getContext<MachineScope | undefined>(SCOPE_CONTEXT) ?? useApp().scopes.local();

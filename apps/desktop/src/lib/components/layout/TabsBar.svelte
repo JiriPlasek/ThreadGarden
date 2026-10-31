@@ -20,11 +20,16 @@
    */
   const { tabs, places, interaction, usage, scopes } = useApp();
 
+  /** In the selected project, on its machine (This PC's when it names none). */
   const newChat = (): void => {
     const sel = places.selected;
+    const scope =
+      sel.kind === 'project' ? scopes.get(sel.machineId ?? scopes.local().machineId) : undefined;
     const project =
-      sel.kind === 'project' ? places.projects.find((p) => p.projectId === sel.projectId) : null;
-    interaction.openNewChat(project?.path ?? null);
+      sel.kind === 'project'
+        ? scope?.places.projects.find((p) => p.projectId === sel.projectId)
+        : null;
+    interaction.openNewChat(project?.path ?? null, scope?.machineId ?? null);
   };
 
   /** Each machine's listed chats by session id. */

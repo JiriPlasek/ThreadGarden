@@ -13,7 +13,8 @@
   import { copyText } from '#lib/native.js';
   import { RequestError } from '#lib/service/client.js';
   import type { ResumeCheck } from '#lib/state/chats.svelte.js';
-  import { useApp } from '#lib/state/context.js';
+  import { useApp, useScope } from '#lib/state/context.js';
+  import type { ChatRef } from '#lib/state/refs.js';
   import type { SendWhen } from '#lib/state/scheduled.svelte.js';
   import ActivityPanel from './ActivityPanel.svelte';
   import ChatHeader from './ChatHeader.svelte';
@@ -39,11 +40,13 @@
    * overlay drawer instead, opened on request in this view only (ruling R30):
    * one that covered the chat on every chat switch would be in the way.
    */
-  let { sessionId }: { sessionId: string } = $props();
+  let { ref }: { ref: ChatRef } = $props();
 
-  const { chats, tabs, interaction, settings, usage, scheduled, scopes } = useApp();
-  /** This view shows a chat of This PC (other machines' chats come with remote chats). */
-  const local = scopes.local();
+  const { tabs, settings, usage, scopes } = useApp();
+  /** The chat's machine (`ChatPane` shows it inside that machine's scope). */
+  const scope = useScope();
+  const { chats, interaction, scheduled } = scope;
+  const sessionId = $derived(ref.sessionId);
   /** A chat just created from the new-chat dialog starts with its composer focused. */
   const focusComposer = untrack(() => interaction.takeComposerFocus(sessionId));
   const chat = $derived(chats.get(sessionId));
@@ -61,7 +64,7 @@
     forkError = null;
     chats
       .fork(sessionId, itemId)
-      .then((id) => tabs.openTab({ machineId: local.machineId, sessionId: id }))
+      .then((id) => tabs.openTab({ machineId: scope.machineId, sessionId: id }))
       .catch((err: unknown) => {
         forkError = err instanceof Error ? err.message : String(err);
       });
@@ -175,8 +178,11 @@
 
   // ── v1.3 B: usage limit and scheduled sends ─────────────────────────────
 
-  /** A usage limit refused this chat's last turn (until a turn goes through or it resets). */
-  const refusal = $derived(usage.refusal(sessionId));
+  /**
+   * A usage limit refused this chat's last turn (until a turn goes through or
+   * it resets). Usage is This PC's only for now, so another machine's chat has none.
+   */
+  const refusal = $derived(scope === scopes.local() ? usage.refusal(sessionId) : undefined);
   /** The reset the "When the limit resets" preset uses. */
   const resetAt = $derived(usage.limitResetAt ?? refusal?.resetsAt);
 
@@ -302,7 +308,7 @@
       seen = new Set(ids);
       primed = true;
       const last = fresh.at(-1);
-      if (last && local.tabs.active === sessionId && !busyElsewhere()) void focusRequest(last);
+      if (last && scope.tabs.active === sessionId && !busyElsewhere()) void focusRequest(last);
     });
   });
 

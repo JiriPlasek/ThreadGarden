@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { HOLDS_ANNOUNCED_KEY, startAttention } from '../../src/lib/notifications';
-import { setup, summary } from '../layout/harness';
+import { here, setup, summary } from '../layout/harness';
 import type { FakeServer } from '../service/fake-ws';
 
 type ListParams = { place: { kind: string } };
@@ -67,16 +67,17 @@ const start = async (
     });
     o.configure?.(server);
   });
-  const notify = vi.fn(async (title: string, body: string, sessionId: string) => {
-    void [title, body, sessionId];
+  const notify = vi.fn(async (title: string, body: string, chatKey: string) => {
+    void [title, body, chatKey];
   });
   if (o.notifications === false) {
     env.app.settings.value = { ...env.app.settings.value, notifications: false };
   }
   const stop = startAttention({
-    api: env.client,
+    scopes: env.app.scopes,
+    machines: env.app.machines,
     settings: env.app.settings,
-    tabs: env.app.scopes.local().tabs,
+    tabs: env.app.tabs,
     places: env.app.places,
     notify,
     setTrayNeedsYou: vi.fn(async () => {}),
@@ -97,7 +98,7 @@ describe('"Back from hold" notifications (v1.2 §3)', () => {
     blur();
     env.server.push('chatBackFromHold', back('h1'));
     await vi.waitFor(() => expect(env.notify).toHaveBeenCalledTimes(1));
-    expect(env.notify.mock.calls[0]).toEqual(['Chat h1 is back from hold', 'alpha', 'h1']);
+    expect(env.notify.mock.calls[0]).toEqual(['Chat h1 is back from hold', 'alpha', here('h1')]);
 
     // On screen in a focused window: no notification.
     env.app.tabs.openTab('h2');
@@ -127,7 +128,11 @@ describe('"Back from hold" notifications (v1.2 §3)', () => {
     await vi.waitFor(() => expect(env.notify).toHaveBeenCalledTimes(1));
     await settle();
     expect(env.notify).toHaveBeenCalledTimes(1);
-    expect(env.notify.mock.calls[0]).toEqual(['Chat h1 and 4 more are back from hold', '', 'h1']);
+    expect(env.notify.mock.calls[0]).toEqual([
+      'Chat h1 and 4 more are back from hold',
+      '',
+      here('h1'),
+    ]);
     expect(saves()).toBe(before + 1);
     expect(store.get(HOLDS_ANNOUNCED_KEY)).toEqual(['h1', 'h2', 'h3', 'h4', 'h5']);
   });
@@ -161,7 +166,7 @@ describe('"Back from hold" notifications (v1.2 §3)', () => {
     blur();
     await vi.waitFor(() => expect(first.notify).toHaveBeenCalledTimes(1));
     // The project's name comes from the chat's folder while projects are not loaded.
-    expect(first.notify.mock.calls[0]).toEqual(['Chat h1 is back from hold', 'alpha', 'h1']);
+    expect(first.notify.mock.calls[0]).toEqual(['Chat h1 is back from hold', 'alpha', here('h1')]);
     await vi.waitFor(() => expect(store.get(HOLDS_ANNOUNCED_KEY)).toEqual(['h1']));
 
     // Reconnect: nothing new.
@@ -179,7 +184,7 @@ describe('"Back from hold" notifications (v1.2 §3)', () => {
     backIds.add('h2');
     const second = await start({ store, backIds });
     await vi.waitFor(() => expect(second.notify).toHaveBeenCalledTimes(1));
-    expect(second.notify.mock.calls[0]![2]).toBe('h2');
+    expect(second.notify.mock.calls[0]![2]).toBe(here('h2'));
     await vi.waitFor(() =>
       expect([...((store.get(HOLDS_ANNOUNCED_KEY) as string[]) ?? [])].sort()).toEqual([
         'h1',

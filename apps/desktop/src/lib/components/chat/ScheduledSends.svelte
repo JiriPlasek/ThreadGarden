@@ -5,7 +5,7 @@
   import ScheduleDialog from '#lib/components/composer/ScheduleDialog.svelte';
   import { fullTime } from '#lib/format/time.js';
   import { sendTimeText } from '#lib/format/usage.js';
-  import { useApp } from '#lib/state/context.js';
+  import { useApp, useScope } from '#lib/state/context.js';
   import type { SendWhen } from '#lib/state/scheduled.svelte.js';
   import { cn } from '#lib/utils.js';
 
@@ -25,7 +25,9 @@
     onEdit: (send: ScheduledSend) => void;
   } = $props();
 
-  const { scheduled, usage } = useApp();
+  const { usage } = useApp();
+  /** The chat's machine keeps its scheduled messages. */
+  const { scheduled } = useScope();
 
   const items = $derived(scheduled.forChat(sessionId));
   let error = $state<string | null>(null);

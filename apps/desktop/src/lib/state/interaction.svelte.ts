@@ -20,8 +20,15 @@ export type ModelChoice = Result<'chat.models'>[number];
 export class InteractionState {
   /** `system.status`; null until loaded. */
   status = $state.raw<SystemStatus | null>(null);
-  /** The new-chat dialog; `cwd` preselects a project folder. */
-  newChat = $state<{ open: boolean; cwd: string | null }>({ open: false, cwd: null });
+  /**
+   * The new-chat dialog; `cwd` preselects a project folder of `machineId`'s
+   * (null: the selected project's machine, else This PC).
+   */
+  newChat = $state<{ open: boolean; cwd: string | null; machineId: string | null }>({
+    open: false,
+    cwd: null,
+    machineId: null,
+  });
   /** The Ctrl/Cmd+K quick switcher (spec §6.1). */
   switcherOpen = $state(false);
   /** Threadgarden's settings dialog (spec §6.5). */
@@ -142,12 +149,12 @@ export class InteractionState {
     return true;
   };
 
-  openNewChat = (cwd: string | null = null): void => {
-    this.newChat = { open: true, cwd };
+  openNewChat = (cwd: string | null = null, machineId: string | null = null): void => {
+    this.newChat = { open: true, cwd, machineId };
   };
 
   closeNewChat = (): void => {
-    this.newChat = { open: false, cwd: this.newChat.cwd };
+    this.newChat = { ...this.newChat, open: false };
   };
 }
 

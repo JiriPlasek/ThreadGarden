@@ -16,7 +16,6 @@ import { places, PlacesState, type Place } from './places.svelte';
 import { machineIdOf } from './refs';
 import { scheduled, ScheduledState } from './scheduled.svelte';
 import { sessions, SessionsState } from './sessions.svelte';
-import type { SettingsState } from './settings.svelte';
 import { tabs, type MachineTabs, type TabsState } from './tabs.svelte';
 import { yourTurn, YourTurnState } from './your-turn.svelte';
 
@@ -38,11 +37,6 @@ type ScopeStores = Omit<MachineScope, 'machineId' | 'api' | 'tabs'>;
 
 export type ScopeDeps = {
   tabs: TabsState;
-  /**
-   * Unused for now: reserved for the machine's notifications (one attention
-   * watcher per scope comes with remote chats, Task 13).
-   */
-  settings: SettingsState;
   /** What the agents strip lists ("Your turn" reads this machine's rows of it). */
   agents?: Pick<AgentsState, 'items'>;
   chats?: ChatsOptions;

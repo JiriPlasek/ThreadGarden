@@ -11,7 +11,8 @@
   import { clockTime } from '#lib/format/usage.js';
   import { readDroppedImage } from '#lib/native.js';
   import { ariaKeyShortcuts, formatCombos, shortcut } from '#lib/shortcuts.js';
-  import { useApp } from '#lib/state/context.js';
+  import { useApp, useScope } from '#lib/state/context.js';
+  import { machineNameOf } from '#lib/state/machines.svelte.js';
   import type { FileSuggestion, SlashCommand } from '#lib/state/interaction.svelte.js';
   import type { SendWhen } from '#lib/state/scheduled.svelte.js';
   import Attachments from './Attachments.svelte';
@@ -118,7 +119,15 @@
     textarea?: HTMLTextAreaElement | null;
   } = $props();
 
-  const { settings, interaction } = useApp();
+  const { settings, scopes, machines } = useApp();
+  /** The machine the message goes to: its drafts, `@` files and slash commands. */
+  const scope = useScope();
+  const { interaction } = scope;
+  /**
+   * Another machine's chat: files dropped from This PC are not there, so they
+   * are not mentioned (images still go, as bytes).
+   */
+  const elsewhere = scope !== scopes.local();
   const uid = $props.id();
   const listId = `${uid}-list`;
 
@@ -457,10 +466,17 @@
     'unsupported-type': 'is not a PNG, JPEG, GIF or WebP image',
   };
 
-  /** Native drop (desktop app): images attached through the shell, other files mentioned. */
+  /**
+   * Native drop (desktop app): images attached through the shell, other files
+   * mentioned (in This PC's chats; another machine's cannot reach them).
+   */
   const dropPaths = async (paths: string[]): Promise<void> => {
     const others = paths.filter((p) => !imageTypeOfPath(p));
-    if (others.length > 0) await insertText(others.map((p) => mentionForPath(p, cwd)).join(''));
+    if (others.length > 0 && elsewhere) {
+      notice = `Files from This PC can't be attached to chats on ${machineNameOf(machines, scope.machineId)}.`;
+    } else if (others.length > 0) {
+      await insertText(others.map((p) => mentionForPath(p, cwd)).join(''));
+    }
     const problems: string[] = [];
     const read: ImageRef[] = [];
     for (const p of paths.filter((x) => imageTypeOfPath(x))) {

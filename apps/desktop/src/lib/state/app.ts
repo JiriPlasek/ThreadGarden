@@ -43,19 +43,20 @@ const wire = (): void => {
   wired = true;
   connection.init(client);
   // This PC's places, sessions, chats, buckets, scheduled sends and "Your turn".
-  wireScope(localScope, { tabs, settings, agents, scopes });
+  wireScope(localScope, { tabs, agents, scopes });
   tabs.init(client, { localMachineId: () => localScope.machineId });
   settings.init(client);
   agents.init(client, { machineId: () => localScope.machineId });
   lifecycle.init(client, agents, connection, connectTo);
   usage.init(client);
   analytics.init(client);
-  startAttention({ api: client, settings, tabs: localScope.tabs, places });
+  // Notifications: a watcher per machine (the scopes below), one tray badge (the sum).
+  startAttention({ scopes, machines, settings, tabs, places });
   // Paired machines: a scope each, on its relay client through the local service.
   // Needs you, Running, the bucket counts and the agents strip add up every machine's.
   places.follow(scopes);
   agents.follow(scopes);
-  scopes.follow(machines, tabs, (m) => createScope(m.id, m.client, { tabs, settings, agents }));
+  scopes.follow(machines, tabs, (m) => createScope(m.id, m.client, { tabs, agents }));
   machines.init(client, client, {
     relayUrl: (id) => relayUrl(current?.port ?? 0, id),
     localToken: () => current?.token ?? '',

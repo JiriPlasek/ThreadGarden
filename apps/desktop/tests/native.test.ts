@@ -61,7 +61,7 @@ describe('native (browser stubs)', () => {
     unlisten();
     await expect(native.pickFolder()).resolves.toBeNull();
     await expect(native.setTrayNeedsYou(3)).resolves.toBeUndefined();
-    await expect(native.notify('t', 'b', 's1')).resolves.toBeUndefined();
+    await expect(native.notify('t', 'b', 'machine-1/s1')).resolves.toBeUndefined();
     await expect(native.setAutostart(true)).resolves.toBeUndefined();
     await expect(native.quitApp()).resolves.toBeUndefined();
   });

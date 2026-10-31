@@ -22,15 +22,26 @@
  * The notification plugin cannot report clicks (ruling R26). Clicking a
  * notification focuses Threadgarden, so when the window gains focus within
  * `FOCUS_OPENS_WITHIN_MS` of a notification, Threadgarden selects "Needs you" and
- * opens the waiting chat if it is the only one.
+ * opens the waiting chat if it is the only one (on any machine).
+ *
+ * Remote machines: every machine's scope gets a watcher of its own (started
+ * when the machine appears, stopped when it goes), so every machine's chats
+ * notify; a notification is known by its chat key (`machineId/sessionId`), and
+ * with more than one machine one from another machine names it first
+ * ("Ubuntu PC · tg-cli · needs permission"). The window's focus, the
+ * notification click and the tray badge are watched once: the badge shows This
+ * PC's Needs you count, which already adds up every machine's.
  */
 import type { ChatStatus, ChatSummary } from '@threadgarden/protocol';
 import { baseName } from './components/layout/chat-info';
 import { notify as nativeNotify, setTrayNeedsYou as nativeSetTray } from './native';
-import { quietly, type Api } from './state/api';
+import { quietly } from './state/api';
+import { machineLabel, type MachinesState } from './state/machines.svelte';
 import type { PlacesState } from './state/places.svelte';
+import { chatKey, type ChatRef } from './state/refs';
+import type { MachineScope, Scopes } from './state/scope';
 import type { SettingsState } from './state/settings.svelte';
-import type { MachineTabs } from './state/tabs.svelte';
+import type { TabsState } from './state/tabs.svelte';
 
 export const FOCUS_OPENS_WITHIN_MS = 30_000;
 
@@ -44,11 +55,18 @@ export const BACK_FROM_HOLD_BATCH_MS = 500;
 const IN_USE: ReadonlySet<ChatStatus> = new Set(['needsYou', 'working']);
 
 export type AttentionDeps = {
-  api: Api;
+  /** Every machine's stores: one watcher per scope, for as long as the scope is there. */
+  scopes: Pick<Scopes, 'observe' | 'all' | 'local'>;
+  /** Names the machine of a notification from another machine. */
+  machines: Pick<MachinesState, 'get' | 'several'>;
   settings: Pick<SettingsState, 'value'>;
-  /** The machine's view of the tabs (session ids of that machine). */
-  tabs: Pick<MachineTabs, 'active' | 'openTab'>;
-  places: Pick<PlacesState, 'select' | 'subscribeCounts' | 'projects'>;
+  /** The tabs (chat keys). */
+  tabs: Pick<TabsState, 'active' | 'openTab'>;
+  /**
+   * This PC's places: where a notification click selects Needs you, and the
+   * tray count (Needs you summed across machines).
+   */
+  places: Pick<PlacesState, 'select' | 'subscribeCounts'>;
   notify?: typeof nativeNotify;
   setTrayNeedsYou?: typeof nativeSetTray;
   now?: () => number;
@@ -57,49 +75,55 @@ export type AttentionDeps = {
   backFromHoldBatchMs?: number;
 };
 
-/** Starts watching; returns a function that stops. */
+/** Starts watching every machine; returns a function that stops. */
 export const startAttention = (deps: AttentionDeps): (() => void) => {
-  const { api, settings, tabs, places } = deps;
-  const notify = deps.notify ?? nativeNotify;
+  const { scopes, tabs, places } = deps;
   const setTray = deps.setTrayNeedsYou ?? nativeSetTray;
   const now = deps.now ?? Date.now;
   const win = deps.win ?? window;
   const doc = win.document;
 
-  let focused = doc.visibilityState !== 'hidden' && doc.hasFocus();
-  let reported: boolean | null = null;
-  let notified: { sessionId: string; at: number } | null = null;
+  const shared: AttentionShared = {
+    focused: doc.visibilityState !== 'hidden' && doc.hasFocus(),
+    notifiedAt: null,
+    reporters: new Set(),
+  };
   let badge = -1;
 
-  const report = (force = false): void => {
-    if (!force && reported === focused) return;
-    if (api.status !== 'open') return; // sent again on the next hello
-    reported = focused;
-    quietly(api.request('ui.visibility', { visible: focused }));
-  };
-
-  /** The user came back soon after a notification: show what is waiting. */
+  /** The user came back soon after a notification: show what is waiting, on every machine. */
   const openNotified = async (): Promise<void> => {
-    const n = notified;
-    notified = null;
-    if (!n || now() - n.at > FOCUS_OPENS_WITHIN_MS) return;
+    const at = shared.notifiedAt;
+    shared.notifiedAt = null;
+    if (at === null || now() - at > FOCUS_OPENS_WITHIN_MS) return;
     // Finished chats are listed there too, below the ones waiting on an answer.
     places.select({ kind: 'needsYou' });
-    const { items } = await api.request('sessions.list', {
-      place: { kind: 'needsYou' },
-      limit: 2,
-    });
-    if (items.length === 1) tabs.openTab(items[0]!.sessionId);
+    const lists = await Promise.all(
+      scopes
+        .all()
+        .filter((s) => s.api.status === 'open')
+        .map(async (s): Promise<ChatRef[]> => {
+          const { items } = await s.api.request('sessions.list', {
+            place: { kind: 'needsYou' },
+            limit: 2,
+          });
+          return items.map((c) => ({ machineId: s.machineId, sessionId: c.sessionId }));
+        }),
+    );
+    const waiting = lists.flat();
+    if (waiting.length === 1) tabs.openTab(waiting[0]!);
   };
 
+  const reportAll = (): void => {
+    for (const report of shared.reporters) report();
+  };
   const onFocus = (): void => {
-    focused = true;
-    report();
+    shared.focused = true;
+    reportAll();
     quietly(openNotified());
   };
   const onBlur = (): void => {
-    focused = false;
-    report();
+    shared.focused = false;
+    reportAll();
   };
   const onVisibility = (): void => {
     if (doc.visibilityState === 'hidden') onBlur();
@@ -108,6 +132,63 @@ export const startAttention = (deps: AttentionDeps): (() => void) => {
   win.addEventListener('focus', onFocus);
   win.addEventListener('blur', onBlur);
   doc.addEventListener('visibilitychange', onVisibility);
+
+  const offScopes = scopes.observe((scope) => watch(scope, deps, shared));
+  const offTray = places.subscribeCounts((counts) => {
+    if (counts.needsYou === badge) return;
+    badge = counts.needsYou;
+    quietly(setTray(badge));
+  });
+
+  return () => {
+    win.removeEventListener('focus', onFocus);
+    win.removeEventListener('blur', onBlur);
+    doc.removeEventListener('visibilitychange', onVisibility);
+    offScopes();
+    offTray();
+  };
+};
+
+/** What the watchers of every machine share: the window's focus and the last notification. */
+type AttentionShared = {
+  focused: boolean;
+  /** When the last notification went out (any machine's), until the window is focused. */
+  notifiedAt: number | null;
+  /** Each machine's `ui.visibility` reporter, run when the focus changes. */
+  reporters: Set<(force?: boolean) => void>;
+};
+
+/** One machine's notifications; returns a function that stops them. */
+const watch = (scope: MachineScope, deps: AttentionDeps, shared: AttentionShared): (() => void) => {
+  const { api, places } = scope;
+  const { settings, tabs, machines } = deps;
+  const notify = deps.notify ?? nativeNotify;
+  const now = deps.now ?? Date.now;
+  const local = scope === deps.scopes.local();
+
+  let reported: boolean | null = null;
+  const report = (force = false): void => {
+    if (!force && reported === shared.focused) return;
+    if (api.status !== 'open') return; // sent again on the next hello
+    reported = shared.focused;
+    quietly(api.request('ui.visibility', { visible: shared.focused }));
+  };
+  shared.reporters.add(report);
+
+  const keyOf = (sessionId: string): string => chatKey({ machineId: scope.machineId, sessionId });
+  /** The chat is the active tab of a focused window: already in front of the user. */
+  const visible = (sessionId: string): boolean =>
+    shared.focused && tabs.active === keyOf(sessionId);
+  /** With more than one machine, another machine's notification names it first. */
+  const body = (text: string): string => {
+    const m = local || !machines.several ? undefined : machines.get(scope.machineId);
+    if (!m) return text;
+    return text ? `${machineLabel(m)} · ${text}` : machineLabel(m);
+  };
+  const say = (title: string, text: string, sessionId: string): void => {
+    shared.notifiedAt = now();
+    quietly(notify(title, body(text), keyOf(sessionId)));
+  };
 
   // ── v1.2 §3: back from hold ──
   type Back = { sessionId: string; title: string; projectName: string };
@@ -135,7 +216,6 @@ export const startAttention = (deps: AttentionDeps): (() => void) => {
   const save = async (): Promise<void> => {
     await api.request('uiState.set', { key: HOLDS_ANNOUNCED_KEY, value: [...announced] });
   };
-  const visible = (sessionId: string): boolean => focused && tabs.active === sessionId;
   const projectName = (s: Pick<ChatSummary, 'projectId' | 'cwd'>): string =>
     places.projects.find((p) => p.projectId === s.projectId)?.displayName ?? baseName(s.cwd);
 
@@ -144,12 +224,11 @@ export const startAttention = (deps: AttentionDeps): (() => void) => {
     const shown = chats.filter((c) => !visible(c.sessionId));
     const first = shown[0];
     if (!enabled || !first) return;
-    notified = { sessionId: first.sessionId, at: now() };
     const title =
       shown.length === 1
         ? `${first.title} is back from hold`
         : `${first.title} and ${shown.length - 1} more are back from hold`;
-    quietly(notify(title, shown.length === 1 ? first.projectName : '', first.sessionId));
+    say(title, shown.length === 1 ? first.projectName : '', first.sessionId);
   };
 
   /** Live returns gathered for one notification and one save. */
@@ -171,8 +250,11 @@ export const startAttention = (deps: AttentionDeps): (() => void) => {
     const [, needsYou, current] = await Promise.all([
       load(),
       api.request('sessions.list', { place: { kind: 'needsYou' }, limit: BACK_FROM_HOLD_LIMIT }),
-      // Settings may not be loaded yet on the first connect.
-      api.request('settings.get', {}).catch(() => settings.value),
+      // Settings (This PC's) may not be loaded yet on the first connect.
+      deps.scopes
+        .local()
+        .api.request('settings.get', {})
+        .catch(() => settings.value),
     ]);
     // Ids missing from the list are kept: the chat may be busy, or beyond the list's end.
     const fresh = needsYou.items.filter(
@@ -221,39 +303,29 @@ export const startAttention = (deps: AttentionDeps): (() => void) => {
     api.on('needsYou', (e) => {
       if (!settings.value.notifications) return;
       // Already in front of the user: the chat is the active tab of a focused window.
-      if (focused && tabs.active === e.sessionId) return;
-      notified = { sessionId: e.sessionId, at: now() };
-      quietly(notify(e.title, `${e.projectName} · ${e.what}`, e.sessionId));
+      if (visible(e.sessionId)) return;
+      say(e.title, `${e.projectName} · ${e.what}`, e.sessionId);
     }),
     // v1.3 B: a scheduled message went out (the notifications setting, like Needs you).
     api.on('scheduledSent', (e) => {
       if (!settings.value.notifications) return;
-      if (focused && tabs.active === e.sessionId) return;
-      notified = { sessionId: e.sessionId, at: now() };
-      const body = e.late
+      if (visible(e.sessionId)) return;
+      const text = e.late
         ? `${e.projectName ? `${e.projectName} · ` : ''}sent late: Threadgarden was not running when it was due`
         : e.projectName;
-      quietly(notify(`Scheduled message sent to ${e.title}`, body, e.sessionId));
+      say(`Scheduled message sent to ${e.title}`, text, e.sessionId);
     }),
     api.on('chatFinished', (e) => {
       if (!settings.value.notifyOnFinish) return;
-      if (focused && tabs.active === e.sessionId) return;
-      notified = { sessionId: e.sessionId, at: now() };
-      quietly(notify(`${e.title} finished — your turn`, e.projectName, e.sessionId));
-    }),
-    places.subscribeCounts((counts) => {
-      if (counts.needsYou === badge) return;
-      badge = counts.needsYou;
-      quietly(setTray(badge));
+      if (visible(e.sessionId)) return;
+      say(`${e.title} finished — your turn`, e.projectName, e.sessionId);
     }),
   ];
   report(true);
   if (api.status === 'open') serially(catchUp);
 
   return () => {
-    win.removeEventListener('focus', onFocus);
-    win.removeEventListener('blur', onBlur);
-    doc.removeEventListener('visibilitychange', onVisibility);
+    shared.reporters.delete(report);
     for (const off of offs) off();
     clearTimeout(batchTimer);
   };

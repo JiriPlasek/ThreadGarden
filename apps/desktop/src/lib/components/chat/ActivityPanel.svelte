@@ -7,7 +7,7 @@
   import IconButton from '#lib/components/layout/IconButton.svelte';
   import { fullTime } from '#lib/format/time.js';
   import { taskEnded, type ChatState } from '#lib/state/chats.svelte.js';
-  import { useApp } from '#lib/state/context.js';
+  import { useScope } from '#lib/state/context.js';
   import { cn } from '#lib/utils.js';
   import { shortModel, taskRows, type TaskRow } from './activity';
   import { elapsed, tokens } from './format';
@@ -40,7 +40,8 @@
     onShowAgent: (toolUseId: string) => void;
   } = $props();
 
-  const { chats } = useApp();
+  /** The chat's machine's chats (stopping a task goes there). */
+  const { chats } = useScope();
 
   /** A prompt longer than this (or than PROMPT_LINES lines) is clamped behind "Show all". */
   const PROMPT_CHARS = 240;

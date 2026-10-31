@@ -200,15 +200,16 @@ describe('Needs you, Running and the agents strip across machines', () => {
       onHold: 1,
       archived: 2,
     });
-    const { app, client, remote } = await setupTwoMachines({
+    const { app, remote } = await setupTwoMachines({
       configure: (s) => (s.handlers['places.counts'] = counts(2, 1)),
       configureRemote: (s) => (s.handlers['places.counts'] = counts(3, 4)),
     });
     const setTrayNeedsYou = vi.fn(async () => {});
     const stop = startAttention({
-      api: client,
+      scopes: app.scopes,
+      machines: app.machines,
       settings: app.settings,
-      tabs: app.scopes.local().tabs,
+      tabs: app.tabs,
       places: app.places,
       notify: vi.fn(async () => {}),
       setTrayNeedsYou,
