@@ -1,6 +1,5 @@
 [Unit]
 Description=Threadgarden headless service
-After=network-online.target
 
 [Service]
 ExecStart=%h/.local/share/threadgarden-headless/current/bin/threadgarden serve --headless

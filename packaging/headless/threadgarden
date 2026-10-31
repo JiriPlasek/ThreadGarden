@@ -4,12 +4,12 @@
 set -eu
 self=$0
 while [ -L "$self" ]; do
-  dir=$(cd "$(dirname "$self")" && pwd)
+  dir=$(CDPATH= cd -- "$(dirname "$self")" && pwd)
   target=$(readlink "$self")
   case $target in
     /*) self=$target ;;
     *) self=$dir/$target ;;
   esac
 done
-here=$(cd "$(dirname "$self")" && pwd)
+here=$(CDPATH= cd -- "$(dirname "$self")" && pwd)
 exec "$here/node" --disable-warning=ExperimentalWarning "$here/../lib/service.mjs" "$@"

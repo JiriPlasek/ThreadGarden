@@ -29,6 +29,11 @@ jobs:
       - name: Build the headless Linux package
         if: runner.os == 'Linux'
         run: pnpm build:headless
+      - name: Check the headless package
+        if: runner.os == 'Linux'
+        run: |
+          test "$(tar -tvzf dist-headless/*.tar.gz | grep -cE '^-rwx.*(bin/node|bin/threadgarden|install.sh)$')" = 3
+          (cd dist-headless && sha256sum -c *.sha256)
       - uses: actions/upload-artifact@v4
         if: runner.os == 'Linux'
         with:
