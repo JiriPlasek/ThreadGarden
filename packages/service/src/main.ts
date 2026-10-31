@@ -376,6 +376,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         titleChanged: (id) => cat.titleChanged(id),
         emit: (e) => broadcastRef.fn(e),
         debug: (m) => log.debug(m),
+        now: clock,
       });
       titles = chatTitles;
       titlesRef.current = chatTitles;

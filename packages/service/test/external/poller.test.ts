@@ -113,6 +113,24 @@ describe('ExternalPoller', () => {
     expect(poller.snapshot().map((e) => e.sessionId)).toEqual(['979fd9f6-4f60', undefined]);
   });
 
+  it('reads its own ids after claude agents answered (a session started meanwhile is left out)', async () => {
+    const own: string[] = [];
+    let answer: (s: string) => void = () => {};
+    const poller = new ExternalPoller(
+      () => new Promise<string>((r) => (answer = r)),
+      // A fresh set per call, like the service's (live chats + title queries now).
+      () => new Set(own),
+      () => {},
+    );
+    const polled = poller.refresh();
+    await Promise.resolve();
+    // pahub starts a session (e.g. a title query) while `claude agents` runs.
+    own.push('525ce1a7');
+    answer(JSON.stringify(SAMPLE));
+    await polled;
+    expect(poller.snapshot().map((e) => e.sessionId)).not.toContain('525ce1a7');
+  });
+
   it('emits external.changed only on change', async () => {
     let payload: unknown[] = SAMPLE;
     const { poller, events } = make(async () => JSON.stringify(payload));

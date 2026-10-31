@@ -31,6 +31,11 @@ export const TITLE_SYSTEM_PROMPT =
 export const TITLE_INPUT_MAX = 2_000;
 export const TITLE_TIMEOUT_MS = 20_000;
 export const TITLE_CONCURRENCY = 2;
+/**
+ * How long a finished title query still counts as pahub's own session: its
+ * `claude` process may take seconds to exit and stay in `claude agents` meanwhile.
+ */
+export const TITLE_GHOST_GRACE_MS = 15_000;
 
 /** A provisional title cuts at a sentence end only after this many characters. */
 const MIN_SENTENCE = 16;
@@ -161,6 +166,8 @@ export type ChatTitlesDeps = {
   timers?: Pick<Timers, 'setTimeout' | 'clearTimeout'>;
   timeoutMs?: number;
   concurrency?: number;
+  /** Clock for `TITLE_GHOST_GRACE_MS`; default `Date.now`. */
+  now?: () => number;
 };
 
 const unrefTimers: Pick<Timers, 'setTimeout' | 'clearTimeout'> = {
@@ -180,6 +187,8 @@ export class ChatTitles {
   private readonly queue: (() => Promise<void>)[] = [];
   /** Running generations → the session id of their one-shot query, once it is sent. */
   private readonly running = new Map<AbortController, string | undefined>();
+  /** Finished title queries → when they settled (see `TITLE_GHOST_GRACE_MS`). */
+  private readonly recent = new Map<string, number>();
   /** Routing reasons already logged (Ruling R33: once each). */
   private readonly logged = new Set<string>();
   private readonly timers: Pick<Timers, 'setTimeout' | 'clearTimeout'>;
@@ -232,11 +241,18 @@ export class ChatTitles {
   }
 
   /**
-   * Session ids of the title queries running now. Claude Code lists their
-   * processes among its sessions; they are pahub's own, never external chats.
+   * Session ids of the title queries running now, or finished less than
+   * `TITLE_GHOST_GRACE_MS` ago (their process may still be exiting). Claude
+   * Code lists those processes among its sessions; they are pahub's own,
+   * never external chats.
    */
   runningIds(): string[] {
-    return [...this.running.values()].filter((id): id is string => id !== undefined);
+    const now = (this.deps.now ?? Date.now)();
+    for (const [id, at] of this.recent) {
+      if (now - at >= TITLE_GHOST_GRACE_MS) this.recent.delete(id);
+    }
+    const running = [...this.running.values()].filter((id): id is string => id !== undefined);
+    return [...running, ...this.recent.keys()];
   }
 
   /** Aborts running generations and drops queued ones (service shutdown). */
@@ -313,6 +329,8 @@ export class ChatTitles {
       this.deps.debug?.(`title of ${sessionId}: ${errorText(err)}`);
     } finally {
       if (timer !== undefined) this.timers.clearTimeout(timer);
+      const queryId = this.running.get(abort);
+      if (queryId !== undefined) this.recent.set(queryId, (this.deps.now ?? Date.now)());
       this.running.delete(abort);
       this.pump();
     }

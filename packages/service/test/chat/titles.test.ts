@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   ChatTitles,
   TITLE_CONCURRENCY,
+  TITLE_GHOST_GRACE_MS,
   TITLE_INPUT_MAX,
   TITLE_MODEL,
   TITLE_SYSTEM_PROMPT,
@@ -192,6 +193,7 @@ beforeEach(() => {
     debug: (m) => debug.push(m),
     routedElsewhere: async () => routed,
     timers,
+    now: timers.now,
   });
 });
 afterEach(() => {
@@ -414,6 +416,8 @@ describe('ChatTitles', () => {
     model.calls[0]!.resolve('Title A');
     model.calls[1]!.reject(new Error('fail'));
     await flush();
+    // Kept while their processes may still exit (fix round 2), then gone.
+    timers.advance(TITLE_GHOST_GRACE_MS);
     expect(titles.runningIds()).toEqual([]);
   });
 
@@ -425,5 +429,28 @@ describe('ChatTitles', () => {
     expect(model.calls).toHaveLength(0);
     // The provisional title stays.
     expect(db.metaOf('a').autoTitle).toBe('Message for a');
+  });
+
+  // ── fix round 2 ──
+
+  it(`keeps a finished query's id in runningIds for ${TITLE_GHOST_GRACE_MS} ms (its process is still exiting)`, async () => {
+    expect(TITLE_GHOST_GRACE_MS).toBe(15_000);
+    titles.started('a', '/w', 'Message for a');
+    titles.started('b', '/w', 'Message for b');
+    titles.turnEnded('a');
+    titles.turnEnded('b');
+    await flush();
+    const [ida, idb] = model.calls.map((c) => c.o.sessionId) as [string, string];
+    model.calls[0]!.resolve('Title A');
+    await flush();
+    timers.advance(10_000);
+    model.calls[1]!.reject(new Error('fail'));
+    await flush();
+    // Both settled; both processes may still be listed by `claude agents`.
+    expect(titles.runningIds().sort()).toEqual([ida, idb].sort());
+    timers.advance(TITLE_GHOST_GRACE_MS - 10_000);
+    expect(titles.runningIds()).toEqual([idb]);
+    timers.advance(10_000);
+    expect(titles.runningIds()).toEqual([]);
   });
 });
