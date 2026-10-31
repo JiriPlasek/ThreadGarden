@@ -314,6 +314,27 @@ live, `chat.send` runs the command again (fresh, not the last poll):
 with fuzzysort. Mentions are sent as plain `@path` text and expanded by Claude
 Code exactly as in the terminal (verified below).
 
+**Settings** are one row per key in `pahub.db`, read back over the
+schema defaults (`Db.getSettings`). Each stored value is checked on its own:
+an invalid or corrupt one reads as its default and never resets the others,
+and the v1.3 appearance fields read an unknown value (a newer accent) as
+their default. Patches (`settings.set`) are validated strictly.
+
+**Appearance (v1.3).** The UI applies the theme as `data-theme` on `<html>`
+and the appearance settings next to it: `data-accent` (graphite, the
+pre-v1.3 neutral look and the default, or blue, teal, green, violet, rose,
+amber), `data-light-style` (default, warm), `data-dark-style` (default, dim,
+midnight) and `data-ui-font` (inter, system); a custom code font becomes
+`--font-mono` on `<html>`, its names reduced to letters, digits, spaces and
+`_-.` (`sanitizeFontFamily`, in the protocol) and quoted. The token
+overrides are in `apps/desktop/src/routes/themes.css`; the defaults have
+none, so the default look is the stylesheet as it was. The UI keeps a copy of
+these settings in `localStorage`: `app.html` applies it before the first
+paint, and the service's settings replace it once connected. A unit test
+cascades the real stylesheets for every theme, style and accent and checks
+WCAG AA (4.5:1) for text pairs and the primary button; the one shortfall is
+the unchanged default light look's muted text on the muted grey (4.34:1).
+
 **Fork** calls the SDK's `forkSession(id, {upToMessageId})`, which writes a new
 session file next to the original and leaves the original untouched; the
 fork is indexed at once so it can be opened.
