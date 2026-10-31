@@ -1,6 +1,6 @@
 /**
  * Scheduled sends (v1.3 B, spec §3): messages the service sends to a chat
- * later, stored in `pahub.db` (`scheduled_sends`) so they survive restarts.
+ * later, stored in `threadgarden.db` (`scheduled_sends`) so they survive restarts.
  *
  * A due send goes out through the same path as `chat.send` (resuming the
  * chat when Threadgarden is not running it). A chat's sends go out in order, one

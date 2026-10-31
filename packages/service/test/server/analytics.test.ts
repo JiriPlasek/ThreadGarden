@@ -94,7 +94,7 @@ describe('analytics.get', () => {
     await svc?.close();
     svc = undefined;
     // What an older Threadgarden left: the same index without statistics.
-    const db = openDb(join(dir, 'data', 'pahub.db'));
+    const db = openDb(join(dir, 'data', 'threadgarden.db'));
     for (const t of STATS_TABLES) {
       db.raw.exec(`DELETE FROM ${t}`);
     }

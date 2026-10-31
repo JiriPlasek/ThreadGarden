@@ -22,6 +22,7 @@ import { ProjectIcons, type FoundIcon } from './history/project-icons.js';
 import { createQuickSearch } from './history/search.js';
 import { watchProjects } from './history/watcher.js';
 import { createLogger, type Logger } from './logger.js';
+import { DB_FILE, migrateDataDir } from './migrate-data-dir.js';
 import type { AgentAdapter } from './sdk/adapter.js';
 import type { ClaudeFound, ClaudeProblem } from './sdk/claude-path.js';
 import { buildSessionEnv } from './sdk/real-adapter.js';
@@ -47,7 +48,7 @@ const IN_TURN: ReadonlySet<ChatStatus> = new Set(['working', 'needsYou', 'unknow
 /** Said in a chat whose scheduled message was due while the service was not running. */
 export const LATE_NOTE =
   'This scheduled message went out late: Threadgarden was not running when it was due.';
-/** pahub-db key of the last chat seq epoch (see `nextSeqEpoch`). */
+/** UI-state key (`threadgarden.db`) of the last chat seq epoch (see `nextSeqEpoch`). */
 const SEQ_EPOCH_KEY = 'service:seqEpoch';
 
 type ClaudeStatus = ClaudeFound | ClaudeProblem;
@@ -55,6 +56,13 @@ const errorText = (err: unknown): string => (err instanceof Error ? err.message 
 
 export type StartOptions = {
   dataDir: string;
+  /**
+   * pahub's data dir (spec v1.3 §9; `dataDir` itself for an override): its
+   * `pahub.db` is copied to `threadgarden.db` once, before the service takes
+   * its lock. The start fails while a pahub service still runs there. Unset:
+   * no migration (tests, the mock service).
+   */
+  legacyDataDir?: string;
   /** Number of live sessions; they keep the service alive. Default: the session host's. */
   liveCount?: () => number;
   clock?: () => number;
@@ -63,7 +71,7 @@ export type StartOptions = {
   installSignalHandlers?: boolean;
   logger?: Logger;
   /**
-   * Enables history and chats: opens `pahub.db`, indexes sessions through
+   * Enables history and chats: opens `threadgarden.db`, indexes sessions through
    * this adapter, watches `<claudeConfigDir>/projects`, serves the places API
    * and runs the session host (every `chat.*` method).
    */
@@ -108,7 +116,7 @@ export type StartOptions = {
   port?: number;
   token?: string;
   /**
-   * API-key-only configuration (spec §5.5; build flag `PAHUB_API_KEY_ONLY`):
+   * API-key-only configuration (spec §5.5; build flag `THREADGARDEN_API_KEY_ONLY`):
    * chats start or resume only with an API key set (`auth.setApiKey`), never
    * on the installed Claude Code's own sign-in.
    */
@@ -140,6 +148,9 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   const log = opts.logger ?? createLogger(dataDir);
 
   await mkdir(dataDir, { recursive: true });
+  if (opts.legacyDataDir !== undefined) {
+    await migrateDataDir({ dataDir, legacyDir: opts.legacyDataDir, log: (m) => log.info(m) });
+  }
   const lock = await acquireInstanceLock(dataDir);
   if (!lock) throw new Error('Threadgarden service is already running for this data directory');
 
@@ -225,7 +236,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   const whenLocated = (): Promise<void> => located;
 
   try {
-    if (opts.adapter) db = openDb(path.join(dataDir, 'pahub.db'));
+    if (opts.adapter) db = openDb(path.join(dataDir, DB_FILE));
     const found = claude.current;
     noteProblem(found);
 

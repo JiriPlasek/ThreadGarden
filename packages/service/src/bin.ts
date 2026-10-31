@@ -7,7 +7,7 @@
  * inside `main.ts` would fire there too.
  */
 import os from 'node:os';
-import { resolveClaudeConfigDir, resolveDataDir } from './config.js';
+import { resolveClaudeConfigDir, resolveDataDirs } from './config.js';
 import { installCrashGuards } from './crash-guard.js';
 import { createLogger } from './logger.js';
 import { startService } from './main.js';
@@ -15,13 +15,16 @@ import { findInstalledClaude } from './sdk/claude-path.js';
 import { RealAdapter } from './sdk/real-adapter.js';
 
 const home = os.homedir();
-const dataDir = resolveDataDir(process.env, process.platform, home);
+const { dataDir, legacyDir, deprecation } = resolveDataDirs(process.env, process.platform, home);
 const logger = createLogger(dataDir);
 // Installed first, so even a failure during startup is logged rather than fatal.
 installCrashGuards(process, { log: logger, exit: (code) => process.exit(code) });
+if (deprecation) logger.warn(deprecation);
 
 startService({
   dataDir,
+  // Spec v1.3 §9: pahub's database is copied over once.
+  legacyDataDir: legacyDir,
   claudeConfigDir: resolveClaudeConfigDir(process.env, home),
   adapter: new RealAdapter(),
   locateClaude: findInstalledClaude,
@@ -31,7 +34,11 @@ startService({
   apiKeyOnly: process.env.PAHUB_API_KEY_ONLY === '1',
 })
   .then((svc) => svc.onClosed(() => process.exit(0)))
-  .catch((err: unknown) => {
-    process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
+  .catch(async (err: unknown) => {
+    const message = err instanceof Error ? err.message : String(err);
+    // Nobody reads a detached service's stderr: the log is where this shows.
+    logger.error(`start failed: ${message}`);
+    await logger.flush();
+    process.stderr.write(`${message}\n`);
     process.exit(1);
   });

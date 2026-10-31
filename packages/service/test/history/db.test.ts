@@ -41,7 +41,7 @@ describe('migrations', () => {
   });
 
   it('on upgrade, notifyOnFinish starts as the stored notifications setting (v1.1)', () => {
-    /** A pahub.db as v1.1 found it: the first three steps, `notifications` maybe stored. */
+    /** A database as v1.1 found it: the first three steps, `notifications` maybe stored. */
     const before = (notifications: string | undefined) => {
       const raw = new DatabaseSync(':memory:');
       migrate(raw);

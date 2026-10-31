@@ -4,7 +4,8 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WebSocket } from 'ws';
 import { PROTOCOL_VERSION } from '@threadgarden/protocol';
-import { readDiscovery } from '../src/discovery.js';
+import { acquireInstanceLock, readDiscovery } from '../src/discovery.js';
+import { openDb } from '../src/history/db.js';
 import { createLogger } from '../src/logger.js';
 import { SessionHost } from '../src/chat/session-host.js';
 import { startService } from '../src/main.js';
@@ -69,7 +70,7 @@ describe('startService', () => {
       await new Promise((r) => setTimeout(r, 50));
     }
     expect(counts).toMatchObject({ result: { all: 5, needsYou: 0, running: 0 } });
-    expect(await readdir(join(dir, 'data'))).toContain('pahub.db');
+    expect(await readdir(join(dir, 'data'))).toContain('threadgarden.db');
     await svc.close();
   });
 
@@ -244,16 +245,61 @@ describe('startService', () => {
     await svc.close();
   });
 
+  it('starts on the data of the pahub dir it migrated (spec v1.3 §9)', async () => {
+    const legacy = join(dir, 'pahub');
+    await mkdir(legacy);
+    const old = openDb(join(legacy, 'pahub.db'));
+    old.patchSettings({ autoTitles: false });
+    old.close();
+    const data = join(dir, 'threadgarden');
+    const adapter = generateCorpus({ sessions: 1, projects: 1, bigSessionMessages: 0 });
+    const svc = await startService({
+      dataDir: data,
+      legacyDataDir: legacy,
+      adapter,
+      claudeConfigDir: dir,
+      installSignalHandlers: false,
+    });
+    const settings = (await rpc(svc.port, svc.token, 'settings.get', {})) as {
+      result: { autoTitles: boolean };
+    };
+    expect(settings.result.autoTitles).toBe(false);
+    expect(await readdir(data)).toContain('threadgarden.db');
+    expect(await readdir(legacy)).toContain('MOVED-TO-THREADGARDEN.txt');
+    await svc.close();
+  });
+
+  it('does not start while a pahub service still holds the old dir', async () => {
+    const legacy = join(dir, 'pahub');
+    await mkdir(legacy);
+    openDb(join(legacy, 'pahub.db')).close();
+    const oldService = await acquireInstanceLock(legacy);
+    const data = join(dir, 'threadgarden');
+    await expect(
+      startService({
+        dataDir: data,
+        legacyDataDir: legacy,
+        adapter: generateCorpus({ sessions: 1, projects: 1, bigSessionMessages: 0 }),
+        claudeConfigDir: dir,
+        installSignalHandlers: false,
+      }),
+    ).rejects.toThrow(/older pahub service is still running/);
+    expect(await readdir(data)).not.toContain('threadgarden.db');
+    expect(await readdir(data)).not.toContain('service.lock');
+    expect(await readDiscovery(data)).toBeNull();
+    await oldService!.release();
+  });
+
   it('releases the lock and closes everything when history setup fails', async () => {
     const data = join(dir, 'data');
-    await mkdir(join(data, 'pahub.db'), { recursive: true }); // a directory: openDb must fail
+    await mkdir(join(data, 'threadgarden.db'), { recursive: true }); // a directory: openDb must fail
     const adapter = generateCorpus({ sessions: 1, projects: 1, bigSessionMessages: 0 });
     await expect(
       startService({ dataDir: data, adapter, claudeConfigDir: dir, installSignalHandlers: false }),
     ).rejects.toThrow();
     expect(await readdir(data)).not.toContain('service.lock');
     expect(await readDiscovery(data)).toBeNull();
-    await rm(join(data, 'pahub.db'), { recursive: true });
+    await rm(join(data, 'threadgarden.db'), { recursive: true });
     const svc = await startService({
       dataDir: data,
       adapter,

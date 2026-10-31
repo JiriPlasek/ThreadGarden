@@ -7,7 +7,7 @@
  * Both are parsed leniently: unknown fields are ignored, missing ones
  * tolerated, and a reading that does not look like one is dropped. The latest
  * value per window is kept account-wide (every chat is the same account) and
- * persisted in `pahub.db` (`usage_limits`). The tracker also remembers which
+ * persisted in `threadgarden.db` (`usage_limits`). The tracker also remembers which
  * chats a limit refused, until one of their later turns goes through.
  */
 import type { DatabaseSync } from 'node:sqlite';
@@ -204,7 +204,7 @@ export const USAGE_READ_INTERVAL_MS = 60_000;
 export const USAGE_READ_TIMEOUT_MS = 10_000;
 
 export type UsageTrackerDeps = {
-  /** `pahub.db` (the `usage_limits` table); without it nothing is persisted. */
+  /** `threadgarden.db` (the `usage_limits` table); without it nothing is persisted. */
   raw?: DatabaseSync;
   now: () => number;
   /** The state changed (the `usage.changed` event). */

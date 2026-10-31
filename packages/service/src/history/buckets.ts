@@ -2,7 +2,7 @@
  * v1.2 buckets (design §3): moving chats between Active, On hold and
  * Archived, tidying old chats away, bringing archived chats back when they
  * run again, and ending holds whose time ran out. Buckets are Threadgarden's own
- * metadata (`pahub.db`), never written into Claude Code's data.
+ * metadata (`threadgarden.db`), never written into Claude Code's data.
  */
 import type { Bucket, ChatStatus, EventMsg } from '@threadgarden/protocol';
 import type { ExternalSession } from '../external/poller.js';

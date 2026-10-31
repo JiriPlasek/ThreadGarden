@@ -19,7 +19,7 @@ pub const PROTOCOL_VERSION: u32 = 3;
 /// How long a freshly spawned service may take to write `service.json` and answer `hello`.
 /// The service writes `service.json` as soon as it listens — it looks for Claude Code
 /// (`claude --version`, seconds on some machines) only afterwards — so this covers a
-/// cold Node start and opening `pahub.db`, with room for antivirus scanning.
+/// cold Node start and opening `threadgarden.db`, with room for antivirus scanning.
 pub const START_TIMEOUT: Duration = Duration::from_secs(15);
 const HELLO_TIMEOUT: Duration = Duration::from_secs(2);
 const POLL_INTERVAL: Duration = Duration::from_millis(100);
