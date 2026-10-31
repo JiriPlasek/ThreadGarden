@@ -2,8 +2,10 @@
  * Quick switcher search (Ctrl+K, spec §6.1): fuzzy match over chat titles and
  * project names (`fuzzysort`), merged with full-text hits from the index.
  * v1.2: archived chats are searched too, ranked on their own; their hits are
- * flagged, come after every other hit and only fill the slots those leave
- * (the UI groups them last).
+ * flagged and come after every other hit (the UI groups them last). Up to
+ * `ARCHIVED_SLOTS` places (at most half the limit) are kept for them, so a
+ * word that matches many active chats still shows the archived ones; any
+ * slots the other hits leave go to archived hits too.
  */
 import fuzzysort, { type Prepared } from 'fuzzysort';
 import type { Catalog } from './catalog.js';
@@ -23,6 +25,8 @@ const FTS_SCORE = 0.2;
 /** fuzzysort's default (0.5) drops loose abbreviations like "flxcap"; a switcher should keep them. */
 const THRESHOLD = 0.25;
 const CACHE_MAX = 50_000;
+/** Places kept for archived matches when they exist (fix wave M2). */
+export const ARCHIVED_SLOTS = 3;
 
 export const createQuickSearch = (
   db: Db,
@@ -83,8 +87,10 @@ export const createQuickSearch = (
       return [...hits.values()].sort((a, b) => b.score - a.score).slice(0, n);
     };
 
-    // Every other match first; archived matches fill the slots left.
-    const main = best(false, limit);
-    return [...main, ...best(true, limit - main.length)];
+    // Every other match first; archived matches get their kept slots and any left.
+    const archived = best(true, limit);
+    const kept = Math.min(ARCHIVED_SLOTS, archived.length, Math.floor(limit / 2));
+    const main = best(false, limit - kept);
+    return [...main, ...archived.slice(0, limit - main.length)];
   };
 };

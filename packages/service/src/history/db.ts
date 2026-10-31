@@ -600,6 +600,28 @@ export class Db implements LiveRegistry {
   }
 
   /**
+   * Archived and on-hold chats among `sessionIds` become active, their hold
+   * (until, note) and "back from hold" cleared (Ruling R36: a chat sent a
+   * message). Returns those, in the given order.
+   */
+  activate(sessionIds: readonly string[]): string[] {
+    if (sessionIds.length === 0) return [];
+    const marks = sessionIds.map(() => '?').join(',');
+    const changed = new Set(
+      this.raw
+        .prepare(
+          `UPDATE chat_buckets
+           SET bucket = 'active', hold_until = NULL, hold_note = NULL, back_at = NULL
+           WHERE bucket IN ('archived', 'onHold') AND session_id IN (${marks})
+           RETURNING session_id`,
+        )
+        .all(...sessionIds)
+        .map((r) => r.session_id as string),
+    );
+    return sessionIds.filter((id) => changed.has(id));
+  }
+
+  /**
    * Holds that ran out by `now` end (one statement): those chats become
    * active and "back from hold" as of the hold's end. Returns them in the
    * order they came due.
@@ -642,8 +664,8 @@ export class Db implements LiveRegistry {
   /**
    * Archives (with `dryRun`: only finds) the active indexed chats last
    * modified before `before`, of one project or outside `excludeProjectIds`,
-   * in one transaction. Unread chats, chats back from hold and `excludeIds`
-   * are left alone. Returns the ids.
+   * in one transaction. Pinned chats (Ruling R35), unread chats, chats back
+   * from hold and `excludeIds` are left alone. Returns the ids.
    */
   archiveOlder(o: {
     before: number;
@@ -657,6 +679,7 @@ export class Db implements LiveRegistry {
       bucketIn('b.bucket', ['active']),
       'b.back_at IS NULL',
       `NOT ${UNREAD_SQL}`,
+      'NOT EXISTS (SELECT 1 FROM meta m WHERE m.session_id = s.session_id AND m.pinned = 1)',
     ];
     const params: (string | number)[] = [o.before];
     if (o.projectId !== undefined) {

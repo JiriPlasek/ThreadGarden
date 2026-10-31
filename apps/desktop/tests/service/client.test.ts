@@ -156,6 +156,18 @@ describe('ServiceClient', () => {
     expect(server.sockets.length).toBe(before); // no reconnect loop
   });
 
+  it('a v1.1 service (protocol 1) is incompatible: the restart screen, never broken lists', async () => {
+    // v1.2 added places (active, onHold) and methods a v1.1 service rejects.
+    expect(PROTOCOL_VERSION).toBeGreaterThan(1);
+    server.handlers['hello'] = () => ({ serviceVersion: '0.1.0', protocolVersion: 1 });
+    const p = client.connect('ws://127.0.0.1:1', 'tok');
+    const assertion = expect(p).rejects.toMatchObject({ code: 'INCOMPATIBLE' });
+    await vi.advanceTimersByTimeAsync(0);
+    await assertion;
+    expect(client.status).toBe('incompatible');
+    expect(server.calls('sessions.list')).toHaveLength(0);
+  });
+
   it('reconnects and resyncs after reconnect without duplicates', async () => {
     const chats = new ChatsState();
     chats.init(client, { schedule: (cb) => queueMicrotask(cb) });

@@ -38,13 +38,18 @@ describe('recency sections (v1.2 §2)', () => {
   it('the "now" section holds needs-you, your-turn, working and running chats', () => {
     expect(isNow(summary('a', { status: 'needsYou' }))).toBe(true);
     expect(isNow(summary('a', { status: 'working' }))).toBe(true);
-    expect(isNow(summary('a', { status: 'idle', unread: true }))).toBe(true);
-    expect(isNow(summary('a', { status: 'history', unread: true }))).toBe(true);
+    expect(isNow(summary('a', { status: 'idle', live: true, unread: true }))).toBe(true);
+    const external = { kind: 'interactive', pid: 1 };
+    expect(isNow(summary('a', { status: 'idle', external, unread: true }))).toBe(true);
     // Ruling R29: background tasks running in an idle chat count as Running.
     expect(isNow(summary('a', { status: 'idle', runningTasks: 2 }))).toBe(true);
     expect(isNow(summary('a', { status: 'idle' }))).toBe(false);
     expect(isNow(summary('a', { status: 'paused' }))).toBe(false);
     expect(isNow(summary('a', { status: 'history' }))).toBe(false);
+    // An unread history row keeps its recency section: the service lists it at
+    // its recency position, so a later page never moves it into "Now".
+    expect(isNow(summary('a', { status: 'history', unread: true }))).toBe(false);
+    expect(isNow(summary('a', { status: 'idle', unread: true }))).toBe(false);
     // Forward compatibility: a status from a newer service goes by its recency.
     expect(isNow(summary('a', { status: 'sleeping' as never }))).toBe(false);
   });
@@ -57,7 +62,7 @@ describe('groupChats', () => {
       summary('w1', { status: 'working', lastActivity: ago(1000) }),
       summary('i1', { status: 'idle', live: true, lastActivity: ago(3 * DAY_MS) }),
       summary('h1', { lastActivity: ago(60_000) }),
-      summary('u1', { unread: true, lastActivity: ago(2 * 60_000) }),
+      summary('u1', { status: 'idle', live: true, unread: true, lastActivity: ago(2 * 60_000) }),
       summary('h2', { lastActivity: ago(2 * DAY_MS) }),
       summary('h3', { lastActivity: ago(20 * DAY_MS) }),
       summary('h4', { lastActivity: ago(400 * DAY_MS) }),
@@ -146,15 +151,17 @@ describe('groupChats', () => {
       'Last 7 days (1+)',
       'h2',
     ]);
+    // An unread history chat paged in later stays at its recency position (M3).
     expect(shape(groupChats([...page1, ...page2], NOW).rows)).toEqual([
-      'Now (2)',
+      'Now (1)',
       'w1',
-      'u1',
       'Last 24 hours (1)',
       'h1',
       'Last 7 days (2)',
       'h2',
       'h3',
+      'Last 30 days (1)',
+      'u1',
       'Older (1)',
       'h4',
     ]);

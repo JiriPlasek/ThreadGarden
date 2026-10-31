@@ -132,6 +132,62 @@ describe('buckets (service)', () => {
     expect((await c.call<Any>('places.counts', {})).archived).toBe(0);
   });
 
+  it('a new chat ended mid-turn, before it was indexed, can be archived at once', async () => {
+    // "End this chat and archive it?": chat.end, then chat.setBucket right away.
+    const adapter = new FakeAdapter();
+    const c = await start(adapter);
+    const { sessionId } = await c.call<Any>('chat.create', { cwd: dir, text: 'a long job' });
+    // Claude Code has written its transcript, but the turn still runs, so indexing waits.
+    addHistory(adapter, sessionId, dir, NOW - 1000);
+    expect(await summary(c, sessionId)).toMatchObject({ live: true });
+    await c.call('chat.end', { sessionId });
+    expect(await c.call('chat.setBucket', { sessionIds: [sessionId], bucket: 'archived' })).toEqual(
+      { updated: 1, skipped: [] },
+    );
+    expect(await summary(c, sessionId)).toMatchObject({ live: false, bucket: 'archived' });
+  });
+
+  it('a chat sent a message is back in the main quick-search results', async () => {
+    const adapter = new FakeAdapter();
+    addHistory(adapter, 'h1', dir, NOW - 1000);
+    const c = await start(adapter);
+    const hit = async (): Promise<Any | undefined> =>
+      (await c.call<Any>('search.quick', { query: 'Chat h1', limit: 10 })).items.find(
+        (h: Any) => h.sessionId === 'h1',
+      );
+    await c.call('chat.setBucket', { sessionIds: ['h1'], bucket: 'archived' });
+    expect(await hit()).toMatchObject({ archived: true });
+    await c.call('chat.send', { sessionId: 'h1', text: 'one more thing' });
+    const back = await hit();
+    expect(back).toBeDefined();
+    expect(back).not.toHaveProperty('archived');
+  });
+
+  it('Ruling R36: sending a message to a chat on hold ends the hold', async () => {
+    const adapter = new FakeAdapter();
+    addHistory(adapter, 'h1', dir, NOW - 1000);
+    const t = clock();
+    const c = await start(adapter, t.opts);
+    await c.call('chat.setBucket', {
+      sessionIds: ['h1'],
+      bucket: 'onHold',
+      holdUntil: NOW + 3_600_000,
+      holdNote: 'Monday',
+    });
+    expect((await c.call<Any>('places.counts', {})).onHold).toBe(1);
+    await c.call('chat.send', { sessionId: 'h1', text: 'actually, one more thing' });
+    const s = await summary(c, 'h1');
+    expect(s).toMatchObject({ bucket: 'active', backFromHold: false });
+    expect(s).not.toHaveProperty('holdUntil');
+    expect(s).not.toHaveProperty('holdNote');
+    expect((await c.call<Any>('places.counts', {})).onHold).toBe(0);
+    // The hold's time passing later announces nothing.
+    t.now = NOW + 7_200_000;
+    t.tick();
+    await c.call('places.counts', {});
+    expect(c.events.some((e) => e.event === 'chatBackFromHold')).toBe(false);
+  });
+
   it('a chat resumed for a message that then fails to send is not left archived', async () => {
     const adapter = new FakeAdapter();
     addHistory(adapter, 'h1', dir, NOW - 1000);

@@ -229,6 +229,12 @@ describe('missing folders (v1.2 §4)', () => {
       expect(screen.getByRole('button', { name: /hidden projects \(3\)/i })).toBeTruthy(),
     );
     expect(screen.queryByRole('button', { name: /missing folders/i })).toBeNull();
+    // The button that opened the dialog is gone: focus lands where the projects went.
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        screen.getByRole('button', { name: /hidden projects \(3\)/i }),
+      ),
+    );
   });
 
   it('hiding the selected missing project moves the selection to the first place', async () => {

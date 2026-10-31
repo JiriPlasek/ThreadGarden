@@ -62,7 +62,10 @@ export type ChatHandlerDeps = {
    */
   apiKeyMissing?: () => boolean;
   resumeCheck: (sessionId: string) => Promise<ResumeCheck>;
-  /** Indexes sessions that pahub just caused to exist (a fork), so they can be opened at once. */
+  /**
+   * Indexes sessions now: a fork pahub just made, so it can be opened at
+   * once, and a chat that ends (its index may have waited for its turn).
+   */
   indexNow: (sessionIds: string[]) => Promise<void>;
   emit: (e: EventMsg) => void;
   onError: (err: unknown, context: string) => void;
@@ -187,9 +190,12 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): voi
     const back = db.clearBackFromHold(sessionId);
     if (seen || back) changed([sessionId]);
   };
-  /** v1.2 auto-unarchive: an archived chat that is sent a message returns to Active. */
-  const unarchive = (sessionId: string): void => {
-    if (db.unarchive([sessionId]).length === 0) return;
+  /**
+   * v1.2 auto-unarchive: an archived chat that is sent a message returns to
+   * Active; so does one on hold, its hold ended (Ruling R36).
+   */
+  const activate = (sessionId: string): void => {
+    if (db.activate([sessionId]).length === 0) return;
     catalog.bucketChanged([sessionId], 'active');
     changed([sessionId]);
   };
@@ -381,9 +387,9 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): voi
       s = host.ensureLive(p.sessionId, cwd);
       changed([p.sessionId]);
     }
-    // Nothing gets lost in the archive: a chat being sent a message (and
-    // perhaps running now) is active, even if the send itself then fails.
-    unarchive(p.sessionId);
+    // Nothing gets lost in the archive or on hold: a chat being sent a message
+    // (and perhaps running now) is active, even if the send itself then fails.
+    activate(p.sessionId);
     const sent = s.send(input);
     markSeen(p.sessionId); // replying means the last turn was seen
     if (nameChat(p.sessionId, s.cwd, p.text, true)) changed([p.sessionId]);
@@ -401,12 +407,20 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): voi
     return {};
   });
 
+  /**
+   * Indexing waits while a turn runs, so a chat ended mid-turn may not be
+   * indexed yet. It is indexed before this answers, so it stays listed and
+   * can be moved at once ("End this chat and archive it?").
+   */
   router.register('chat.end', async (p) => {
     if (host.get(p.sessionId)) {
       forget(p.sessionId); // the transcript now holds the live turns
       deps.titles?.forget(p.sessionId); // a first turn cut short gets no generated title
       host.end(p.sessionId);
       changed([p.sessionId]);
+      await deps.indexNow([p.sessionId]).catch((err: unknown) => {
+        deps.onError(err, `index ended chat ${p.sessionId}`);
+      });
     }
     return {};
   });

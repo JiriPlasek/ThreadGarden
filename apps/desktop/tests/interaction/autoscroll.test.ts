@@ -2,7 +2,7 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import { manyItems, text, user } from '../chat/fixtures';
-import { bashRequest, pushItems, renderChat, SID } from './helpers';
+import { bashRequest, fill, pushItems, renderChat, SID } from './helpers';
 
 /** The chat's scroll viewport. */
 const viewportOf = (container: HTMLElement) =>
@@ -15,7 +15,12 @@ const scrollUp = async (viewport: HTMLElement, to = 1000) => {
   expect(screen.getByRole('button', { name: /jump to latest/i })).toBeTruthy();
 };
 
-describe('autoscroll on send (v1.1 §5)', () => {
+/**
+ * Long chats render slowly in jsdom: under a loaded parallel run these took
+ * over the default 5 s now and then, so they get more time (typing is one
+ * input event, `fill`, for the same reason).
+ */
+describe('autoscroll on send (v1.1 §5)', { timeout: 20_000 }, () => {
   it('sending while scrolled up jumps to the bottom and keeps following new output', async () => {
     const items = manyItems(300);
     const env = await renderChat({ items });
@@ -24,7 +29,8 @@ describe('autoscroll on send (v1.1 §5)', () => {
     const bottom = viewport.scrollTop;
 
     await scrollUp(viewport);
-    await userEvent.type(env.composer(), 'one more thing{Enter}');
+    await fill(env.composer(), 'one more thing');
+    await userEvent.keyboard('{Enter}');
     await waitFor(() => expect(env.server.calls('chat.send')).toHaveLength(1));
     await waitFor(() => expect(viewport.scrollTop).toBe(bottom));
     expect(screen.queryByRole('button', { name: /jump to latest/i })).toBeNull();
@@ -49,7 +55,8 @@ describe('autoscroll on send (v1.1 §5)', () => {
     await waitFor(() => expect(viewport.scrollTop).toBeGreaterThan(1000));
     const bottom = viewport.scrollTop;
     await scrollUp(viewport);
-    await userEvent.type(env.composer(), 'also this{Enter}');
+    await fill(env.composer(), 'also this');
+    await userEvent.keyboard('{Enter}');
     await waitFor(() => expect(env.app.chats.get(SID)?.queuedMessages).toBe(1));
     await waitFor(() => expect(viewport.scrollTop).toBe(bottom));
   });

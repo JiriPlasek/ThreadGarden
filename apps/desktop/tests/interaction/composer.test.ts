@@ -11,7 +11,7 @@ import {
   mentionText,
   slashAt,
 } from '../../src/lib/components/composer/input';
-import { CWD, pushStatus, renderChat, SID } from './helpers';
+import { CWD, fill, pushStatus, renderChat, SID } from './helpers';
 
 type SendParams = { sessionId: string; text: string; images?: unknown[] };
 
@@ -48,28 +48,37 @@ describe('composer', () => {
     await waitFor(() => expect(server.calls('chat.send')).toHaveLength(1));
   });
 
-  it('typing @sch shows schema.ts and inserts @src/lib/server/db/schema.ts', async () => {
-    const { server, composer } = await renderChat({
-      configure: (s) => {
-        s.handlers['files.suggest'] = () => [
-          { path: 'src/lib/server/db/schema.ts', kind: 'file' },
-          { path: 'src/lib/server/db', kind: 'dir' },
-        ];
-      },
-    });
-    await userEvent.type(composer(), 'look at @sch');
-    const list = await screen.findByRole('listbox', { name: /files/i });
-    const options = await within(list).findAllByRole('option');
-    expect(options[0]!.textContent).toContain('schema.ts');
-    expect(options[0]!.getAttribute('aria-selected')).toBe('true');
-    expect(server.calls('files.suggest').at(-1)!.params).toMatchObject({ cwd: CWD, query: 'sch' });
-    expect(composer().getAttribute('aria-activedescendant')).toBe(options[0]!.id);
+  // One input event (`fill`) and more time: typing key by key here timed out
+  // now and then under a loaded parallel run.
+  it(
+    'typing @sch shows schema.ts and inserts @src/lib/server/db/schema.ts',
+    { timeout: 20_000 },
+    async () => {
+      const { server, composer } = await renderChat({
+        configure: (s) => {
+          s.handlers['files.suggest'] = () => [
+            { path: 'src/lib/server/db/schema.ts', kind: 'file' },
+            { path: 'src/lib/server/db', kind: 'dir' },
+          ];
+        },
+      });
+      await fill(composer(), 'look at @sch');
+      const list = await screen.findByRole('listbox', { name: /files/i });
+      const options = await within(list).findAllByRole('option');
+      expect(options[0]!.textContent).toContain('schema.ts');
+      expect(options[0]!.getAttribute('aria-selected')).toBe('true');
+      expect(server.calls('files.suggest').at(-1)!.params).toMatchObject({
+        cwd: CWD,
+        query: 'sch',
+      });
+      expect(composer().getAttribute('aria-activedescendant')).toBe(options[0]!.id);
 
-    await userEvent.keyboard('{Enter}');
-    expect(composer().value).toBe('look at @src/lib/server/db/schema.ts ');
-    expect(screen.queryByRole('listbox')).toBeNull();
-    expect(server.calls('chat.send')).toHaveLength(0);
-  });
+      await userEvent.keyboard('{Enter}');
+      expect(composer().value).toBe('look at @src/lib/server/db/schema.ts ');
+      expect(screen.queryByRole('listbox')).toBeNull();
+      expect(server.calls('chat.send')).toHaveLength(0);
+    },
+  );
 
   it('mention picker navigates with arrows and closes with Esc', async () => {
     const { server, composer } = await renderChat({

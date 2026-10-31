@@ -396,6 +396,31 @@ describe('buckets: quick search', () => {
     expect(hits.at(-1)).toMatchObject({ sessionId: 'session-1', archived: true });
     for (const h of hits.slice(0, -1)) expect(h).not.toHaveProperty('archived');
   });
+
+  it('up to 3 slots are kept for archived matches, however many others match', async () => {
+    const t = await setup(30, 3);
+    for (let i = 0; i < 30; i++) {
+      await t.call('meta.update', {
+        sessionId: `session-${i}`,
+        customTitle: `flux capacitor ${i}`,
+      });
+    }
+    const archivedIds = (hits: Any[]) =>
+      hits.filter((h) => h.archived === true).map((h) => h.sessionId as string);
+
+    await t.setBucket(['session-3'], 'archived');
+    let hits = (await t.call('search.quick', { query: 'flux capacitor', limit: 20 }))
+      .items as Any[];
+    expect(hits).toHaveLength(20);
+    expect(archivedIds(hits)).toEqual(['session-3']);
+    expect(hits.at(-1)).toMatchObject({ sessionId: 'session-3', archived: true });
+
+    await t.setBucket(['session-4', 'session-5', 'session-6', 'session-7'], 'archived');
+    hits = (await t.call('search.quick', { query: 'flux capacitor', limit: 20 })).items as Any[];
+    expect(hits).toHaveLength(20);
+    expect(archivedIds(hits)).toHaveLength(3);
+    for (const h of hits.slice(0, 17)) expect(h).not.toHaveProperty('archived');
+  });
 });
 
 describe('buckets: back from hold', () => {
@@ -527,6 +552,21 @@ describe('buckets: chat.archiveOlder', () => {
     expect(await t.ids({ kind: 'archived' })).toEqual(['session-2']);
     expect(t.catalog.summary('session-0')?.bucket).toBe('onHold');
     expect(t.events).toEqual([{ event: 'sessions.changed', data: { sessionIds: ['session-2'] } }]);
+  });
+
+  it('Ruling R35: pinned chats are skipped, in the count and the move', async () => {
+    const t = await setup();
+    t.setNow(BASE + 30 * DAY + 100 * 60_000); // everything is older
+    await t.call('meta.update', { sessionId: 'session-0', pinned: true });
+    await t.call('meta.update', { sessionId: 'session-7', pinned: true });
+    expect(await t.call('chat.archiveOlder', { olderThanDays: 30, dryRun: true })).toEqual({
+      archived: 10,
+    });
+    expect(await t.call('chat.archiveOlder', { olderThanDays: 30 })).toEqual({ archived: 10 });
+    expect(await t.ids({ kind: 'active' })).toEqual(['session-7', 'session-0']);
+    // Unpinned later, it can go with the next tidy-up.
+    await t.call('meta.update', { sessionId: 'session-7', pinned: false });
+    expect(await t.call('chat.archiveOlder', { olderThanDays: 30 })).toEqual({ archived: 1 });
   });
 
   it('one project, or the Active place without hidden projects', async () => {

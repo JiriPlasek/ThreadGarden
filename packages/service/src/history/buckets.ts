@@ -77,8 +77,8 @@ export class Buckets {
   /**
    * `chat.archiveOlder`: archives (or with `dryRun` counts) the active chats
    * last active more than `olderThanDays` ago, of one project or of the
-   * Active place (hidden projects left out). Chats in use, unread or back
-   * from hold stay. One transaction.
+   * Active place (hidden projects left out). Chats in use, pinned (Ruling
+   * R35), unread or back from hold stay. One transaction.
    */
   archiveOlder(o: { projectId?: string | undefined; olderThanDays: number; dryRun?: boolean }): {
     archived: number;

@@ -97,7 +97,7 @@
     }
   }
   title="Archive {chatsWord(olderCount)} older than {ARCHIVE_OLDER_DAYS} days?"
-  description="Chats that are running, wait for you, are unread or back from hold stay in Active. An archived chat returns to Active when it runs again or you send it a message."
+  description="Pinned chats, and chats that are running, wait for you, are unread or back from hold, stay in Active. An archived chat returns to Active when it runs again or you send it a message."
   confirmLabel="Archive {chatsWord(olderCount)}"
   onConfirm={buckets.archiveOlder}
 />

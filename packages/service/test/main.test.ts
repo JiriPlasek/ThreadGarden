@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WebSocket } from 'ws';
+import { PROTOCOL_VERSION } from '@pahub/protocol';
 import { readDiscovery } from '../src/discovery.js';
 import { createLogger } from '../src/logger.js';
 import { SessionHost } from '../src/chat/session-host.js';
@@ -40,12 +41,12 @@ describe('startService', () => {
       pid: process.pid,
       port: svc.port,
       token: svc.token,
-      protocolVersion: 1,
+      protocolVersion: PROTOCOL_VERSION,
     });
     expect(
-      await rpc(svc.port, svc.token, 'hello', { protocolVersion: 1, client: 't' }),
+      await rpc(svc.port, svc.token, 'hello', { protocolVersion: PROTOCOL_VERSION, client: 't' }),
     ).toMatchObject({
-      result: { protocolVersion: 1 },
+      result: { protocolVersion: PROTOCOL_VERSION },
     });
     await svc.close();
     expect(await readDiscovery(dir)).toBeNull();
@@ -171,8 +172,8 @@ describe('startService', () => {
     expect(locateClaude).toHaveBeenCalledTimes(1);
     expect(await readDiscovery(join(dir, 'data'))).toMatchObject({ port: svc.port });
     expect(
-      await rpc(svc.port, svc.token, 'hello', { protocolVersion: 1, client: 't' }),
-    ).toMatchObject({ result: { protocolVersion: 1 } });
+      await rpc(svc.port, svc.token, 'hello', { protocolVersion: PROTOCOL_VERSION, client: 't' }),
+    ).toMatchObject({ result: { protocolVersion: PROTOCOL_VERSION } });
     // While locating, status does not claim Claude Code is missing: it answers once known.
     let status: unknown;
     const pending = rpc(svc.port, svc.token, 'system.status', {}).then((r) => (status = r));

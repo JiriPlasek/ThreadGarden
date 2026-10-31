@@ -48,7 +48,9 @@ flowchart TB
   (`pathToClaudeCodeExecutable`; no fallback to the SDK's bundled binary) with
   the user's own configuration (`settingSources: ["user","project","local"]`,
   the `claude_code` system prompt preset, `cwd` = the project). They write
-  their transcripts to the Claude config dir exactly as in a terminal.
+  their transcripts to the Claude config dir exactly as in a terminal. A new
+  chat's generated title (v1.2) briefly starts one more `claude` process, which
+  writes nothing (see Chat titles under [Data flows](#data-flows)).
 
 The service is a separate, detached process so that closing or crashing the
 window never stops a running agent.
@@ -209,7 +211,10 @@ there with its status still idle and its `runningTasks` count, and it counts
 in `places.counts.running` and its project's running count. The session host
 reports each change of that count, and the service sends `sessions.changed`
 for the chat so lists refresh.
-Titles follow pahub custom title → SDK title → summary → first prompt; all
+Titles follow pahub custom title → generated title (v1.2) → Claude Code's own
+title → summary → provisional title (v1.2) → first prompt. The summary is
+skipped when it equals the first prompt or the chat has a provisional title
+(without a title of its own, the SDK's summary is just the latest prompt). All
 but a custom title are cut to 80 characters.
 
 **Your turn.** When a pahub chat's turn ends (a `result` that leaves it
@@ -240,14 +245,46 @@ Active as `backFromHold`: listed under Needs you, announced with
 `chatBackFromHold`, and cleared by `chat.markSeen` (which the UI sends when the
 chat is viewed, as for unread chats) or a message. Bucket and project lists
 keep it at its recency position, like an unread history chat (Ruling R34), so
-the UI's Now section does not claim it. The UI announces holds that end
-together in one notification, and, once per hold, the ones that ended while
-no window was connected (it keeps the
-announced ids in `uiState`). An archived chat returns to Active when it is sent
-a message or runs as an external session. `chat.archiveOlder` archives a
-place's idle, seen chats older than N days (with `dryRun` for the
-confirmation's count). Quick search ranks archived matches after all others
-and flags them, and the UI lists them in their own group.
+the UI's Now section (which counts "Your turn" only for live and external
+chats) does not claim it. A hold that ends while its chat works or waits on
+the user is not flagged until the chat is idle, and so is not announced then;
+the UI announces it at its next connect. The UI announces holds that end
+together in one notification, and, once per hold, the ones that ended while no
+window was connected (it keeps the announced ids in `uiState`, and forgets an
+id when its chat is put on hold again). An archived chat returns to Active
+when it is sent a message, or when it runs as an external session, which
+pahub notices only while external-session polling is on (and `claude agents`
+is available). Sending a message to a chat on hold ends the hold too (Ruling
+R36). `chat.archiveOlder` archives a place's idle, seen, unpinned chats older
+than N days (with `dryRun` for the confirmation's count; Ruling R35). Quick
+search ranks archived matches after all others and flags them, keeping up to
+3 places for them (at most half the results), and the UI lists them in their
+own group.
+
+**Chat titles** (v1.2). Claude Code titles only its terminal sessions, so a
+chat pahub starts gets a provisional title at once: the first sentence of the
+first line of its first message (also set when pahub continues a chat that
+has no title of any kind). After the chat's first turn, if "Name new chats
+automatically" (`autoTitles`, on by default) is on, the service asks a small
+model for a 3–6 word title, at most once per chat, at most two at a time and
+with a 20 s timeout. The request is one Agent SDK `query()` with a string
+prompt, which starts one more `claude` process: model `haiku`, a naming system
+prompt, the first message and the start of the first reply (2,000 characters
+in all), `persistSession: false` (`--no-session-persistence`: no transcript),
+`settingSources: []`, no tools (`tools: []`, `strictMcpConfig`), one turn and
+no thinking, with the same `claude`, environment and authentication as the
+user's chats. Because it loads no settings, it is skipped (Ruling R33) when
+the user, project or local settings set `env`, `apiKeyHelper`,
+`awsAuthRefresh`, `awsCredentialExport`, `gcpAuthRefresh` or
+`otelHeadersHelper`, or cannot be parsed, so it never goes around the
+provider the user chose. The answer is cleaned (its first line, without
+quotes, labels or end punctuation; more than 10 words is no title) and stored
+in pahub's own `chat_titles` table, next to the provisional title; any failure
+keeps the provisional title and is logged at debug level, without content. A
+generated title is cleared when Claude Code's own title of the chat changes
+later (a rename in the terminal). While the query's process runs it is listed
+by `claude agents`: the poller counts its session id as pahub's own while it
+runs and for 15 s after it ends, so it never shows as an external chat.
 
 **Chat view.** `chat.open` returns the last N items of the SDK history merged
 with the live session's items (the live version wins for anything both have),
@@ -311,6 +348,12 @@ fork is indexed at once so it can be opened.
   (Windows Credential Manager, macOS Keychain, Secret Service), sent to the
   service after each `hello`, and held there in memory only, never stored or
   logged.
+- **Title requests** (v1.2). With "Name new chats automatically" on, the
+  first message of each chat pahub starts and the start of its first reply
+  (2,000 characters at most) are sent once more, to Claude Code's `haiku`,
+  through the user's own `claude` and authentication, with no tools, no
+  settings and no transcript; never when settings route requests elsewhere
+  (Ruling R33).
 - **Permissions.** pahub offers the default, acceptEdits, plan and auto
   permission modes, never `bypassPermissions`, and it filters out "always
   allow" suggestions that would switch a session to bypass.
@@ -325,8 +368,8 @@ The budgets in §8 are requirements. The techniques that meet them:
 - Lists and search come from SQLite (WAL); the SDK is asked only about
   sessions that changed.
 - Indexing runs in the background, incrementally, and yields between pages.
-- Chat lists and message views are virtualised (fixed-height rows and section headers in the
-  chat list; measured rows in the message view).
+- Chat lists and message views are virtualised (fixed-height rows and
+  section headers in the chat list; measured rows in the message view).
 - Streaming is coalesced to one update per 33 ms; markdown rendering is cached
   per item.
 - The quick switcher keeps a prepared fuzzysort corpus of titles and projects,
@@ -498,6 +541,20 @@ Windows 11, signed in with a subscription. What it established:
   each transcript; with one read per transcript the indexer alone now takes
   77 s for the same history (see Performance).
 
+**Title query** (v1.2). One real `RealAdapter.oneShot` with the options above
+(`buildOneShotOptions`), run on 2026-10-31 with Claude Code 2.1.314 on Windows
+11 and a subscription login, from a new empty temp folder with the message
+"help me set up eslint for a svelte project":
+
+- `haiku` answered "Setting up ESLint for Svelte" in about 3 s, unchanged by
+  the sanitizer.
+- No project folder appeared under `projects/` (folder names compared before
+  and after), none for the temp folder in particular, and no file anywhere
+  under the config dir was named after the query's session id: no transcript.
+- `claude agents --json --all` listed the query's session id as busy while it
+  ran, and no longer listed it at the first poll after it ended (under 0.4 s),
+  well within the 15 s grace.
+
 `test/real/smoke.real.test.ts` covers the lower-level facts recorded under
 [Authentication](#authentication) (session id, no echo of sent messages,
 startup failures, which credential a session picks).
@@ -539,8 +596,11 @@ Decisions made during the build that change behaviour described in the design:
 - **Search index cap.** Each session's indexed text is capped at 2 Mi
   characters, keeping the most recent text; very old text in very long
   sessions is not searchable (the chat view still shows everything).
-- **Titles.** Every non-custom title (SDK title, summary, first prompt) is cut
-  to 80 characters, since the SDK summary may itself be the first prompt.
+- **Titles.** Every title but a custom one (generated, Claude Code's own,
+  summary, provisional, first prompt) is cut to 80 characters, since the SDK
+  summary may itself be the first prompt. Chats pahub starts get pahub's own
+  provisional and generated titles (v1.2, see Chat titles under Data flows),
+  because Claude Code titles only its terminal sessions.
 - **Lists.** Live and external chats are returned in full on the first page of
   a list, so a first page can exceed the page size by that many rows. Hidden
   projects are left out of Active (formerly All chats), but their chats

@@ -183,7 +183,11 @@ export const startAttention = (deps: AttentionDeps): (() => void) => {
     );
   };
 
-  /** Announced chats that changed: forget the idle ones no longer back from hold. */
+  /**
+   * Announced chats that changed: forget the idle ones no longer back from
+   * hold, and any put on hold again (busy or not), so that hold's end is
+   * announced too.
+   */
   const prune = async (sessionIds: string[]): Promise<void> => {
     await load();
     const ids = sessionIds.filter((id) => announced.has(id));
@@ -192,7 +196,7 @@ export const startAttention = (deps: AttentionDeps): (() => void) => {
     const byId = new Map(items.map((s) => [s.sessionId, s]));
     const gone = ids.filter((id) => {
       const s = byId.get(id);
-      return !s || (!s.backFromHold && !IN_USE.has(s.status));
+      return !s || s.bucket === 'onHold' || (!s.backFromHold && !IN_USE.has(s.status));
     });
     if (gone.length === 0) return;
     for (const id of gone) announced.delete(id);

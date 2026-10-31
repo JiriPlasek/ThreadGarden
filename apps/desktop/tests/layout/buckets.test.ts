@@ -518,6 +518,8 @@ describe('"Archive all older than 30 days"', () => {
     await userEvent.click(button);
     const dialog = await screen.findByRole('alertdialog');
     expect(within(dialog).getByText('Archive 12 chats older than 30 days?')).toBeTruthy();
+    // Ruling R35: the count leaves pinned chats out, and the dialog says so.
+    expect(dialog.textContent).toMatch(/Pinned chats, and chats that are running/);
     expect(server.calls('chat.archiveOlder').map((c) => c.params)).toEqual([
       { olderThanDays: 30, dryRun: true },
     ]);

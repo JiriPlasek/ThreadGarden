@@ -241,7 +241,7 @@ export const methods = {
    * Archives the active chats whose last activity is older than
    * `olderThanDays` days (one project, or the Active place: hidden projects
    * left out), in one transaction. Chats that run, wait on the user, are
-   * unread or back from hold are skipped. `dryRun` only counts them (for the
+   * pinned (Ruling R35), unread or back from hold are skipped. `dryRun` only counts them (for the
    * confirmation).
    */
   'chat.archiveOlder': def(

@@ -38,9 +38,20 @@ export const serviceCall = async <T>(method: string, params: unknown): Promise<T
 /**
  * Nothing unread: a spec that ends right after a chat's turn finished leaves
  * it unread ("Your turn", counted under Needs you) in the shared mock, as the
- * window closed before the chat counted as seen.
+ * window closed before the chat counted as seen. A spec can also end while a
+ * turn it started still runs (it saw what it waited for mid-turn): that turn
+ * ends first (at most 15 s), or it would turn unread afterwards.
  */
 export const markAllSeen = async (): Promise<void> => {
+  const deadline = Date.now() + 15_000;
+  for (;;) {
+    const running = await serviceCall<{ items: { status: string }[] }>('sessions.list', {
+      place: { kind: 'running' },
+      limit: 200,
+    });
+    if (!running.items.some((s) => s.status === 'working') || Date.now() > deadline) break;
+    await new Promise((r) => setTimeout(r, 200));
+  }
   const { items } = await serviceCall<{ items: { sessionId: string }[] }>('sessions.list', {
     place: { kind: 'needsYou' },
     limit: 200,

@@ -34,6 +34,8 @@
   let showHidden = $state(false);
   /** The "Hide all missing" confirmation is open (v1.2 §4). */
   let hidingMissing = $state(false);
+  /** Where focus goes after "Hide all missing": its own button is gone by then. */
+  let hiddenToggle = $state<HTMLButtonElement | null>(null);
 
   const MISSING_WHY = 'Claude Code still has these chats, but their folders were deleted.';
 
@@ -261,6 +263,7 @@
 
     {#if hidden.length > 0}
       <button
+        bind:this={hiddenToggle}
         type="button"
         class="text-muted-foreground hover:text-foreground mt-3 flex h-6 items-center gap-1 px-2 text-[0.6875rem]"
         aria-expanded={showHidden}
@@ -291,4 +294,5 @@
     : `${missing.length} projects`} whose folder was deleted will move to Hidden projects. Their chats stay in Claude Code, and you can show the projects again from there."
   confirmLabel={missing.length === 1 ? 'Hide 1 project' : `Hide ${missing.length} projects`}
   onConfirm={() => places.hideProjects(missing.map((p) => p.projectId))}
+  focusAfterConfirm={() => hiddenToggle}
 />

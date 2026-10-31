@@ -240,6 +240,25 @@ describe('"Back from hold" notifications (v1.2 §3)', () => {
     expect(env.server.calls('sessions.summaries')).toHaveLength(asked);
   });
 
+  it('forgets a busy announced chat put on hold again, so the end of that hold is announced', async () => {
+    const store = new Map<string, unknown>();
+    const env = await start({ store });
+    await flush();
+    env.server.push('chatBackFromHold', back('h1'));
+    await vi.waitFor(() => expect(store.get(HOLDS_ANNOUNCED_KEY)).toEqual(['h1']));
+    // It works (not flagged for the moment), and the user puts it on hold again.
+    env.server.handlers['sessions.summaries'] = (p) => ({
+      items: (p as { sessionIds: string[] }).sessionIds.map((id) =>
+        summary(id, { status: 'working', live: true, bucket: 'onHold', backFromHold: false }),
+      ),
+    });
+    env.server.push('sessions.changed', { sessionIds: ['h1'] });
+    await vi.waitFor(() => expect(store.get(HOLDS_ANNOUNCED_KEY)).toEqual([]));
+    // That hold ends while no window is connected: the next connect announces it.
+    const again = await start({ store, backIds: new Set(['h1']) });
+    await vi.waitFor(() => expect(again.notify).toHaveBeenCalledTimes(1));
+  });
+
   it('focusing soon after the notification shows Needs you (Ruling R26)', async () => {
     const env = await start();
     await flush();
