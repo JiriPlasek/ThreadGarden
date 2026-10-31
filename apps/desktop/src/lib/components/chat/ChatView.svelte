@@ -96,7 +96,7 @@
     const parts: string[] = [];
     if (check.status === 'unverified') {
       parts.push(
-        `pahub can't check whether this chat is open elsewhere${check.reason ? ` (${check.reason})` : ''}.`,
+        `Threadgarden can't check whether this chat is open elsewhere${check.reason ? ` (${check.reason})` : ''}.`,
       );
     }
     if (check.recentlyModified) {

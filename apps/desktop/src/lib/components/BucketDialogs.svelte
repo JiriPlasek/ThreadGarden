@@ -46,7 +46,7 @@
       tasks,
       description:
         warning ??
-        `pahub is running “${t.title}”. Ending stops its Claude Code process; ${ARCHIVE_AFTER}`,
+        `Threadgarden is running “${t.title}”. Ending stops its Claude Code process; ${ARCHIVE_AFTER}`,
     };
   });
 
