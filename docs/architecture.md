@@ -19,7 +19,7 @@ flowchart TB
   service["Threadgarden service (Node.js 22, detached)<br/>session host · history index (SQLite + FTS5)<br/>watcher · external poller · file index"]
   claude["claude processes<br/>(the user's installed Claude Code, one per live chat)"]
   config[("Claude config dir<br/>~/.claude — read-only to Threadgarden")]
-  data[("Threadgarden data dir<br/>pahub.db · service.json · logs")]
+  data[("Threadgarden data dir<br/>threadgarden.db · service.json · logs")]
 
   ui -- "WebSocket on 127.0.0.1<br/>(random port, bearer token)" --> service
   shell -- "starts detached,<br/>reads service.json" --> service
@@ -38,7 +38,7 @@ flowchart TB
 - **The service** (`packages/service`) is a long-lived TypeScript process on
   Node.js 22. It owns every Claude Code session Threadgarden runs, the history
   index, external-session polling and the `@` file index, and stores its own
-  state in `pahub.db` (`node:sqlite`, no native addons). It is TypeScript
+  state in `threadgarden.db` (`node:sqlite`, no native addons). It is TypeScript
   because the Agent SDK, the only official programmatic interface to Claude
   Code, exists for TypeScript and Python only. Release builds run it as one
   esbuild bundle (`service.mjs`) on a Node.js runtime shipped as the Tauri
@@ -73,6 +73,33 @@ lock, and the recorded one is used once it answers. If no service answers in
 time, the window shows the error with **Retry**. The UI then connects with
 the token from `service.json`.
 
+**Data dir and the move from pahub** (v1.3 §9). The data dir is
+`threadgarden` under `%APPDATA%`, `~/Library/Application Support` or
+`$XDG_DATA_HOME` (`THREADGARDEN_DATA_DIR` overrides it; the old
+`PAHUB_DATA_DIR` still does for one release, with a deprecation note). Before
+v1.3 it was `pahub`, with `pahub.db`. The shell resolves both dirs and passes
+them to the service it starts (`THREADGARDEN_DATA_DIR`,
+`THREADGARDEN_LEGACY_DATA_DIR`), so the two never disagree. It looks for
+`service.json` in the new dir first, then in the old one: a pahub service
+still running there is reached (both subprotocols are offered), its `hello`
+reports protocol 3, and **Restart service** stops it (the shell stops a
+service recorded in either dir). At start, before it takes its own lock, the
+service migrates once (`src/migrate-data-dir.ts`): when the new dir has no
+`threadgarden.db` and the old one has a `pahub.db`, it takes the old dir's
+instance lock (so no pahub service runs during the copy), copies the database
+with SQLite `VACUUM INTO` to a temporary name in the new dir and renames it to
+`threadgarden.db`; a half-done copy is never used, and the next start tries
+again. The old dir keeps everything it had (logs, `service.json` and the lock
+are not copied) and gains a `MOVED-TO-THREADGARDEN.txt`. While a live pahub
+service holds the old lock, the service refuses to start (it never runs on an
+empty database) and logs why. With an override dir both files live in that
+one dir. The API key moves the same way in the shell: it is read under the
+credential name `threadgarden`, then `pahub`; a key found under the old name
+is written under the new one and deleted under the old one, and saving or
+removing the key removes any old entry. The webview's storage (it follows the
+Tauri identifier, now `dev.threadgarden.desktop`), the notification permission
+and the start-on-login entry are not migrated.
+
 **Crash safety.** The service logs an unhandled rejection or uncaught
 exception and keeps running (one stray error must not end every agent); only
 a burst of more than 10 uncaught exceptions in a minute ends the process.
@@ -96,7 +123,7 @@ next launch reconnects to them.
 
 **Service.** With no live session, no connected client and no pending
 scheduled send (v1.3) for 30 minutes the service exits. When it stops for any other reason (crash, reboot, shutdown
-with live chats), the chats that were live are recorded in `pahub.db`, and the
+with live chats), the chats that were live are recorded in `threadgarden.db`, and the
 next start shows them as interrupted, ready to resume. The conversation itself
 is safe: Claude Code persisted it.
 
@@ -135,8 +162,11 @@ is on; a narrow chat pane opens it as a drawer on request instead.
 service and the UI; the service validates every request.
 
 - **Transport:** one WebSocket per UI on `127.0.0.1`. The token is offered as
-  the WebSocket subprotocol `pahub.<token>` and compared in constant time; a
-  connection without it is closed (code 4401).
+  the WebSocket subprotocol `threadgarden.<token>` and compared in constant
+  time; a connection without it is closed (code 4401). For one release the
+  service also accepts `pahub.<token>`, and the UI and the shell offer both,
+  so a pahub service still running is reached and reports its older protocol
+  (v1.3 §9).
 - **Requests** `{id, method, params}` → `{id, result}` or `{id, error: {code,
   message}}`. Error codes the UI acts on include `GAP`, `RESUME_BLOCKED`,
   `CLAUDE_MISSING`, `NOT_LIVE`, `NOT_FOUND`, `FORK_FAILED` and
@@ -190,7 +220,7 @@ file-system events and maps event names of the form
 opens or reads the files, and if the directory does not exist yet it retries.
 Changed ids go to the indexer's incremental refresh.
 
-**Indexer and full-text search.** Index state lives in `pahub.db`: one row per
+**Indexer and full-text search.** Index state lives in `threadgarden.db`: one row per
 session (metadata, the `lastModified`/`fileSize` it was indexed at, its
 project) and an FTS5 trigram table of user and assistant text. Tool calls,
 tool results and thinking are not indexed. A session's text is capped at 2 Mi
@@ -279,7 +309,7 @@ but a custom title are cut to 80 characters.
 **Your turn.** When a Threadgarden chat's turn ends (a `result` that leaves it
 waiting for the user, not one followed by queued input, and not one of a turn
 the user stopped from Threadgarden with Stop or Esc), the service stores
-the time in `pahub.db` (`turn_state`, Threadgarden's own table) and emits
+the time in `threadgarden.db` (`turn_state`, Threadgarden's own table) and emits
 `chatFinished`. A chat is `unread` while its last turn ended after it was last
 seen (`chat.markSeen`, also implied by `chat.send` and `chat.create`) and it is
 neither waiting on the user nor working. Needs you lists the waiting chats
@@ -417,7 +447,7 @@ live, `chat.send` runs the command again (fresh, not the last poll):
 with fuzzysort. Mentions are sent as plain `@path` text and expanded by Claude
 Code exactly as in the terminal (verified below).
 
-**Settings** are one row per key in `pahub.db`, read back over the
+**Settings** are one row per key in `threadgarden.db`, read back over the
 schema defaults (`Db.getSettings`). Each stored value is checked on its own:
 an invalid or corrupt one reads as its default and never resets the others,
 and the v1.3 appearance fields read an unknown value (a newer accent) as
@@ -443,7 +473,7 @@ was 4.34:1 on the muted grey.)
 `rate_limit_event`s (`rate_limit_info`: `status`, `resetsAt`,
 `rateLimitType`, `utilization`, overage fields); the normalizer renders none
 of them. The service keeps the latest value per window, account-wide (every
-chat is the same account), in `pahub.db` (`usage_limits`, with the time it
+chat is the same account), in `threadgarden.db` (`usage_limits`, with the time it
 was observed), and broadcasts `usage.changed` when what the UI shows changes.
 Claude Code 2.1.314 sends `resetsAt` in epoch seconds and `utilization` as a
 fraction (read from its bundle: the reset is `Math.floor(Date.now()/1000)+…`
@@ -796,7 +826,8 @@ Decisions made during the build that change behaviour described in the design:
   the same protocol shows a thin bar with **Restart service**.
 - **Where authentication and the Claude Code version show:** in the chat
   header, not a separate status bar.
-- **API-key-only build** (§5.5): `PAHUB_API_KEY_ONLY=1` at build time
+- **API-key-only build** (§5.5): `THREADGARDEN_API_KEY_ONLY=1` (for one
+  release also the old `PAHUB_API_KEY_ONLY=1`, with a deprecation note) at build time
   (Vite `define` in the UI, esbuild `define` in the service bundle) hides the
   inherit option; the service refuses to start or resume a chat without an
   API key (`API_KEY_REQUIRED`).

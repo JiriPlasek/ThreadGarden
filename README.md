@@ -140,6 +140,16 @@ pnpm --filter desktop tauri build --config src-tauri/tauri.bundle.conf.json
 
 The installers land in `apps/desktop/src-tauri/target/release/bundle/`. Release builds ship the service as one bundled file (`packages/service/dist/service.mjs`) run by a Node.js 22 LTS runtime packaged as the Tauri sidecar `threadgarden-node`, so users need no Node.js installation. The sidecar binary is downloaded from nodejs.org at build time, verified against `SHASUMS256.txt` and the hashes pinned in `scripts/fetch-node-sidecar.mjs`, and never committed.
 
+### Upgrading from pahub
+
+Threadgarden was called pahub before v1.3, and v1.3 renames its internals too. Install Threadgarden and start it; nothing is lost:
+
+- **Your data moves.** On its first start the new service copies `pahub.db` from pahub's data dir (`%APPDATA%\pahub`, `~/Library/Application Support/pahub` or `${XDG_DATA_HOME:-~/.local/share}/pahub`) to `threadgarden.db` in Threadgarden's (see [Data and privacy](#data-and-privacy)) and uses only that from then on. The copy is made in one step, so an interrupted one is never used. The old folder is left as it was, plus a `MOVED-TO-THREADGARDEN.txt`; once Threadgarden runs fine you can delete it. Its logs are not copied. With `PAHUB_DATA_DIR` (or `THREADGARDEN_DATA_DIR`) set, the copy happens inside that one folder.
+- **A pahub service that is still running** is found and shown as a service of another version: restart it from that screen, and the new service takes over and moves the data. While the old service runs, the new one does not start (it never starts on an empty database).
+- **Your API key** moves from the `pahub` entry of the OS credential store to a `threadgarden` one the first time Threadgarden reads it.
+- **Not moved:** the OS notification permission and the start-on-login entry, which belong to the app's new identity. Uninstall the old pahub app (it is a separate app), and if Start on login was on, turn it off and on again in Threadgarden's settings. The appearance cache of the window is rebuilt from your settings on the first connect.
+- `PAHUB_DATA_DIR` and the `PAHUB_API_KEY_ONLY` build flag still work in this release, with a deprecation note; use `THREADGARDEN_DATA_DIR` and `THREADGARDEN_API_KEY_ONLY`.
+
 ## Development
 
 ```sh
@@ -186,15 +196,15 @@ The only writes under the config dir are the ones Claude Code makes itself: the 
 
 **What Threadgarden stores**, all in its own data dir:
 
-| OS      | Location                                 |
-| ------- | ---------------------------------------- |
-| Windows | `%APPDATA%\pahub`                        |
-| macOS   | `~/Library/Application Support/pahub`    |
-| Linux   | `${XDG_DATA_HOME:-~/.local/share}/pahub` |
+| OS      | Location                                        |
+| ------- | ----------------------------------------------- |
+| Windows | `%APPDATA%\threadgarden`                        |
+| macOS   | `~/Library/Application Support/threadgarden`    |
+| Linux   | `${XDG_DATA_HOME:-~/.local/share}/threadgarden` |
 
-Threadgarden was called Threadgarden until v1.3; the data dir, `pahub.db`, the `PAHUB_*` environment variables and the `@threadgarden/*` packages keep that name for now, so nothing you already have moves. Set `PAHUB_DATA_DIR` to use another directory. It holds `pahub.db` (SQLite: a full-text index of your conversations' user and assistant text, Threadgarden-side titles, pins, hidden projects, drafts, settings, tab and layout state, which chats were running, for crash recovery, the latest usage-limit readings, and your scheduled messages with their images until they are sent), `service.json` (how the app finds the running service: pid, port, access token; readable only by you), a lock file, and `logs/` (rotating; message content is not logged). Deleting the directory resets Threadgarden completely and touches nothing of Claude Code's. Because the index holds the text of your conversations, treat this directory like `~/.claude` itself.
+Set `THREADGARDEN_DATA_DIR` to use another directory. It holds `threadgarden.db` (SQLite: a full-text index of your conversations' user and assistant text, Threadgarden-side titles, pins, hidden projects, drafts, settings, tab and layout state, which chats were running, for crash recovery, the latest usage-limit readings, and your scheduled messages with their images until they are sent), `service.json` (how the app finds the running service: pid, port, access token; readable only by you), a lock file, and `logs/` (rotating; message content is not logged). Deleting the directory resets Threadgarden completely and touches nothing of Claude Code's. Because the index holds the text of your conversations, treat this directory like `~/.claude` itself.
 
-**API key:** if you enter one, it is kept in the OS credential store (Windows Credential Manager, macOS Keychain, Secret Service on Linux) and handed to the service in memory; it is never written to `pahub.db`, `service.json` or the logs.
+**API key:** if you enter one, it is kept in the OS credential store (Windows Credential Manager, macOS Keychain, Secret Service on Linux) and handed to the service in memory; it is never written to `threadgarden.db`, `service.json` or the logs. The credential entry is named `threadgarden` (`pahub` before v1.3, see [Upgrading from pahub](#upgrading-from-pahub)).
 
 **Network:** the service listens on `127.0.0.1` only, on a random port, and accepts only connections that present the random token from `service.json`. Threadgarden itself contacts no servers: the `claude` processes it starts talk to Anthropic exactly as they do in a terminal. Remote images in chat content are not loaded (they show as links), and links open in your system browser.
 
@@ -202,7 +212,7 @@ Threadgarden was called Threadgarden until v1.3; the data dir, `pahub.db`, the `
 
 Threadgarden has no login of its own. By default every session it starts uses whatever authentication your installed Claude Code already uses (a Claude subscription login, an API key in the environment, or a configured third-party provider). If you set an Anthropic API key in Threadgarden's settings, Threadgarden passes it to the sessions it starts as `ANTHROPIC_API_KEY`, and they use the key instead; removing it returns to the inherited authentication. The chat header shows which authentication a session reports, so you can see whether it runs on a subscription or on API billing. What was verified about this is in [docs/architecture.md](docs/architecture.md#authentication).
 
-**API-key-only build.** To ship Threadgarden without the option of inheriting Claude Code's own sign-in (spec §5.5), build it with `PAHUB_API_KEY_ONLY=1` set, for example `PAHUB_API_KEY_ONLY=1 pnpm --filter desktop tauri build`. The flag is baked into both the UI and the bundled service at build time (it cannot be switched on or off by the environment of an installed app). In such a build, chats start or continue only once an Anthropic API key is set in Settings: the service refuses `chat.create` and resuming a chat without one (`API_KEY_REQUIRED`), the settings and new-chat dialogs say that a key is required, and history stays browsable without a key.
+**API-key-only build.** To ship Threadgarden without the option of inheriting Claude Code's own sign-in (spec §5.5), build it with `THREADGARDEN_API_KEY_ONLY=1` set, for example `THREADGARDEN_API_KEY_ONLY=1 pnpm --filter desktop tauri build` (the old name `PAHUB_API_KEY_ONLY` still works in this release, with a deprecation note). The flag is baked into both the UI and the bundled service at build time (it cannot be switched on or off by the environment of an installed app). In such a build, chats start or continue only once an Anthropic API key is set in Settings: the service refuses `chat.create` and resuming a chat without one (`API_KEY_REQUIRED`), the settings and new-chat dialogs say that a key is required, and history stays browsable without a key.
 
 You are responsible for complying with Anthropic's terms for the authentication you use. For reference, the Agent SDK documentation states that, unless previously approved, Anthropic does not allow third-party developers to offer claude.ai login or rate limits for their products, including agents built on the Claude Agent SDK, and points to API key authentication instead; use of the SDK is governed by Anthropic's Commercial Terms. Read the current documentation and terms yourself; this section is not legal advice.
 

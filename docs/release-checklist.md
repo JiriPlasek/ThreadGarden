@@ -85,7 +85,15 @@ check in the pull request or release notes.
 - [ ] Set an API key: the chat header of a new chat shows API-key
       authentication; remove it and the next new chat shows the inherited
       authentication again. The key is in the OS credential store under
-      `pahub`, and not in the data dir.
+      `threadgarden`, and not in the data dir.
+- [ ] Upgrade from pahub (v1.3 §9): with pahub v1.2 installed, its service
+      running, a few chats titled, pinned and archived, and an API key set,
+      install Threadgarden and start it. It shows the restart screen for the
+      older service; restarting it brings up the same chats, titles, pins,
+      buckets, settings and API key. The old `pahub` data dir is unchanged
+      apart from a new `MOVED-TO-THREADGARDEN.txt`, the new `threadgarden`
+      dir holds `threadgarden.db`, and the credential store has a
+      `threadgarden` entry and no `pahub` one.
 - [ ] Theme (system/light/dark), Enter-to-send and start-on-login settings
       take effect and survive a restart.
 - [ ] A draft typed in a chat survives quitting and relaunching Threadgarden.
