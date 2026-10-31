@@ -44,6 +44,10 @@ import { generateCorpus } from './corpus.js';
 import { FakeAdapter, FakeSession } from './fake-adapter.js';
 
 const MOCK_VERSION = '0.0.0-mock';
+/** The model named on the scripted replies (v1.3 analytics). */
+const MOCK_MODEL = 'claude-sonnet-4-5';
+/** The synthetic history spans this many days before the mock's start (v1.3 analytics). */
+const HISTORY_DAYS = 150;
 const DELTA_MS = 40;
 /** The "agent" subagent reports progress this often, `AGENT_STEPS.length` times (~3 s). */
 const AGENT_STEP_MS = 600;
@@ -431,7 +435,13 @@ class ScriptedSession extends FakeSession {
     }
     stream({ type: 'content_block_stop', index: 0 });
     const uuid = randomUUID();
-    const message = { id: apiId, role: 'assistant', content: [{ type: 'text', text: sent }] };
+    const message = {
+      id: apiId,
+      role: 'assistant',
+      model: MOCK_MODEL,
+      content: [{ type: 'text', text: sent }],
+      usage: { input_tokens: 1200, output_tokens: sent.length, cache_read_input_tokens: 18_000 },
+    };
     this.out(msg({ type: 'assistant', uuid, ...base, message }));
     await this.adapter.record(this, { type: 'assistant', uuid, message });
   }
@@ -484,6 +494,8 @@ class ScriptedAdapter extends FakeAdapter {
     }
     entry.messages.push({
       ...m,
+      // Like the CLI's transcript entries (v1.3 analytics reads it).
+      timestamp: new Date().toISOString(),
       session_id: s.id,
       parent_tool_use_id: null,
       parent_agent_id: null,
@@ -526,6 +538,8 @@ export const startMockService = async (o: MockOptions = {}): Promise<MockService
     sessions: o.sessions ?? 1000,
     projects: o.projects ?? 50,
     bigSessionMessages: o.bigSessionMessages ?? 2000,
+    // Dated up to now, with models, tokens and tool calls: the Analytics view has data.
+    recent: { now: Date.now(), days: HISTORY_DAYS },
   });
   for (const [id, s] of corpus.sessions) adapter.sessions.set(id, s);
 
