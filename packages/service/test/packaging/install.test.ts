@@ -83,7 +83,11 @@ describe.skipIf(process.platform === 'win32' || isRoot)('headless install.sh', (
       'loginctl',
       'echo "loginctl $*" >> "$LOG"\n[ "$1" = show-user ] && [ -n "${LINGER:-}" ] && echo "Linger=$LINGER"\nexit 0',
     );
-    const sudo = await stub('sudo', 'echo "sudo $*" >> "$LOG"\nexec "$@"');
+    // Logs the command by basename: LOGINCTL is an absolute stub path.
+    const sudo = await stub(
+      'sudo',
+      'first=$1\nshift\necho "sudo $(basename "$first") $*" >> "$LOG"\nexec "$first" "$@"',
+    );
     return sh(join(from, 'install.sh'), [], {
       HOME: home,
       USER: 'tester',
@@ -156,6 +160,16 @@ describe.skipIf(process.platform === 'win32' || isRoot)('headless install.sh', (
     const left = (await readdir(join(home, data))).sort();
     expect(left).toEqual(['2.0.0', '3.0.0', 'current']);
     expect(await readlink(join(home, data, 'current'))).toMatch(/3\.0\.0$/);
+  });
+
+  it('reinstalling the current version keeps the rollback and drops stale temp copies', async () => {
+    for (const v of ['2.0.0', '3.0.0']) {
+      await writeFile(join(release, 'VERSION'), `${v}\n`);
+      expect((await install()).code).toBe(0);
+    }
+    await mkdir(join(home, data, '.3.0.0.tmp.99'));
+    expect((await install({}, join(home, data, 'current'))).code).toBe(0);
+    expect((await readdir(join(home, data))).sort()).toEqual(['2.0.0', '3.0.0', 'current']);
   });
 
   it('refuses to run as root', async () => {

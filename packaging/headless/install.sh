@@ -23,9 +23,13 @@ fi
 
 src=$(CDPATH= cd -- "$(dirname "$0")" && pwd -P)
 version=$(cat "$src/VERSION")
-: "${version:?empty VERSION}"
+if [ -z "$version" ]; then
+  echo "Empty VERSION." >&2
+  exit 1
+fi
+# It becomes a directory name: letters, digits and . + _ - only, no leading dot.
 case $version in
-  */* | . | ..)
+  *[!A-Za-z0-9.+_-]* | .*)
     echo "Invalid VERSION '$version'." >&2
     exit 1
     ;;
@@ -47,23 +51,32 @@ if [ "$(CDPATH= cd -- "$dest" 2>/dev/null && pwd -P || true)" != "$src" ]; then
   # Copy aside, then swap in, so a failed copy never leaves a half release.
   tmp=$base/.$version.tmp.$$
   rm -rf "$tmp"
+  trap 'rm -rf "$tmp"' EXIT
   mkdir -p "$tmp"
   cp -R "$src/." "$tmp/"
   rm -rf "${dest:?}"
   mv "$tmp" "$dest"
+  trap - EXIT
 fi
 chmod +x "$dest/bin/threadgarden" "$dest/install.sh"
 [ ! -f "$dest/bin/node" ] || chmod +x "$dest/bin/node"
 ln -sfn "$dest" "$base/current"
 ln -sfn "$base/current/bin/threadgarden" "$HOME/.local/bin/threadgarden"
 
-# Keep this release and the one before it; drop the rest.
-for old in "$base"/*; do
-  [ -d "$old" ] && [ ! -L "$old" ] || continue
-  name=${old##*/}
-  [ "$name" != "$version" ] && [ "$name" != "$previous" ] || continue
-  rm -rf "$old"
+# Copies an earlier run left half-done.
+for stale in "$base"/.*.tmp.*; do
+  if [ -d "$stale" ]; then rm -rf "$stale"; fi
 done
+# Keep this release and the one before it; drop the rest. Reinstalling the
+# current version (previous == version) must not cost the rollback, so it prunes nothing.
+if [ "$previous" != "$version" ]; then
+  for old in "$base"/*; do
+    [ -d "$old" ] && [ ! -L "$old" ] || continue
+    name=${old##*/}
+    [ "$name" != "$version" ] && [ "$name" != "$previous" ] || continue
+    rm -rf "$old"
+  done
+fi
 
 cp "$src/threadgarden.service" "$unit_dir/threadgarden.service"
 
@@ -80,9 +93,12 @@ case $linger in
     echo "(it may ask for your password; skip it with Ctrl+C and the service will"
     echo "only run while you are logged in)."
     # Ctrl+C reaches the whole process group; only the sudo child should die.
-    trap 'echo "Skipped lingering."' INT
-    $SUDO $LOGINCTL enable-linger "$user" ||
-      echo "Could not enable lingering; run 'sudo loginctl enable-linger $user' later."
+    skipped=0
+    trap 'skipped=1; echo "Skipped lingering."' INT
+    $SUDO $LOGINCTL enable-linger "$user" || {
+      [ "$skipped" = 1 ] ||
+        echo "Could not enable lingering; run 'sudo loginctl enable-linger $user' later."
+    }
     trap - INT
     ;;
 esac
