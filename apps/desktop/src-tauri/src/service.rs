@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::discovery::{self, Discovery};
+use crate::discovery::{self, DataDirs, Discovery};
 
 /// Must equal `PROTOCOL_VERSION` in `packages/protocol/src/version.ts` (checked by a test).
 pub const PROTOCOL_VERSION: u32 = 4;
@@ -108,13 +108,16 @@ pub fn release_target(exe_dir: &Path, resource_dir: &Path) -> Result<LaunchTarge
     Ok(LaunchTarget::node(node, &script))
 }
 
-/// The service command: detached, stdio to the null device, `PAHUB_DATA_DIR` set.
-pub fn build_detached_command(target: &LaunchTarget, data_dir: &Path) -> Command {
+/// The service command: detached, stdio to the null device, the data dirs set
+/// (`THREADGARDEN_DATA_DIR`, and `THREADGARDEN_LEGACY_DATA_DIR` for the one-time
+/// migration from pahub's, spec v1.3 §9).
+pub fn build_detached_command(target: &LaunchTarget, dirs: &DataDirs) -> Command {
     let mut cmd = Command::new(&target.program);
     cmd.args(&target.args)
-        .env("PAHUB_DATA_DIR", data_dir)
+        .env("THREADGARDEN_DATA_DIR", &dirs.dir)
+        .env("THREADGARDEN_LEGACY_DATA_DIR", &dirs.legacy)
         // Not the app's cwd: a process's cwd cannot be deleted on Windows.
-        .current_dir(data_dir)
+        .current_dir(&dirs.dir)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -180,10 +183,10 @@ fn spawn(cmd: &mut Command) -> std::io::Result<std::process::Child> {
 }
 
 /// Starts the service detached and returns its pid.
-pub fn spawn_detached(target: &LaunchTarget, data_dir: &Path) -> Result<u32, String> {
-    std::fs::create_dir_all(data_dir)
-        .map_err(|e| format!("service-start-failed: {}: {e}", data_dir.display()))?;
-    let mut cmd = build_detached_command(target, data_dir);
+pub fn spawn_detached(target: &LaunchTarget, dirs: &DataDirs) -> Result<u32, String> {
+    std::fs::create_dir_all(&dirs.dir)
+        .map_err(|e| format!("service-start-failed: {}: {e}", dirs.dir.display()))?;
+    let mut cmd = build_detached_command(target, dirs);
     let mut child = spawn(&mut cmd)
         .map_err(|e| format!("service-start-failed: {}: {e}", target.program.display()))?;
     let pid = child.id();
@@ -274,11 +277,25 @@ pub const STOP_TIMEOUT: Duration = Duration::from_secs(10);
 /// resolves once its process has exited, so a new service can take over the
 /// data dir. Nothing recorded, or the process already gone, is success; a
 /// refused request is fine too (the UI may have asked it first, and it is
-/// already closing).
+/// already closing). Both data dirs are looked at: the service to restart may
+/// be a pahub service in the old one (spec v1.3 §9), whose exit lets the new
+/// service migrate.
 pub async fn stop(
-    data_dir: &Path,
+    dirs: &DataDirs,
     timeout: Duration,
     is_alive: impl Fn(u32) -> bool,
+) -> Result<(), String> {
+    for dir in dirs.discovery_dirs() {
+        stop_recorded(dir, timeout, &is_alive).await?;
+    }
+    Ok(())
+}
+
+/// Stops the service recorded in one data dir (see `stop`).
+async fn stop_recorded(
+    data_dir: &Path,
+    timeout: Duration,
+    is_alive: &impl Fn(u32) -> bool,
 ) -> Result<(), String> {
     let Some(d) = discovery::read_discovery(data_dir).filter(|d| is_alive(d.pid)) else {
         return Ok(());
@@ -312,21 +329,34 @@ fn connection(d: &Discovery, hello: &HelloResult, app_version: &str) -> Connecti
     }
 }
 
+/// The first service recorded in `dirs` (the new data dir, then the old one)
+/// whose process is alive and that answers `hello`.
+async fn answering(dirs: &DataDirs) -> Option<(Discovery, HelloResult)> {
+    for dir in dirs.discovery_dirs() {
+        if let Some(d) = discovery::read_live_discovery(dir, discovery::pid_alive)
+            && let Ok(h) = hello(d.port, &d.token, HELLO_TIMEOUT).await
+        {
+            return Some((d, h));
+        }
+    }
+    None
+}
+
 /// Connects to the running service, or calls `launch` to start one and waits
 /// up to `start_timeout` for a live `service.json` whose service answers `hello`.
 /// Only a different *protocol* is an error; a different service version is reported.
+/// A pahub service still running in the old data dir (spec v1.3 §9) is found
+/// too: its older protocol is `service-version-mismatch`, and the restart the
+/// UI then offers stops it, so the new service can migrate its data.
 pub async fn connect(
-    data_dir: &Path,
+    dirs: &DataDirs,
     app_version: &str,
     start_timeout: Duration,
     launch: impl FnOnce() -> Result<(), String>,
 ) -> Result<Connection, String> {
-    let recorded = discovery::read_discovery(data_dir);
-    if let Some(d) = recorded.as_ref().filter(|d| discovery::pid_alive(d.pid))
-        && let Ok(h) = hello(d.port, &d.token, HELLO_TIMEOUT).await
-    {
+    if let Some((d, h)) = answering(dirs).await {
         check_protocol(&h)?;
-        return Ok(connection(d, &h, app_version));
+        return Ok(connection(&d, &h, app_version));
     }
 
     // A live process that did not answer is either not the service (a reused
@@ -337,9 +367,7 @@ pub async fn connect(
     launch()?;
     let deadline = tokio::time::Instant::now() + start_timeout;
     loop {
-        if let Some(d) = discovery::read_live_discovery(data_dir, discovery::pid_alive)
-            && let Ok(h) = hello(d.port, &d.token, HELLO_TIMEOUT).await
-        {
+        if let Some((d, h)) = answering(dirs).await {
             check_protocol(&h)?;
             return Ok(connection(&d, &h, app_version));
         }
@@ -347,7 +375,7 @@ pub async fn connect(
             return Err(format!(
                 "service-start-timeout: no service answered within {} s (logs in {})",
                 start_timeout.as_secs_f32(),
-                data_dir.display()
+                dirs.dir.display()
             ));
         }
         tokio::time::sleep(POLL_INTERVAL).await;
@@ -469,8 +497,10 @@ mod tests {
     }
 
     /// A stand-in service that answers every request with `{}`, records each
-    /// request, and "exits" (clears `alive`) once asked to shut down.
+    /// request, and "exits" (clears `alive`) once asked to shut down. It knows
+    /// only the `<prefix>.<token>` subprotocol.
     async fn shutdown_service(
+        prefix: &'static str,
         token: &'static str,
         alive: Arc<AtomicBool>,
     ) -> (u16, Arc<std::sync::Mutex<Vec<serde_json::Value>>>) {
@@ -482,7 +512,7 @@ mod tests {
             while let Ok((stream, _)) = listener.accept().await {
                 let (log, alive) = (log.clone(), alive.clone());
                 tokio::spawn(async move {
-                    let check = RequireToken(format!("threadgarden.{token}"));
+                    let check = RequireToken(format!("{prefix}.{token}"));
                     let Ok(mut ws) = tokio_tungstenite::accept_hdr_async(stream, check).await
                     else {
                         return;
@@ -501,6 +531,11 @@ mod tests {
             }
         });
         (port, seen)
+    }
+
+    /// One data dir that is its own legacy dir.
+    fn only(dir: &Path) -> DataDirs {
+        DataDirs::single(dir.to_path_buf())
     }
 
     fn write_discovery(dir: &Path, port: u16, token: &str, started_at: u64) {
@@ -529,18 +564,31 @@ mod tests {
     #[test]
     fn builds_detached_command_with_expected_flags_per_os() {
         let target = LaunchTarget::node(PathBuf::from("node"), Path::new("svc/service.mjs"));
-        let cmd = build_detached_command(&target, Path::new("data-dir"));
+        let dirs = DataDirs {
+            dir: PathBuf::from("data-dir"),
+            legacy: PathBuf::from("old-dir"),
+            deprecated_env: false,
+        };
+        let cmd = build_detached_command(&target, &dirs);
         assert_eq!(cmd.get_program(), "node");
         let args: Vec<_> = cmd.get_args().collect();
         assert_eq!(
             args,
             ["--disable-warning=ExperimentalWarning", "svc/service.mjs"]
         );
-        let data_dir = cmd
-            .get_envs()
-            .find(|(k, _)| *k == "PAHUB_DATA_DIR")
-            .and_then(|(_, v)| v);
-        assert_eq!(data_dir, Some(std::ffi::OsStr::new("data-dir")));
+        let env = |name: &str| {
+            cmd.get_envs()
+                .find(|(k, _)| *k == name)
+                .and_then(|(_, v)| v)
+        };
+        assert_eq!(
+            env("THREADGARDEN_DATA_DIR"),
+            Some(std::ffi::OsStr::new("data-dir"))
+        );
+        assert_eq!(
+            env("THREADGARDEN_LEGACY_DATA_DIR"),
+            Some(std::ffi::OsStr::new("old-dir"))
+        );
         assert_eq!(cmd.get_current_dir(), Some(Path::new("data-dir")));
         #[cfg(windows)]
         assert_eq!(DETACH_FLAGS, 0x0000_0008 | 0x0000_0200 | 0x0800_0000);
@@ -559,7 +607,7 @@ mod tests {
                 format!("echo $$ $(ps -o pgid= -p $$) > '{}'", out.display()).into(),
             ],
         };
-        let pid = spawn_detached(&target, dir.path()).unwrap();
+        let pid = spawn_detached(&target, &only(dir.path())).unwrap();
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         let text = loop {
             if let Ok(t) = std::fs::read_to_string(&out)
@@ -675,9 +723,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let port = fake_service("tok", APP_VERSION, PROTOCOL_VERSION).await;
         write_discovery(dir.path(), port, "tok", 1);
-        let conn = connect(dir.path(), APP_VERSION, Duration::from_secs(1), || {
-            panic!("must not launch a second service")
-        })
+        let conn = connect(
+            &only(dir.path()),
+            APP_VERSION,
+            Duration::from_secs(1),
+            || panic!("must not launch a second service"),
+        )
         .await
         .unwrap();
         assert_eq!(
@@ -698,9 +749,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let port = fake_service("tok", "0.0.9", PROTOCOL_VERSION).await;
         write_discovery(dir.path(), port, "tok", 1);
-        let conn = connect(dir.path(), APP_VERSION, Duration::from_secs(1), || {
-            panic!("must not launch over a compatible service")
-        })
+        let conn = connect(
+            &only(dir.path()),
+            APP_VERSION,
+            Duration::from_secs(1),
+            || panic!("must not launch over a compatible service"),
+        )
         .await
         .unwrap();
         assert_eq!(conn.service_version, "0.0.9");
@@ -715,9 +769,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let port = fake_service("tok", APP_VERSION, PROTOCOL_VERSION + 1).await;
         write_discovery(dir.path(), port, "tok", 1);
-        let err = connect(dir.path(), APP_VERSION, Duration::from_secs(1), || {
-            panic!("must not launch over an incompatible service")
-        })
+        let err = connect(
+            &only(dir.path()),
+            APP_VERSION,
+            Duration::from_secs(1),
+            || panic!("must not launch over an incompatible service"),
+        )
         .await
         .unwrap_err();
         assert_eq!(err, "service-version-mismatch");
@@ -734,14 +791,19 @@ mod tests {
         let port = fake_service("new", APP_VERSION, PROTOCOL_VERSION).await;
         let launched = Arc::new(AtomicBool::new(false));
         let (flag, path) = (launched.clone(), dir.path().to_path_buf());
-        let conn = connect(dir.path(), APP_VERSION, Duration::from_secs(3), move || {
-            flag.store(true, Ordering::SeqCst);
-            std::thread::spawn(move || {
-                std::thread::sleep(Duration::from_millis(300));
-                write_discovery(&path, port, "new", 2);
-            });
-            Ok(())
-        })
+        let conn = connect(
+            &only(dir.path()),
+            APP_VERSION,
+            Duration::from_secs(3),
+            move || {
+                flag.store(true, Ordering::SeqCst);
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_millis(300));
+                    write_discovery(&path, port, "new", 2);
+                });
+                Ok(())
+            },
+        )
         .await
         .unwrap();
         assert!(launched.load(Ordering::SeqCst));
@@ -759,10 +821,15 @@ mod tests {
         // The extra service started meanwhile exits at once (the data dir is
         // locked), so no fresh service.json ever appears: the recorded service,
         // answering now, is the one to use.
-        let conn = connect(dir.path(), APP_VERSION, Duration::from_secs(5), move || {
-            flag.store(true, Ordering::SeqCst);
-            Ok(())
-        })
+        let conn = connect(
+            &only(dir.path()),
+            APP_VERSION,
+            Duration::from_secs(5),
+            move || {
+                flag.store(true, Ordering::SeqCst);
+                Ok(())
+            },
+        )
         .await
         .unwrap();
         assert!(launched.load(Ordering::SeqCst));
@@ -781,9 +848,12 @@ mod tests {
     #[tokio::test]
     async fn gives_up_when_no_service_appears() {
         let dir = tempfile::tempdir().unwrap();
-        let err = connect(dir.path(), APP_VERSION, Duration::from_millis(300), || {
-            Ok(())
-        })
+        let err = connect(
+            &only(dir.path()),
+            APP_VERSION,
+            Duration::from_millis(300),
+            || Ok(()),
+        )
         .await
         .unwrap_err();
         assert!(err.starts_with("service-start-timeout"), "{err}");
@@ -792,9 +862,12 @@ mod tests {
     #[tokio::test]
     async fn reports_a_failed_launch() {
         let dir = tempfile::tempdir().unwrap();
-        let err = connect(dir.path(), APP_VERSION, Duration::from_secs(1), || {
-            Err("service-runtime-missing: x".into())
-        })
+        let err = connect(
+            &only(dir.path()),
+            APP_VERSION,
+            Duration::from_secs(1),
+            || Err("service-runtime-missing: x".into()),
+        )
         .await
         .unwrap_err();
         assert_eq!(err, "service-runtime-missing: x");
@@ -804,10 +877,10 @@ mod tests {
     async fn stop_asks_the_service_to_shut_down_and_waits_for_its_exit() {
         let dir = tempfile::tempdir().unwrap();
         let alive = Arc::new(AtomicBool::new(true));
-        let (port, seen) = shutdown_service("tok", alive.clone()).await;
+        let (port, seen) = shutdown_service("threadgarden", "tok", alive.clone()).await;
         write_discovery(dir.path(), port, "tok", 1);
         let flag = alive.clone();
-        stop(dir.path(), Duration::from_secs(3), move |_| {
+        stop(&only(dir.path()), Duration::from_secs(3), move |_| {
             flag.load(Ordering::SeqCst)
         })
         .await
@@ -822,11 +895,11 @@ mod tests {
     #[tokio::test]
     async fn stop_without_a_live_service_is_a_no_op() {
         let dir = tempfile::tempdir().unwrap();
-        stop(dir.path(), Duration::from_millis(100), |_| true)
+        stop(&only(dir.path()), Duration::from_millis(100), |_| true)
             .await
             .unwrap();
         write_discovery(dir.path(), 1, "tok", 1);
-        stop(dir.path(), Duration::from_millis(100), |_| false)
+        stop(&only(dir.path()), Duration::from_millis(100), |_| false)
             .await
             .unwrap();
     }
@@ -839,9 +912,66 @@ mod tests {
         let port = gone.local_addr().unwrap().port();
         drop(gone);
         write_discovery(dir.path(), port, "tok", 1);
-        let err = stop(dir.path(), Duration::from_millis(300), |_| true)
+        let err = stop(&only(dir.path()), Duration::from_millis(300), |_| true)
             .await
             .unwrap_err();
         assert!(err.starts_with("service-stop-timeout"), "{err}");
+    }
+
+    /// A new data dir and pahub's old one (spec v1.3 §9).
+    fn new_and_old() -> (tempfile::TempDir, tempfile::TempDir, DataDirs) {
+        let (new, old) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+        let dirs = DataDirs {
+            dir: new.path().to_path_buf(),
+            legacy: old.path().to_path_buf(),
+            deprecated_env: false,
+        };
+        (new, old, dirs)
+    }
+
+    /// A pahub service still running from before the update is found in the
+    /// old dir and reported as incompatible, so the UI offers the restart.
+    #[tokio::test]
+    async fn finds_a_pahub_service_in_the_old_dir_and_reports_the_mismatch() {
+        let (_new, old, dirs) = new_and_old();
+        let port = fake_service_with_prefix("pahub", "tok", "0.2.0", 3).await;
+        write_discovery(old.path(), port, "tok", 1);
+        let err = connect(&dirs, APP_VERSION, Duration::from_secs(1), || {
+            panic!("must not launch next to a running pahub service")
+        })
+        .await
+        .unwrap_err();
+        assert_eq!(err, "service-version-mismatch");
+    }
+
+    #[tokio::test]
+    async fn prefers_the_service_in_the_new_dir() {
+        let (new, old, dirs) = new_and_old();
+        let current = fake_service("new", APP_VERSION, PROTOCOL_VERSION).await;
+        write_discovery(new.path(), current, "new", 2);
+        let legacy = fake_service_with_prefix("pahub", "old", "0.2.0", 3).await;
+        write_discovery(old.path(), legacy, "old", 1);
+        let conn = connect(&dirs, APP_VERSION, Duration::from_secs(1), || {
+            panic!("must not launch over a compatible service")
+        })
+        .await
+        .unwrap();
+        assert_eq!(conn.port, current);
+    }
+
+    #[tokio::test]
+    async fn stop_also_stops_a_pahub_service_in_the_old_dir() {
+        let (_new, old, dirs) = new_and_old();
+        let alive = Arc::new(AtomicBool::new(true));
+        let (port, seen) = shutdown_service("pahub", "tok", alive.clone()).await;
+        write_discovery(old.path(), port, "tok", 1);
+        let flag = alive.clone();
+        stop(&dirs, Duration::from_secs(3), move |_| {
+            flag.load(Ordering::SeqCst)
+        })
+        .await
+        .unwrap();
+        assert!(!alive.load(Ordering::SeqCst));
+        assert_eq!(seen.lock().unwrap()[0]["method"], "service.shutdown");
     }
 }

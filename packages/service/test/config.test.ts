@@ -50,9 +50,10 @@ describe('resolveDataDirs', () => {
     expect(dirs.deprecation).toMatch(/PAHUB_DATA_DIR is deprecated.*THREADGARDEN_DATA_DIR/);
   });
   it('prefers THREADGARDEN_DATA_DIR over PAHUB_DATA_DIR; empty values count as unset', () => {
+    // Still noted: the shell passes the dir it resolved from PAHUB_DATA_DIR as THREADGARDEN_DATA_DIR.
     expect(
       resolveDataDirs({ THREADGARDEN_DATA_DIR: '/new', PAHUB_DATA_DIR: '/old' }, 'linux', '/h'),
-    ).toEqual({ dataDir: '/new', legacyDir: '/new' });
+    ).toEqual({ dataDir: '/new', legacyDir: '/new', deprecation: expect.stringMatching(/PAHUB/) });
     expect(
       resolveDataDirs({ THREADGARDEN_DATA_DIR: '', PAHUB_DATA_DIR: '' }, 'linux', '/h').dataDir,
     ).toBe('/h/.local/share/threadgarden');

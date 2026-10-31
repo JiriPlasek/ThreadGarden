@@ -8,7 +8,7 @@ pub mod secrets;
 pub mod service;
 pub mod tray;
 
-use std::path::PathBuf;
+use std::sync::Once;
 
 use tauri::{AppHandle, DragDropEvent, Manager, RunEvent, WindowEvent};
 use tokio::sync::Mutex;
@@ -16,16 +16,28 @@ use tokio::sync::Mutex;
 /// Serialises `service_connection` so concurrent calls never start two services.
 static CONNECT: Mutex<()> = Mutex::const_new(());
 
-fn data_dir(app: &AppHandle) -> Result<PathBuf, String> {
+/// Said once per run when the data dir comes from the deprecated `PAHUB_DATA_DIR`.
+static DEPRECATED_ENV_NOTE: Once = Once::new();
+
+fn data_dirs(app: &AppHandle) -> Result<discovery::DataDirs, String> {
     let home = app
         .path()
         .home_dir()
         .map_err(|e| format!("no-home-dir: {e}"))?;
-    Ok(discovery::resolve_data_dir(
+    let dirs = discovery::resolve_data_dirs(
         |name| std::env::var(name).ok(),
         discovery::Os::current(),
         &home,
-    ))
+    );
+    if dirs.deprecated_env {
+        DEPRECATED_ENV_NOTE.call_once(|| {
+            eprintln!(
+                "Threadgarden: PAHUB_DATA_DIR is deprecated and will be ignored in a later \
+                 release; set THREADGARDEN_DATA_DIR instead"
+            );
+        });
+    }
+    Ok(dirs)
 }
 
 /// Debug builds run the repo's service with the system `node`; release builds
@@ -50,11 +62,11 @@ fn launch_target(app: &AppHandle) -> Result<service::LaunchTarget, String> {
 /// Finds the running service or starts it (see `service::connect`).
 async fn connect_service(app: &AppHandle) -> Result<service::Connection, String> {
     let _guard = CONNECT.lock().await;
-    let dir = data_dir(app)?;
+    let dirs = data_dirs(app)?;
     let app_version = app.package_info().version.to_string();
-    service::connect(&dir, &app_version, service::START_TIMEOUT, || {
+    service::connect(&dirs, &app_version, service::START_TIMEOUT, || {
         let target = launch_target(app)?;
-        service::spawn_detached(&target, &dir).map(|_| ())
+        service::spawn_detached(&target, &dirs).map(|_| ())
     })
     .await
 }
@@ -70,8 +82,8 @@ async fn service_connection(app: AppHandle) -> Result<service::Connection, Strin
 #[tauri::command]
 async fn service_stop(app: AppHandle) -> Result<(), String> {
     let _guard = CONNECT.lock().await;
-    let dir = data_dir(&app)?;
-    service::stop(&dir, service::STOP_TIMEOUT, discovery::pid_alive).await
+    let dirs = data_dirs(&app)?;
+    service::stop(&dirs, service::STOP_TIMEOUT, discovery::pid_alive).await
 }
 
 async fn blocking<T: Send + 'static>(

@@ -3,6 +3,8 @@ import path from 'node:path';
 /** The data dir's name, and the one pahub (Threadgarden before v1.3) used. */
 const DIR_NAME = 'threadgarden';
 const LEGACY_DIR_NAME = 'pahub';
+const PAHUB_DATA_DIR_DEPRECATED =
+  'PAHUB_DATA_DIR is deprecated and will be ignored in a later release: set THREADGARDEN_DATA_DIR instead';
 
 export type DataDirs = {
   /** Where the service keeps its data. */
@@ -43,18 +45,14 @@ export const resolveDataDirs = (
   platform: NodeJS.Platform,
   home: string,
 ): DataDirs => {
-  const override = env.THREADGARDEN_DATA_DIR;
-  if (override)
-    return { dataDir: override, legacyDir: env.THREADGARDEN_LEGACY_DATA_DIR || override };
   const legacy = env.PAHUB_DATA_DIR;
-  if (legacy) {
-    return {
-      dataDir: legacy,
-      legacyDir: legacy,
-      deprecation:
-        'PAHUB_DATA_DIR is deprecated and will be ignored in a later release: set THREADGARDEN_DATA_DIR instead',
-    };
+  // Also when the shell passed the dir it resolved from it as THREADGARDEN_DATA_DIR.
+  const note = legacy ? { deprecation: PAHUB_DATA_DIR_DEPRECATED } : {};
+  const override = env.THREADGARDEN_DATA_DIR;
+  if (override) {
+    return { dataDir: override, legacyDir: env.THREADGARDEN_LEGACY_DATA_DIR || override, ...note };
   }
+  if (legacy) return { dataDir: legacy, legacyDir: legacy, ...note };
   return {
     dataDir: platformDir(env, platform, home, DIR_NAME),
     legacyDir: platformDir(env, platform, home, LEGACY_DIR_NAME),
