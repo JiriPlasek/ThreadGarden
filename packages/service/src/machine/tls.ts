@@ -1,7 +1,6 @@
 import { X509Certificate, createPrivateKey, randomBytes } from 'node:crypto';
 import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { generate } from 'selfsigned';
 
 export type TlsIdentity = { keyPem: string; certPem: string; fingerprint256: string };
 
@@ -77,6 +76,9 @@ export const loadOrCreateTlsIdentity = async (
   // Valid from a day ago: a device whose clock is behind this machine's must
   // not find a brand-new certificate "not yet valid" (devices check the dates).
   const notBeforeDate = new Date(now - BACKDATE_MS);
+  // Loaded only here: a headless service needs it once, the desktop's never
+  // (a static import would load it and its polyfills at every service start).
+  const { generate } = await import('selfsigned');
   const pems = await generate([{ name: 'commonName', value: commonName }], {
     keyType: 'ec',
     curve: 'P-256',
