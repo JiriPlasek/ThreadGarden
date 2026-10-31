@@ -428,6 +428,7 @@ CI runs them with `PAHUB_PERF_SLACK=3`. Measured on the development machine
 | `@` suggestions over 200k files | 50 ms | max 17.3 ms |
 | Event-loop delay while building a 200k-file index | 50 ms | max 15.0 ms |
 | Event-loop delay while indexing a 20 MB session | 50 ms | max 9.2 ms (221 ms total) |
+| Event-loop delay while finding the icons of 50 worst-case projects at once | 50 ms | max 17.3 ms (577 ms total) |
 | Service idle memory after indexing 1,000 sessions | 150 MB | 101.6 MB RSS |
 | Switching to an open tab | 50 ms | median 9.5 ms |
 | Opening a history chat | 150 ms | median 22.0 ms |
