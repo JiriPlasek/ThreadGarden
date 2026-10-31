@@ -92,6 +92,32 @@ const steps: string[] = [
     generated_title TEXT
   );
   `,
+  // v1.3 B usage and scheduled sends. `usage_limits`: the account's latest
+  // plan usage per window (and the account row), as JSON, so it survives
+  // restarts. `scheduled_sends`: messages pahub sends to a chat later
+  // (`state` pending / sending / failed; sent and cancelled ones are deleted).
+  `
+  CREATE TABLE IF NOT EXISTS usage_limits (
+    key TEXT PRIMARY KEY,
+    json TEXT NOT NULL,
+    observed_at INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS scheduled_sends (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    text TEXT NOT NULL,
+    images TEXT,
+    send_at INTEGER NOT NULL,
+    created_at INTEGER NOT NULL,
+    state TEXT NOT NULL DEFAULT 'pending',
+    after_reset INTEGER NOT NULL DEFAULT 0,
+    rescheduled INTEGER NOT NULL DEFAULT 0,
+    late INTEGER NOT NULL DEFAULT 0,
+    error TEXT
+  );
+  CREATE INDEX IF NOT EXISTS scheduled_sends_due ON scheduled_sends (state, send_at);
+  CREATE INDEX IF NOT EXISTS scheduled_sends_session ON scheduled_sends (session_id);
+  `,
 ];
 
 /** Runs the steps not run yet; `upTo` stops early (tests build older schemas with it). */

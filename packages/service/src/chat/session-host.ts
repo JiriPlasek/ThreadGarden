@@ -63,6 +63,13 @@ export type SessionHostDeps = {
   onActivity?: LiveSessionDeps['onActivity'];
   /** Handed to every session (see `LiveSessionDeps.onRunningTasks`, Ruling R29). */
   onRunningTasks?: LiveSessionDeps['onRunningTasks'];
+  // ── v1.3 B: usage limits ──
+  /** Handed to every session (see `LiveSessionDeps.onRateLimit`). */
+  onRateLimit?: LiveSessionDeps['onRateLimit'];
+  /** Handed to every session (see `LiveSessionDeps.onLimitError`). */
+  onLimitError?: LiveSessionDeps['onLimitError'];
+  /** Handed to every session (see `LiveSessionDeps.onTurnResult`). */
+  onTurnResult?: LiveSessionDeps['onTurnResult'];
 };
 
 export class SessionHost {
@@ -258,6 +265,18 @@ export class SessionHost {
     return seq === this.seqOf(sessionId) ? [] : 'gap';
   }
 
+  /**
+   * v1.3 B: the usage reading of some live chat that offers one (the account
+   * is the same for all); undefined when none runs. Never starts a process.
+   */
+  usageReader(): (() => Promise<unknown>) | undefined {
+    for (const s of this.sessions.values()) {
+      const read = s.live ? s.readUsage() : undefined;
+      if (read) return read;
+    }
+    return undefined;
+  }
+
   liveCount(): number {
     let n = 0;
     for (const s of this.sessions.values()) if (s.live) n++;
@@ -288,6 +307,9 @@ export class SessionHost {
       onTurnEnded,
       onActivity,
       onRunningTasks,
+      onRateLimit,
+      onLimitError,
+      onTurnResult,
     } = this.deps;
     return {
       adapter,
@@ -302,6 +324,9 @@ export class SessionHost {
       ...(onTurnEnded ? { onTurnEnded } : {}),
       ...(onActivity ? { onActivity } : {}),
       ...(onRunningTasks ? { onRunningTasks } : {}),
+      ...(onRateLimit ? { onRateLimit } : {}),
+      ...(onLimitError ? { onLimitError } : {}),
+      ...(onTurnResult ? { onTurnResult } : {}),
       ...extra,
       log: extra.log ?? new EventLog(undefined, this.seqBase),
     };

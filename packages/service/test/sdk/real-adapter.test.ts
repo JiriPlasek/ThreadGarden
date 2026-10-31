@@ -6,7 +6,7 @@ import type {
   SDKUserMessage,
   StartOptions,
 } from '../../src/sdk/adapter.js';
-import { RealAdapter, type SdkApi } from '../../src/sdk/real-adapter.js';
+import { RealAdapter, USAGE_METHOD, usageReader, type SdkApi } from '../../src/sdk/real-adapter.js';
 
 /** A stand-in for the SDK's `Query`: an async generator plus the control methods. */
 const fakeQuery = (messages: SDKMessage[]) => {
@@ -250,5 +250,26 @@ describe('RealAdapter.oneShot (fix round 1)', () => {
     const remove = vi.spyOn(signal, 'removeEventListener');
     await expect(adapter.oneShot(opts(signal))).rejects.toThrow(/spawn failed/);
     expect(add.mock.calls.length).toBe(remove.mock.calls.length);
+  });
+});
+
+// ── v1.3 B: usage reading ────────────────────────────────────────────────────
+
+describe('RealAdapter usage reading', () => {
+  it('feature-detects the experimental usage call and skips the behaviours scan', async () => {
+    const { q, adapter } = setup();
+    const answer = { rate_limits_available: true, rate_limits: {} };
+    const read = vi.fn(async () => answer);
+    Object.assign(q, { [USAGE_METHOD]: read });
+    const session = adapter.start(startOptions);
+    expect(session.usage).toBeTypeOf('function');
+    await expect(session.usage!()).resolves.toBe(answer);
+    expect(read).toHaveBeenCalledWith({ skipBehaviors: true });
+  });
+
+  it('offers no reading when the SDK has none', () => {
+    const { adapter } = setup();
+    expect(adapter.start(startOptions).usage).toBeUndefined();
+    expect(usageReader({})).toBeUndefined();
   });
 });

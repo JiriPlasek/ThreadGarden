@@ -92,6 +92,12 @@ export interface AgentSession {
   supportedCommands(): Promise<SlashCommand[]>;
   supportedModels(): Promise<ModelInfo[]>;
   accountInfo(): Promise<AccountInfo>;
+  /**
+   * v1.3 B: the SDK's experimental usage reading (plan rate-limit windows),
+   * unparsed; absent when this SDK does not offer it. Callers parse it
+   * leniently and fall back to the rate-limit events on any failure.
+   */
+  usage?: () => Promise<unknown>;
   close(): void;
 }
 

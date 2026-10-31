@@ -176,7 +176,16 @@ const toModel = (m: ModelInfo): Model => ({
   ...(m.supportedEffortLevels ? { supportedEffortLevels: [...m.supportedEffortLevels] } : {}),
 });
 
-export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): void => {
+export type ChatHandlers = {
+  /** What `chat.send` does (scheduled sends go out through it). */
+  send: (p: {
+    sessionId: string;
+    text: string;
+    images?: ImageRef[] | undefined;
+  }) => Promise<{ queued: boolean }>;
+};
+
+export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): ChatHandlers => {
   const { host, adapter, db, catalog } = deps;
   const historyCache = new Map<string, CacheEntry>();
   const cacheBudget = deps.historyCacheChars ?? HISTORY_CACHE_CHARS;
@@ -383,7 +392,11 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): voi
     return { sessionId: s.sessionId };
   });
 
-  router.register('chat.send', async (p) => {
+  /**
+   * `chat.send`, also the path scheduled sends (v1.3 B) go out by: resumes
+   * the chat when pahub is not running it (behind the resume-safety check).
+   */
+  const send = async (p: { sessionId: string; text: string; images?: ImageRef[] | undefined }) => {
     const input = toInput(p);
     let s = host.get(p.sessionId);
     if (!s?.live) {
@@ -408,7 +421,8 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): voi
     markSeen(p.sessionId); // replying means the last turn was seen
     if (nameChat(p.sessionId, s.cwd, p.text, true)) changed([p.sessionId]);
     return sent;
-  });
+  };
+  router.register('chat.send', send);
 
   router.register('chat.markSeen', async (p) => {
     markSeen(p.sessionId);
@@ -553,4 +567,6 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): voi
     }
     return lastModels ?? [];
   });
+
+  return { send };
 };

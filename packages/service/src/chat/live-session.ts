@@ -127,6 +127,13 @@ export type LiveSessionDeps = {
    * very often while a reply streams, so it must be cheap. A throw is reported.
    */
   onActivity?: (sessionId: string) => void;
+  // ── v1.3 B: usage limits ──
+  /** A `rate_limit_event` arrived (its `rate_limit_info`, unparsed). A throw is reported. */
+  onRateLimit?: (sessionId: string, info: unknown) => void;
+  /** An assistant message carried the API error `rate_limit` (the turn was refused). */
+  onLimitError?: (sessionId: string) => void;
+  /** A `result` arrived (every turn end, before `onTurnEnded`). A throw is reported. */
+  onTurnResult?: (sessionId: string) => void;
 };
 
 export const defaultOnError = (err: unknown, context: string): void => {
@@ -585,6 +592,21 @@ export class LiveSession {
   }
 
   /** Auth label for the header (from the session's account info, see `authLabel`). */
+  /**
+   * v1.3 B: the SDK's experimental usage reading of this chat's process;
+   * undefined when there is none or it does not offer the reading.
+   */
+  readUsage(): (() => Promise<unknown>) | undefined {
+    const session = this.session;
+    const usage = session?.usage;
+    return usage ? () => usage.call(session) : undefined;
+  }
+
+  /** Adds a line of pahub's own to the chat (e.g. a scheduled message that went out late). */
+  note(level: 'info' | 'warning' | 'error', text: string): void {
+    this.pushItems([{ kind: 'system', id: `local:${randomUUID()}`, level, text }], false);
+  }
+
   setAuth(auth: ChatHeaderInfo['auth']): void {
     if (auth === undefined) delete this.headerValue.auth;
     else this.headerValue.auth = auth;
@@ -667,6 +689,7 @@ export class LiveSession {
     this.guard('task tracking', () => {
       if (this.tracker.apply(m)) this.scheduleTasks();
     });
+    this.guard('usage limits', () => this.noteLimits(m));
     try {
       this.noteActivity();
       this.updateHeader(m);
@@ -693,6 +716,14 @@ export class LiveSession {
         false,
       );
     }
+  }
+
+  /** v1.3 B: rate-limit events and refused turns, for the account's usage state. */
+  private noteLimits(m: SDKMessage): void {
+    const x: unknown = m;
+    if (!isRec(x)) return;
+    if (x.type === 'rate_limit_event') this.deps.onRateLimit?.(this.id, x.rate_limit_info);
+    else if (x.type === 'assistant' && x.error === 'rate_limit') this.deps.onLimitError?.(this.id);
   }
 
   /** Maps a startup-failure result to an explained error line; true when `m` was one. */
@@ -860,6 +891,7 @@ export class LiveSession {
    * (`TaskTracker.endForeground`), so none shows as running forever.
    */
   private resultArrived(): void {
+    this.guard('onTurnResult', () => this.deps.onTurnResult?.(this.id));
     this.guard('task tracking', () => {
       if (this.tracker.endForeground()) this.scheduleTasks();
     });

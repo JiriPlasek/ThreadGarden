@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { PROTOCOL_VERSION, type EventMsg } from '@pahub/protocol';
+import { PROTOCOL_VERSION, type ChatStatus, type EventMsg } from '@pahub/protocol';
 import pkg from '../package.json' with { type: 'json' };
 import { nextSeqEpoch, seqBaseForEpoch } from './chat/event-log.js';
 import { realTimers, type Timers } from './chat/live-session.js';
@@ -28,12 +28,24 @@ import { registerChatHandlers } from './server/handlers/chat.js';
 import { makeResumeChecker, registerExternalHandlers } from './server/handlers/external.js';
 import { registerFileHandlers } from './server/handlers/files.js';
 import { registerHistoryHandlers } from './server/handlers/history.js';
+import { registerUsageHandlers } from './server/handlers/usage.js';
 import { Router } from './server/router.js';
 import { startWsServer } from './server/ws-server.js';
+import { ScheduledSends } from './usage/scheduled.js';
+import { UsageTracker } from './usage/usage.js';
 
 export const IDLE_EXIT_MS = 30 * 60_000;
-/** The idle check; it also ends on-hold chats' holds whose time ran out (v1.2, ≤ 60 s late). */
+/**
+ * The idle check; it also ends on-hold chats' holds whose time ran out (v1.2,
+ * ≤ 60 s late) and catches up on scheduled sends (v1.3 B; their own timer is
+ * the precise one).
+ */
 const IDLE_CHECK_MS = 60_000;
+/** A chat in a turn (working, waiting on the user): its next scheduled send waits (v1.3 B). */
+const IN_TURN: ReadonlySet<ChatStatus> = new Set(['working', 'needsYou', 'unknown']);
+/** Said in a chat whose scheduled message was due while the service was not running. */
+export const LATE_NOTE =
+  'This scheduled message went out late: pahub was not running when it was due.';
 /** pahub-db key of the last chat seq epoch (see `nextSeqEpoch`). */
 const SEQ_EPOCH_KEY = 'service:seqEpoch';
 
@@ -109,6 +121,9 @@ export type ServiceHandle = {
   router: Router;
   /** The session host (present when an adapter was given). */
   host?: SessionHost;
+  /** v1.3 B: plan usage and scheduled sends (present when an adapter was given). */
+  usage?: UsageTracker;
+  scheduled?: ScheduledSends;
   broadcast: (e: { event: string; data: unknown }) => void;
   close(): Promise<void>;
   onClosed(cb: () => void): void;
@@ -161,6 +176,8 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   let projectOrder: ProjectOrderNotifier | undefined;
   let buckets: Buckets | undefined;
   let titles: ChatTitles | undefined;
+  let usage: UsageTracker | undefined;
+  let scheduled: ScheduledSends | undefined;
   let startSync: (() => void) | undefined;
   const live = (): { list(): LiveChat[] } | undefined => opts.live ?? host;
   const claudeRunner = opts.claudeRunner ?? makeClaudeRunner;
@@ -274,6 +291,31 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       const projectOrderRef: { current?: ProjectOrderNotifier } = {};
       /** v1.2 C1: set once the catalog exists (after the session host). */
       const titlesRef: { current?: ChatTitles } = {};
+      // v1.3 B: the account's plan usage, from every session's rate-limit events.
+      const usageTracker = new UsageTracker({
+        raw: opened.raw,
+        now: clock,
+        emit: (state) => broadcastRef.fn({ event: 'usage.changed', data: state }),
+        timers: opts.sessionTimers ?? realTimers,
+        onError,
+      });
+      usage = usageTracker;
+      /** Set once the chat handlers exist (scheduled sends go out through `chat.send`). */
+      const scheduledRef: { current?: ScheduledSends } = {};
+      /** Title and project of a chat for notifications (`needsYou`, `scheduledSent`). */
+      const describeChat = (id: string): { title?: string; projectName?: string } => {
+        const row = opened.getSession(id);
+        if (!row) {
+          // Not indexed yet: pahub's own title of it, if any (v1.2 C1).
+          const title = titleFor(opened.metaOf(id));
+          return title === UNTITLED_TITLE ? {} : { title };
+        }
+        const project = opened.listProjects().find((p) => p.projectId === row.projectId);
+        return {
+          title: titleFor(row),
+          ...(project ? { projectName: project.displayName } : {}),
+        };
+      };
       const sessionHost = new SessionHost({
         adapter,
         registry: opened,
@@ -287,19 +329,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         ...(opts.sessionTimers ? { timers: opts.sessionTimers } : {}),
         isPinned: (id) => opened.isSessionPinned(id),
         getSettings: () => opened.getSettings(),
-        describe: (id) => {
-          const row = opened.getSession(id);
-          if (!row) {
-            // Not indexed yet: pahub's own title of it, if any (v1.2 C1).
-            const title = titleFor(opened.metaOf(id));
-            return title === UNTITLED_TITLE ? {} : { title };
-          }
-          const project = opened.listProjects().find((p) => p.projectId === row.projectId);
-          return {
-            title: titleFor(row),
-            ...(project ? { projectName: project.displayName } : {}),
-          };
-        },
+        describe: describeChat,
         onError,
         seqBase: seqBaseForEpoch(epoch),
         // v1.1 "Your turn": pahub's own record of the turn end; lists show the chat unread.
@@ -313,6 +343,14 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         onActivity: () => projectOrderRef.current?.notify(),
         // Ruling R29: running background tasks put a chat under Running, idle or not.
         onRunningTasks: (id) => emitChat({ event: 'sessions.changed', data: { sessionIds: [id] } }),
+        // v1.3 B: usage limits, and the scheduled send whose turn this was.
+        onRateLimit: (id, info) => usageTracker.observeEvent(id, info),
+        onLimitError: (id) => usageTracker.noteRefusal(id),
+        onTurnResult: (id) => {
+          const refused = usageTracker.turnEnded(id);
+          // After the session has finished handling this result.
+          setImmediate(() => scheduledRef.current?.turnEnded(id, refused));
+        },
       });
       host = sessionHost;
 
@@ -342,6 +380,10 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       /** Chat events go to clients; a turn that ended lets deferred indexing run. */
       const emitChat = (e: EventMsg): void => {
         broadcastRef.fn(e);
+        if (e.event === 'chat.status') {
+          const { sessionId, status } = e.data as { sessionId: string; status: ChatStatus };
+          setImmediate(() => scheduledRef.current?.statusChanged(sessionId, status));
+        }
         if (e.event !== 'chat.status' && e.event !== 'sessions.changed') return;
         // After the host has finished the transition that emitted this.
         setImmediate(() => {
@@ -409,7 +451,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
           if (patch.claudePath !== undefined && opts.locateClaude) relocate();
         },
       });
-      registerChatHandlers(router, {
+      const chatHandlers = registerChatHandlers(router, {
         host: sessionHost,
         adapter,
         db: opened,
@@ -427,6 +469,32 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         now: clock,
         timers: opts.sessionTimers ?? realTimers,
         titles: chatTitles,
+      });
+      const scheduledSends = new ScheduledSends({
+        raw: opened.raw,
+        now: clock,
+        timers: opts.sessionTimers ?? realTimers,
+        emit: (e) => broadcastRef.fn(e),
+        send: (sessionId, text, images) => chatHandlers.send({ sessionId, text, images }),
+        busy: (id) => {
+          const s = sessionHost.get(id);
+          return s !== undefined && s.live && IN_TURN.has(s.status);
+        },
+        limitResetAt: () => usageTracker.limitResetAt(),
+        exists: (id) => sessionHost.get(id) !== undefined || cat.summary(id) !== undefined,
+        describe: (id) => {
+          const d = describeChat(id);
+          return { title: d.title ?? UNTITLED_TITLE, projectName: d.projectName ?? '' };
+        },
+        noteLate: (id) => sessionHost.get(id)?.note('info', LATE_NOTE),
+        onError,
+      });
+      scheduled = scheduledSends;
+      scheduledRef.current = scheduledSends;
+      registerUsageHandlers(router, {
+        usage: usageTracker,
+        scheduled: scheduledSends,
+        reader: () => sessionHost.usageReader(),
       });
       watcher = watchProjects(
         path.join(claudeDir, 'projects'),
@@ -507,6 +575,17 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   // Holds that ran out while the service was not running end now.
   sweepHolds();
   host?.start();
+  /** Scheduled sends that are due go out (v1.3 B); a failure is logged, never fatal. */
+  const checkScheduled = (start = false): void => {
+    try {
+      if (start) scheduled?.start();
+      else scheduled?.check();
+    } catch (err) {
+      log.error(`scheduled sends: ${errorText(err)}`);
+    }
+  };
+  // Sends due while the service was not running go out now (marked late).
+  checkScheduled(true);
   startSync?.();
   poller?.start();
 
@@ -533,6 +612,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     closing ??= (async () => {
       try {
         clearTimer(timer);
+        await step('scheduled sends', () => scheduled?.dispose());
         // Live sessions end with the process; the registry still lists them,
         // so the next start shows them as interrupted (§4.2).
         await step('sessions', () => host?.dispose());
@@ -554,9 +634,19 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     return closing;
   };
 
+  /** Scheduled sends waiting to go out keep the service running (v1.3 B). */
+  const sendsPending = (): boolean => {
+    try {
+      return (scheduled?.pendingCount() ?? 0) > 0;
+    } catch (err) {
+      log.error(`scheduled sends: ${errorText(err)}`);
+      return true; // when unsure, stay: exiting would miss a send
+    }
+  };
   const timer = setTimer(() => {
     sweepHolds();
-    if (liveCount() > 0 || clientCount > 0) lastActive = clock();
+    checkScheduled();
+    if (liveCount() > 0 || clientCount > 0 || sendsPending()) lastActive = clock();
     else if (clock() - lastActive >= IDLE_EXIT_MS) {
       log.info('idle for 30 minutes, exiting');
       void close();
@@ -581,6 +671,8 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     token,
     router,
     ...(host ? { host } : {}),
+    ...(usage ? { usage } : {}),
+    ...(scheduled ? { scheduled } : {}),
     broadcast: wsServer.broadcast,
     close,
     onClosed: (cb) => void closedCallbacks.push(cb),
