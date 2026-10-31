@@ -2,6 +2,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   utimesSync,
@@ -20,8 +21,12 @@ import {
 } from '../../src/history/project-icons.js';
 
 const dirs: string[] = [];
+/**
+ * A fresh project folder, as its real path: on Windows runners `tmpdir()` can
+ * be an 8.3 short name (`RUNNER~1`) while the icon search reports real paths.
+ */
 const tmp = (): string => {
-  const d = mkdtempSync(path.join(tmpdir(), 'threadgarden-icons-'));
+  const d = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'threadgarden-icons-')));
   dirs.push(d);
   return d;
 };
