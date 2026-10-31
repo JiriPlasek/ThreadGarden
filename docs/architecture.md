@@ -50,7 +50,7 @@ flowchart TB
   the `claude_code` system prompt preset, `cwd` = the project). They write
   their transcripts to the Claude config dir exactly as in a terminal. A new
   chat's generated title (v1.2) briefly starts one more `claude` process, which
-  writes nothing (see Chat titles under [Data flows](#data-flows)).
+  writes no transcript (see Chat titles under [Data flows](#data-flows)).
 
 The service is a separate, detached process so that closing or crashing the
 window never stops a running agent.

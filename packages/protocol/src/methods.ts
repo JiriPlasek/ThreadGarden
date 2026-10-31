@@ -75,8 +75,8 @@ export const methods = {
           score: z.number(),
           /**
            * v1.2: an archived chat. Archived matches come after every other
-           * match and only fill the slots those leave (the UI groups them
-           * last); absent for the others.
+           * match and get up to 3 reserved slots, never more than half the
+           * results (the UI groups them last); absent for the others.
            */
           archived: z.boolean().optional(),
         }),
