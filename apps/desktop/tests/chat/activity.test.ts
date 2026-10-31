@@ -443,6 +443,164 @@ describe('activity panel', () => {
   });
 });
 
+describe('activity panel: order, nesting and details (v1.3 §2)', () => {
+  const rowsOf = (region: HTMLElement, list: string): string[] =>
+    within(within(region).getByRole('list', { name: list }))
+      .getAllByRole('listitem')
+      .map((li) => li.querySelector('[data-task-description]')?.textContent ?? '');
+
+  it('lists running tasks first, newest start first, then ended ones by end time', async () => {
+    const now = Date.now();
+    const { panel } = await renderChat({
+      tasks: [
+        agent({
+          taskId: 'a1',
+          description: 'done long ago',
+          status: 'completed',
+          endedAt: now - 9e5,
+        }),
+        agent({ taskId: 'a2', description: 'old runner', startedAt: now - 60_000 }),
+        agent({ taskId: 'a3', description: 'just done', status: 'failed', endedAt: now - 1_000 }),
+        agent({ taskId: 'a4', description: 'new runner', startedAt: now - 1_000 }),
+        shell({ taskId: 'b1', description: 'tsc --watch', status: 'stopped', endedAt: now - 5 }),
+        shell({ taskId: 'b2', description: 'npm run dev', startedAt: now - 9e5 }),
+      ],
+    });
+    expect(rowsOf(panel()!, 'Agents')).toEqual([
+      'new runner',
+      'old runner',
+      'just done',
+      'done long ago',
+    ]);
+    expect(rowsOf(panel()!, 'Processes')).toEqual(['npm run dev', 'tsc --watch']);
+  });
+
+  it('indents a task under the task that launched it', async () => {
+    const { panel } = await renderChat({
+      tasks: [
+        agent({ taskId: 'child', description: 'Child', parentTaskId: 'root', toolUseId: 'tu-c' }),
+        agent({ taskId: 'root', description: 'Root', startedAt: Date.now() - 60_000 }),
+        agent({ taskId: 'other', description: 'Other', startedAt: Date.now() - 30_000 }),
+      ],
+    });
+    const items = within(within(panel()!).getByRole('list', { name: 'Agents' })).getAllByRole(
+      'listitem',
+    );
+    expect(
+      items.map((li) => [
+        li.querySelector('[data-task-description]')?.textContent,
+        li.dataset.depth,
+      ]),
+    ).toEqual([
+      ['Other', undefined],
+      ['Root', undefined],
+      ['Child', '1'],
+    ]);
+    await userEvent.click(within(items[2]!).getByRole('button', { name: 'Details of Child' }));
+    expect(items[2]!.textContent).toContain('Started by');
+    expect(items[2]!.textContent).toContain('Root');
+  });
+
+  it("shows an agent's model without the claude- prefix, and nothing when it is unknown", async () => {
+    const { panel } = await renderChat({
+      tasks: [
+        agent({ taskId: 'a1', description: 'Streamed', model: 'claude-sonnet-4-5' }),
+        agent({ taskId: 'a2', description: 'Alias', model: 'haiku', startedAt: Date.now() - 9e3 }),
+        agent({ taskId: 'a3', description: 'Unknown', startedAt: Date.now() - 9e4 }),
+      ],
+    });
+    const [streamed, alias, unknown] = within(
+      within(panel()!).getByRole('list', { name: 'Agents' }),
+    ).getAllByRole('listitem');
+    expect(streamed!.textContent).toContain('sonnet-4-5');
+    expect(streamed!.textContent).not.toContain('claude-sonnet');
+    expect(within(streamed!).getByTitle('Model: claude-sonnet-4-5')).toBeTruthy();
+    expect(alias!.textContent).toContain('haiku');
+    expect(unknown!.textContent).not.toMatch(/inherit|model/i);
+  });
+
+  it('a disclosure button expands an agent to its details', async () => {
+    const prompt = 'Look at the parser.\nThen the tokenizer.';
+    const { panel } = await renderChat({
+      tasks: [
+        agent({
+          model: 'claude-opus-5',
+          prompt,
+          backgrounded: true,
+          workflowName: 'spec',
+          status: 'failed',
+          endedAt: Date.now(),
+          error: 'Rate limited',
+        }),
+      ],
+    });
+    const row = within(panel()!).getByRole('listitem');
+    const disclosure = within(row).getByRole('button', { name: 'Details of Explore the parser' });
+    expect(disclosure.getAttribute('aria-expanded')).toBe('false');
+    expect(row.querySelector('dl')).toBeNull();
+    await userEvent.click(disclosure);
+    expect(disclosure.getAttribute('aria-expanded')).toBe('true');
+    const dl = row.querySelector('dl')!;
+    expect(disclosure.getAttribute('aria-controls')).toBe(dl.id);
+    const fields = Object.fromEntries(
+      [...dl.querySelectorAll('dt')].map((dt) => [
+        dt.textContent?.trim(),
+        dt.nextElementSibling?.textContent?.trim(),
+      ]),
+    );
+    expect(fields).toMatchObject({
+      Prompt: prompt,
+      Type: 'Explore',
+      Model: 'claude-opus-5',
+      Workflow: 'spec',
+      Duration: expect.stringMatching(/^\d+s$/),
+      Tokens: '12k',
+      'Tool uses': '3',
+      'Last tool': 'Grep',
+      Summary: 'Reading the tokenizer',
+      'Runs in': 'Background',
+      Error: 'Rate limited',
+    });
+    expect(fields['Started at']).toBeTruthy();
+    // Short prompts are shown whole, with no "Show all".
+    expect(within(dl).queryByRole('button', { name: 'Show all' })).toBeNull();
+    // The keyboard works it too (a real button).
+    disclosure.focus();
+    await userEvent.keyboard('{Enter}');
+    expect(row.querySelector('dl')).toBeNull();
+  });
+
+  it('a long prompt is clamped behind "Show all"', async () => {
+    const prompt = `Read everything. ${'word '.repeat(100)}`;
+    const { panel } = await renderChat({ tasks: [agent({ prompt })] });
+    const row = within(panel()!).getByRole('listitem');
+    await userEvent.click(within(row).getByRole('button', { name: /^Details of/ }));
+    const text = row.querySelector<HTMLElement>('[data-prompt]')!;
+    expect(text.className).toContain('line-clamp-4');
+    const more = within(row).getByRole('button', { name: 'Show all' });
+    expect(more.getAttribute('aria-expanded')).toBe('false');
+    await userEvent.click(more);
+    expect(text.className).not.toContain('line-clamp-4');
+    expect(within(row).getByRole('button', { name: 'Show less' })).toBeTruthy();
+  });
+
+  it('a process expands to its command, type, timings and summary; Stop stays', async () => {
+    const { panel } = await renderChat({
+      tasks: [shell({ summary: 'Listening on 5173' })],
+    });
+    const row = within(panel()!).getByRole('listitem');
+    await userEvent.click(within(row).getByRole('button', { name: 'Details of npm run dev' }));
+    const dl = row.querySelector('dl')!;
+    expect(dl.textContent).toContain('Command');
+    expect(dl.textContent).toContain('npm run dev');
+    expect(dl.textContent).toContain('shell');
+    expect(dl.textContent).toContain('Running for');
+    expect(dl.textContent).toContain('Listening on 5173');
+    expect(dl.textContent).toContain('Background');
+    expect(within(row).getByRole('button', { name: 'Stop npm run dev' })).toBeTruthy();
+  });
+});
+
 describe('activity panel in a narrow chat pane (ruling R30)', () => {
   let restore: (() => void) | null = null;
   /** jsdom has no layout: report this width for the chat body. */
