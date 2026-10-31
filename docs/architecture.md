@@ -198,12 +198,15 @@ service and the UI; the service validates every request.
   (another certificate answered at the address; nothing was sent), **4403**
   (the machine refused this device: revoked) or **4502** (unreachable, or the
   link dropped: the UI reconnects with backoff and resyncs through
-  `chat.since`); **1001** when the local service stops.
+  `chat.since`); **1001** when the local service stops. The UI also checks
+  that the relayed `hello` names the paired machine's id: another id counts
+  as a mismatch, like 4409, and the client stops.
 - **Versions across machines.** v1.4 is protocol 5. The desktop and its local
   service still need the exact version; a remote service is accepted at
-  protocol 4, 5 or 6 (one either way), and a method it lacks answers
-  `METHOD_NOT_FOUND`, which the UI treats as "not supported on this machine".
-  A machine outside that window shows as needing attention ("Different
+  protocol 4, 5 or 6 (one either way). A method such a service lacks answers
+  `METHOD_NOT_FOUND`; the UI does not map that code yet (it surfaces as any
+  failed request), and a later plan shows it as "not supported on this
+  machine". A machine outside that window shows as needing attention ("Different
   Threadgarden version").
 - **Requests** `{id, method, params}` → `{id, result}` or `{id, error: {code,
   message}}`. Error codes the UI acts on include `GAP`, `RESUME_BLOCKED`,

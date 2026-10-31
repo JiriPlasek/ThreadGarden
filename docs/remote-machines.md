@@ -162,29 +162,52 @@ Threadgarden itself never stores GitHub credentials.
 ### The Threadgarden headless service
 
 There are no published releases yet. Every CI run builds the x64 package as
-the artifact `threadgarden-headless` (kept for 7 days): a
+the artifact `threadgarden-headless`: a
 `threadgarden-headless-<version>-linux-x64.tar.gz` and its `.sha256`.
 Download them into a new, empty folder with the GitHub CLI you just signed
 in (replace `<owner>` with the GitHub account the Threadgarden repository
-belongs to):
+belongs to). Remote machines arrive on `main` when the branch
+`feat/remote-machines-1` is merged; until then, take the package from that
+branch:
 
 ```sh
 repo=<owner>/threadgarden
-mkdir -p ~/threadgarden-download && cd ~/threadgarden-download && rm -rf ./*
-run=$(gh run list --repo "$repo" --workflow ci.yml --branch main --status success --limit 1 --json databaseId --jq '.[0].databaseId')
+branch=main     # before the merge: branch=feat/remote-machines-1
+rm -rf ~/threadgarden-download && mkdir ~/threadgarden-download && cd ~/threadgarden-download
+run=$(gh run list --repo "$repo" --workflow ci.yml --branch "$branch" --limit 1 --json databaseId --jq '.[0].databaseId')
 gh run download "$run" --repo "$repo" --name threadgarden-headless
 ls
 ```
+
+The latest run is taken whatever its result: the package is built by the
+job `check` on Ubuntu, so another job that fails (`rust`, or `bundle` with
+its end-to-end tests) marks the run failed but leaves the artifact in place. If
+`gh run download` finds no artifact, that run is still in progress or its
+Ubuntu `check` job failed: list the runs with
+`gh run list --repo "$repo" --workflow ci.yml --branch "$branch"`, or open
+the pull request's **Checks** on GitHub (the run id is the number after
+`/actions/runs/` in a run's address), then set `run=<id>` and download
+again.
+
+Artifacts are kept for **7 days**. When the run you want is older, re-run
+it (`gh run rerun "$run" --repo "$repo"`, or **Re-run all jobs** on the
+run's page on GitHub) and download once its `check` job has finished.
 
 `gh run list` with `--json` needs a recent GitHub CLI (`gh --version` 2.40 or
 newer; Ubuntu 24.04's package is). If Ubuntu's `gh` is older, install it from
 GitHub's own package repository as described in
 [the GitHub CLI's Linux install guide](https://github.com/cli/cli/blob/trunk/docs/install_linux.md),
-or download the artifact on Windows instead: open the latest successful CI
-run on GitHub, download `threadgarden-headless` under Artifacts, unzip it,
-and, after `mkdir -p ~/threadgarden-download` on the Ubuntu PC, copy both
-files over from PowerShell in the folder you unzipped to (with your version
-in the names):
+or download the artifact on Windows instead: open the CI run on GitHub (as
+above: the latest run of the branch, or the run id from the pull request's
+checks), download `threadgarden-headless` under Artifacts and unzip it into
+a new, empty folder. Empty the download folder on the Ubuntu PC too:
+
+```sh
+rm -rf ~/threadgarden-download && mkdir ~/threadgarden-download
+```
+
+then copy both files over from PowerShell in the folder you unzipped to
+(with your version in the names):
 
 ```powershell
 scp threadgarden-headless-0.2.0-linux-x64.tar.gz threadgarden-headless-0.2.0-linux-x64.tar.gz.sha256 <your-ubuntu-user>@192.168.1.50:threadgarden-download/
@@ -260,18 +283,22 @@ threadgarden pair
 
 ```text
 Pairing code: ABCD-EFGH-JKMN (valid for 5 minutes)
-Address: 192.168.1.50:47380
+Address: 172.17.0.1
+Address: 192.168.1.50
+Port: 47380
 Name: Ubuntu PC
 ```
 
-The code works once, for 5 minutes; running `threadgarden pair` again
-replaces it. Then, in Threadgarden on Windows:
+It lists every private address the PC listens on, one per line: besides
+the Wi-Fi's there can be others (here `172.17.0.1`, Docker's). The code
+works once, for 5 minutes; running `threadgarden pair` again replaces it. Then, in Threadgarden on Windows:
 
 1. Open **Settings** (the gear at the top of the places column) and scroll to
    **Machines**. Click **Add machine…**.
-2. **Address:** the address from `threadgarden pair` without the port
-   (`192.168.1.50`), or `ubuntu-pc.local`. If the port is not 47380, open
-   **More** and enter it.
+2. **Address:** the address you reach the PC at: the one you use for
+   `ssh` (`192.168.1.50`; `hostname -I` lists them), or `ubuntu-pc.local`.
+   If `Port:` is not 47380, open **More** and enter it (or type
+   `192.168.1.50:47390` in Address; Threadgarden splits it).
 3. **Pairing code:** the code (dashes and case do not matter).
 4. **This device's name:** how the Ubuntu PC will list your desktop
    (`threadgarden devices`); it starts as this PC's name.
@@ -335,10 +362,13 @@ tail -n 50 ~/.local/share/threadgarden/logs/service.log   # the service's own lo
 - `Threadgarden is not running.`: start it with
   `systemctl --user start threadgarden` and look at `journalctl` above if it
   stops again.
-- `Not listening for devices.` or `threadgarden pair` says it is not
-  listening: the PC has no private network address right now (Wi-Fi not
-  connected). The service checks again every minute and starts listening
-  when one appears; the log says "listening for devices on …".
+- `Not listening for devices.` (from `threadgarden status`) or
+  `Not listening for devices: no private network address yet.` (from
+  `threadgarden pair`): the PC has no private network address right now
+  (Wi-Fi not connected). The service checks again every minute and starts
+  listening when one appears; its log
+  (`~/.local/share/threadgarden/logs/service.log`) then says "listening for
+  devices on …".
 - The service does not run after a reboot until you log in: lingering is
   off. Run `sudo loginctl enable-linger $USER`.
 - Chats on the PC say Claude Code is missing: `claude` is not on the
