@@ -212,6 +212,21 @@ const steps: string[] = [
     last_seen INTEGER
   );
   `,
+  // remote machines: machines this one connects to
+  // (`device_id`: this machine's device on it, so removing can revoke it there)
+  `
+  CREATE TABLE IF NOT EXISTS machines (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    address TEXT NOT NULL,
+    port INTEGER NOT NULL,
+    cert_pem TEXT NOT NULL,
+    fingerprint TEXT NOT NULL,
+    device_id TEXT NOT NULL,
+    added_at INTEGER NOT NULL,
+    sort INTEGER NOT NULL DEFAULT 0
+  );
+  `,
 ];
 
 /** Runs the steps not run yet; `upTo` stops early (tests build older schemas with it). */

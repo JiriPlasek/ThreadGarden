@@ -12,7 +12,14 @@ import {
 } from './chat.js';
 import { ChatItemsEventSchema, ChatStatusEventSchema, ChatTasksEventSchema } from './events.js';
 import { ChatItemSchema, ImageRefSchema } from './items.js';
-import { DeviceSchema, MachineInfoSchema } from './machines.js';
+import {
+  DeviceSchema,
+  DeviceTokenSchema,
+  MachineAddressSchema,
+  MachineInfoSchema,
+  MachinePortSchema,
+  PairedMachineSchema,
+} from './machines.js';
 import { ChatTaskSchema } from './tasks.js';
 import { ScheduledSendSchema, UsageStateSchema } from './usage.js';
 
@@ -50,7 +57,11 @@ export const methods = {
   'pairing.create': def(empty, z.object({ code: z.string(), expiresAt: z.number() })),
   /** v1.4, local only: the devices paired with this machine. */
   'devices.list': def(empty, z.array(DeviceSchema)),
-  /** v1.4, local only: unpairs a device; its open connections close with 4403. */
+  /**
+   * v1.4: unpairs a device; its open connections close with 4403. Local
+   * callers may revoke any device; a paired device only itself (`FORBIDDEN`
+   * otherwise), so it can be unpaired from either side.
+   */
   'devices.revoke': def(z.object({ deviceId: z.string() }), z.object({ revoked: z.boolean() })),
   /**
    * v1.4, pairing: HMAC-SHA256 of `<certificate fingerprint>
@@ -67,6 +78,45 @@ export const methods = {
     z.object({ code: z.string().max(64), deviceName: z.string().trim().min(1).max(60) }),
     z.object({ deviceId: z.string(), token: z.string(), machine: MachineInfoSchema }),
   ),
+  // ── v1.4: machines this one connects to (all local only) ──────────────────
+  /** The paired machines, in their order. */
+  'machines.list': def(empty, z.array(PairedMachineSchema)),
+  /**
+   * Pairs with the machine at `address` (default port 47380) with the code it
+   * showed: the code is sent only once the machine proved it knows it for the
+   * certificate it presented, which is then pinned. Stores the machine and
+   * unlocks it; the token is returned this once, for the keychain. Errors:
+   * `PAIRING_UNREACHABLE`, `PAIRING_PROOF_FAILED` (nothing was sent: a wrong
+   * code or another machine at the address), `PAIRING_INVALID`,
+   * `PAIRING_EXPIRED`, `PAIRING_SELF` (this machine), `PAIRING_DUPLICATE`
+   * (already paired; the message names it).
+   */
+  'machines.pair': def(
+    z.object({
+      address: MachineAddressSchema,
+      port: MachinePortSchema.optional(),
+      code: z.string().max(64),
+      deviceName: z.string().trim().min(1).max(60),
+    }),
+    z.object({ machine: PairedMachineSchema, token: z.string() }),
+  ),
+  /** Hands over a machine's token (from the keychain); in memory until the service stops. `NOT_FOUND`. */
+  'machines.unlock': def(z.object({ machineId: z.string(), token: DeviceTokenSchema }), empty),
+  /** Renames or moves a machine; the pin stays. A move closes its relays (4502). `NOT_FOUND`. */
+  'machines.update': def(
+    z.object({
+      machineId: z.string(),
+      name: z.string().trim().min(1).max(40).optional(),
+      address: MachineAddressSchema.optional(),
+      port: MachinePortSchema.optional(),
+    }),
+    PairedMachineSchema,
+  ),
+  /**
+   * Forgets a machine (its relays close with 4404). With `revoke`, it first
+   * asks the machine to revoke this device, when reachable; a failure is ignored.
+   */
+  'machines.remove': def(z.object({ machineId: z.string(), revoke: z.boolean() }), empty),
   /** v1.2: `active`, `onHold`, `archived` per bucket; `all` (= `active`) stays for older UIs. */
   'places.counts': def(
     empty,

@@ -24,6 +24,7 @@ import { Catalog, UNTITLED_TITLE, titleFor, type LiveChat } from './history/cata
 import { openDb, type Db } from './history/db.js';
 import { DeviceRegistry } from './machine/devices.js';
 import { loadMachineIdentity } from './machine/identity.js';
+import { PairedMachines } from './machine/paired-machines.js';
 import { privateListenAddresses } from './machine/interfaces.js';
 import { loadOrCreateTlsIdentity, type TlsIdentity } from './machine/tls.js';
 import { Indexer } from './history/indexer.js';
@@ -44,6 +45,7 @@ import { registerHistoryHandlers } from './server/handlers/history.js';
 import { registerUsageHandlers } from './server/handlers/usage.js';
 import { REMOTE_PORT, startRemoteServer } from './server/remote-server.js';
 import { Router } from './server/router.js';
+import { createRelay, type Relay } from './server/relay.js';
 import { startWsServer } from './server/ws-server.js';
 import { ScheduledSends } from './usage/scheduled.js';
 import { UsageTracker } from './usage/usage.js';
@@ -238,6 +240,8 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   let remote: Awaited<ReturnType<typeof startRemoteServer>> | undefined;
   /** What every remote listener starts with (headless, with a database). */
   let listen: { tls: TlsIdentity; devices: DeviceRegistry } | undefined;
+  /** The UI's connections to paired machines (with a database). */
+  let relay: Relay | undefined;
   let poller: ExternalPoller | undefined;
   let projectOrder: ProjectOrderNotifier | undefined;
   let buckets: Buckets | undefined;
@@ -396,12 +400,24 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         });
         listen = { tls, devices };
       }
-      // machine.*, pairing and devices (v1.4); none of them without a database.
+      // The machines this one pairs with, and the relay to them (v1.4).
+      const paired = new PairedMachines(opened.raw);
+      const machineRelay = createRelay({
+        machines: paired,
+        onLinkFailed: (machineId, err) =>
+          log.debug(`relay to machine ${machineId}: ${errorText(err)}`),
+      });
+      relay = machineRelay;
+      // machine.*, pairing, devices and machines.* (v1.4); none of them without a database.
       registerMachineHandlers(router, {
         db: opened,
         devices,
         identity: () => machineOf(opened),
         ...(tls ? { tls } : {}),
+        paired,
+        relay: machineRelay,
+        // Paired machines are this machine's business: never told to its devices.
+        emitLocal: (e) => server?.broadcast(e),
       });
     }
     const found = claude.current;
@@ -724,6 +740,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       token,
       router,
       ...(opts.port === undefined ? {} : { port: opts.port }),
+      ...(relay ? { relay } : {}),
       onClientCountChange: (n) => {
         localClients = n;
         lastActive = clock();
@@ -751,6 +768,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     await step('watcher', () => watcher?.close());
     await step('indexer', () => indexer?.stop());
     await step('remote server', () => remote?.close());
+    await step('relay', () => relay?.close());
     await step('server', () => server?.close());
     await step('database', () => db?.close());
     await step('lock', () => lock.release());
@@ -823,6 +841,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
           await following;
           await remote?.close();
         });
+        await step('relay', () => relay?.close());
         await step('server', () => wsServer.close());
         await step('discovery', () => removeDiscovery(dataDir));
         await step('database', () => db?.close());

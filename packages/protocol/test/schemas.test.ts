@@ -15,6 +15,8 @@ import {
   acceptsRemoteProtocol,
   ACCENTS,
   sanitizeFontFamily,
+  PairedMachineSchema,
+  RELAY_CLOSE,
 } from '../src/index.js';
 
 const sampleItems = [
@@ -144,6 +146,11 @@ describe('protocol schemas', () => {
       'devices.revoke',
       'pair.proof',
       'pair.claim',
+      'machines.list',
+      'machines.pair',
+      'machines.unlock',
+      'machines.update',
+      'machines.remove',
     ];
     expect(Object.keys(methods).sort()).toEqual([...expected].sort());
     for (const name of expected) {
@@ -172,6 +179,8 @@ describe('protocol schemas', () => {
         'usage.changed',
         'scheduled.changed',
         'scheduledSent',
+        // v1.4: machines
+        'machines.changed',
       ].sort(),
     );
   });
@@ -609,6 +618,52 @@ describe('protocol schemas', () => {
       expect(p.safeParse({ code: 'x', deviceName: '   ' }).success).toBe(false);
       expect(p.safeParse({ code: 'x', deviceName: 'x'.repeat(60) }).success).toBe(true);
       expect(p.safeParse({ code: 'x', deviceName: 'x'.repeat(61) }).success).toBe(false);
+    });
+  });
+
+  describe('v1.4 paired machines', () => {
+    it('machines.pair takes an address and an optional port, never a URL', () => {
+      const p = methods['machines.pair'].params;
+      const ok = { address: ' ubuntu-pc.local ', code: 'AAAA-AAAA-AAAA', deviceName: 'Den' };
+      expect(p.parse(ok)).toEqual({ ...ok, address: 'ubuntu-pc.local' });
+      expect(p.safeParse({ ...ok, address: '192.168.1.20', port: 47380 }).success).toBe(true);
+      expect(p.safeParse({ ...ok, address: 'fe80::1' }).success).toBe(true);
+      for (const address of ['', 'a/b', 'host?x=1', 'user@host', 'a b', 'h#x', 'x'.repeat(254)]) {
+        expect(p.safeParse({ ...ok, address }).success, address).toBe(false);
+      }
+      for (const port of [0, 65536, 1.5]) {
+        expect(p.safeParse({ ...ok, port }).success, String(port)).toBe(false);
+      }
+    });
+
+    it('machines.unlock takes a 64-hex-character token only', () => {
+      const p = methods['machines.unlock'].params;
+      expect(p.safeParse({ machineId: 'm', token: 'a'.repeat(64) }).success).toBe(true);
+      expect(p.safeParse({ machineId: 'm', token: 'a'.repeat(63) }).success).toBe(false);
+      expect(p.safeParse({ machineId: 'm', token: `${'a'.repeat(62)}, ` }).success).toBe(false);
+    });
+
+    it('a paired machine never carries its certificate or token', () => {
+      const m = {
+        id: 'm',
+        name: 'Ubuntu PC',
+        address: '192.168.1.20',
+        port: 47380,
+        fingerprint: 'AB:CD',
+        addedAt: 1,
+        unlocked: true,
+      };
+      expect(PairedMachineSchema.parse({ ...m, certPem: 'x', token: 'y' })).toEqual(m);
+      expect(events['machines.changed'].parse([m])).toEqual([m]);
+    });
+
+    it('names the relay close codes', () => {
+      expect(RELAY_CLOSE).toEqual({
+        locked: 4404,
+        mismatch: 4409,
+        refused: 4403,
+        unreachable: 4502,
+      });
     });
   });
 });

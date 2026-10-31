@@ -17,7 +17,26 @@ type DeviceRow = { id: string; name: string; created_at: number; last_seen: numb
 const sha256 = (s: string): Buffer => createHash('sha256').update(s).digest();
 /** Compares through a hash of both sides so the buffers always have the same length. */
 const sameSecret = (a: string, b: string): boolean => timingSafeEqual(sha256(a), sha256(b));
-const normalise = (code: string): string => code.replace(/[-\s]/g, '').toUpperCase();
+/** A code as typed (any case, with or without dashes or spaces) in the form it is compared in. */
+export const normalisePairingCode = (code: string): string =>
+  code.replace(/[-\s]/g, '').toUpperCase();
+const normalise = normalisePairingCode;
+const WELL_FORMED = new RegExp(`^[${PAIRING_ALPHABET}]{${CODE_LENGTH}}$`);
+/** Whether a typed code could be a pairing code at all (12 characters of the alphabet). */
+export const isWellFormedPairingCode = (code: string): boolean =>
+  WELL_FORMED.test(normalisePairingCode(code));
+/**
+ * The pairing proof (ledger Ruling R7): HMAC-SHA256 keyed by the normalised
+ * code over `<certificate fingerprint>\n<nonce>`, as hex. The machine computes
+ * it with its live code and its own certificate; the client with the code it
+ * was given and the certificate it saw.
+ */
+export const pairingProof = (
+  normalisedCode: string,
+  fingerprint256: string,
+  nonce: string,
+): string =>
+  createHmac('sha256', normalisedCode).update(`${fingerprint256}\n${nonce}`).digest('hex');
 const toDevice = (r: DeviceRow): Device => ({
   id: r.id,
   name: r.name,
@@ -65,10 +84,7 @@ export class DeviceRegistry {
    */
   proof(fingerprint256: string, nonce: string): string | null {
     const live = this.liveCode();
-    if (!live) return null;
-    return createHmac('sha256', live.normalised)
-      .update(`${fingerprint256}\n${nonce}`)
-      .digest('hex');
+    return live ? pairingProof(live.normalised, fingerprint256, nonce) : null;
   }
 
   /** Whether a pairing code is live now (the remote listener admits pairing sockets only then). */

@@ -210,7 +210,8 @@ describe('remote server', () => {
     expect(await call(ws, 'machine.get', {})).toMatchObject({ result: { id: machineId } });
     expect(await call(ws, 'pairing.create', {})).toMatchObject({ error: { code: 'FORBIDDEN' } });
     expect(await call(ws, 'devices.list', {})).toMatchObject({ error: { code: 'FORBIDDEN' } });
-    expect(await call(ws, 'devices.revoke', { deviceId })).toMatchObject({
+    // A device may revoke itself only.
+    expect(await call(ws, 'devices.revoke', { deviceId: 'someone-else' })).toMatchObject({
       error: { code: 'FORBIDDEN' },
     });
     expect(await call(ws, 'machine.rename', { name: 'x' })).toMatchObject({
@@ -591,7 +592,7 @@ describe('machine handlers', () => {
     for (const [method, params] of [
       ['pairing.create', {}],
       ['devices.list', {}],
-      ['devices.revoke', { deviceId }],
+      ['devices.revoke', { deviceId: 'someone-else' }],
       ['machine.rename', { name: 'x' }],
     ] as const) {
       expect(await dispatch(method, params, remote), method).toMatchObject({
@@ -601,5 +602,14 @@ describe('machine handlers', () => {
     }
     expect(devices.list()).toHaveLength(1);
     expect((await dispatch('machine.get', {}, remote)).result).toEqual(machine());
+  });
+
+  it('lets a paired device revoke itself, which closes its sockets', async () => {
+    const ws = await openTls(s, `threadgarden-device.${token}`);
+    const closed = closeCode(ws);
+    // The socket closes (4403) as the device is revoked, possibly before the answer.
+    ws.send(JSON.stringify({ id: 99, method: 'devices.revoke', params: { deviceId } }));
+    expect(await closed).toBe(4403);
+    expect(devices.list()).toEqual([]);
   });
 });

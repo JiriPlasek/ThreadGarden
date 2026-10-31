@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { ChatHeaderInfoSchema, ChatStatusSchema } from './chat.js';
 import { ChatItemSchema } from './items.js';
+import { PairedMachineSchema } from './machines.js';
 import { ChatTaskSchema } from './tasks.js';
 import { ScheduledSendSchema, UsageStateSchema } from './usage.js';
 
@@ -78,6 +79,9 @@ export const events = {
     late: z.boolean(),
     dueAt: z.number(),
   }),
+  // ── v1.4: machines ─────────────────────────────────────────────────────────
+  /** Every paired machine (as `machines.list`), after any change; local clients only. */
+  'machines.changed': z.array(PairedMachineSchema),
 } as const;
 
 export type EventName = keyof typeof events;
