@@ -305,4 +305,22 @@ describe('ServiceClient', () => {
     expect(server.sockets).toHaveLength(sockets);
     c.close();
   });
+
+  it('acceptHello false closes before open: no open listeners, no retry', async () => {
+    const statuses: string[] = [];
+    const opened = vi.fn();
+    const c = new ServiceClient({ WebSocketImpl: server.Impl, acceptHello: () => false });
+    c.onStatus((s) => statuses.push(s));
+    c.onOpen(opened);
+    const failed = c.connect('ws://127.0.0.1:1', 'tok').catch((e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await failed).toMatchObject({ code: 'DISCONNECTED' });
+    expect(c.status).toBe('closed');
+    expect(c.hello).toBeNull();
+    expect(statuses).not.toContain('open');
+    expect(opened).not.toHaveBeenCalled();
+    const sockets = server.sockets.length;
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(server.sockets).toHaveLength(sockets);
+  });
 });

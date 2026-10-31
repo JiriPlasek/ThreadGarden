@@ -42,6 +42,11 @@ export type ClientOptions = {
    * `'stop'` ends the reconnecting until `connect` is called again. Default `'retry'`.
    */
   onClose?: (code: number) => 'retry' | 'stop';
+  /**
+   * Checked with every `hello` the protocol check accepted, before the client
+   * counts as open; false closes it as `close()` does (no retry, no `onClose`).
+   */
+  acceptHello?: (hello: Result<'hello'>) => boolean;
 };
 
 type Pending = {
@@ -61,6 +66,7 @@ export class ServiceClient {
   private readonly maxMs: number;
   private readonly acceptProtocol: (v: number) => boolean;
   private readonly onCloseCode: (code: number) => 'retry' | 'stop';
+  private readonly acceptHello: (hello: Result<'hello'>) => boolean;
   private ws: WebSocket | null = null;
   private url = '';
   private token = '';
@@ -83,6 +89,7 @@ export class ServiceClient {
     this.maxMs = opts.backoffMaxMs ?? 5_000;
     this.acceptProtocol = opts.acceptProtocol ?? ((v) => v === PROTOCOL_VERSION);
     this.onCloseCode = opts.onClose ?? (() => 'retry');
+    this.acceptHello = opts.acceptHello ?? (() => true);
   }
 
   /**
@@ -236,6 +243,11 @@ export class ServiceClient {
           if (this.ws !== ws) return;
           if (!this.acceptProtocol((r as { protocolVersion?: number }).protocolVersion ?? -1)) {
             return this.fail(ws);
+          }
+          if (!this.acceptHello(r as Result<'hello'>)) {
+            this.firstConnect?.reject(new RequestError('DISCONNECTED', 'Refused the service'));
+            this.firstConnect = null;
+            return this.close();
           }
           this.hello = r as Result<'hello'>;
           this.attempt = 0;

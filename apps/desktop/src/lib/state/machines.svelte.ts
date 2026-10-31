@@ -317,6 +317,18 @@ export class MachinesState {
     const client = this.makeClient({
       acceptProtocol: acceptsRemoteProtocol,
       onClose: (code) => this.onRelayClose(id, code),
+      // Defence in depth (spec §6): the relay pins the certificate, and the
+      // machine must also be the one paired. A service too old to say is let through.
+      acceptHello: (hello) => {
+        const seen = hello.machine?.id;
+        if (seen === undefined || seen === id) return true;
+        const e = this.paired.find((x) => x.id === id);
+        if (e) {
+          e.status = 'mismatch';
+          e.info = null;
+        }
+        return false;
+      },
     });
     client.onStatus((s) => {
       const e = this.paired.find((x) => x.id === id);

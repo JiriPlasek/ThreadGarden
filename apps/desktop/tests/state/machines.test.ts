@@ -162,6 +162,35 @@ describe('MachinesState', () => {
     expect(machines.get(M1)?.status).toBe('mismatch');
   });
 
+  it('treats a hello from another machine id as a mismatch and stops (spec §6)', async () => {
+    // Defence in depth: the relay pins the certificate; the id must match the pairing too.
+    remote(M1).handlers.hello = () => ({
+      serviceVersion: '1.4.0',
+      protocolVersion: PROTOCOL_VERSION,
+      machine: info('someone-else', 'Other PC'),
+    });
+    await setup([paired(M1, 'Ubuntu PC')], { [M1]: 'tok' });
+    await vi.advanceTimersByTimeAsync(0);
+    const entry = machines.get(M1)!;
+    expect(entry.status).toBe('mismatch');
+    expect(entry.info).toBeNull();
+    expect(entry.client.status).toBe('closed');
+    // Never seen as open, so nothing used it: no request beyond hello went out.
+    expect(remote(M1).calls('machine.get')).toEqual([]);
+    const attempts = remote(M1).sockets.length;
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(remote(M1).sockets).toHaveLength(attempts);
+    expect(machines.get(M1)?.status).toBe('mismatch');
+  });
+
+  it('accepts a hello without a machine (an older service) and the right id', async () => {
+    remote(M1).handlers.hello = () => ({ serviceVersion: 'x', protocolVersion: 4 });
+    await setup([paired(M1, 'A'), paired(M2, 'B')], { [M1]: 't1', [M2]: 't2' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(machines.get(M1)?.status).toBe('on');
+    expect(machines.get(M2)?.status).toBe('on');
+  });
+
   it('stops when the machine refuses the device and when the relay is locked', async () => {
     await setup([paired(M1, 'A'), paired(M2, 'B')], { [M1]: 't1', [M2]: 't2' });
     await vi.advanceTimersByTimeAsync(0);
