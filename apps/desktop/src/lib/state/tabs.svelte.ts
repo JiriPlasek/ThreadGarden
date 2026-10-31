@@ -5,8 +5,18 @@ type Persisted = { open: string[]; active: string | null };
 
 export class TabsState {
   open = $state<string[]>([]);
+  /** The chat on screen; null when none is (no tabs, or the Analytics view is shown). */
   active = $state<string | null>(null);
   restored = $state(false);
+  /**
+   * v1.3 analytics: the Analytics view has a tab of its own in the tab bar
+   * (not a chat, so not in `open` and not remembered across restarts), and
+   * `analyticsShown` while it fills the main pane instead of a chat.
+   */
+  analyticsOpen = $state(false);
+  analyticsShown = $state(false);
+  /** The chat that was active when the Analytics view was shown: it comes back after. */
+  private behindAnalytics: string | null = null;
 
   private api: Api | null = null;
   private readonly subscribers = new Set<() => void>();
@@ -43,12 +53,14 @@ export class TabsState {
 
   openTab = (sessionId: string): void => {
     if (!this.open.includes(sessionId)) this.open = [...this.open, sessionId];
+    this.analyticsShown = false;
     this.active = sessionId;
     this.changed();
   };
 
   activate = (sessionId: string): void => {
     if (!this.open.includes(sessionId) || this.active === sessionId) return;
+    this.analyticsShown = false;
     this.active = sessionId;
     this.changed();
   };
@@ -60,6 +72,31 @@ export class TabsState {
     if (this.active === sessionId) {
       this.active = this.open[Math.min(i, this.open.length - 1)] ?? null;
     }
+    if (this.behindAnalytics === sessionId) {
+      this.behindAnalytics = this.open[Math.min(i, this.open.length - 1)] ?? null;
+    }
+    this.changed();
+  };
+
+  /** Opens (or switches to) the Analytics view; the active chat steps aside until it closes. */
+  showAnalytics = (): void => {
+    if (this.analyticsShown) return;
+    this.behindAnalytics = this.active;
+    this.analyticsOpen = true;
+    this.analyticsShown = true;
+    this.active = null;
+    this.changed();
+  };
+
+  /** Closes the Analytics tab; if it was on screen, the chat behind it comes back. */
+  closeAnalytics = (): void => {
+    if (!this.analyticsOpen) return;
+    this.analyticsOpen = false;
+    if (this.analyticsShown) {
+      this.analyticsShown = false;
+      this.active = this.behindAnalytics ?? this.open.at(-1) ?? null;
+    }
+    this.behindAnalytics = null;
     this.changed();
   };
 
@@ -73,7 +110,9 @@ export class TabsState {
 
   private changed = (persist = true): void => {
     if (persist && this.api) {
-      const value: Persisted = { open: [...this.open], active: this.active };
+      // Behind the Analytics view, the chat it covers is still the one to restore.
+      const active = this.analyticsShown ? this.behindAnalytics : this.active;
+      const value: Persisted = { open: [...this.open], active };
       quietly(this.api.request('uiState.set', { key: TABS_KEY, value }));
     }
     for (const cb of this.subscribers) cb();

@@ -6,6 +6,7 @@ import { serviceConnection, type ServiceConnection } from '../native';
 import { startAttention } from '../notifications';
 import { ServiceClient } from '../service/client';
 import { agents } from './agents.svelte';
+import { analytics } from './analytics.svelte';
 import { buckets } from './buckets.svelte';
 import { chats } from './chats.svelte';
 import { connection } from './connection.svelte';
@@ -47,6 +48,7 @@ const wire = (): void => {
   interaction.init(client);
   lifecycle.init(client, agents, connection, connectTo);
   buckets.init(client, chats);
+  analytics.init(client);
   tabs.subscribe(() => chats.sync(tabs.open, tabs.active));
   startAttention({ api: client, settings, tabs, places });
   yourTurn.init(client, { tabs, chats, sessions, agents });

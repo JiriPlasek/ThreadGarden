@@ -4,6 +4,7 @@
  */
 import { getContext } from 'svelte';
 import { agents, type AgentsState } from './agents.svelte';
+import { analytics, type AnalyticsState } from './analytics.svelte';
 import { buckets, type BucketsState } from './buckets.svelte';
 import { chats, type ChatsState } from './chats.svelte';
 import { connection, type ConnectionState } from './connection.svelte';
@@ -25,6 +26,8 @@ export type AppState = {
   interaction: InteractionState;
   lifecycle: LifecycleState;
   buckets: BucketsState;
+  /** v1.3: the Analytics view. */
+  analytics: AnalyticsState;
 };
 
 export const APP_CONTEXT = Symbol('pahub.app');
@@ -40,6 +43,7 @@ const singletons: AppState = {
   interaction,
   lifecycle,
   buckets,
+  analytics,
 };
 
 /** Must be called during component initialisation. */

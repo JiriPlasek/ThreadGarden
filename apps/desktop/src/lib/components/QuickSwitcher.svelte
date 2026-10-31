@@ -5,6 +5,7 @@
 
 <script lang="ts">
   import ArchiveIcon from '@lucide/svelte/icons/archive';
+  import ChartColumnIcon from '@lucide/svelte/icons/chart-column';
   import MessageSquareIcon from '@lucide/svelte/icons/message-square';
   import CircleStopIcon from '@lucide/svelte/icons/circle-stop';
   import KeyboardIcon from '@lucide/svelte/icons/keyboard';
@@ -24,7 +25,7 @@
    * full text across all projects with one `search.quick` per keystroke (the
    * service answers within its 50 ms budget; an answer overtaken by a newer
    * query is dropped). Enter opens the chat or focuses its tab. Also hosts
-   * commands: "New chat in…", "Stop all work", "Settings", "Keyboard shortcuts",
+   * commands: "New chat in…", "Stop all work", "Analytics" (v1.3), "Settings", "Keyboard shortcuts",
    * and in Active or a project "Archive chats older than 30 days…". Archived
    * matches come last, in their own "Archived" group (v1.2 §3).
    */
@@ -61,6 +62,7 @@
       icon: CircleStopIcon,
       run: () => (lifecycle.dialog = 'stopAll'),
     },
+    { id: 'analytics', label: 'Analytics', icon: ChartColumnIcon, run: () => tabs.showAnalytics() },
     {
       id: 'settings',
       label: 'Settings',
