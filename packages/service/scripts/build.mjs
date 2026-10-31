@@ -14,6 +14,7 @@
  */
 import process from 'node:process';
 import { build } from 'esbuild';
+import { protocolAlias } from '../protocol-alias.mjs';
 
 const legacyApiKeyOnly = process.env.PAHUB_API_KEY_ONLY;
 if (legacyApiKeyOnly) {
@@ -30,6 +31,7 @@ await build({
   platform: 'node',
   format: 'esm',
   target: 'node22',
+  alias: protocolAlias,
   define: {
     'process.env.THREADGARDEN_API_KEY_ONLY': JSON.stringify(apiKeyOnly ? '1' : ''),
     // Folded into the value above (and noted) here, at build time.

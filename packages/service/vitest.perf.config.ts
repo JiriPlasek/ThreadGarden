@@ -1,9 +1,11 @@
 import { defineConfig } from 'vitest/config';
+import { protocolAlias } from './protocol-alias.mjs';
 
 // Performance budgets (spec §8): `pnpm --filter @threadgarden/service test:perf`.
 // One file at a time, after the regular tests, so timings are not skewed by
 // other test files running in parallel.
 export default defineConfig({
+  resolve: { alias: protocolAlias },
   test: {
     include: ['test/perf/**/*.perf.test.ts'],
     fileParallelism: false,

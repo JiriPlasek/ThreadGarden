@@ -11,6 +11,7 @@
     "isolatedModules": true,
     "resolveJsonModule": true,
     "forceConsistentCasingInFileNames": true,
-    "noEmit": true
+    "noEmit": true,
+    "paths": { "@threadgarden/protocol": ["./packages/protocol/src/index.ts"] }
   }
 }

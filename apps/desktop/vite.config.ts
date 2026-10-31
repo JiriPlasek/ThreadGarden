@@ -36,6 +36,10 @@ export default defineConfig({
         assets: process.env.THREADGARDEN_UI_OUT ?? 'build',
         fallback: 'index.html',
       }),
+      // The workspace protocol package from its source (its package.json entry),
+      // so the pnpm link in node_modules is never followed: some sandboxed and
+      // agent environments on Windows cannot follow links. Also sets tsconfig paths.
+      alias: { '@threadgarden/protocol': '../../packages/protocol/src/index.ts' },
     }),
   ],
   // Build flags (see src/lib/build-flags.ts): baked in at build time.

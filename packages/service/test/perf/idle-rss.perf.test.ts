@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { afterAll, describe, expect, it } from 'vitest';
+import { protocolAlias } from '../../protocol-alias.mjs';
 import { slack } from './perf-helpers.js';
 
 const MB = 1024 * 1024;
@@ -31,6 +32,7 @@ describe('service memory', () => {
       platform: 'node',
       format: 'esm',
       target: 'node22',
+      alias: protocolAlias,
       banner: {
         js: "import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);",
       },
