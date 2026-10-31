@@ -101,16 +101,14 @@ describe('usage and scheduled sends (service)', () => {
     await start(adapter);
     await ok('chat.send', { sessionId: 'h1', text: 'go' });
     const resetsAt = Math.floor(Date.now() / 1000) + 3600;
-    adapter
-      .lastSession()
-      .emit(
-        rateLimit({
-          status: 'allowed_warning',
-          rateLimitType: 'five_hour',
-          utilization: 0.9,
-          resetsAt,
-        }),
-      );
+    adapter.lastSession().emit(
+      rateLimit({
+        status: 'allowed_warning',
+        rateLimitType: 'five_hour',
+        utilization: 0.9,
+        resetsAt,
+      }),
+    );
     await settle();
     const state = await ok<UsageState>('usage.get', {});
     expect(state.windows).toEqual([
