@@ -12,6 +12,7 @@ import {
   settingsDefaults,
   SettingsSchema,
   PROTOCOL_VERSION,
+  acceptsRemoteProtocol,
   ACCENTS,
   sanitizeFontFamily,
 } from '../src/index.js';
@@ -48,7 +49,8 @@ const sampleItems = [
 
 describe('protocol schemas', () => {
   it('exposes the protocol version', () => {
-    expect(PROTOCOL_VERSION).toBe(4);
+    expect(PROTOCOL_VERSION).toBe(5);
+    expect([3, 4, 5, 6, 7].map(acceptsRemoteProtocol)).toEqual([false, true, true, true, false]);
   });
 
   it('accepts every ChatItem kind', () => {
@@ -134,6 +136,9 @@ describe('protocol schemas', () => {
       'scheduled.sendNow',
       // v1.3 C: analytics
       'analytics.get',
+      // v1.4: machines
+      'machine.get',
+      'machine.rename',
     ];
     expect(Object.keys(methods).sort()).toEqual([...expected].sort());
     for (const name of expected) {

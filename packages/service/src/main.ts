@@ -2,7 +2,13 @@ import { randomBytes } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { PROTOCOL_VERSION, type ChatStatus, type EventMsg } from '@threadgarden/protocol';
+import {
+  CAPABILITIES,
+  PROTOCOL_VERSION,
+  type ChatStatus,
+  type EventMsg,
+  type MachineInfo,
+} from '@threadgarden/protocol';
 import pkg from '../package.json' with { type: 'json' };
 import { nextSeqEpoch, seqBaseForEpoch } from './chat/event-log.js';
 import { realTimers, type Timers } from './chat/live-session.js';
@@ -16,6 +22,7 @@ import { ExternalPoller, makeClaudeRunner, type ExternalSession } from './extern
 import { Buckets } from './history/buckets.js';
 import { Catalog, UNTITLED_TITLE, titleFor, type LiveChat } from './history/catalog.js';
 import { openDb, type Db } from './history/db.js';
+import { loadMachineIdentity, renameMachine } from './machine/identity.js';
 import { Indexer } from './history/indexer.js';
 import { FolderCheck, ProjectOrderNotifier } from './history/project-activity.js';
 import { ProjectIcons, type FoundIcon } from './history/project-icons.js';
@@ -31,7 +38,7 @@ import { makeResumeChecker, registerExternalHandlers } from './server/handlers/e
 import { registerFileHandlers } from './server/handlers/files.js';
 import { registerHistoryHandlers } from './server/handlers/history.js';
 import { registerUsageHandlers } from './server/handlers/usage.js';
-import { Router } from './server/router.js';
+import { Router, ServiceError } from './server/router.js';
 import { startWsServer } from './server/ws-server.js';
 import { ScheduledSends } from './usage/scheduled.js';
 import { UsageTracker } from './usage/usage.js';
@@ -169,10 +176,37 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     }
   };
 
-  router.register('hello', async () => ({
-    serviceVersion: pkg.version,
-    protocolVersion: PROTOCOL_VERSION,
-  }));
+  /** This machine's identity; it lives in the database, so there is none without one. */
+  const machineInfo = (): MachineInfo | undefined => {
+    if (!db) return undefined;
+    const { id, name } = loadMachineIdentity(db, os.hostname());
+    return {
+      id,
+      name,
+      platform: process.platform as MachineInfo['platform'],
+      headless: false,
+      home: os.homedir(),
+      capabilities: [...CAPABILITIES],
+    };
+  };
+  router.register('hello', async () => {
+    const machine = machineInfo();
+    return {
+      serviceVersion: pkg.version,
+      protocolVersion: PROTOCOL_VERSION,
+      ...(machine ? { machine } : {}),
+    };
+  });
+  router.register('machine.get', async () => {
+    const machine = machineInfo();
+    if (!machine) throw new ServiceError('NO_DATABASE', 'This service has no machine identity');
+    return machine;
+  });
+  router.register('machine.rename', async ({ name }) => {
+    if (!db) throw new ServiceError('NO_DATABASE', 'This service has no machine identity');
+    renameMachine(db, name);
+    return machineInfo()!;
+  });
 
   const broadcastRef: { fn: (e: EventMsg) => void } = { fn: () => {} };
   /** v1.2: runs once the catalog exists (the poller is created before it). */

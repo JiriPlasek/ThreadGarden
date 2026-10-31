@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use crate::discovery::{self, DataDirs, Discovery};
 
 /// Must equal `PROTOCOL_VERSION` in `packages/protocol/src/version.ts` (checked by a test).
-pub const PROTOCOL_VERSION: u32 = 4;
+pub const PROTOCOL_VERSION: u32 = 5;
 /// How long a freshly spawned service may take to write `service.json` and answer `hello`.
 /// The service writes `service.json` as soon as it listens — it looks for Claude Code
 /// (`claude --version`, seconds on some machines) only afterwards — so this covers a

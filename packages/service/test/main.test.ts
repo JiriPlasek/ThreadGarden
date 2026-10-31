@@ -74,6 +74,30 @@ describe('startService', () => {
     await svc.close();
   });
 
+  it('carries the machine in hello when there is a database', async () => {
+    const adapter = generateCorpus({ sessions: 1, projects: 1, bigSessionMessages: 0 });
+    const svc = await startService({
+      dataDir: join(dir, 'data'),
+      claudeConfigDir: join(dir, 'claude-missing'),
+      adapter,
+      installSignalHandlers: false,
+    });
+    const hello = (await rpc(svc.port, svc.token, 'hello', {
+      protocolVersion: PROTOCOL_VERSION,
+      client: 't',
+    })) as { result: { machine: { id: string } } };
+    expect(hello.result.machine).toMatchObject({
+      platform: process.platform,
+      headless: false,
+      capabilities: ['remote'],
+    });
+    const renamed = (await rpc(svc.port, svc.token, 'machine.rename', { name: ' Den ' })) as {
+      result: { id: string; name: string };
+    };
+    expect(renamed.result).toMatchObject({ id: hello.result.machine.id, name: 'Den' });
+    await svc.close();
+  });
+
   it('polls external sessions, answers resume checks and reports system status', async () => {
     const adapter = generateCorpus({ sessions: 2, projects: 1, bigSessionMessages: 0 });
     const run = async () =>

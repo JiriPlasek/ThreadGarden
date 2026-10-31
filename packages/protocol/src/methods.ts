@@ -12,6 +12,7 @@ import {
 } from './chat.js';
 import { ChatItemsEventSchema, ChatStatusEventSchema, ChatTasksEventSchema } from './events.js';
 import { ChatItemSchema, ImageRefSchema } from './items.js';
+import { MachineInfoSchema } from './machines.js';
 import { ChatTaskSchema } from './tasks.js';
 import { ScheduledSendSchema, UsageStateSchema } from './usage.js';
 
@@ -35,8 +36,16 @@ const def = <P extends z.ZodType, R extends z.ZodType>(params: P, result: R) => 
 export const methods = {
   hello: def(
     z.object({ protocolVersion: z.number(), client: z.string() }),
-    z.object({ serviceVersion: z.string(), protocolVersion: z.number() }),
+    z.object({
+      serviceVersion: z.string(),
+      protocolVersion: z.number(),
+      /** Optional so a protocol-4 service still parses. */
+      machine: MachineInfoSchema.optional(),
+    }),
   ),
+  /** v1.4: this machine's identity. */
+  'machine.get': def(empty, MachineInfoSchema),
+  'machine.rename': def(z.object({ name: z.string().trim().min(1).max(40) }), MachineInfoSchema),
   /** v1.2: `active`, `onHold`, `archived` per bucket; `all` (= `active`) stays for older UIs. */
   'places.counts': def(
     empty,
