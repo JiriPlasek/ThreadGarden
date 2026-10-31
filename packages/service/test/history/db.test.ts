@@ -72,6 +72,72 @@ describe('migrations', () => {
   });
 });
 
+describe('Db settings', () => {
+  const store = (db: Db, key: string, json: string): void => {
+    db.raw
+      .prepare(
+        'INSERT INTO settings (key, json) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET json = excluded.json',
+      )
+      .run(key, json);
+  };
+
+  it('an invalid stored value falls back to its own default, never voiding the others', () => {
+    const db = openDb(':memory:');
+    db.patchSettings({ notifications: false, idleReclaimMinutes: 3, accent: 'teal' });
+    store(db, 'theme', '"purple"');
+    store(db, 'enterToSend', 'not json');
+    store(db, 'darkStyle', '"oled-ultra"');
+    store(db, 'codeFont', '{"family":1}');
+    store(db, 'retired', '"setting from an older pahub"');
+    const s = db.getSettings();
+    expect(s).toMatchObject({
+      notifications: false,
+      idleReclaimMinutes: 3,
+      accent: 'teal',
+      theme: 'system',
+      enterToSend: true,
+      darkStyle: 'default',
+      codeFont: null,
+    });
+    expect(s).not.toHaveProperty('retired');
+    db.close();
+  });
+
+  it('stores the v1.3 appearance settings, defaulting to today’s look', () => {
+    const db = openDb(':memory:');
+    expect(db.getSettings()).toMatchObject({
+      accent: 'graphite',
+      darkStyle: 'default',
+      lightStyle: 'default',
+      uiFont: 'inter',
+      codeFont: null,
+    });
+    const after = db.patchSettings({
+      accent: 'violet',
+      darkStyle: 'midnight',
+      lightStyle: 'warm',
+      uiFont: 'system',
+      codeFont: 'Fira Code',
+    });
+    expect(after).toMatchObject({
+      accent: 'violet',
+      darkStyle: 'midnight',
+      lightStyle: 'warm',
+      uiFont: 'system',
+      codeFont: 'Fira Code',
+    });
+    expect(db.patchSettings({ codeFont: null }).codeFont).toBeNull();
+    db.close();
+  });
+
+  it('sanitises a code font stored by hand', () => {
+    const db = openDb(':memory:');
+    store(db, 'codeFont', JSON.stringify('Fira"; } * { color: red'));
+    expect(db.getSettings().codeFont).toBe('Fira color red');
+    db.close();
+  });
+});
+
 describe('Db', () => {
   it('searchFts finds substring "arit" in "parity"', () => {
     const db = openDb(':memory:');
