@@ -88,7 +88,7 @@ export class MachinesState {
   private everOn = new Set<string>();
   private pairing = 0;
   private removing = new Set<string>();
-  private removals = new Map<string, Promise<void>>();
+  private removals = new Map<string, Promise<boolean>>();
   private readonly added = new Set<(m: MachineEntry) => void>();
   private readonly removedCbs = new Set<(id: string) => void>();
   private readonly listedCbs = new Set<() => void>();
@@ -230,7 +230,8 @@ export class MachinesState {
     this.applyOne(m);
   };
 
-  remove = (id: string): Promise<void> => {
+  /** Forgets the machine; true when it confirmed revoking this device (false: it still lists this PC). */
+  remove = (id: string): Promise<boolean> => {
     // A second call while one is in flight shares it, so the first `finally` cannot clear the mark early.
     const running = this.removals.get(id);
     if (running) return running;
@@ -239,12 +240,16 @@ export class MachinesState {
     return p;
   };
 
-  private doRemove = async (id: string): Promise<void> => {
+  private doRemove = async (id: string): Promise<boolean> => {
     // Marked first: a connect already awaiting the keychain or the unlock must not revive the client.
     this.removing.add(id);
     this.paired.find((m) => m.id === id)?.client.close();
     try {
-      await this.localApi.request('machines.remove', { machineId: id, revoke: true });
+      const { revoked } = await this.localApi.request('machines.remove', {
+        machineId: id,
+        revoke: true,
+      });
+      return revoked;
     } finally {
       await this.tokens.clear(id).catch(() => {});
       this.drop(id);

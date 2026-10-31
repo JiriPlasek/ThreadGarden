@@ -17,6 +17,7 @@
   import { formatShortcut, shortcut } from '#lib/shortcuts.js';
   import { IDLE_MINUTES_MAX } from '#lib/state/settings.svelte.js';
   import AppearancePreview from './AppearancePreview.svelte';
+  import MachinesSettings from './MachinesSettings.svelte';
 
   type Accent = Settings['accent'];
 
@@ -58,6 +59,19 @@
   let keyBusy = $state(false);
   let keyError = $state<string | null>(null);
 
+  /** Scrolls to and focuses the section the opener asked for (e.g. "Open settings" on a machine that needs attention). */
+  const showSection = (): void => {
+    const section = interaction.settingsSection;
+    interaction.settingsSection = null;
+    if (section !== 'machines') return;
+    // The dialog's content mounts after `open` flips.
+    setTimeout(() => {
+      const heading = document.getElementById('settings-machines');
+      heading?.scrollIntoView?.({ block: 'start' });
+      heading?.focus();
+    }, 0);
+  };
+
   let wasOpen = false;
   $effect(() => {
     const open = interaction.settingsOpen;
@@ -68,6 +82,7 @@
       keyError = null;
       interaction.loadStatus().catch(() => {});
       settings.checkApiKey().catch(() => {});
+      showSection();
     }
     wasOpen = open;
   });
@@ -344,6 +359,8 @@
         }}
       />
     </section>
+
+    <MachinesSettings />
 
     <section class="grid gap-1 border-t pt-3" aria-label="Authentication">
       <label for="settings-api-key" class="text-muted-foreground text-xs">Anthropic API key</label>

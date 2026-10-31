@@ -33,6 +33,10 @@ export class InteractionState {
   switcherOpen = $state(false);
   /** Threadgarden's settings dialog (spec §6.5). */
   settingsOpen = $state(false);
+  /** The Add machine dialog (Settings → Machines). */
+  addMachineOpen = $state(false);
+  /** A section of the settings dialog to scroll to and focus when it opens (cleared once shown). */
+  settingsSection = $state<'machines' | null>(null);
   /** The keyboard shortcuts dialog (Ctrl/Cmd+/ or ?). */
   shortcutsOpen = $state(false);
   /** The user chose to browse history although Claude Code is missing. */

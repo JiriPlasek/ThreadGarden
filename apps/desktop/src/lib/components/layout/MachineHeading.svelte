@@ -105,7 +105,10 @@
               type="button"
               class="text-muted-foreground hover:text-foreground focus-visible:ring-ring/50 shrink-0 rounded-sm px-1 text-[0.6875rem] underline underline-offset-2 outline-none focus-visible:ring-2"
               aria-describedby={reasonId}
-              onclick={() => (interaction.settingsOpen = true)}>Open settings</button
+              onclick={() => {
+                interaction.settingsSection = 'machines';
+                interaction.settingsOpen = true;
+              }}>Open settings</button
             >
           {/snippet}
         </Tooltip.Trigger>
