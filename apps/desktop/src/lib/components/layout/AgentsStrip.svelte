@@ -8,13 +8,15 @@
   import { baseName, externalLabel, previewLine, rawStatus } from './chat-info';
   import RunningBadge from './RunningBadge.svelte';
   import StatusIcon, { statusLabel } from './StatusIcon.svelte';
+  import UsageMeter from './UsageMeter.svelte';
 
   /**
    * Bottom strip (spec §6.1, Ruling R21): every live pahub chat and every active
    * external session from every project, needs-you → working → idle. Clicking one
    * opens (or focuses) its tab; a chat with running background tasks shows its
    * "N running" pill (Ruling R29). "Stop all work" (enabled while any pahub chat is
-   * live; it closes idle ones too) sits behind a confirmation.
+   * live; it closes idle ones too) sits behind a confirmation. v1.3 B: the
+   * usage meter sits before it (hidden while nothing is known).
    */
   const { agents, chats, tabs, places } = useApp();
 
@@ -64,6 +66,7 @@
       {/each}
     </ul>
   {/if}
+  <UsageMeter />
   <Button
     variant="ghost"
     size="xs"

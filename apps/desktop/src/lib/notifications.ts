@@ -5,6 +5,9 @@
  * service counts unread chats in it); and the window's focus reported to the
  * service (`ui.visibility`, which paces external-session polling).
  *
+ * v1.3 B: "Scheduled message sent to ‹title›" when a scheduled send goes out
+ * (the notifications setting; saying so when it went out late).
+ *
  * v1.2 §3: "‹title› is back from hold" when a hold runs out (`chatBackFromHold`,
  * same setting and focus rule as Needs you). Holds that end together (a bulk
  * hold) are one notification, "‹title› and N more are back from hold". The
@@ -220,6 +223,16 @@ export const startAttention = (deps: AttentionDeps): (() => void) => {
       if (focused && tabs.active === e.sessionId) return;
       notified = { sessionId: e.sessionId, at: now() };
       quietly(notify(e.title, `${e.projectName} · ${e.what}`, e.sessionId));
+    }),
+    // v1.3 B: a scheduled message went out (the notifications setting, like Needs you).
+    api.on('scheduledSent', (e) => {
+      if (!settings.value.notifications) return;
+      if (focused && tabs.active === e.sessionId) return;
+      notified = { sessionId: e.sessionId, at: now() };
+      const body = e.late
+        ? `${e.projectName ? `${e.projectName} · ` : ''}sent late: pahub was not running when it was due`
+        : e.projectName;
+      quietly(notify(`Scheduled message sent to ${e.title}`, body, e.sessionId));
     }),
     api.on('chatFinished', (e) => {
       if (!settings.value.notifyOnFinish) return;

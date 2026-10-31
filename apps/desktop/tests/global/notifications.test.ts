@@ -206,4 +206,24 @@ describe('notifications', () => {
       expect(env.server.calls('ui.visibility').at(-1)!.params).toEqual({ visible: true }),
     );
   });
+
+  it('v1.3 B: a scheduled message that went out is announced, late ones say so', async () => {
+    const env = await start();
+    window.dispatchEvent(new Event('blur'));
+    const sent = { sessionId: 's1', title: 'Fix the build', projectName: 'alpha', dueAt: 1 };
+    env.server.push('scheduledSent', { ...sent, late: false });
+    await flush();
+    expect(env.notify).toHaveBeenLastCalledWith(
+      'Scheduled message sent to Fix the build',
+      'alpha',
+      's1',
+    );
+    env.server.push('scheduledSent', { ...sent, late: true });
+    await flush();
+    expect(env.notify.mock.calls.at(-1)?.[1]).toMatch(/^alpha · sent late/);
+    env.app.settings.value = { ...env.app.settings.value, notifications: false };
+    env.server.push('scheduledSent', { ...sent, late: false });
+    await flush();
+    expect(env.notify).toHaveBeenCalledTimes(2);
+  });
 });

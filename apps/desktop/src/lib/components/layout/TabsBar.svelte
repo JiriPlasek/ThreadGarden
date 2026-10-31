@@ -7,6 +7,7 @@
   import { rawStatus, tabId } from './chat-info';
   import IconButton from './IconButton.svelte';
   import RunningBadge from './RunningBadge.svelte';
+  import ScheduledBadge from './ScheduledBadge.svelte';
   import StatusIcon from './StatusIcon.svelte';
 
   /**
@@ -14,7 +15,7 @@
    * close a tab (every key is listed in `shortcuts.ts`); closing only drops the view, the session keeps running.
    * "+" (Ctrl/Cmd+N) starts a new chat, in the selected project if there is one.
    */
-  const { tabs, chats, sessions, places, interaction } = useApp();
+  const { tabs, chats, sessions, places, interaction, scheduled, usage } = useApp();
 
   const newChat = (): void => {
     const sel = places.selected;
@@ -140,6 +141,9 @@
           <span class="truncate">{t.title}</span>
           {#if t.running > 0}
             <RunningBadge count={t.running} />
+          {/if}
+          {#if scheduled.forChat(sessionId).length > 0}
+            <ScheduledBadge sends={scheduled.forChat(sessionId)} now={usage.now} />
           {/if}
         </button>
         <IconButton

@@ -8,9 +8,11 @@ import { InteractionState } from '../../src/lib/state/interaction.svelte';
 import { LifecycleState } from '../../src/lib/state/lifecycle.svelte';
 import { APP_CONTEXT, type AppState } from '../../src/lib/state/context';
 import { PlacesState } from '../../src/lib/state/places.svelte';
+import { ScheduledState } from '../../src/lib/state/scheduled.svelte';
 import { SessionsState } from '../../src/lib/state/sessions.svelte';
 import { SettingsState } from '../../src/lib/state/settings.svelte';
 import { TabsState } from '../../src/lib/state/tabs.svelte';
+import { UsageStore } from '../../src/lib/state/usage.svelte';
 import { FakeServer } from '../service/fake-ws';
 
 export const summary = (
@@ -90,6 +92,8 @@ export const setup = async (configure?: (server: FakeServer) => void) => {
     interaction: new InteractionState(),
     lifecycle: new LifecycleState(),
     buckets: new BucketsState(),
+    usage: new UsageStore(),
+    scheduled: new ScheduledState(),
   };
   app.connection.init(client);
   app.places.init(client);
@@ -105,6 +109,8 @@ export const setup = async (configure?: (server: FakeServer) => void) => {
     await client.connect(`ws://fake:${conn.port}`, conn.token);
   });
   app.buckets.init(client, app.chats);
+  app.usage.init(client);
+  app.scheduled.init(client);
   app.tabs.subscribe(() => app.chats.sync(app.tabs.open, app.tabs.active));
 
   const context = new Map<unknown, unknown>([[APP_CONTEXT, app]]);

@@ -117,6 +117,8 @@ describe('quick switcher', () => {
     ).toEqual([
       'New chat in…',
       'Stop all work',
+      // v1.3 B
+      'Usage',
       'Settings',
       'Keyboard shortcuts',
       // v1.2 §3, in Active and in a project.

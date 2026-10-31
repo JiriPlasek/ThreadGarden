@@ -39,7 +39,7 @@
    */
   let { onCollapse }: { onCollapse?: () => void } = $props();
 
-  const { sessions, places, tabs, agents, settings, chats, buckets } = useApp();
+  const { sessions, places, tabs, agents, settings, chats, buckets, scheduled } = useApp();
 
   /**
    * Fixed row heights of the virtual list, in rem so they follow the interface
@@ -494,6 +494,7 @@
             : undefined}
           {now}
           running={chats.get(chat.sessionId)?.running ?? chat.runningTasks ?? 0}
+          scheduled={scheduled.forChat(chat.sessionId)}
           onOpen={onRowClick}
           onRename={(c) => (renaming = c)}
           onTogglePin={togglePin}

@@ -1,21 +1,25 @@
 <script lang="ts">
-  import type { ImageRef } from '@pahub/protocol';
+  import type { ImageRef, ScheduledSend } from '@pahub/protocol';
   import CheckIcon from '@lucide/svelte/icons/check';
+  import GaugeIcon from '@lucide/svelte/icons/gauge';
   import HandIcon from '@lucide/svelte/icons/hand';
   import XIcon from '@lucide/svelte/icons/x';
   import { tick, untrack } from 'svelte';
   import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
   import Composer from '#lib/components/composer/Composer.svelte';
   import SetupScreen from '#lib/components/SetupScreen.svelte';
+  import { clockTime, sendTimeText } from '#lib/format/usage.js';
   import { rowPx } from '#lib/interface-scale.js';
   import { copyText } from '#lib/native.js';
   import { RequestError } from '#lib/service/client.js';
   import type { ResumeCheck } from '#lib/state/chats.svelte.js';
   import { useApp } from '#lib/state/context.js';
+  import type { SendWhen } from '#lib/state/scheduled.svelte.js';
   import ActivityPanel from './ActivityPanel.svelte';
   import ChatHeader from './ChatHeader.svelte';
   import type { RequestActions } from './context';
   import MessageList from './MessageList.svelte';
+  import ScheduledSends from './ScheduledSends.svelte';
 
   /**
    * One open chat: header with controls, the virtualised messages, and the
@@ -36,7 +40,7 @@
    */
   let { sessionId }: { sessionId: string } = $props();
 
-  const { chats, tabs, interaction, settings } = useApp();
+  const { chats, tabs, interaction, settings, usage, scheduled } = useApp();
   /** A chat just created from the new-chat dialog starts with its composer focused. */
   const focusComposer = untrack(() => interaction.takeComposerFocus(sessionId));
   const chat = $derived(chats.get(sessionId));
@@ -44,6 +48,7 @@
   let root = $state<HTMLDivElement | null>(null);
   let composerBox = $state<HTMLTextAreaElement | null>(null);
   let list = $state<ReturnType<typeof MessageList> | null>(null);
+  let composer = $state<ReturnType<typeof Composer> | null>(null);
 
   let forkError = $state<string | null>(null);
   let sendError = $state<string | null>(null);
@@ -164,6 +169,75 @@
       sendError = err instanceof Error ? err.message : String(err);
     }
   };
+
+  // ── v1.3 B: usage limit and scheduled sends ─────────────────────────────
+
+  /** A usage limit refused this chat's last turn (until a turn goes through or it resets). */
+  const refusal = $derived(usage.refusal(sessionId));
+  /** The reset the "When the limit resets" preset uses. */
+  const resetAt = $derived(usage.limitResetAt ?? refusal?.resetsAt);
+
+  const schedule = async (text: string, images: ImageRef[], when: SendWhen): Promise<boolean> => {
+    sendError = null;
+    await scheduled.create(sessionId, text, images, when);
+    return true;
+  };
+
+  /** The scheduled message open in the composer, and what the composer held before. */
+  let editingSend = $state.raw<ScheduledSend | null>(null);
+  let beforeEdit: { text: string; images: ImageRef[] } | null = null;
+
+  const startEdit = async (s: ScheduledSend): Promise<void> => {
+    sendError = null;
+    try {
+      const full = await scheduled.get(s.id);
+      if (!composer) return;
+      beforeEdit ??= composer.current();
+      await composer.load(full.text, full.images ?? []);
+      editingSend = s;
+    } catch (err) {
+      sendError = err instanceof Error ? err.message : String(err);
+    }
+  };
+
+  const stopEdit = (): void => {
+    const restore = beforeEdit;
+    editingSend = null;
+    beforeEdit = null;
+    void composer?.load(restore?.text ?? '', restore?.images ?? []);
+  };
+
+  const editing = $derived(
+    editingSend
+      ? {
+          label: `Editing the message scheduled for ${sendTimeText(editingSend.sendAt, usage.now)}`,
+          onSave: async (text: string, images: ImageRef[]): Promise<boolean> => {
+            const id = editingSend?.id;
+            if (!id) return false;
+            await scheduled.update(id, { text, images });
+            const restore = beforeEdit;
+            editingSend = null;
+            beforeEdit = null;
+            // What the box held before the edit comes back.
+            if (restore && (restore.text || restore.images.length > 0)) {
+              // After the composer has cleared the saved message.
+              setTimeout(() => void composer?.load(restore.text, restore.images), 0);
+            }
+            return true;
+          },
+          onStop: stopEdit,
+        }
+      : undefined,
+  );
+
+  // A message being edited that went out (or was cancelled elsewhere): the edit ends, its text stays.
+  $effect(() => {
+    const e = editingSend;
+    if (e && !scheduled.forChat(sessionId).some((x) => x.id === e.id)) {
+      editingSend = null;
+      beforeEdit = null;
+    }
+  });
 
   // ── interrupt ───────────────────────────────────────────────────────────
 
@@ -450,10 +524,34 @@
               </div>
             </div>
           {/if}
+          {#if refusal}
+            <div
+              class="flex items-center gap-2 rounded-md bg-red-500/10 px-3 py-1 text-xs text-red-900 dark:text-red-200"
+              role="status"
+            >
+              <GaugeIcon class="size-4 shrink-0" aria-hidden="true" />
+              <span class="flex-1"
+                >Usage limit reached{refusal.resetsAt !== undefined
+                  ? ` — resets at ${clockTime(refusal.resetsAt)}`
+                  : ''}</span
+              >
+              <button
+                type="button"
+                class="font-medium underline-offset-2 hover:underline"
+                onclick={() => usage.open()}>Usage</button
+              >
+            </div>
+          {/if}
+          <ScheduledSends
+            {sessionId}
+            editingId={editingSend?.id}
+            onEdit={(s) => void startEdit(s)}
+          />
           {#if sendError}
             <p class="text-destructive text-xs" role="alert">{sendError}</p>
           {/if}
           <Composer
+            bind:this={composer}
             bind:textarea={composerBox}
             draftKey={sessionId}
             cwd={chat.summary?.cwd ?? ''}
@@ -463,6 +561,10 @@
             onSubmit={submit}
             onInterrupt={interrupt}
             {onControl}
+            onSchedule={schedule}
+            {resetAt}
+            limited={refusal !== undefined}
+            {editing}
             autofocus={focusComposer}
           />
         </div>

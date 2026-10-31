@@ -10,9 +10,11 @@ import { connection, type ConnectionState } from './connection.svelte';
 import { interaction, type InteractionState } from './interaction.svelte';
 import { lifecycle, type LifecycleState } from './lifecycle.svelte';
 import { places, type PlacesState } from './places.svelte';
+import { scheduled, type ScheduledState } from './scheduled.svelte';
 import { sessions, type SessionsState } from './sessions.svelte';
 import { settings, type SettingsState } from './settings.svelte';
 import { tabs, type TabsState } from './tabs.svelte';
+import { usage, type UsageStore } from './usage.svelte';
 
 export type AppState = {
   connection: ConnectionState;
@@ -25,6 +27,9 @@ export type AppState = {
   interaction: InteractionState;
   lifecycle: LifecycleState;
   buckets: BucketsState;
+  /** v1.3 B: plan usage and scheduled sends. */
+  usage: UsageStore;
+  scheduled: ScheduledState;
 };
 
 export const APP_CONTEXT = Symbol('pahub.app');
@@ -40,6 +45,8 @@ const singletons: AppState = {
   interaction,
   lifecycle,
   buckets,
+  usage,
+  scheduled,
 };
 
 /** Must be called during component initialisation. */
