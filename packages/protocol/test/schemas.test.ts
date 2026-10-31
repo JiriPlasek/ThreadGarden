@@ -12,6 +12,8 @@ import {
   settingsDefaults,
   SettingsSchema,
   PROTOCOL_VERSION,
+  ACCENTS,
+  sanitizeFontFamily,
 } from '../src/index.js';
 
 const sampleItems = [
@@ -401,6 +403,92 @@ describe('protocol schemas', () => {
         autoTitles: false,
       });
       expect(SettingsPatchSchema.safeParse({ autoTitles: 'yes' }).success).toBe(false);
+    });
+  });
+
+  // ── v1.3 E: appearance ────────────────────────────────────────────────────
+
+  describe('v1.3 appearance settings', () => {
+    it("default to today's look, also for settings stored before they existed", () => {
+      expect(settingsDefaults).toMatchObject({
+        accent: 'graphite',
+        darkStyle: 'default',
+        lightStyle: 'default',
+        uiFont: 'inter',
+        codeFont: null,
+      });
+      expect(SettingsSchema.parse({ theme: 'dark' })).toMatchObject({
+        theme: 'dark',
+        accent: 'graphite',
+        codeFont: null,
+      });
+    });
+
+    it("offers seven accents, graphite (today's look) first", () => {
+      expect(ACCENTS).toEqual(['graphite', 'blue', 'teal', 'green', 'violet', 'rose', 'amber']);
+    });
+
+    it('reads an unknown stored value as its default instead of failing the whole object', () => {
+      const parsed = SettingsSchema.parse({
+        notifications: false,
+        accent: 'chartreuse',
+        darkStyle: 42,
+        lightStyle: null,
+        uiFont: 'comic',
+        codeFont: { evil: true },
+      });
+      expect(parsed).toMatchObject({
+        notifications: false,
+        accent: 'graphite',
+        darkStyle: 'default',
+        lightStyle: 'default',
+        uiFont: 'inter',
+        codeFont: null,
+      });
+    });
+
+    it('patches strictly: unknown choices are rejected', () => {
+      expect(SettingsPatchSchema.parse({ accent: 'teal', darkStyle: 'midnight' })).toEqual({
+        accent: 'teal',
+        darkStyle: 'midnight',
+      });
+      expect(SettingsPatchSchema.safeParse({ accent: 'chartreuse' }).success).toBe(false);
+      expect(SettingsPatchSchema.safeParse({ lightStyle: 'dim' }).success).toBe(false);
+      expect(SettingsPatchSchema.safeParse({ uiFont: 'comic' }).success).toBe(false);
+      expect(SettingsPatchSchema.safeParse({ codeFont: 'x'.repeat(300) }).success).toBe(false);
+    });
+
+    it('sanitises the code font when patched and when read', () => {
+      expect(SettingsPatchSchema.parse({ codeFont: ' JetBrains   Mono ' })).toEqual({
+        codeFont: 'JetBrains Mono',
+      });
+      expect(SettingsPatchSchema.parse({ codeFont: '   ' })).toEqual({ codeFont: null });
+      expect(SettingsPatchSchema.parse({ codeFont: null })).toEqual({ codeFont: null });
+      expect(SettingsSchema.parse({ codeFont: 'a;}body{x' }).codeFont).toBe('a body x');
+    });
+  });
+
+  describe('sanitizeFontFamily', () => {
+    it('keeps font names and a comma-separated list of them', () => {
+      expect(sanitizeFontFamily('Fira Code')).toBe('Fira Code');
+      expect(sanitizeFontFamily('Cascadia Code PL,Consolas')).toBe('Cascadia Code PL, Consolas');
+      expect(sanitizeFontFamily('Iosevka_Term-SS04 1.5')).toBe('Iosevka_Term-SS04 1.5');
+      expect(sanitizeFontFamily('ＭＳ ゴシック')).toBe('ＭＳ ゴシック');
+    });
+
+    it('strips everything that could leave a quoted CSS family name', () => {
+      expect(sanitizeFontFamily('"Fira Code"')).toBe('Fira Code');
+      expect(sanitizeFontFamily("x'); background: url(//evil)")).toBe('x background url evil');
+      expect(sanitizeFontFamily('a\\"; }</style><script>')).toBe('a style script');
+      expect(sanitizeFontFamily('mono /* */ var(--x)')).toBe('mono var --x');
+      expect(sanitizeFontFamily('a\nb\u0000c')).toBe('a b c');
+    });
+
+    it('returns null for nothing usable; keeps at most four names of 64 characters', () => {
+      expect(sanitizeFontFamily('')).toBeNull();
+      expect(sanitizeFontFamily(' ,;{} , ')).toBeNull();
+      expect(sanitizeFontFamily('a, b, c, d, e')).toBe('a, b, c, d');
+      expect(sanitizeFontFamily('x'.repeat(100))).toBe('x'.repeat(64));
     });
   });
 });

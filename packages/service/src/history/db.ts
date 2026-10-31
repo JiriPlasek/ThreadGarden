@@ -8,6 +8,7 @@
 import './sqlite-warning.js';
 import { DatabaseSync } from 'node:sqlite';
 import { SettingsSchema, type Bucket, type Settings, type SettingsPatch } from '@pahub/protocol';
+import type { ZodType } from 'zod';
 import type { LiveRegistry } from '../chat/live-session.js';
 import type { SDKSessionInfo } from '../sdk/adapter.js';
 import { migrate } from './migrations.js';
@@ -751,18 +752,26 @@ export class Db implements LiveRegistry {
 
   // --- settings / ui state ------------------------------------------------------
 
-  /** Stored values merged over the schema defaults; invalid stored values fall back to defaults. */
+  /**
+   * Stored values merged over the schema defaults. Each value is checked on
+   * its own: an invalid or corrupt one falls back to its default and never
+   * voids the others; keys this build does not know are ignored.
+   */
   getSettings(): Settings {
+    const fields: Record<string, ZodType> = SettingsSchema.shape;
     const stored: Record<string, unknown> = {};
     for (const r of this.raw.prepare('SELECT key, json FROM settings').all()) {
+      const key = r.key as string;
+      const field = Object.hasOwn(fields, key) ? fields[key] : undefined;
+      if (!field) continue;
       try {
-        stored[r.key as string] = JSON.parse(r.json as string);
+        const value: unknown = JSON.parse(r.json as string);
+        if (field.safeParse(value).success) stored[key] = value;
       } catch {
         // ignore a corrupt value; the default applies
       }
     }
-    const parsed = SettingsSchema.safeParse(stored);
-    return parsed.success ? parsed.data : SettingsSchema.parse({});
+    return SettingsSchema.parse(stored);
   }
 
   patchSettings(patch: SettingsPatch): Settings {

@@ -23,7 +23,8 @@ pahub works with Claude Code; it is not affiliated with or endorsed by Anthropic
 - **External sessions** from `claude agents --json`, with copyable `claude --resume` / `claude attach` commands. Background sessions that Claude Code's own background service runs (`claude --bg`) can be stopped from pahub (it runs `claude stop <id>` after a confirmation); sessions open in a terminal are stopped there. pahub refuses to resume a session that is still running in another process.
 - **Ctrl/Cmd+K quick switcher** over titles, projects and full text, plus commands such as "New chat in…" and "Stop all work"; every action has a [keyboard shortcut](#keyboard-shortcuts), listed in the app with Ctrl/Cmd+/.
 - **Adjustable interface size** (Ctrl/Cmd with =, - and 0, or in Settings).
-- Windows, macOS and Linux; light and dark themes.
+- **Themes**: light, dark or follow the system, with an accent colour (Graphite, the default, or Blue, Teal, Green, Violet, Rose, Amber), a Warm paper tint for light, Dim or Midnight (true black, for OLED screens) for dark, Inter or the system font, and your own code font. Settings, Appearance, shows a live preview; the accents and styles keep WCAG AA contrast for text and buttons.
+- Windows, macOS and Linux.
 
 ## Keyboard shortcuts
 

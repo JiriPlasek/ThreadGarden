@@ -1,4 +1,5 @@
 import { settingsDefaults, type Settings, type SettingsPatch } from '@pahub/protocol';
+import { cacheAppearance, readCachedAppearance } from '../appearance';
 import {
   SCALE_KEY,
   SCALE_STEP,
@@ -26,7 +27,11 @@ export type KeyStore = typeof apiKey;
 export const IDLE_MINUTES_MAX = 1440;
 
 export class SettingsState {
-  value = $state<Settings>({ ...settingsDefaults });
+  /**
+   * Starts from the appearance this webview remembers (theme, accent, styles,
+   * fonts), so the first paint has it; the service's copy replaces it on load.
+   */
+  value = $state<Settings>({ ...settingsDefaults, ...readCachedAppearance() });
   loaded = $state(false);
   /** Persisted column widths in px by column name. */
   columnWidths = $state<ColumnWidths>({});
@@ -90,13 +95,16 @@ export class SettingsState {
 
   load = async (): Promise<void> => {
     if (!this.api) return;
-    this.value = await this.api.request('settings.get', {});
+    // Defaults fill in what an older service does not send yet (v1.3 appearance).
+    this.value = { ...settingsDefaults, ...(await this.api.request('settings.get', {})) };
     this.loaded = true;
+    cacheAppearance(this.value);
   };
 
   update = async (patch: SettingsPatch): Promise<void> => {
     if (!this.api) return;
-    this.value = await this.api.request('settings.set', patch);
+    this.value = { ...settingsDefaults, ...(await this.api.request('settings.set', patch)) };
+    cacheAppearance(this.value);
   };
 
   restoreColumns = async (): Promise<void> => {

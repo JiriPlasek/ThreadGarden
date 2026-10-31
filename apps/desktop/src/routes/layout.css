@@ -2,10 +2,13 @@
 @import 'tw-animate-css';
 @import 'shadcn-svelte/tailwind.css';
 @import '@fontsource-variable/inter';
+@import './themes.css';
 
 @custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
 
-:root {
+/* Also on any element with data-theme='light', so the Settings preview can show light inside dark. */
+:root,
+[data-theme='light'] {
   --background: oklch(1 0 0);
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);
@@ -75,7 +78,8 @@
 }
 
 @theme inline {
-  --font-sans: 'Inter Variable', sans-serif;
+  /* --font-ui is set by the interface font setting (themes.css); Inter otherwise. */
+  --font-sans: var(--font-ui, 'Inter Variable', sans-serif);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);

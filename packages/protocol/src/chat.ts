@@ -127,6 +127,41 @@ export const ChatHeaderInfoSchema = z.object({
 });
 export type ChatHeaderInfo = z.infer<typeof ChatHeaderInfoSchema>;
 
+// ── v1.3 E: appearance ──
+/** Accent colours; `graphite` is the neutral look pahub had before v1.3 and stays the default. */
+export const ACCENTS = ['graphite', 'blue', 'teal', 'green', 'violet', 'rose', 'amber'] as const;
+export const DARK_STYLES = ['default', 'dim', 'midnight'] as const;
+export const LIGHT_STYLES = ['default', 'warm'] as const;
+/** `inter` is the bundled Inter Variable; `system` the platform's UI font. */
+export const UI_FONTS = ['inter', 'system'] as const;
+/** Longest code font value a patch may carry (before sanitising). */
+export const CODE_FONT_MAX = 256;
+const FONT_NAME_MAX = 64;
+const FONT_NAMES_MAX = 4;
+
+/**
+ * Reduces a user-typed font family list to names that are safe inside a
+ * double-quoted CSS string: letters, digits, spaces, `_`, `-` and `.` only
+ * (quotes, backslashes, semicolons, braces, slashes and control characters
+ * become spaces), at most four comma-separated names of 64 characters.
+ * Returns null when nothing usable is left.
+ */
+export const sanitizeFontFamily = (raw: string): string | null => {
+  const names = raw
+    .split(',')
+    .map((n) =>
+      n
+        .replace(/[^\p{L}\p{N} _.-]/gu, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, FONT_NAME_MAX)
+        .trim(),
+    )
+    .filter((n) => n.length > 0)
+    .slice(0, FONT_NAMES_MAX);
+  return names.length > 0 ? names.join(', ') : null;
+};
+
 const settingsFields = {
   claudePath: z.string().nullable(),
   idleReclaimMinutes: z.number(),
@@ -145,6 +180,20 @@ const settingsFields = {
    * sentence).
    */
   autoTitles: z.boolean(),
+  // ── v1.3 E: appearance ──
+  /** Drives the primary, ring and selection colours in both themes. */
+  accent: z.enum(ACCENTS),
+  /** Surfaces of the dark theme: today's, a softer grey, or true black (OLED). */
+  darkStyle: z.enum(DARK_STYLES),
+  /** Surfaces of the light theme: today's white, or a warm paper tint. */
+  lightStyle: z.enum(LIGHT_STYLES),
+  uiFont: z.enum(UI_FONTS),
+  /** A custom code font family list (sanitised, see `sanitizeFontFamily`); null is the default monospace stack. */
+  codeFont: z
+    .string()
+    .max(CODE_FONT_MAX)
+    .nullable()
+    .transform((v) => (v === null ? null : sanitizeFontFamily(v))),
 };
 
 export const SettingsSchema = z.object({
@@ -158,6 +207,19 @@ export const SettingsSchema = z.object({
   notifyOnFinish: settingsFields.notifyOnFinish.default(true),
   // ── v1.2 C1: chat titles ──
   autoTitles: settingsFields.autoTitles.default(true),
+  // ── v1.3 E: appearance ──
+  // Read leniently (`.catch`): a stored value this build does not know (a newer
+  // accent, a corrupt row) reads as the default instead of failing the object.
+  accent: settingsFields.accent.catch('graphite'),
+  darkStyle: settingsFields.darkStyle.catch('default'),
+  lightStyle: settingsFields.lightStyle.catch('default'),
+  uiFont: settingsFields.uiFont.catch('inter'),
+  // Any length reads: the value is sanitised (and capped) anyway.
+  codeFont: z
+    .string()
+    .nullable()
+    .transform((v) => (v === null ? null : sanitizeFontFamily(v)))
+    .catch(null),
 });
 export type Settings = z.infer<typeof SettingsSchema>;
 
