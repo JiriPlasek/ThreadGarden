@@ -1,5 +1,11 @@
 <script lang="ts">
-  import type { Settings, SettingsPatch } from '@pahub/protocol';
+  import {
+    ACCENTS,
+    CODE_FONT_MAX,
+    sanitizeFontFamily,
+    type Settings,
+    type SettingsPatch,
+  } from '@pahub/protocol';
   import FileSearchIcon from '@lucide/svelte/icons/file-search';
   import KeyboardIcon from '@lucide/svelte/icons/keyboard';
   import { buildFlags } from '#lib/build-flags.js';
@@ -10,6 +16,9 @@
   import { SCALES } from '#lib/interface-scale.js';
   import { formatShortcut, shortcut } from '#lib/shortcuts.js';
   import { IDLE_MINUTES_MAX } from '#lib/state/settings.svelte.js';
+  import AppearancePreview from './AppearancePreview.svelte';
+
+  type Accent = Settings['accent'];
 
   /**
    * pahub's own settings (spec §6.5), stored by the service (the API key
@@ -19,16 +28,28 @@
    */
   const { settings, interaction, connection } = useApp();
 
-  type Form = Omit<Settings, 'claudePath' | 'idleReclaimMinutes'> & {
+  type Form = Omit<Settings, 'claudePath' | 'idleReclaimMinutes' | 'codeFont'> & {
     claudePath: string;
     idleReclaimMinutes: string;
+    codeFont: string;
   };
 
   const fromSettings = (s: Settings): Form => ({
     ...s,
     claudePath: s.claudePath ?? '',
     idleReclaimMinutes: String(s.idleReclaimMinutes),
+    codeFont: s.codeFont ?? '',
   });
+
+  const ACCENT_NAMES: Record<Accent, string> = {
+    graphite: 'Graphite (default)',
+    blue: 'Blue',
+    teal: 'Teal',
+    green: 'Green',
+    violet: 'Violet',
+    rose: 'Rose',
+    amber: 'Amber',
+  };
 
   let form = $state<Form>(fromSettings(settings.value));
   let saving = $state(false);
@@ -76,6 +97,7 @@
       ...form,
       claudePath: form.claudePath.trim() || null,
       idleReclaimMinutes: idle,
+      codeFont: sanitizeFontFamily(form.codeFont),
     };
     const patch: SettingsPatch = {};
     for (const key of Object.keys(next) as (keyof Settings)[]) {
@@ -182,31 +204,6 @@
         {/if}
       </div>
 
-      <div class="grid gap-1">
-        <label for="settings-theme" class="text-muted-foreground text-xs">Theme</label>
-        <select id="settings-theme" class="{fieldClass} w-40" bind:value={form.theme}>
-          <option value="system">System</option>
-          <option value="light">Light</option>
-          <option value="dark">Dark</option>
-        </select>
-      </div>
-
-      <div class="grid gap-1">
-        <label for="settings-scale" class="text-muted-foreground text-xs"
-          >Interface size (applies at once; also {scaleUp} and {scaleDown})</label
-        >
-        <select
-          id="settings-scale"
-          class="{fieldClass} w-40"
-          value={String(settings.scale)}
-          onchange={(e) => settings.setScale(Number(e.currentTarget.value))}
-        >
-          {#each SCALES as s (s)}
-            <option value={String(s)}>{Math.round(s * 100)} %{s === 1 ? ' (default)' : ''}</option>
-          {/each}
-        </select>
-      </div>
-
       <label class={checkClass}>
         <input type="checkbox" bind:checked={form.notifications} /> Notifications when a chat needs you
       </label>
@@ -237,6 +234,115 @@
       <label class={checkClass}>
         <input type="checkbox" bind:checked={form.startOnLogin} /> Start on login
       </label>
+    </section>
+
+    <section class="grid gap-3 border-t pt-3" aria-labelledby="settings-appearance">
+      <h3 id="settings-appearance" class="text-muted-foreground text-xs font-medium">Appearance</h3>
+      <div class="grid grid-cols-2 gap-3">
+        <div class="grid gap-1">
+          <label for="settings-theme" class="text-muted-foreground text-xs">Theme</label>
+          <select id="settings-theme" class={fieldClass} bind:value={form.theme}>
+            <option value="system">System</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
+        </div>
+
+        <div class="grid gap-1">
+          <label for="settings-scale" class="text-muted-foreground text-xs"
+            >Interface size ({scaleUp} / {scaleDown})</label
+          >
+          <select
+            id="settings-scale"
+            class={fieldClass}
+            title="Applies at once"
+            value={String(settings.scale)}
+            onchange={(e) => settings.setScale(Number(e.currentTarget.value))}
+          >
+            {#each SCALES as s (s)}
+              <option value={String(s)}>{Math.round(s * 100)} %{s === 1 ? ' (default)' : ''}</option
+              >
+            {/each}
+          </select>
+        </div>
+
+        <div class="grid gap-1">
+          <label for="settings-light-style" class="text-muted-foreground text-xs">Light style</label
+          >
+          <select id="settings-light-style" class={fieldClass} bind:value={form.lightStyle}>
+            <option value="default">Default</option>
+            <option value="warm">Warm (paper)</option>
+          </select>
+        </div>
+
+        <div class="grid gap-1">
+          <label for="settings-dark-style" class="text-muted-foreground text-xs">Dark style</label>
+          <select id="settings-dark-style" class={fieldClass} bind:value={form.darkStyle}>
+            <option value="default">Default</option>
+            <option value="dim">Dim (softer grey)</option>
+            <option value="midnight">Midnight (true black, OLED)</option>
+          </select>
+        </div>
+
+        <div class="grid gap-1">
+          <label for="settings-ui-font" class="text-muted-foreground text-xs">Interface font</label>
+          <select id="settings-ui-font" class={fieldClass} bind:value={form.uiFont}>
+            <option value="inter">Inter (default)</option>
+            <option value="system">System font</option>
+          </select>
+        </div>
+
+        <div class="grid gap-1">
+          <label for="settings-code-font" class="text-muted-foreground text-xs">Code font</label>
+          <input
+            id="settings-code-font"
+            class="{fieldClass} font-mono text-xs"
+            placeholder="Default monospace"
+            title="A font installed on this computer, such as JetBrains Mono; empty uses the default"
+            spellcheck="false"
+            autocomplete="off"
+            maxlength={CODE_FONT_MAX}
+            bind:value={form.codeFont}
+          />
+        </div>
+      </div>
+
+      <fieldset class="grid gap-1">
+        <legend class="text-muted-foreground mb-1 text-xs">Accent colour</legend>
+        <div class="flex flex-wrap gap-1.5">
+          {#each ACCENTS as accent (accent)}
+            <label
+              class="has-[:focus-visible]:ring-ring/50 has-[:checked]:border-foreground/60 flex h-7 items-center gap-1.5 rounded-md border px-2 text-xs has-[:focus-visible]:ring-2"
+            >
+              <input
+                type="radio"
+                name="settings-accent"
+                class="sr-only"
+                value={accent}
+                bind:group={form.accent}
+              />
+              <!-- The swatch takes its colour from the stylesheet's own tokens for that accent. -->
+              <span
+                data-theme="light"
+                data-accent={accent}
+                class="bg-primary size-3 rounded-full"
+                aria-hidden="true"
+              ></span>
+              {ACCENT_NAMES[accent]}
+            </label>
+          {/each}
+        </div>
+      </fieldset>
+
+      <AppearancePreview
+        appearance={{
+          accent: form.accent,
+          darkStyle: form.darkStyle,
+          lightStyle: form.lightStyle,
+          uiFont: form.uiFont,
+          codeFont: form.codeFont,
+        }}
+      />
     </section>
 
     <section class="grid gap-1 border-t pt-3" aria-label="Authentication">
