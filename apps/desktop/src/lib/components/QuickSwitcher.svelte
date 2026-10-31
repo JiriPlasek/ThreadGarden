@@ -4,6 +4,7 @@
 </script>
 
 <script lang="ts">
+  import ArchiveIcon from '@lucide/svelte/icons/archive';
   import MessageSquareIcon from '@lucide/svelte/icons/message-square';
   import CircleStopIcon from '@lucide/svelte/icons/circle-stop';
   import KeyboardIcon from '@lucide/svelte/icons/keyboard';
@@ -14,6 +15,7 @@
   import * as Dialog from '#lib/components/ui/dialog/index.js';
   import { useApp } from '#lib/state/context.js';
   import { formatShortcut, shortcut, type Combo } from '#lib/shortcuts.js';
+  import { ARCHIVE_OLDER_DAYS } from '#lib/state/buckets.svelte.js';
   import type { QuickHit } from '#lib/state/sessions.svelte.js';
   import { cn } from '#lib/utils.js';
 
@@ -22,9 +24,11 @@
    * full text across all projects with one `search.quick` per keystroke (the
    * service answers within its 50 ms budget; an answer overtaken by a newer
    * query is dropped). Enter opens the chat or focuses its tab. Also hosts
-   * commands: "New chat in…", "Stop all work", "Settings", "Keyboard shortcuts".
+   * commands: "New chat in…", "Stop all work", "Settings", "Keyboard shortcuts",
+   * and in Active or a project "Archive chats older than 30 days…". Archived
+   * matches come last, in their own "Archived" group (v1.2 §3).
    */
-  const { interaction, sessions, tabs, lifecycle } = useApp();
+  const { interaction, sessions, tabs, lifecycle, places, buckets } = useApp();
 
   type Command = {
     id: string;
@@ -35,6 +39,19 @@
     keys?: Combo;
   };
   type Row = { key: string; hit: QuickHit; command?: never } | { key: string; command: Command };
+
+  /** The tidy action applies to Active or to the selected project. */
+  const archiveOlderCommand = $derived.by((): Command | null => {
+    const p = places.selected;
+    if (p.kind !== 'active' && p.kind !== 'all' && p.kind !== 'project') return null;
+    const projectId = p.kind === 'project' ? p.projectId : undefined;
+    return {
+      id: 'archive-older',
+      label: `Archive chats older than ${ARCHIVE_OLDER_DAYS} days…`,
+      icon: ArchiveIcon,
+      run: () => void buckets.askArchiveOlder(projectId),
+    };
+  });
 
   const COMMANDS: Command[] = [
     { id: 'new-chat', label: 'New chat in…', icon: PlusIcon, run: () => interaction.openNewChat() },
@@ -69,13 +86,18 @@
   let latest = 0;
 
   const commands = $derived.by(() => {
+    const all = archiveOlderCommand ? [...COMMANDS, archiveOlderCommand] : COMMANDS;
     const q = query.trim().toLowerCase();
-    return q ? COMMANDS.filter((c) => c.label.toLowerCase().includes(q)) : COMMANDS;
+    return q ? all.filter((c) => c.label.toLowerCase().includes(q)) : all;
   });
-  const rows = $derived<Row[]>([
-    ...hits.map((hit) => ({ key: `chat:${hit.sessionId}`, hit })),
+  const chatRow = (hit: QuickHit): Row => ({ key: `chat:${hit.sessionId}`, hit });
+  /** Chats, then commands; archived chats last (shown as their own group). */
+  const main = $derived<Row[]>([
+    ...hits.filter((h) => !h.archived).map(chatRow),
     ...commands.map((command) => ({ key: `cmd:${command.id}`, command })),
   ]);
+  const archived = $derived<Row[]>(hits.filter((h) => h.archived).map(chatRow));
+  const rows = $derived<Row[]>([...main, ...archived]);
 
   const search = (text: string): void => {
     const q = text.trim();
@@ -188,7 +210,7 @@
       aria-label="Chats and commands"
       class="max-h-[min(60vh,28rem)] overflow-y-auto p-1 [scrollbar-width:thin]"
     >
-      {#each rows as row, i (row.key)}
+      {#snippet option(row: Row, i: number)}
         <!-- Keyboard selection happens in the combobox (arrows, Enter); a click picks directly. -->
         <!-- svelte-ignore a11y_click_events_have_key_events -->
         <li
@@ -214,10 +236,17 @@
               >
             {/if}
           {:else}
-            <MessageSquareIcon
-              class="text-muted-foreground mt-0.5 size-4 shrink-0"
-              aria-hidden="true"
-            />
+            {#if row.hit.archived}
+              <ArchiveIcon
+                class="text-muted-foreground mt-0.5 size-4 shrink-0"
+                aria-hidden="true"
+              />
+            {:else}
+              <MessageSquareIcon
+                class="text-muted-foreground mt-0.5 size-4 shrink-0"
+                aria-hidden="true"
+              />
+            {/if}
             <span class="flex min-w-0 flex-1 flex-col">
               <span class="flex min-w-0 items-baseline gap-2">
                 <span class="truncate font-medium">{row.hit.title}</span>
@@ -231,7 +260,22 @@
             </span>
           {/if}
         </li>
+      {/snippet}
+      {#each main as row, i (row.key)}
+        {@render option(row, i)}
       {/each}
+      {#if archived.length > 0}
+        <li role="group" aria-label="Archived">
+          <div aria-hidden="true" class="text-muted-foreground px-2 pt-2 pb-1 text-xs font-medium">
+            Archived
+          </div>
+          <ul role="presentation">
+            {#each archived as row, j (row.key)}
+              {@render option(row, main.length + j)}
+            {/each}
+          </ul>
+        </li>
+      {/if}
     </ul>
     {#if query.trim() && hits.length === 0 && commands.length === 0}
       <p class="text-muted-foreground px-3 pb-3 text-sm">No matching chats.</p>

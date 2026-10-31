@@ -21,10 +21,16 @@ const freezeClock = (at = NOW): void => {
   vi.setSystemTime(at);
 };
 
+/** A section header's label and count (not its actions, such as Older's "Archive all…"). */
+const headerText = (h: Element | null | undefined): string | undefined =>
+  h
+    ? [...h.querySelectorAll(':scope > span')].map((s) => s.textContent?.trim() ?? '').join(' ')
+    : undefined;
+
 /** Section headers' text, in order. */
 const headers = (): string[] =>
   [...document.querySelectorAll('[data-section-header]:not([data-sticky])')].map(
-    (h) => h.textContent?.replace(/\s+/g, ' ').trim() ?? '',
+    (h) => headerText(h) ?? '',
   );
 
 const options = (): string[] =>
@@ -176,7 +182,7 @@ describe('chat list recency sections (v1.2 §2)', () => {
     await waitFor(() => expect(screen.queryByText('chat 0')).toBeNull());
     expect(rows().length).toBeLessThan(60);
     const sticky = list.querySelector('[data-section-header][data-sticky]');
-    expect(sticky?.textContent?.replace(/\s+/g, ' ').trim()).toBe('Older 279');
+    expect(headerText(sticky)).toBe('Older 279');
     expect(sticky?.getAttribute('aria-hidden')).toBe('true');
   });
 });
@@ -235,7 +241,8 @@ describe('missing folders (v1.2 §4)', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'Hide all missing' }));
     const dialog = await screen.findByRole('alertdialog');
     await userEvent.click(within(dialog).getByRole('button', { name: /hide 2 projects/i }));
-    await waitFor(() => expect(app.places.selected).toEqual({ kind: 'all' }));
+    // v1.2 §3: the first place is Active (it replaced All chats).
+    await waitFor(() => expect(app.places.selected).toEqual({ kind: 'active' }));
   });
 
   it('the section explains why missing folders appear', async () => {

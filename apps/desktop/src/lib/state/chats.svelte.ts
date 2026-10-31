@@ -167,7 +167,45 @@ export class ChatsState {
     api.on('chat.items', (e) => this.onItems(e));
     api.on('chat.status', (e) => this.onStatus(e));
     api.on('chat.tasks', (e) => this.onTasks(e));
+    // v1.2: the bucket (and hold) of an open chat shows in its header.
+    api.on('sessions.changed', (e) => this.refreshSummaries(e.sessionIds));
     api.onReconnect(() => this.resync());
+  };
+
+  private readonly staleSummaries = new Set<string>();
+  private refreshing = false;
+
+  /**
+   * Re-reads the summaries of the open chats among `sessionIds` (title,
+   * bucket, hold, unread). Overlapping calls coalesce into one trailing read.
+   */
+  private refreshSummaries = (sessionIds: readonly string[]): void => {
+    for (const id of sessionIds) {
+      if (this.byId.get(id)?.summary || this.peeks.has(id)) this.staleSummaries.add(id);
+    }
+    if (this.refreshing || this.staleSummaries.size === 0) return;
+    const api = this.api;
+    if (!api) return;
+    this.refreshing = true;
+    void (async () => {
+      try {
+        while (this.staleSummaries.size > 0) {
+          const ids = [...this.staleSummaries];
+          this.staleSummaries.clear();
+          const { items } = await api.request('sessions.summaries', { sessionIds: ids });
+          for (const s of items) {
+            const chat = this.byId.get(s.sessionId);
+            if (chat?.summary) chat.summary = s;
+            else if (this.peeks.has(s.sessionId)) this.peeks.set(s.sessionId, s);
+          }
+        }
+      } catch {
+        // The next change (or reopening the chat) reads them again.
+        this.staleSummaries.clear();
+      } finally {
+        this.refreshing = false;
+      }
+    })();
   };
 
   get = (sessionId: string): ChatState | undefined => this.byId.get(sessionId);

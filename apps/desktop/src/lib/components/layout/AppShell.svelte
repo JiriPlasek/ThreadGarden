@@ -9,6 +9,7 @@
 
 <script lang="ts">
   import PanelLeftOpenIcon from '@lucide/svelte/icons/panel-left-open';
+  import BucketDialogs from '#lib/components/BucketDialogs.svelte';
   import SettingsIcon from '@lucide/svelte/icons/settings';
   import KeyboardShortcutsDialog from '#lib/components/KeyboardShortcutsDialog.svelte';
   import NewChatDialog from '#lib/components/NewChatDialog.svelte';
@@ -176,3 +177,4 @@
 <QuickSwitcher />
 <SettingsDialog />
 <KeyboardShortcutsDialog />
+<BucketDialogs />

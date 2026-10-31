@@ -1,10 +1,18 @@
 <script lang="ts">
   import ActivityIcon from '@lucide/svelte/icons/activity';
+  import ArchiveIcon from '@lucide/svelte/icons/archive';
   import CheckIcon from '@lucide/svelte/icons/check';
   import CircleStopIcon from '@lucide/svelte/icons/circle-stop';
+  import EllipsisIcon from '@lucide/svelte/icons/ellipsis';
+  import InboxIcon from '@lucide/svelte/icons/inbox';
+  import PauseIcon from '@lucide/svelte/icons/pause';
   import PowerIcon from '@lucide/svelte/icons/power';
   import TerminalIcon from '@lucide/svelte/icons/terminal';
   import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
+  import { Button } from '#lib/components/ui/button/index.js';
+  import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
+  import { formatHoldUntil } from '#lib/format/hold.js';
+  import { fullTime } from '#lib/format/time.js';
   import { baseName, rawStatus } from '#lib/components/layout/chat-info.js';
   import IconButton from '#lib/components/layout/IconButton.svelte';
   import StatusIcon from '#lib/components/layout/StatusIcon.svelte';
@@ -20,7 +28,9 @@
    * Code version, End session and Copy resume command. A chat running outside
    * pahub gets Stop when Claude Code's background service runs it, and a
    * "stop it there" note when it is open in a terminal. The Activity button
-   * shows or hides the Activity panel (Ctrl/Cmd+., handled by ChatView).
+   * shows or hides the Activity panel (Ctrl/Cmd+., handled by ChatView). The
+   * "Chat state" menu moves the chat between Active, On hold and Archived; an
+   * on-hold chat shows until when and its note (v1.2 §3).
    */
   let {
     chat,
@@ -33,7 +43,7 @@
     onToggleActivity?: () => void;
   } = $props();
 
-  const { chats, places } = useApp();
+  const { chats, places, buckets } = useApp();
 
   /** Ruling R11: pahub never offers bypassPermissions. */
   const PERMISSION_MODES = [
@@ -161,6 +171,22 @@
     await chats.stopExternal(sessionId);
   };
 
+  const bucket = $derived(summary?.bucket ?? 'active');
+  /** Ticks once a minute while the chat is on hold ("until today 18:30" reads relative to now). */
+  let now = $state(Date.now());
+  $effect(() => {
+    if (bucket !== 'onHold') return;
+    now = Date.now();
+    const t = setInterval(() => (now = Date.now()), 60_000);
+    return () => clearInterval(t);
+  });
+  const moveTo = (to: 'active' | 'onHold' | 'archived'): void => {
+    if (!summary) return;
+    if (to === 'onHold') buckets.hold([summary]);
+    else if (to === 'archived') void buckets.archive([summary]);
+    else void buckets.activate([summary]);
+  };
+
   const selectClass =
     'bg-background hover:bg-muted h-6 max-w-40 truncate rounded border px-1 text-xs disabled:cursor-not-allowed disabled:opacity-60';
 </script>
@@ -174,7 +200,63 @@
     {#if project}
       <span class="text-muted-foreground shrink-0 text-xs">{project}</span>
     {/if}
+    {#if bucket === 'onHold'}
+      <span
+        class="bg-muted text-muted-foreground flex min-w-0 shrink items-center gap-1 rounded px-1.5 text-xs leading-5"
+      >
+        <PauseIcon class="size-3.5 shrink-0" aria-hidden="true" />
+        <span class="shrink-0" title={summary?.holdUntil ? fullTime(summary.holdUntil) : undefined}
+          >On hold{summary?.holdUntil !== undefined
+            ? ` until ${formatHoldUntil(summary.holdUntil, now)}`
+            : ''}</span
+        >
+        {#if summary?.holdNote}
+          <span class="text-foreground/80 min-w-0 truncate" title={summary.holdNote}
+            >{summary.holdNote}</span
+          >
+        {/if}
+      </span>
+    {:else if bucket === 'archived'}
+      <span
+        class="bg-muted text-muted-foreground flex shrink-0 items-center gap-1 rounded px-1.5 text-xs leading-5"
+      >
+        <ArchiveIcon class="size-3.5" aria-hidden="true" />Archived
+      </span>
+    {/if}
     <div class="ml-auto flex shrink-0 items-center gap-0.5">
+      {#if summary}
+        <DropdownMenu.Root>
+          <DropdownMenu.Trigger>
+            {#snippet child({ props })}
+              <Button
+                {...props}
+                variant="ghost"
+                size="icon-xs"
+                class="text-muted-foreground hover:text-foreground"
+                aria-label="Chat state"
+                title="Chat state: Active, On hold or Archived"
+              >
+                <EllipsisIcon />
+              </Button>
+            {/snippet}
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Content align="end" class="min-w-40">
+            {#if bucket !== 'active'}
+              <DropdownMenu.Item class="py-1 text-xs" onSelect={() => moveTo('active')}>
+                <InboxIcon /> Make active
+              </DropdownMenu.Item>
+            {/if}
+            <DropdownMenu.Item class="py-1 text-xs" onSelect={() => moveTo('onHold')}>
+              <PauseIcon /> Put on hold…
+            </DropdownMenu.Item>
+            {#if bucket !== 'archived'}
+              <DropdownMenu.Item class="py-1 text-xs" onSelect={() => moveTo('archived')}>
+                <ArchiveIcon /> Archive
+              </DropdownMenu.Item>
+            {/if}
+          </DropdownMenu.Content>
+        </DropdownMenu.Root>
+      {/if}
       {#if onToggleActivity}
         <IconButton
           label="Activity panel"

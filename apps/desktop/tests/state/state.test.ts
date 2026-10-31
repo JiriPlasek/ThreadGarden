@@ -352,7 +352,8 @@ describe('places and sessions', () => {
     places.init(client);
     sessions.init(client, places);
     await flushAsync();
-    expect(sessions.items.map((s) => s.sessionId)).toEqual(['all--1', 's2']);
+    // v1.2 §3: Active is the first place (it replaced All chats).
+    expect(sessions.items.map((s) => s.sessionId)).toEqual(['active--1', 's2']);
     places.select({ kind: 'running' });
     await flushAsync();
     expect(sessions.items[0]?.sessionId).toBe('running--1');

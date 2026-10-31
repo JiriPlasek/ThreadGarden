@@ -1,11 +1,13 @@
 <script lang="ts">
   import type { Place, Project } from '@pahub/protocol';
+  import ArchiveIcon from '@lucide/svelte/icons/archive';
   import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
   import EyeIcon from '@lucide/svelte/icons/eye';
   import EyeOffIcon from '@lucide/svelte/icons/eye-off';
   import FolderIcon from '@lucide/svelte/icons/folder';
   import FolderXIcon from '@lucide/svelte/icons/folder-x';
   import InboxIcon from '@lucide/svelte/icons/inbox';
+  import PauseIcon from '@lucide/svelte/icons/pause';
   import PanelLeftCloseIcon from '@lucide/svelte/icons/panel-left-close';
   import PinIcon from '@lucide/svelte/icons/pin';
   import PinOffIcon from '@lucide/svelte/icons/pin-off';
@@ -20,9 +22,10 @@
   import StatusIcon from './StatusIcon.svelte';
 
   /**
-   * Left column (spec §6.1): smart folders with counts, then projects in the
-   * service's order (pinned, then recent activity). Projects whose folder is
-   * gone sit in a collapsed "Missing folders" group below them (v1.1 §4).
+   * Left column (spec §6.1): smart folders with counts (Needs you, Running,
+   * and the buckets Active, On hold and Archived, v1.2 §3), then projects in
+   * the service's order (pinned, then recent activity). Projects whose folder
+   * is gone sit in a collapsed "Missing folders" group below them (v1.1 §4).
    */
   let { onCollapse }: { onCollapse?: () => void } = $props();
 
@@ -44,6 +47,31 @@
       .filter((p) => p.hidden)
       .sort((a, b) => a.displayName.localeCompare(b.displayName)),
   );
+
+  /** The bucket places (v1.2 §3); Active replaces "All chats" (`all` from an older service). */
+  const BUCKETS = [
+    {
+      kind: 'active',
+      label: 'Active',
+      title: 'Active chats',
+      icon: InboxIcon,
+      count: () => places.counts.active ?? places.counts.all,
+    },
+    {
+      kind: 'onHold',
+      label: 'On hold',
+      title: 'Chats on hold',
+      icon: PauseIcon,
+      count: () => places.counts.onHold ?? 0,
+    },
+    {
+      kind: 'archived',
+      label: 'Archived',
+      title: 'Archived chats',
+      icon: ArchiveIcon,
+      count: () => places.counts.archived ?? 0,
+    },
+  ] as const;
 
   const isSelected = (place: Place): boolean => samePlace(places.selected, place);
   const select = (place: Place): void => places.select(place);
@@ -157,18 +185,21 @@
           {@render badge(places.counts.running, 'green', 'Working agents')}
         </button>
       </li>
-      <li>
-        <button
-          type="button"
-          class={itemClass(isSelected({ kind: 'all' }))}
-          aria-current={isSelected({ kind: 'all' }) ? 'true' : undefined}
-          onclick={() => select({ kind: 'all' })}
-        >
-          <InboxIcon class="text-muted-foreground size-4 shrink-0" aria-hidden="true" />
-          <span class="truncate">All chats</span>
-          {@render badge(places.counts.all, 'muted', 'All chats')}
-        </button>
-      </li>
+      {#each BUCKETS as b (b.kind)}
+        {@const place = { kind: b.kind }}
+        <li>
+          <button
+            type="button"
+            class={itemClass(isSelected(place))}
+            aria-current={isSelected(place) ? 'true' : undefined}
+            onclick={() => select(place)}
+          >
+            <b.icon class="text-muted-foreground size-4 shrink-0" aria-hidden="true" />
+            <span class="truncate">{b.label}</span>
+            {@render badge(b.count(), 'muted', b.title)}
+          </button>
+        </li>
+      {/each}
     </ul>
 
     <h3

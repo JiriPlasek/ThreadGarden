@@ -12,8 +12,9 @@ export type Platform = 'mac' | 'other';
  * One key of a combination. `Mod` is Ctrl on Windows/Linux and ⌘ on macOS;
  * `Ctrl` is the Control key on every platform. Other names: `Shift`, `Alt`,
  * `Enter`, `Esc`, `Tab`, `Space`, `Delete`, `Home`, `End`, `PageUp`,
- * `PageDown`, `Up`, `Down`, `Left`, `Right`, the mouse gestures `MiddleClick`
- * and `DoubleClick`, or a printable character (`K`, `/`, `?`, `@`, `=`, …).
+ * `PageDown`, `Up`, `Down`, `Left`, `Right`, the mouse gestures `Click`,
+ * `MiddleClick` and `DoubleClick`, or a printable character (`K`, `/`, `?`,
+ * `@`, `=`, …).
  */
 export type Key = string;
 export type Combo = readonly Key[];
@@ -135,6 +136,49 @@ export const SHORTCUTS: readonly Shortcut[] = [
     group: 'Chat list',
     combos: [['Esc']],
     description: 'Clear the search',
+  },
+  // v1.2 §3 buckets and multi-select — ChatList.
+  {
+    id: 'list-archive',
+    group: 'Chat list',
+    combos: [['E']],
+    description: 'Archive the selected chats (or the one under the cursor)',
+  },
+  {
+    id: 'list-hold',
+    group: 'Chat list',
+    combos: [['H']],
+    description: 'Put on hold: choose until when and add a note',
+  },
+  {
+    id: 'list-activate',
+    group: 'Chat list',
+    combos: [['A']],
+    description: 'Make active (back from On hold or Archived)',
+  },
+  {
+    id: 'list-select-toggle',
+    group: 'Chat list',
+    combos: [['Mod', 'Click']],
+    description: 'Add a chat to the selection, or remove it',
+  },
+  {
+    id: 'list-select-range',
+    group: 'Chat list',
+    combos: [['Shift', 'Click']],
+    description: 'Select a range of chats',
+  },
+  {
+    id: 'list-select-section',
+    group: 'Chat list',
+    combos: [['Mod', 'A']],
+    description: "Select every chat of the cursor's section",
+  },
+  {
+    id: 'list-select-clear',
+    group: 'Chat list',
+    combos: [['Esc']],
+    description: 'Clear the selection',
   },
 
   // Composer — Composer (send, new line, pickers' triggers, paste), ChatView (Esc), PermissionCard.
@@ -312,6 +356,7 @@ const KEY_LABELS: Record<string, string> = {
   Right: '→',
   PageUp: 'Page Up',
   PageDown: 'Page Down',
+  Click: 'Click',
   MiddleClick: 'Middle-click',
   DoubleClick: 'Double-click',
 };
@@ -338,7 +383,7 @@ const ARIA_KEYS: Record<string, string> = {
   Right: 'ArrowRight',
 };
 
-const MOUSE = new Set(['MiddleClick', 'DoubleClick']);
+const MOUSE = new Set(['Click', 'MiddleClick', 'DoubleClick']);
 
 /** The `aria-keyshortcuts` value: "Control+N" (or "Meta+N" on macOS); alternatives space-separated. */
 export const ariaKeyShortcuts = (

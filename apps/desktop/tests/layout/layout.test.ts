@@ -117,7 +117,7 @@ describe('agents strip', () => {
     let items = [summary('i1', { status: 'idle', live: true })];
     const { app, context } = await setup((server) => {
       server.handlers['sessions.list'] = (p) =>
-        (p as ListParams).place.kind === 'all' ? { items } : { items: [] };
+        (p as ListParams).place.kind === 'active' ? { items } : { items: [] };
     });
     render(AgentsStrip, { context });
     const stop = await screen.findByRole('button', { name: /stop all work/i });

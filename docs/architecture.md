@@ -200,7 +200,8 @@ external rows (the *overlay*) are small and change constantly, so they are
 returned in full on the first page of any place; later pages are index rows
 only, keyset-paged and excluding overlay ids, so the cursor never drifts when
 a chat changes status. Hidden projects stay visible in Needs you and Running
-(an agent waiting for you is never hidden) but are left out of All chats.
+(an agent waiting for you is never hidden) but are left out of Active (v1.2;
+formerly All chats) and the other bucket places.
 Running lists the working chats and (Ruling R29) every live pahub chat with a
 running background task (an agent or process, not paused or finished), even
 while its turn is idle: an idle chat whose dev server still runs is listed
@@ -225,6 +226,25 @@ The UI decides what "seen" means: a chat is marked seen while it is the active
 tab of a focused window (at once on `chatFinished`, otherwise after the tab
 has been shown for a moment, so tabs only passed through stay unread), and it
 posts the "finished — your turn" notification only for chats not on screen.
+
+**Buckets** (v1.2). Every chat is Active, On hold or Archived, stored in
+pahub's own `chat_buckets` table. `sessions.list` takes the places `active`,
+`onHold` and `archived` (`all` is an alias of `active`), and a project place
+lists its active chats unless `include` adds the others; Needs you and Running
+span every bucket. `chat.setBucket` moves chats in bulk and refuses, per chat,
+to archive one pahub runs (`LIVE`: the UI asks "End this chat and archive
+it?", ends it and retries) or one running elsewhere (`RUNNING`); the UI
+reports the chats it skipped. Archiving marks chats seen (Ruling R32). A hold
+whose time runs out (checked at startup and every 60 s) returns the chat to
+Active as `backFromHold`: listed under Needs you, announced with
+`chatBackFromHold`, and cleared by `chat.markSeen` (which the UI sends when the
+chat is viewed, as for unread chats) or a message. The UI announces, once per
+hold, the ones that ended while no window was connected (it keeps the
+announced ids in `uiState`). An archived chat returns to Active when it is sent
+a message or runs as an external session. `chat.archiveOlder` archives a
+place's idle, seen chats older than N days (with `dryRun` for the
+confirmation's count). Quick search ranks archived matches after all others
+and flags them, and the UI lists them in their own group.
 
 **Chat view.** `chat.open` returns the last N items of the SDK history merged
 with the live session's items (the live version wins for anything both have),
@@ -520,11 +540,11 @@ Decisions made during the build that change behaviour described in the design:
   to 80 characters, since the SDK summary may itself be the first prompt.
 - **Lists.** Live and external chats are returned in full on the first page of
   a list, so a first page can exceed the page size by that many rows. Hidden
-  projects are left out of All chats, but their chats
+  projects are left out of Active (formerly All chats), but their chats
   still appear in Needs you and Running.
 - **Running agents strip** lists every live pahub chat (needs-you, working and
-  idle, since an idle live chat still holds a process) plus external
-  sessions that need you or are working.
+  idle, since an idle live chat still holds a process; idle ones that are
+  archived are left out) plus external sessions that need you or are working.
 - **Messages that produce no item.** SDK messages that carry no content for
   the reader (progress, status, rate-limit and init events, the CLI's
   `command_lifecycle` telemetry, successful hook output, which the terminal

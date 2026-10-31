@@ -4,14 +4,41 @@ import { quietly, type Api } from './api';
 /** `uiState` key: whether the "Missing folders" group of the places column is expanded. */
 export const MISSING_OPEN_KEY = 'places.missingOpen';
 
-export type PlaceCounts = { needsYou: number; running: number; all: number };
+/**
+ * `places.counts`. v1.2 adds the bucket counts; `all` (= `active`) stays for
+ * older services, so the bucket counts are optional here.
+ */
+export type PlaceCounts = {
+  needsYou: number;
+  running: number;
+  all: number;
+  active?: number;
+  onHold?: number;
+  archived?: number;
+};
 
-export const samePlace = (a: Place, b: Place): boolean =>
-  a.kind === b.kind &&
-  (a.kind !== 'project' || (b.kind === 'project' && a.projectId === b.projectId));
+/** What a project place's "Include on hold / archived" toggle adds (v1.2 §3). */
+export const INCLUDE_OTHER_BUCKETS = ['onHold', 'archived'] as const;
+
+/** v1.2: "All chats" became Active; `all` (e.g. from an older UI) reads as `active`. */
+const normalize = (place: Place): Place => (place.kind === 'all' ? { kind: 'active' } : place);
+
+/** The same place in the left column (a project's `include` toggle does not count). */
+export const samePlace = (a: Place, b: Place): boolean => {
+  const x = normalize(a);
+  const y = normalize(b);
+  return (
+    x.kind === y.kind &&
+    (x.kind !== 'project' || (y.kind === 'project' && x.projectId === y.projectId))
+  );
+};
+
+/** A project place that also lists its on-hold and archived chats. */
+export const includesOtherBuckets = (place: Place): boolean =>
+  place.kind === 'project' && (place.include?.length ?? 0) > 0;
 
 export class PlacesState {
-  selected = $state<Place>({ kind: 'all' });
+  selected = $state<Place>({ kind: 'active' });
   counts = $state<PlaceCounts>({ needsYou: 0, running: 0, all: 0 });
   projects = $state<Project[]>([]);
   /** The "Missing folders" group is expanded (collapsed by default, v1.1 §4). */
@@ -48,9 +75,20 @@ export class PlacesState {
     return () => this.countWatchers.delete(cb);
   };
 
+  /** Selecting a project shows its active chats (the include toggle starts off). */
   select = (place: Place): void => {
     if (samePlace(this.selected, place)) return;
-    this.selected = place;
+    this.selected = normalize(place);
+    for (const cb of this.subscribers) cb();
+  };
+
+  /** The selected project's "Include on hold / archived" toggle (v1.2 §3). */
+  setInclude = (on: boolean): void => {
+    const p = this.selected;
+    if (p.kind !== 'project' || includesOtherBuckets(p) === on) return;
+    this.selected = on
+      ? { kind: 'project', projectId: p.projectId, include: [...INCLUDE_OTHER_BUCKETS] }
+      : { kind: 'project', projectId: p.projectId };
     for (const cb of this.subscribers) cb();
   };
 
@@ -103,11 +141,11 @@ export class PlacesState {
     await this.refresh();
   };
 
-  /** Hiding the selected project moves the selection to "All chats". */
+  /** Hiding the selected project moves the selection to Active. */
   hideProject = async (projectId: string, hidden: boolean): Promise<void> => {
     await this.api!.request('projects.update', { projectId, hidden });
     if (hidden && this.selected.kind === 'project' && this.selected.projectId === projectId) {
-      this.select({ kind: 'all' });
+      this.select({ kind: 'active' });
     } else {
       for (const cb of this.subscribers) cb();
     }
@@ -128,7 +166,7 @@ export class PlacesState {
       }
     } finally {
       const sel = this.selected;
-      if (sel.kind === 'project' && done.has(sel.projectId)) this.select({ kind: 'all' });
+      if (sel.kind === 'project' && done.has(sel.projectId)) this.select({ kind: 'active' });
       else if (done.size > 0) for (const cb of this.subscribers) cb();
       // A failed refresh must not mask a failed hide (the next event refreshes anyway).
       await this.refresh().catch(() => {});

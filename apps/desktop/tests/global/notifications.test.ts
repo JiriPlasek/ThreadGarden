@@ -105,7 +105,7 @@ describe('notifications', () => {
     env.advance(FOCUS_OPENS_WITHIN_MS + 1);
     window.dispatchEvent(new Event('focus'));
     await flush();
-    expect(env.app.places.selected).toEqual({ kind: 'all' });
+    expect(env.app.places.selected).toEqual({ kind: 'active' });
     expect(env.app.tabs.active).toBeNull();
   });
 

@@ -1,10 +1,16 @@
 <script lang="ts">
-  import type { ChatSummary } from '@pahub/protocol';
+  import type { Bucket, ChatSummary } from '@pahub/protocol';
   import { untrack } from 'svelte';
+  import { SvelteSet } from 'svelte/reactivity';
+  import LayersIcon from '@lucide/svelte/icons/layers';
   import PanelLeftCloseIcon from '@lucide/svelte/icons/panel-left-close';
   import SearchIcon from '@lucide/svelte/icons/search';
+  import XIcon from '@lucide/svelte/icons/x';
+  import { Button } from '#lib/components/ui/button/index.js';
   import { rowPx } from '#lib/interface-scale.js';
+  import { ARCHIVE_OLDER_DAYS } from '#lib/state/buckets.svelte.js';
   import { useApp } from '#lib/state/context.js';
+  import { includesOtherBuckets } from '#lib/state/places.svelte.js';
   import { baseName } from './chat-info';
   import ChatListRow from './ChatListRow.svelte';
   import IconButton from './IconButton.svelte';
@@ -23,10 +29,17 @@
    * each option names its section through `aria-describedby`, pointing at
    * per-section labels that are always in the DOM (a header row may be
    * virtualized away, a listbox group cannot span virtual rows).
+   *
+   * Buckets (v1.2 §3): rows move to Active / On hold / Archived from their
+   * context menu or with E (archive), H (hold) and A (make active). Ctrl/Cmd+
+   * click toggles a chat in the multi-selection, Shift+click selects a range,
+   * Ctrl/Cmd+A the cursor's section, Esc clears it; a bulk bar acts on it.
+   * The Older header offers "Archive all older than 30 days" (also a Ctrl+K
+   * command, as the header is hidden from assistive technology).
    */
   let { onCollapse }: { onCollapse?: () => void } = $props();
 
-  const { sessions, places, tabs, agents, settings, chats } = useApp();
+  const { sessions, places, tabs, agents, settings, chats, buckets } = useApp();
 
   /**
    * Fixed row heights of the virtual list, in rem so they follow the interface
@@ -58,11 +71,19 @@
     };
   });
 
-  // A different place or query is a different list: start at its top.
+  /** The multi-selection (session ids) and where a Shift+click range starts. */
+  const selection = new SvelteSet<string>();
+  let anchor: string | null = null;
+
+  // A different place or query is a different list: start at its top, nothing selected.
   $effect(() => {
     void places.selected;
     void sessions.query;
-    untrack(() => list?.scrollToTop());
+    untrack(() => {
+      list?.scrollToTop();
+      selection.clear();
+      anchor = null;
+    });
   });
 
   /** Sections move with the clock once a minute, not on every render or tick. */
@@ -79,13 +100,23 @@
   let cursor = $derived<string | null>(tabs.active);
   const cursorIndex = $derived(cursor === null ? -1 : (grouped.indexOf.get(cursor) ?? -1));
 
+  /** The selected chats still listed, in display order. */
+  const selectedChats = $derived(grouped.chats.filter((c) => selection.has(c.sessionId)));
+  // Chats that left the list (archived from Active, …) leave the selection.
+  $effect(() => {
+    const listed = grouped.indexOf;
+    untrack(() => {
+      for (const id of [...selection]) if (!listed.has(id)) selection.delete(id);
+    });
+  });
+
   const names = $derived(new Map(places.projects.map((p) => [p.projectId, p.displayName])));
   const spansProjects = $derived(places.selected.kind !== 'project');
   const placeTitle = $derived.by(() => {
     const p = places.selected;
     if (p.kind === 'needsYou') return 'Needs you';
     if (p.kind === 'running') return 'Running';
-    if (p.kind === 'all' || p.kind === 'active') return 'All chats';
+    if (p.kind === 'all' || p.kind === 'active') return 'Active';
     if (p.kind === 'onHold') return 'On hold';
     if (p.kind === 'archived') return 'Archived';
     return names.get(p.projectId) ?? 'Project';
@@ -95,8 +126,22 @@
     const p = places.selected;
     if (p.kind === 'needsYou') return 'Nothing needs you right now.';
     if (p.kind === 'running') return 'No agents are working.';
+    if (p.kind === 'onHold') return 'No chats on hold.';
+    if (p.kind === 'archived') return 'No archived chats.';
     return 'No chats yet.';
   });
+  const isProject = $derived(places.selected.kind === 'project');
+  /** The Older section's tidy action applies to Active and to a project (not to a search). */
+  const canArchiveOlder = $derived(
+    !sessions.query &&
+      (places.selected.kind === 'active' ||
+        places.selected.kind === 'all' ||
+        places.selected.kind === 'project'),
+  );
+  const archiveOlder = (): void => {
+    const p = places.selected;
+    void buckets.askArchiveOlder(p.kind === 'project' ? p.projectId : undefined);
+  };
 
   const rowId = (sessionId: string): string => `chat-row-${sessionId}`;
   const sectionId = (section: string): string => `chat-section-${section}`;
@@ -115,6 +160,81 @@
     tabs.openTab(chat.sessionId);
   };
 
+  const clearSelection = (): void => {
+    selection.clear();
+  };
+
+  /** Selects the chats from `from` to `to` in display order (replacing the selection). */
+  const selectRange = (from: string, to: string): void => {
+    const b = grouped.indexOf.get(to);
+    if (b === undefined) return;
+    const a = grouped.indexOf.get(from) ?? b;
+    selection.clear();
+    for (let i = Math.min(a, b); i <= Math.max(a, b); i++) {
+      selection.add(grouped.chats[i]!.sessionId);
+    }
+  };
+
+  /** A plain click opens; Ctrl/Cmd+click toggles the chat, Shift+click selects a range. */
+  const onRowClick = (chat: ChatSummary, e?: MouseEvent): void => {
+    const id = chat.sessionId;
+    if (e && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
+      cursor = id;
+      anchor = id;
+      if (selection.has(id)) selection.delete(id);
+      else selection.add(id);
+      return;
+    }
+    if (e?.shiftKey) {
+      anchor ??= cursor ?? id;
+      selectRange(anchor, id);
+      cursor = id;
+      return;
+    }
+    clearSelection();
+    anchor = id;
+    open(chat);
+  };
+
+  /** Ctrl/Cmd+A: every chat of the cursor's section (the first section without a cursor). */
+  const selectSection = (): void => {
+    const row = grouped.rows[grouped.rowOf[Math.max(0, cursorIndex)] ?? -1];
+    if (!row || row.kind !== 'chat') return;
+    selection.clear();
+    for (const r of grouped.rows) {
+      if (r.kind === 'chat' && r.section === row.section) selection.add(r.chat.sessionId);
+    }
+  };
+
+  /**
+   * Moves chats to a bucket; On hold opens the hold popover first. Moving the
+   * selection clears it (once the hold is saved, for On hold).
+   */
+  const move = (targets: ChatSummary[], bucket: Bucket, fromSelection: boolean): void => {
+    if (targets.length === 0) return;
+    if (bucket === 'onHold') {
+      buckets.hold(targets, fromSelection ? clearSelection : undefined);
+      return;
+    }
+    if (fromSelection) clearSelection();
+    void (bucket === 'archived' ? buckets.archive(targets) : buckets.activate(targets));
+  };
+
+  /** From the keyboard: the selection, or the chat under the cursor when nothing is selected. */
+  const moveFromKeys = (bucket: Bucket): void => {
+    if (selectedChats.length > 0) return move(selectedChats, bucket, true);
+    const chat = grouped.chats[cursorIndex];
+    if (chat) move([chat], bucket, false);
+  };
+
+  /** From a row's menu: the whole selection when the row is part of it. */
+  const moveFromMenu = (chat: ChatSummary, bucket: Bucket): void => {
+    if (selection.has(chat.sessionId)) move(selectedChats, bucket, true);
+    else move([chat], bucket, false);
+  };
+
+  const BUCKET_KEYS: Readonly<Record<string, Bucket>> = { e: 'archived', h: 'onHold', a: 'active' };
+
   /** Moves the cursor to the `index`-th chat (headers are not stops). */
   const moveTo = (index: number): void => {
     const n = grouped.chats.length;
@@ -126,6 +246,26 @@
 
   const onListKey = (e: KeyboardEvent): void => {
     const i = cursorIndex;
+    const key = e.key.toLowerCase();
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && key === 'a') {
+      e.preventDefault();
+      selectSection();
+      return;
+    }
+    const bucket = Object.hasOwn(BUCKET_KEYS, key) ? BUCKET_KEYS[key] : undefined;
+    if (bucket) {
+      // E, H and A alone: modified, they are someone else's shortcuts.
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      e.preventDefault();
+      moveFromKeys(bucket);
+      return;
+    }
+    if (e.key === 'Escape') {
+      if (selection.size === 0) return;
+      e.preventDefault();
+      clearSelection();
+      return;
+    }
     switch (e.key) {
       case 'ArrowDown':
         moveTo(i + 1);
@@ -148,7 +288,10 @@
       case 'Enter':
       case ' ': {
         const chat = grouped.chats[i];
-        if (chat) open(chat);
+        if (chat) {
+          clearSelection();
+          open(chat);
+        }
         break;
       }
       default:
@@ -176,11 +319,32 @@
     await sessions.rename(sessionId, title);
     void agents.refresh().catch(() => {});
   };
+
+  /** Left/Right move between the bulk bar's buttons (toolbar keys). */
+  const onBarKey = (e: KeyboardEvent): void => {
+    if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+    const buttons = [...(e.currentTarget as HTMLElement).querySelectorAll('button')];
+    const at = buttons.indexOf(document.activeElement as HTMLButtonElement);
+    if (at < 0) return;
+    e.preventDefault();
+    const next = (at + (e.key === 'ArrowRight' ? 1 : -1) + buttons.length) % buttons.length;
+    buttons[next]!.focus();
+  };
 </script>
 
 <section class="relative flex h-full min-w-0 flex-col" aria-label="Chat list">
   <header class="flex h-9 shrink-0 items-center gap-1 pr-1.5 pl-3">
     <h2 class="min-w-0 flex-1 truncate text-xs font-semibold">{placeTitle}</h2>
+    {#if isProject}
+      <IconButton
+        label="Include on hold / archived"
+        pressed={includesOtherBuckets(places.selected)}
+        class="aria-pressed:bg-accent aria-pressed:text-foreground"
+        onclick={() => places.setInclude(!includesOtherBuckets(places.selected))}
+      >
+        <LayersIcon />
+      </IconButton>
+    {/if}
     {#if onCollapse}
       <IconButton label="Hide chat list" onclick={onCollapse}><PanelLeftCloseIcon /></IconButton>
     {/if}
@@ -209,6 +373,30 @@
     </p>
   {/if}
 
+  {#if selectedChats.length > 0}
+    <div
+      role="toolbar"
+      aria-label="Selected chats"
+      tabindex="-1"
+      class="bg-muted/60 mx-2 mb-2 flex shrink-0 items-center gap-0.5 rounded-md border py-0.5 pr-0.5 pl-2 text-xs"
+      onkeydown={onBarKey}
+    >
+      <span class="min-w-0 flex-1 truncate font-medium tabular-nums"
+        >{selectedChats.length} selected</span
+      >
+      <Button variant="ghost" size="xs" onclick={() => move(selectedChats, 'active', true)}
+        >Make active</Button
+      >
+      <Button variant="ghost" size="xs" onclick={() => move(selectedChats, 'onHold', true)}
+        >Put on hold…</Button
+      >
+      <Button variant="ghost" size="xs" onclick={() => move(selectedChats, 'archived', true)}
+        >Archive</Button
+      >
+      <IconButton label="Clear selection" onclick={clearSelection}><XIcon /></IconButton>
+    </div>
+  {/if}
+
   {#snippet header(h: HeaderRow, pinned: boolean)}
     <div
       role="presentation"
@@ -219,6 +407,17 @@
     >
       <span class="min-w-0 truncate">{h.label}</span>
       <span class="shrink-0 font-normal tabular-nums">{h.count}{h.more ? '+' : ''}</span>
+      {#if h.section === 'older' && canArchiveOlder}
+        <!-- Pointer only (the header is hidden from assistive technology): Ctrl+K has the command. -->
+        <button
+          type="button"
+          tabindex="-1"
+          class="hover:text-foreground ml-auto shrink-0 rounded px-1 font-normal tracking-normal normal-case hover:underline"
+          aria-label="Archive all older than {ARCHIVE_OLDER_DAYS} days"
+          title="Archive all older than {ARCHIVE_OLDER_DAYS} days"
+          onclick={archiveOlder}>Archive all…</button
+        >
+      {/if}
     </div>
   {/snippet}
 
@@ -239,6 +438,7 @@
     onEndReached={() => void sessions.loadMore()}
     role="listbox"
     aria-label="{placeTitle} chats"
+    aria-multiselectable="true"
     aria-activedescendant={cursorIndex >= 0 ? rowId(cursor!) : undefined}
     aria-busy={sessions.loading}
     tabindex={0}
@@ -256,16 +456,18 @@
           index={r.index}
           setSize={grouped.chats.length}
           describedBy={sectionId(r.section)}
-          selected={chat.sessionId === cursor}
+          selected={selection.size > 0 ? selection.has(chat.sessionId) : chat.sessionId === cursor}
+          checked={selection.has(chat.sessionId)}
           active={chat.sessionId === tabs.active}
           projectName={spansProjects
             ? (names.get(chat.projectId) ?? baseName(chat.cwd))
             : undefined}
           {now}
           running={chats.get(chat.sessionId)?.running ?? chat.runningTasks ?? 0}
-          onOpen={open}
+          onOpen={onRowClick}
           onRename={(c) => (renaming = c)}
           onTogglePin={togglePin}
+          onMove={moveFromMenu}
         />
       {/if}
     {/snippet}

@@ -11,7 +11,7 @@ export const slack = Number(process.env.PAHUB_PERF_SLACK ?? 1);
 export const openApp = async (page: Page): Promise<void> => {
   await page.goto('/');
   const places = page.getByRole('navigation', { name: 'Places' });
-  await expect(places.locator('[title="All chats"]')).toHaveText(String(MOCK_CHATS), {
+  await expect(places.locator('[title="Active chats"]')).toHaveText(String(MOCK_CHATS), {
     timeout: 60_000,
   });
 };

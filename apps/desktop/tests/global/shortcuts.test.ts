@@ -93,6 +93,22 @@ describe('shortcut list', () => {
     expect(s?.combos.map((c) => formatShortcut(c, 'mac'))).toEqual(['⌘.']);
   });
 
+  it('includes the bucket keys and multi-select gestures of the chat list (v1.2 §3)', () => {
+    const list = SHORTCUTS.filter((s) => s.group === 'Chat list');
+    const keys = (id: string) =>
+      list.find((s) => s.id === id)?.combos.map((c) => formatShortcut(c, 'other'));
+    expect(keys('list-archive')).toEqual(['E']);
+    expect(keys('list-hold')).toEqual(['H']);
+    expect(keys('list-activate')).toEqual(['A']);
+    expect(keys('list-select-toggle')).toEqual(['Ctrl+Click']);
+    expect(keys('list-select-range')).toEqual(['Shift+Click']);
+    expect(keys('list-select-section')).toEqual(['Ctrl+A']);
+    expect(keys('list-select-clear')).toEqual(['Esc']);
+    expect(formatShortcut(['Mod', 'Click'], 'mac')).toBe('⌘Click');
+    // Clicks are not keys.
+    expect(ariaKeyShortcuts([['Mod', 'Click']], 'other')).toBe('');
+  });
+
   it('README lists every shortcut description', () => {
     // Tests run in apps/desktop; the README is the repository's.
     const readme = readFileSync(resolve(process.cwd(), '../../README.md'), 'utf8');

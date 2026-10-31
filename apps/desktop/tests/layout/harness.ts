@@ -1,6 +1,7 @@
 import type { ChatStatus, ChatSummary, Project } from '@pahub/protocol';
 import { ServiceClient } from '../../src/lib/service/client';
 import { AgentsState } from '../../src/lib/state/agents.svelte';
+import { BucketsState } from '../../src/lib/state/buckets.svelte';
 import { ChatsState } from '../../src/lib/state/chats.svelte';
 import { ConnectionState } from '../../src/lib/state/connection.svelte';
 import { InteractionState } from '../../src/lib/state/interaction.svelte';
@@ -47,7 +48,14 @@ export const project = (projectId: string, displayName: string, over: Partial<Pr
 export const setup = async (configure?: (server: FakeServer) => void) => {
   const server = new FakeServer();
   Object.assign(server.handlers, {
-    'places.counts': () => ({ needsYou: 0, running: 0, all: 0 }),
+    'places.counts': () => ({
+      needsYou: 0,
+      running: 0,
+      all: 0,
+      active: 0,
+      onHold: 0,
+      archived: 0,
+    }),
     'projects.list': () => [],
     'sessions.list': () => ({ items: [] }),
     'uiState.get': () => ({ value: null }),
@@ -81,6 +89,7 @@ export const setup = async (configure?: (server: FakeServer) => void) => {
     agents: new AgentsState(),
     interaction: new InteractionState(),
     lifecycle: new LifecycleState(),
+    buckets: new BucketsState(),
   };
   app.connection.init(client);
   app.places.init(client);
@@ -95,6 +104,7 @@ export const setup = async (configure?: (server: FakeServer) => void) => {
     app.connection.setVersions(conn);
     await client.connect(`ws://fake:${conn.port}`, conn.token);
   });
+  app.buckets.init(client, app.chats);
   app.tabs.subscribe(() => app.chats.sync(app.tabs.open, app.tabs.active));
 
   const context = new Map<unknown, unknown>([[APP_CONTEXT, app]]);

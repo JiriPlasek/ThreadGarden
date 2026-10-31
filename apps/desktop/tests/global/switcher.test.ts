@@ -114,7 +114,14 @@ describe('quick switcher', () => {
       within(list)
         .getAllByRole('option')
         .map((o) => o.querySelector('[data-label]')?.textContent?.trim()),
-    ).toEqual(['New chat in…', 'Stop all work', 'Settings', 'Keyboard shortcuts']);
+    ).toEqual([
+      'New chat in…',
+      'Stop all work',
+      'Settings',
+      'Keyboard shortcuts',
+      // v1.2 §3, in Active and in a project.
+      'Archive chats older than 30 days…',
+    ]);
 
     await userEvent.keyboard('sett');
     await waitFor(() =>

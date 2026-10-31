@@ -48,15 +48,22 @@ export class AgentsState {
       try {
         do {
           this.again = false;
-          // "Needs you" and "Running" span every project (hidden ones too); the first
-          // page of "All chats" starts with every live and external session, which
-          // is where idle live chats come from.
-          const [needsYou, running, all] = await Promise.all([
+          // "Needs you" and "Running" span every project (hidden ones too) and
+          // bucket. The first page of a bucket place starts with its live and
+          // external sessions, which is where idle live chats come from: Active
+          // and On hold, not Archived (v1.2 §3: archived chats leave the strip).
+          const [needsYou, running, active, onHold] = await Promise.all([
             api.request('sessions.list', { place: { kind: 'needsYou' }, limit: AGENTS_LIMIT }),
             api.request('sessions.list', { place: { kind: 'running' }, limit: AGENTS_LIMIT }),
-            api.request('sessions.list', { place: { kind: 'all' }, limit: 1 }),
+            api.request('sessions.list', { place: { kind: 'active' }, limit: 1 }),
+            api.request('sessions.list', { place: { kind: 'onHold' }, limit: 1 }),
           ]);
-          this.items = mergeAgents([...needsYou.items, ...running.items, ...all.items]);
+          this.items = mergeAgents([
+            ...needsYou.items,
+            ...running.items,
+            ...active.items,
+            ...onHold.items,
+          ]);
         } while (this.again);
       } finally {
         this.inflight = null;

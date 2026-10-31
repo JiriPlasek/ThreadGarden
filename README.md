@@ -16,6 +16,7 @@ pahub works with Claude Code; it is not affiliated with or endorsed by Anthropic
 - **Needs you** and **Running** across all projects, a bottom strip with every running agent, a tray badge and desktop notifications. Permission prompts, questions and plan approvals are answered inline.
 - **Your turn**: a chat that finished while you were not looking gets a blue dot, joins Needs you below the chats waiting on an answer, and can post a notification (Settings, "Notify when a chat finishes"). Sending a message or answering a request scrolls the chat to the newest output. Projects whose folder is gone move into a collapsed "Missing folders" group, which explains itself on hover and can hide them all at once (reversible from Hidden projects).
 - **Recency sections** in every chat list: Now (needs you, your turn, running) first, then Last 24 hours, Last 7 days, Last 30 days and Older, each under a sticky header with a count.
+- **Active, On hold and Archived**: every chat is in one of them (pahub's own data, never written into Claude Code's). Put a chat on hold until tomorrow, next week or a time you pick, with a note ("waiting for review from Petr"); when the time comes it returns to Active, shows up under Needs you as "Back from hold" and posts a notification. Archived chats leave the lists, the agents strip and the main quick-switcher results, and come back by themselves when they run again or you send them a message. Move chats from a row's menu, the chat header, with E, H and A, or several at once (Ctrl/Cmd+click, Shift+click, Ctrl/Cmd+A); the Older section can archive everything older than 30 days in one go.
 - **Composer** with `@` file mentions (fuzzy, respecting `.gitignore`), slash commands from the running Claude Code, pasted or dropped images, queued messages while Claude works, and drafts that survive restarts.
 - **Resume, fork and end** any chat. Idle chats release their process after 15 minutes (configurable) and resume transparently on the next message.
 - **External sessions** from `claude agents --json`, with copyable `claude --resume` / `claude attach` commands. Background sessions that Claude Code's own background service runs (`claude --bg`) can be stopped from pahub (it runs `claude stop <id>` after a confirmation); sessions open in a terminal are stopped there. pahub refuses to resume a session that is still running in another process.
@@ -50,14 +51,21 @@ Press **Ctrl+/** (**⌘/** on macOS), or **?** outside a text field, to see this
 
 **Chat list**
 
-| Keys                 | Action                                |
-| -------------------- | ------------------------------------- |
-| ↑ or ↓               | Move through the chats                |
-| Page Up or Page Down | Move a page of chats at a time        |
-| Home or End          | First or last chat                    |
-| Enter or Space       | Open the selected chat                |
-| ↓                    | From the search field, go to the list |
-| Esc                  | Clear the search                      |
+| Keys                 | Action                                                   |
+| -------------------- | -------------------------------------------------------- |
+| ↑ or ↓               | Move through the chats                                   |
+| Page Up or Page Down | Move a page of chats at a time                           |
+| Home or End          | First or last chat                                       |
+| Enter or Space       | Open the selected chat                                   |
+| ↓                    | From the search field, go to the list                    |
+| Esc                  | Clear the search                                         |
+| E                    | Archive the selected chats (or the one under the cursor) |
+| H                    | Put on hold: choose until when and add a note            |
+| A                    | Make active (back from On hold or Archived)              |
+| Ctrl+Click           | Add a chat to the selection, or remove it                |
+| Shift+Click          | Select a range of chats                                  |
+| Ctrl+A               | Select every chat of the cursor's section                |
+| Esc                  | Clear the selection                                      |
 
 **Composer**
 

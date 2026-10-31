@@ -9,6 +9,10 @@
  *   switched, window focused) is marked seen when it is known to be unread,
  *   debounced so tabs only passed through (Ctrl+Tab) stay unread.
  *
+ * v1.2 "Back from hold" works the same way: a chat whose hold ran out counts
+ * as unread here, so viewing it calls `chat.markSeen`, which clears the flag
+ * (the service does not clear it on `chat.open`, which reconnects repeat).
+ *
  * "Known to be unread" reads every summary the UI already has: the chat list,
  * the agents strip (whose Needs you fetch spans every project), the open
  * chat's own summary and the tab's peek, plus the finishes seen here. All
@@ -106,12 +110,8 @@ export class YourTurnState {
         doc.removeEventListener('visibilitychange', onVisibility);
       },
       stopEffects,
-      api.on('chatFinished', (e) => {
-        this.marked.delete(e.sessionId);
-        this.failed.delete(e.sessionId);
-        if (this.visible(e.sessionId)) this.markSeen(e.sessionId);
-        else this.finished.add(e.sessionId);
-      }),
+      api.on('chatFinished', (e) => this.announced(e.sessionId)),
+      api.on('chatBackFromHold', (e) => this.announced(e.sessionId)),
       // Turns may have ended while disconnected: the summaries fetched now decide.
       api.onOpen(() => {
         this.marked.clear();
@@ -128,19 +128,32 @@ export class YourTurnState {
   /** The chat is the active tab of a focused window. */
   visible = (sessionId: string): boolean => this.focused && this.deps?.tabs.active === sessionId;
 
-  /** Whether anything this window knows says the chat has an unseen finished turn (reactive). */
+  /**
+   * Whether anything this window knows says the chat has something unseen: a
+   * finished turn, or (v1.2) a hold that ran out (reactive).
+   */
   unread = (sessionId: string): boolean => {
     if (this.finished.has(sessionId)) return true;
     const d = this.deps;
     if (!d || this.marked.has(sessionId)) return false;
+    type Flags = { unread?: boolean; backFromHold?: boolean } | null | undefined;
+    const unseen = (s: Flags): boolean => s?.unread === true || s?.backFromHold === true;
     const listed = (items: readonly { sessionId: string; unread?: boolean }[]) =>
-      items.find((s) => s.sessionId === sessionId)?.unread === true;
+      unseen(items.find((s) => s.sessionId === sessionId));
     return (
-      d.chats.get(sessionId)?.summary?.unread === true ||
-      d.chats.summaryOf(sessionId)?.unread === true ||
+      unseen(d.chats.get(sessionId)?.summary) ||
+      unseen(d.chats.summaryOf(sessionId)) ||
       listed(d.sessions.items) ||
       listed(d.agents.items)
     );
+  };
+
+  /** A finished turn or an ended hold was announced: seen at once if on screen. */
+  private announced = (sessionId: string): void => {
+    this.marked.delete(sessionId);
+    this.failed.delete(sessionId);
+    if (this.visible(sessionId)) this.markSeen(sessionId);
+    else this.finished.add(sessionId);
   };
 
   private cancel = (): void => {
