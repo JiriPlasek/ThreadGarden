@@ -16,6 +16,14 @@ Threadgarden must never write, rename, move or delete anything under the Claude 
 
 Two related rules: Threadgarden never offers `bypassPermissions`, and it is never presented as Claude Code (it may say it works with Claude Code) or styled to look like it.
 
+## Rules for remote machines
+
+A headless service answers paired devices over the network ([Machines](docs/architecture.md#machines)), so the service keeps three rules:
+
+- **Methods a paired device must not call are registered local only:** `router.register('pairing.create', handler, { localOnly: true })`. A remote caller gets `FORBIDDEN` before its params are read. Setup, pairing, device and machine management, secrets and shutdown are local only; when in doubt, make a new method local only. Every `router.dispatch` passes an origin (`{ clientId, origin: 'local' | 'remote' }`); there is deliberately no default, so a call site cannot grant local-only methods by forgetting it. A handler that must behave differently for a remote caller (like `devices.revoke`, which lets a device revoke only itself) checks `ctx.origin` and `ctx.deviceId`.
+- **The relay never parses frames.** `server/relay.ts` pipes the UI's socket to the machine verbatim, both ways: it never parses, logs, rewrites or filters a frame, so it needs no change when the protocol grows and leaks no chat content into logs. Behaviour belongs in the services at either end.
+- **The network side stays narrow.** The remote listener binds private addresses only (`privateListenAddresses`), never a wildcard or a public address; device tokens travel only in the WebSocket subprotocol, never in a URL or a log; nothing sends a pairing code before the machine has proved it knows it. Only the mock service (`src/testing/mock-main.ts --remote`) may listen on `127.0.0.1`, for the Playwright specs.
+
 ## Workflow
 
 - One branch per change, opened as a pull request against `main`.
@@ -38,14 +46,14 @@ The root [README](README.md#development) shows how to run the UI in a browser ag
 
 ## Tests
 
-| Command                                         | What it runs                                                                                                                              |
-| ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `pnpm test`                                     | Every package's unit and component tests (Vitest), then `pnpm test:perf`                                                                  |
-| `pnpm test:perf`                                | The service performance budgets, one file at a time; `THREADGARDEN_PERF_SLACK` multiplies the budgets (CI uses 3)                         |
-| `pnpm test:e2e`                                 | Playwright smoke and UI budget specs in Chromium against the mock service (`pnpm --filter desktop exec playwright install chromium` once) |
-| `pnpm --filter <package> test`                  | One package's tests (`@threadgarden/protocol`, `@threadgarden/service`, `desktop`)                                                        |
-| `cargo test` in `apps/desktop/src-tauri`        | The Rust shell (build the UI first: `pnpm --filter desktop build`)                                                                        |
-| `pnpm --filter @threadgarden/service test:real` | Opt-in suite against your installed `claude` and your login; never in CI                                                                  |
+| Command                                         | What it runs                                                                                                                                                                                            |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm test`                                     | Every package's unit and component tests (Vitest), then `pnpm test:perf`                                                                                                                                |
+| `pnpm test:perf`                                | The service performance budgets, one file at a time; `THREADGARDEN_PERF_SLACK` multiplies the budgets (CI uses 3)                                                                                       |
+| `pnpm test:e2e`                                 | Playwright smoke and UI budget specs in Chromium against the mock service and a second, headless one that `machines.spec.ts` pairs with (`pnpm --filter desktop exec playwright install chromium` once) |
+| `pnpm --filter <package> test`                  | One package's tests (`@threadgarden/protocol`, `@threadgarden/service`, `desktop`)                                                                                                                      |
+| `cargo test` in `apps/desktop/src-tauri`        | The Rust shell (build the UI first: `pnpm --filter desktop build`)                                                                                                                                      |
+| `pnpm --filter @threadgarden/service test:real` | Opt-in suite against your installed `claude` and your login; never in CI                                                                                                                                |
 
 Service logic is tested against a fake SDK adapter (`packages/service/src/testing/fake-adapter.ts`); only `src/sdk/real-adapter.ts` calls the SDK at run time. A performance budget is a requirement, not a target: do not raise one to make a test pass.
 

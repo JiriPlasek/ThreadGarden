@@ -21,13 +21,21 @@ flowchart TB
   config[("Claude config dir<br/>~/.claude — read-only to Threadgarden")]
   data[("Threadgarden data dir<br/>threadgarden.db · service.json · logs")]
 
+  subgraph machine["Another machine (v1.4; e.g. a headless Ubuntu PC)"]
+    remote["Threadgarden service --headless<br/>(systemd user unit, never exits on idle)<br/>TLS listener on private addresses"]
+    rclaude["claude processes<br/>(that machine's Claude Code)"]
+  end
+
   ui -- "WebSocket on 127.0.0.1<br/>(random port, bearer token)" --> service
+  ui -- "/relay?machine=id on the same port,<br/>one socket per paired machine" --> service
+  service -- "relay: wss:// pinned certificate,<br/>device token in the subprotocol" --> remote
   shell -- "starts detached,<br/>reads service.json" --> service
   ui -- "Tauri commands (native only)" --> shell
   service -- "Agent SDK query()" --> claude
   service -- "SDK listSessions / getSessionMessages,<br/>fs watch (names only), claude agents --json" --> config
   claude -- "writes its own transcripts" --> config
   service --> data
+  remote -- "Agent SDK query()" --> rclaude
 ```
 
 - **The app** is a Tauri 2 shell (Rust) hosting a SvelteKit 5 static UI. Rust
@@ -51,6 +59,13 @@ flowchart TB
   their transcripts to the Claude config dir exactly as in a terminal. A new
   chat's generated title (v1.2) briefly starts one more `claude` process, which
   writes no transcript (see Chat titles under [Data flows](#data-flows)).
+
+- **Other machines** (v1.4, [Machines](#machines)): the same service, run
+  headless on another computer (today a Linux PC on the home network, set up
+  with [the guide](remote-machines.md)), with its own Claude Code, history
+  and chats. The desktop pairs with it once; afterwards the UI reaches it
+  through its own local service, which relays each UI socket over TLS pinned
+  to that machine's certificate. The webview itself never leaves loopback.
 
 The service is a separate, detached process so that closing or crashing the
 window never stops a running agent.
@@ -124,7 +139,8 @@ exits). Quitting the app alone leaves the service and its agents running; the
 next launch reconnects to them.
 
 **Service.** With no live session, no connected client and no pending
-scheduled send (v1.3) for 30 minutes the service exits. When it stops for any other reason (crash, reboot, shutdown
+scheduled send (v1.3) for 30 minutes the service exits; a headless service
+(v1.4) never does. Relayed UI sockets count as clients of the local service. When it stops for any other reason (crash, reboot, shutdown
 with live chats), the chats that were live are recorded in `threadgarden.db`, and the
 next start shows them as interrupted, ready to resume. The conversation itself
 is safe: Claude Code persisted it.
@@ -169,6 +185,26 @@ service and the UI; the service validates every request.
   service also accepts `pahub.<token>`, and the UI and the shell offer both,
   so a pahub service still running is reached and reports its older protocol
   (v1.3 §9).
+- **Remote transport** (v1.4). A headless service also listens for paired
+  devices over TLS (`wss://`, default port 47380; [Machines](#machines)).
+  Two subprotocols: `threadgarden-pair` for a device being paired (only
+  `hello`, `pair.proof` and `pair.claim` run there) and
+  `threadgarden-device.<token>` for a paired one. The token is checked before
+  the upgrade completes; an unknown token is closed with 4401, a revoked
+  device's sockets with 4403. The desktop's UI never opens these itself: it
+  opens `ws://127.0.0.1:<port>/relay?machine=<id>` on its local service (with
+  the usual local token), and that service relays. The relay closes the UI's
+  socket with **4404** (machine unknown, removed or not unlocked), **4409**
+  (another certificate answered at the address; nothing was sent), **4403**
+  (the machine refused this device: revoked) or **4502** (unreachable, or the
+  link dropped: the UI reconnects with backoff and resyncs through
+  `chat.since`); **1001** when the local service stops.
+- **Versions across machines.** v1.4 is protocol 5. The desktop and its local
+  service still need the exact version; a remote service is accepted at
+  protocol 4, 5 or 6 (one either way), and a method it lacks answers
+  `METHOD_NOT_FOUND`, which the UI treats as "not supported on this machine".
+  A machine outside that window shows as needing attention ("Different
+  Threadgarden version").
 - **Requests** `{id, method, params}` → `{id, result}` or `{id, error: {code,
   message}}`. Error codes the UI acts on include `GAP`, `RESUME_BLOCKED`,
   `CLAUDE_MISSING`, `NOT_LIVE`, `NOT_FOUND`, `FORK_FAILED` and
@@ -177,13 +213,25 @@ service and the UI; the service validates every request.
   `chat.older`, `chat.since`, `chat.create`, `chat.send`, `chat.respond`,
   `chat.fork`, `chat.end`, model/mode/effort controls, `chat.resumeCheck`),
   Threadgarden-side metadata, drafts, UI state, settings, `files.suggest`,
-  `work.stopAll`, `service.shutdown` and `system.status`. `chat.markSeen`
-  Threadgarden-side metadata, drafts, UI state, settings, `files.suggest`,
   `work.stopAll`, `service.shutdown`, `system.status` and (v1.3) `analytics.get`. `chat.markSeen`
   records that the user has seen a chat's latest turn ("Your turn", below).
   v1.3 (protocol 3) adds `usage.get` (the account's plan usage; `refresh`
   asks a running chat for a fresh reading) and `scheduled.create`, `.list`,
   `.get`, `.update`, `.cancel` and `.sendNow` (below).
+  v1.4 (protocol 5): `hello` returns `machine` (id, name, platform,
+  `headless`, home, capabilities); `machine.get` and `machine.rename`;
+  `pairing.create`, `devices.list` and `devices.revoke` on the machine that
+  is paired with; `pair.proof` and `pair.claim` for the device pairing; and
+  `machines.list`, `.pair`, `.unlock`, `.update`, `.remove` for the machines
+  this one pairs with and relays to (event `machines.changed`).
+- **Local-only methods** (v1.4). Every request is dispatched with its
+  origin, `local` (the loopback server) or `remote` (the TLS listener), and
+  a method registered `localOnly` answers `FORBIDDEN` to a remote caller
+  before its params are read. Local only: `machine.rename`,
+  `pairing.create`, `devices.list`, every `machines.*`, `auth.setApiKey` and
+  `service.shutdown`. `devices.revoke` runs remotely only for the caller's
+  own device. Everything else (chats, lists, `work.stopAll`, …) is open to a
+  paired device: every paired device has full control.
 - **Events** `{event, data}` are pushed to every client: `chat.items` and
   `chat.status` per chat, plus list-level events (`sessions.changed`,
   `projects.changed`, `external.changed`, `index.progress`). `needsYou` and
@@ -515,12 +563,149 @@ gone out): it becomes `failed` for the user to check.
 session file next to the original and leaves the original untouched; the
 fork is indexed at once so it can be opened.
 
+## Machines
+
+v1.4 lets the desktop run chats on another computer: a **machine** is one
+Threadgarden service. The design is
+[`2026-10-31-remote-machines-design.md`](superpowers/specs/2026-10-31-remote-machines-design.md);
+this release covers pairing, the connection and chats on a paired machine
+(not yet power control, projects created or cloned there, moving chats,
+offline copies, or analytics and usage across machines). The owner's setup
+steps are in [Remote machines](remote-machines.md).
+
+**Identity.** Every service has a machine id (random, made once, kept in
+`threadgarden.db`) and a name (the host name until renamed: Settings →
+Machines on the desktop, `threadgarden rename <name>` on a headless one).
+`hello` returns both. The desktop calls its own machine **This PC**.
+
+**Headless mode** (`threadgarden serve --headless [--port <port>]`; the
+Linux package's systemd user unit runs it). The service never exits on idle
+and opens a **remote listener**: one TLS server per private IPv4 address of
+the machine (10/8, 172.16/12, 192.168/16, 100.64/10; never `0.0.0.0`, never a
+public address), all on one port (47380 by default). It re-reads the
+addresses every 60 s and moves the listener when they change (a DHCP lease,
+Wi-Fi coming up late); with none it does not listen until one appears.
+`service.json` records where it listens, which `threadgarden status` and
+`threadgarden pair` print. The TLS identity (an EC P-256 self-signed
+certificate valid from a day ago, so a device whose clock is behind still
+accepts it, for 20 years) lives in `<data dir>/tls/` with mode 0600; an
+unusable one (unparsable, a key that does not match, a file missing) is
+replaced and the log says so; paired devices then see another certificate
+and must pair again. A desktop service never listens beyond loopback ("Allow
+other devices" is for a later release).
+
+**Packaging.** `pnpm build:headless` (`scripts/build-headless.mjs`) writes
+`dist-headless/threadgarden-headless-<version>-linux-<x64|arm64>.tar.gz` and
+its `.sha256`: the service bundle, the pinned Node.js runtime, the
+`threadgarden` launcher, the systemd user unit and `install.sh`. CI builds the
+x64 package on Linux, checks its file modes and checksum and keeps it as the
+`threadgarden-headless` artifact. `install.sh` refuses root, needs a running
+user systemd manager, installs to `~/.local/share/threadgarden-headless/<version>`
+(`current` points at it; the previous version is kept, older ones removed),
+links `~/.local/bin/threadgarden`, explains and asks for `sudo loginctl
+enable-linger` (so the user unit starts at boot without a login), then
+enables and restarts the unit. Its test (`test/packaging/install.test.ts`)
+runs it on Linux with stub `systemctl`, `loginctl` and `sudo`.
+
+**Pairing** (`machine/devices.ts`, `machine/pairing-client.ts`). On the
+headless machine `threadgarden pair` asks its service for a code
+(`pairing.create`, local only): 12 characters of an unambiguous alphabet,
+shown as `XXXX-XXXX-XXXX`, single use, valid 5 minutes, held in memory only;
+a new code replaces the old one, and the fifth wrong claim kills it. The
+listener admits pairing sockets only while a code is live (otherwise HTTP
+503), at most 4 at once, each closed after 60 s, with 4 KiB frames. On the
+desktop, Settings → Machines → **Add machine** sends `machines.pair` to the
+local service, which connects on the pairing subprotocol accepting any
+certificate, notes the one presented, and sends `pair.proof` with a random
+nonce only. The machine answers HMAC-SHA256(code, its certificate
+fingerprint + nonce); the local service computes the same over the
+certificate it saw, so a machine that does not know the code, or a man in
+the middle relaying the real machine's proof under another certificate,
+fails here and **the code is never sent**. Only then does `pair.claim` send
+the code and the device name. The machine stores the new device with the
+sha256 of its token (never the token itself); the local service stores the
+machine (id, name, address, port, the certificate as the pin, its device id
+there) in its `machines` table and returns the token to the UI once. The
+UI keeps it in the OS credential store (service `threadgarden`, account
+`machine:<id>`, beside the API key; in memory in a browser) and hands it to the local
+service with `machines.unlock` after every connect; the service holds it in
+memory only. Pairing refuses this machine itself and one already paired
+before the code is sent.
+
+**The relay** (`server/relay.ts`). For each paired machine the UI opens
+`/relay?machine=<id>` on its local service, which opens a link to the
+machine (`wss://`, the certificate checked against the pin before anything is
+sent, the device token in the subprotocol) and pipes the two sockets. Frames
+go through verbatim both ways; the relay never parses, logs or rewrites
+them. Frames the UI sends before the link is up wait for it (10 s, then
+4502). The link is pinged every 15 s, and one whose pong has not come back by
+the next ping is dead (a Wi-Fi drop sends no close): it is ended and the UI
+told 4502. A certificate date error is a clock problem, reported as
+unreachable (and logged), not as another machine. Moving a machine
+(`machines.update` with a new address or port; the pin stays) closes its
+relays 4502 so the UI reconnects to the new address; removing it forgets the
+token first, closes its relays 4404 and then, if asked and the machine can be
+reached, revokes this device there (`devices.revoke` with its own device id).
+
+**The desktop** (`apps/desktop/src/lib/state/machines.svelte.ts`). One
+`ServiceClient` per machine, each relayed, with its own stores (a
+`MachineScope`); every chat and tab key includes the machine id, so the
+same session id or project path on two machines never collide. A machine's
+status is **On**, **Connecting…** or **Unreachable** (retrying), or **Needs
+attention** with a reason: "This address answers as a different machine"
+(4409), "This device was removed on ‹machine›" (4403), "Pair again" (4404:
+no token on this PC) or "Different Threadgarden version". With a paired
+machine the places column shows one group per machine (This PC first: name,
+state, its projects; collapsible); Needs you, Running, the agents strip,
+buckets and Ctrl/Cmd+K cover every connected machine, and their rows carry
+a machine chip. A chat's header names its machine; the New chat dialog has a
+machine picker. Notifications come from every connected machine and name it.
+**Stop all work** stops every connected machine's work (Ruling R17);
+restarting or quitting the service acts on This PC only. A restart of the
+desktop or its service changes nothing on the machine: the relays reopen and
+the UI unlocks the machines again from the keychain. Analytics and the usage
+meter show This PC only in this release.
+
 ## Security model
 
 - **Loopback and token.** The service binds `127.0.0.1` only, on a random port.
   The token is 32 random bytes (hex), regenerated at every service start, and
   stored only in `service.json`, written atomically with mode `0600` in the
   user's data dir. Every connection must present it.
+- **Remote listener** (v1.4, [Machines](#machines)). Off by default: only a
+  headless service opens it, and a desktop install never does. It binds the
+  machine's private IPv4 addresses only (10/8, 172.16/12, 192.168/16,
+  100.64/10), never a wildcard or public address, and speaks TLS with a
+  self-signed certificate. Nothing goes through a cloud service: the desktop
+  connects to the machine's address on the local network.
+- **Pinning.** A device pins the machine's certificate at pairing. Every
+  later link checks it during the TLS handshake, before the device token is
+  sent, so an address that now belongs to another device (a DHCP lease, a
+  `.local` name answered by another host) never receives the token; the UI
+  shows "This address answers as a different machine" and Settings → Machines
+  lets the owner change the address while keeping the pin.
+- **Pairing.** A code is single use, lives 5 minutes in memory only, and dies
+  after five wrong claims. The machine proves it knows the code (an HMAC over
+  its certificate fingerprint and the device's nonce) before the device sends
+  it, so neither a wrong address nor a man in the middle learns it. Until a
+  code is live the listener refuses pairing sockets (HTTP 503); with one
+  live, at most 4 at once, each closed after 60 s, frames up to 4 KiB, and
+  only `hello`, `pair.proof` and `pair.claim` run on them. Before pairing,
+  `hello` and `pair.proof` leave the machine's home folder out.
+- **Device tokens.** 32 random bytes, sent only in the WebSocket subprotocol,
+  never in a URL. The machine stores only their sha256; the desktop keeps the
+  token in the OS credential store and its local service holds it in memory
+  while unlocked. Revocable from either side: `threadgarden revoke <id>` on the
+  machine (its sockets close with 4403 at once), or Remove in Settings →
+  Machines, which forgets the machine and asks it to revoke this device.
+  Every paired device has full control of the machine's chats (the owner is
+  the only user); setup, pairing, device and machine management, the API key
+  and shutdown are local-only methods a paired device cannot call.
+- **The webview stays on loopback.** The CSP is unchanged: `connect-src`
+  allows the Tauri IPC origins and `ws://127.0.0.1:*` only. Remote traffic
+  leaves through the local service's relay, which pins the certificate; a
+  webview cannot pin a self-signed certificate, and widening the CSP would
+  open the UI to the network.
 - **Content Security Policy:** `default-src 'self'`; `connect-src` only the
   Tauri IPC origins and `ws://127.0.0.1:*`; `img-src 'self' data: blob:`, so
   remote images in model output are never fetched (no tracking pixels);

@@ -29,6 +29,7 @@ Threadgarden works with Claude Code; it is not affiliated with or endorsed by An
 - **Ctrl/Cmd+K quick switcher** over titles, projects and full text, plus commands such as "New chat in…" and "Stop all work"; every action has a [keyboard shortcut](#keyboard-shortcuts), listed in the app with Ctrl/Cmd+/.
 - **Adjustable interface size** (Ctrl/Cmd with =, - and 0, or in Settings).
 - **Themes**: light, dark or follow the system, with an accent colour (Graphite, the default, or Blue, Teal, Green, Violet, Rose, Amber), a Warm paper tint for light, Dim or Midnight (true black, for OLED screens) for dark, Inter or the system font, and your own code font. Settings, Appearance, shows a live preview; the accents and styles keep WCAG AA contrast for text and buttons.
+- **Remote machines**: run chats on another computer on your home network, such as an always-on Ubuntu PC, from the same window. Install the headless service there, run `threadgarden pair`, and add the machine in Settings → Machines with the code it shows. Each machine gets its own group of projects in the places column with its state (On, Connecting…, Unreachable, or Needs attention with the reason); Needs you, Running, the agents strip, notifications and Ctrl/Cmd+K cover every machine, with a machine chip on each row. The connection stays on your network, uses TLS pinned to the machine's certificate, and can be revoked from either side. Setup: [docs/remote-machines.md](docs/remote-machines.md).
 - Windows, macOS and Linux.
 
 ## Keyboard shortcuts
@@ -119,6 +120,7 @@ The interface size (80 % to 150 % in 10 % steps) is also in Settings, and Thread
   - Windows 10 or 11, x64 (uses the system WebView2; the installer adds it if missing).
   - macOS on Apple silicon (CI builds `aarch64-apple-darwin`; Intel Macs can build from source with `--target x86_64-apple-darwin`).
   - Linux x64 with WebKitGTK 4.1 (built on Ubuntu 22.04 as deb, rpm and AppImage).
+- **A remote machine** (optional) runs the headless service: Linux x64 (arm64 builds from source) with systemd, installed for your user from a tarball with `./install.sh` (no root, except one `sudo loginctl enable-linger` so it starts at boot), plus its own Claude Code, signed in. Step by step: [docs/remote-machines.md](docs/remote-machines.md).
 
 ## Install
 
@@ -206,7 +208,7 @@ Set `THREADGARDEN_DATA_DIR` to use another directory. It holds `threadgarden.db`
 
 **API key:** if you enter one, it is kept in the OS credential store (Windows Credential Manager, macOS Keychain, Secret Service on Linux) and handed to the service in memory; it is never written to `threadgarden.db`, `service.json` or the logs. The credential entry is named `threadgarden` (`pahub` before v1.3, see [Upgrading from pahub](#upgrading-from-pahub)).
 
-**Network:** the service listens on `127.0.0.1` only, on a random port, and accepts only connections that present the random token from `service.json`. Threadgarden itself contacts no servers: the `claude` processes it starts talk to Anthropic exactly as they do in a terminal. Remote images in chat content are not loaded (they show as links), and links open in your system browser.
+**Network:** the service listens on `127.0.0.1` only, on a random port, and accepts only connections that present the random token from `service.json`. A headless install on a remote machine also listens on that machine's private network addresses (port 47380, TLS), for the devices paired with it; the desktop app never does. Threadgarden itself contacts no servers other than the machines you paired: the `claude` processes it starts talk to Anthropic exactly as they do in a terminal. Remote images in chat content are not loaded (they show as links), and links open in your system browser.
 
 ## Authentication and terms
 
