@@ -3,6 +3,7 @@
   import { MachineAddressSchema, MachinePortSchema } from '@threadgarden/protocol';
   import { Button } from '#lib/components/ui/button/index.js';
   import * as Dialog from '#lib/components/ui/dialog/index.js';
+  import { deviceNameFrom } from '#lib/device-name.js';
   import { RequestError } from '#lib/service/client.js';
   import { useApp } from '#lib/state/context.js';
   import { THIS_PC } from '#lib/state/refs.js';
@@ -26,8 +27,8 @@
   type Failure = string | [before: string, command: string, after: string];
   let error = $state<Failure | null>(null);
 
-  /** The name this PC goes by on the other machine: its hostname. */
-  const defaultName = (): string => machines.local?.info?.name || THIS_PC;
+  /** The name this PC goes by on the other machine: its host name, short enough to pair with. */
+  const defaultName = (): string => deviceNameFrom(machines.local?.info?.name, THIS_PC);
 
   /** Back to a blank form: the one-time code and the errors about it never outlive the dialog. */
   const reset = (): void => {
