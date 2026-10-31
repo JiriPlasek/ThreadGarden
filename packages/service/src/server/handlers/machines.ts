@@ -3,12 +3,19 @@ import type { Db } from '../../history/db.js';
 import type { DeviceRegistry } from '../../machine/devices.js';
 import { renameMachine } from '../../machine/identity.js';
 import type { TlsIdentity } from '../../machine/tls.js';
-import { ServiceError, type Router } from '../router.js';
+import { ServiceError, type HandlerCtx, type Router } from '../router.js';
 
 const PAIRING_MESSAGES = {
   PAIRING_INVALID: 'The pairing code is not valid',
   PAIRING_EXPIRED: 'The pairing code has expired',
 } as const;
+
+/**
+ * This machine as the caller may see it: before authentication (a pairing
+ * socket: remote, no device) the home folder is withheld.
+ */
+export const machineFor = (ctx: HandlerCtx, machine: MachineInfo): MachineInfo =>
+  ctx.origin === 'remote' && ctx.deviceId === undefined ? { ...machine, home: '' } : machine;
 
 /**
  * This machine, the devices paired with it and pairing. Creating codes,
@@ -29,7 +36,7 @@ export const registerMachineHandlers = (
 ): void => {
   const { devices, identity } = deps;
 
-  router.register('machine.get', async () => identity());
+  router.register('machine.get', async (_p, ctx) => machineFor(ctx, identity()));
   router.register(
     'machine.rename',
     async ({ name }) => {
@@ -49,10 +56,14 @@ export const registerMachineHandlers = (
     { localOnly: true },
   );
 
-  router.register('pair.proof', async ({ nonce }) => {
+  router.register('pair.proof', async ({ nonce }, ctx) => {
     if (!deps.tls) throw new ServiceError('NOT_LISTENING', 'This machine does not accept devices');
-    return { proof: devices.proof(deps.tls.fingerprint256, nonce), machine: identity() };
+    return {
+      proof: devices.proof(deps.tls.fingerprint256, nonce),
+      machine: machineFor(ctx, identity()),
+    };
   });
+  // A successful claim authenticates the caller: it gets the machine as it is.
   router.register('pair.claim', async ({ code, deviceName }) => {
     const claimed = devices.claim(code, deviceName);
     if ('error' in claimed) throw new ServiceError(claimed.error, PAIRING_MESSAGES[claimed.error]);

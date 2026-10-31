@@ -9,8 +9,14 @@ import { WebSocket } from 'ws';
 import { openDb, type Db } from '../../src/history/db.js';
 import { DeviceRegistry } from '../../src/machine/devices.js';
 import { loadOrCreateTlsIdentity, type TlsIdentity } from '../../src/machine/tls.js';
-import { registerMachineHandlers } from '../../src/server/handlers/machines.js';
-import { REMOTE_PORT, startRemoteServer } from '../../src/server/remote-server.js';
+import { machineFor, registerMachineHandlers } from '../../src/server/handlers/machines.js';
+import {
+  PAIRING_MAX_PAYLOAD,
+  PAIRING_MAX_SOCKETS,
+  PAIRING_SOCKET_TTL_MS,
+  REMOTE_PORT,
+  startRemoteServer,
+} from '../../src/server/remote-server.js';
 import { Router, type HandlerCtx } from '../../src/server/router.js';
 
 type Server = Awaited<ReturnType<typeof startRemoteServer>>;
@@ -50,7 +56,11 @@ beforeEach(async () => {
   devices = new DeviceRegistry(db.raw);
   machineId = 'm-1';
   router = new Router();
-  router.register('hello', async () => ({ serviceVersion: 't', protocolVersion: 5 }));
+  router.register('hello', async (_p, ctx) => ({
+    serviceVersion: 't',
+    protocolVersion: 5,
+    machine: machineFor(ctx, machine()),
+  }));
   registerMachineHandlers(router, { db, devices, identity: machine, tls });
   counts = [];
   s = await startRemoteServer({
@@ -65,10 +75,27 @@ beforeEach(async () => {
   if ('error' in paired) throw new Error(paired.error);
   ({ token, deviceId } = paired);
 });
+const extra: Server[] = [];
 afterEach(async () => {
-  await s.close();
+  await Promise.all([s, ...extra.splice(0)].map((x) => x.close()));
   db.close();
 });
+/** Another listener on a free port, with options of its own. */
+const startAnother = async (more: Partial<Parameters<typeof startRemoteServer>[0]> = {}) => {
+  const other = await startRemoteServer({
+    addresses: ['127.0.0.1'],
+    port: 0,
+    tls,
+    devices,
+    router,
+    onClientCountChange: () => {},
+    ...more,
+  });
+  extra.push(other);
+  return other;
+};
+/** The machine as a pairing socket sees it. */
+const unauthenticated = (): MachineInfo => ({ ...machine(), home: '' });
 
 const openTls = (srv: Server, protocol?: string) =>
   new Promise<WebSocket>((resolve, reject) => {
@@ -181,7 +208,7 @@ describe('remote server', () => {
         .update(`${tls.fingerprint256}\n${nonce}`)
         .digest('hex'),
     );
-    expect(result.machine).toEqual(machine());
+    expect(result.machine).toEqual(unauthenticated());
     const claimed = await call(ws, 'pair.claim', { code, deviceName: 'Gaming PC' });
     expect(claimed.result.token).toMatch(/^[0-9a-f]{64}$/);
     expect(claimed.result.machine).toEqual(machine());
@@ -203,7 +230,7 @@ describe('remote server', () => {
     const nonce = randomBytes(32).toString('hex');
     expect((await call(ws, 'pair.proof', { nonce })).result).toEqual({
       proof: null,
-      machine: machine(),
+      machine: unauthenticated(),
     });
     expect(await call(ws, 'pair.proof', { nonce: 'short' })).toMatchObject({
       error: { code: 'INVALID_PARAMS' },
@@ -233,6 +260,113 @@ describe('remote server', () => {
       error: { code: 'PAIRING_INVALID' },
     });
     ws.close();
+  });
+
+  it('kills the code after five wrong claims over a pairing socket', async () => {
+    const { code } = devices.createPairingCode();
+    const ws = await openTls(s, 'threadgarden-pair');
+    for (let i = 0; i < 5; i++) {
+      expect(
+        await call(ws, 'pair.claim', { code: 'AAAA-AAAA-AAAA', deviceName: 'x' }),
+      ).toMatchObject({ error: { code: 'PAIRING_INVALID' } });
+    }
+    const late = await call(ws, 'pair.claim', { code, deviceName: 'x' });
+    expect(late).toMatchObject({ error: { code: 'PAIRING_INVALID' } });
+    expect(late.result).toBeUndefined();
+    expect(devices.list()).toHaveLength(1);
+    ws.close();
+  });
+
+  it('withholds the home folder until the caller is authenticated', async () => {
+    const pairing = await openTls(s, 'threadgarden-pair');
+    const hello = { protocolVersion: 5, client: 'p' };
+    expect((await call(pairing, 'hello', hello)).result.machine).toEqual(unauthenticated());
+    const nonce = randomBytes(32).toString('hex');
+    expect((await call(pairing, 'pair.proof', { nonce })).result.machine.home).toBe('');
+    const device = await openTls(s, `threadgarden-device.${token}`);
+    expect((await call(device, 'hello', hello)).result.machine).toEqual(machine());
+    expect((await call(device, 'machine.get', {})).result.home).toBe('/home/me');
+    pairing.close();
+    device.close();
+  });
+
+  it('closes a pairing socket that sends a frame over the pairing limit (1009)', async () => {
+    const ws = await openTls(s, 'threadgarden-pair');
+    const closed = closeCode(ws);
+    ws.on('error', () => {});
+    const nonce = 'a'.repeat(PAIRING_MAX_PAYLOAD);
+    ws.send(JSON.stringify({ id: 1, method: 'pair.proof', params: { nonce } }));
+    expect(await closed).toBe(1009);
+  });
+
+  it('never reads a big frame from a refused device token (4401)', async () => {
+    const dispatch = vi.spyOn(router, 'dispatch');
+    const ws = await openTls(s, 'threadgarden-device.nope');
+    ws.on('error', () => {});
+    const closed = closeCode(ws);
+    ws.send(
+      JSON.stringify({ id: 1, method: 'machine.get', params: { pad: 'x'.repeat(64 * 1024) } }),
+    );
+    expect(await closed).toBe(4401);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
+  it(`refuses pairing sockets beyond ${PAIRING_MAX_SOCKETS} with 503`, async () => {
+    const open: WebSocket[] = [];
+    for (let i = 0; i < PAIRING_MAX_SOCKETS; i++) open.push(await openTls(s, 'threadgarden-pair'));
+    await expect(openTls(s, 'threadgarden-pair')).rejects.toThrow(/503/);
+    // Devices are not held back by pairing sockets.
+    const device = await openTls(s, `threadgarden-device.${token}`);
+    expect(await call(device, 'machine.get', {})).toMatchObject({ result: { id: machineId } });
+    // A closed pairing socket frees its place.
+    const closed = closeCode(open[0]!);
+    open[0]!.close();
+    await closed;
+    await expect
+      .poll(async () => {
+        try {
+          open[0] = await openTls(s, 'threadgarden-pair');
+          return true;
+        } catch {
+          return false;
+        }
+      })
+      .toBe(true);
+    for (const ws of [...open, device]) ws.close();
+  });
+
+  it('closes a pairing socket when its time is up', async () => {
+    expect(PAIRING_SOCKET_TTL_MS).toBe(60_000);
+    const short = await startAnother({ pairingTtlMs: 50 });
+    const ws = await openTls(short, 'threadgarden-pair');
+    expect(await closeCode(ws)).toBe(4408);
+    // Devices have no such limit.
+    const device = await openTls(short, `threadgarden-device.${token}`);
+    await new Promise((r) => setTimeout(r, 120));
+    expect(device.readyState).toBe(WebSocket.OPEN);
+    device.close();
+  });
+
+  it('closes a device revoked between its upgrade and its connection (4403)', async () => {
+    const realVerify = devices.verify.bind(devices);
+    const verify = vi.spyOn(devices, 'verify').mockImplementationOnce((t) => {
+      const found = realVerify(t);
+      devices.revoke(deviceId);
+      return found;
+    });
+    expect(await closeCode(await openTls(s, `threadgarden-device.${token}`))).toBe(4403);
+    verify.mockRestore();
+  });
+
+  it('refuses to listen on a wildcard, an empty address or a host name', async () => {
+    for (const address of ['0.0.0.0', '::', '0:0:0:0:0:0:0:0', '', 'localhost']) {
+      await expect(startAnother({ addresses: [address] }), address).rejects.toThrow(
+        /refusing to listen/,
+      );
+    }
+    await expect(startAnother({ addresses: ['127.0.0.1', '0.0.0.0'] })).rejects.toThrow(
+      /refusing to listen/,
+    );
   });
 
   it('closes a revoked device with 4403', async () => {

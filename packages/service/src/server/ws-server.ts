@@ -67,7 +67,7 @@ export const startWsServer = async (opts: {
   wss.on('error', report);
 
   wss.on('connection', (ws) => {
-    dropOnError(ws);
+    dropOnError(ws, report);
     const offered = tokenOf(ws.protocol);
     if (offered === null || !tokenMatches(offered, opts.token)) {
       ws.close(UNAUTHORIZED, 'unauthorized');

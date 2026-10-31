@@ -1,5 +1,5 @@
 import { mkdir, mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WebSocket } from 'ws';
@@ -95,6 +95,18 @@ describe('startService', () => {
       result: { id: string; name: string };
     };
     expect(renamed.result).toMatchObject({ id: hello.result.machine.id, name: 'Den' });
+    // Ruling R11: a pairing socket (remote, no device yet) is not told the home folder.
+    const helloParams = { protocolVersion: PROTOCOL_VERSION, client: 't' };
+    const asPairing = (await svc.router.dispatch(
+      { id: 1, method: 'hello', params: helloParams },
+      { clientId: 'p', origin: 'remote' },
+    )) as { result: { machine: { home: string; id: string } } };
+    expect(asPairing.result.machine).toMatchObject({ id: hello.result.machine.id, home: '' });
+    const asDevice = (await svc.router.dispatch(
+      { id: 1, method: 'hello', params: helloParams },
+      { clientId: 'd', origin: 'remote', deviceId: 'dev' },
+    )) as { result: { machine: { home: string } } };
+    expect(asDevice.result.machine.home).toBe(homedir());
     await svc.close();
   });
 

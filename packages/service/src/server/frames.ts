@@ -53,9 +53,15 @@ export const serveFrames = (
 
 /**
  * The first thing done with any new socket, before it is authenticated: a
- * socket error (a broken frame, an oversized message) drops that socket. An
- * 'error' event without a listener would throw and take the service down.
+ * socket error (a broken frame, an oversized message) is reported and drops
+ * that socket. An 'error' event without a listener would throw and take the
+ * service down. When the socket already started closing (ws closes with 1009
+ * on an oversized frame, 1002 on a broken one) the close is left to finish,
+ * so the peer learns why.
  */
-export const dropOnError = (ws: WebSocket): void => {
-  ws.on('error', () => ws.terminate());
+export const dropOnError = (ws: WebSocket, report: (err: unknown) => void): void => {
+  ws.on('error', (err) => {
+    report(err);
+    if (ws.readyState === ws.OPEN) ws.terminate();
+  });
 };

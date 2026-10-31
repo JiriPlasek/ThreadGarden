@@ -37,7 +37,7 @@ import { buildSessionEnv } from './sdk/real-adapter.js';
 import { registerChatHandlers } from './server/handlers/chat.js';
 import { makeResumeChecker, registerExternalHandlers } from './server/handlers/external.js';
 import { registerFileHandlers } from './server/handlers/files.js';
-import { registerMachineHandlers } from './server/handlers/machines.js';
+import { machineFor, registerMachineHandlers } from './server/handlers/machines.js';
 import { registerHistoryHandlers } from './server/handlers/history.js';
 import { registerUsageHandlers } from './server/handlers/usage.js';
 import { Router } from './server/router.js';
@@ -190,10 +190,10 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       capabilities: [...CAPABILITIES],
     };
   };
-  router.register('hello', async () => ({
+  router.register('hello', async (_p, ctx) => ({
     serviceVersion: pkg.version,
     protocolVersion: PROTOCOL_VERSION,
-    ...(db ? { machine: machineOf(db) } : {}),
+    ...(db ? { machine: machineFor(ctx, machineOf(db)) } : {}),
   }));
 
   const broadcastRef: { fn: (e: EventMsg) => void } = { fn: () => {} };
