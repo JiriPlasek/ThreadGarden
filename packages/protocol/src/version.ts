@@ -5,5 +5,8 @@
  * 3 (v1.3): usage limits and scheduled sends (`usage.*`, `scheduled.*`),
  *   project icons (`projects.icon`), agent details on tasks and appearance
  *   settings.
+ * 4 (v1.3, the rename): the `threadgarden.<token>` subprotocol and the
+ *   `threadgarden` data dir. A pahub service (3) is restarted, and the new
+ *   one copies pahub's data over as it starts.
  */
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;

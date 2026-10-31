@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use crate::discovery::{self, Discovery};
 
 /// Must equal `PROTOCOL_VERSION` in `packages/protocol/src/version.ts` (checked by a test).
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 4;
 /// How long a freshly spawned service may take to write `service.json` and answer `hello`.
 /// The service writes `service.json` as soon as it listens — it looks for Claude Code
 /// (`claude --version`, seconds on some machines) only afterwards — so this covers a
@@ -204,10 +204,19 @@ pub fn check_protocol(hello: &HelloResult) -> Result<(), String> {
     }
 }
 
-/// Sends `hello` over the service's WebSocket (token as the `pahub.<token>` subprotocol).
+/// The WebSocket subprotocols that carry the token: `threadgarden.<token>`, and
+/// `pahub.<token>` for a service from before v1.3 (spec v1.3 §9). Such a
+/// service answers `hello` with its older protocol, so the UI offers to restart it.
+pub fn subprotocols(token: &str) -> String {
+    format!("threadgarden.{token}, pahub.{token}")
+}
+
+/// Sends `hello` over the service's WebSocket (token in the subprotocol, see `subprotocols`).
 pub async fn hello(port: u16, token: &str, timeout: Duration) -> Result<HelloResult, String> {
-    let params =
-        serde_json::json!({ "protocolVersion": PROTOCOL_VERSION, "client": "pahub-desktop" });
+    let params = serde_json::json!({
+        "protocolVersion": PROTOCOL_VERSION,
+        "client": "threadgarden-desktop",
+    });
     let result = tokio::time::timeout(timeout, request(port, token, "hello", params))
         .await
         .map_err(|_| "hello-timeout".to_string())??;
@@ -229,7 +238,7 @@ async fn request(
     let mut req = format!("ws://127.0.0.1:{port}")
         .into_client_request()
         .map_err(|e| err(&e))?;
-    let protocol = HeaderValue::from_str(&format!("pahub.{token}")).map_err(|e| err(&e))?;
+    let protocol = HeaderValue::from_str(&subprotocols(token)).map_err(|e| err(&e))?;
     req.headers_mut().insert("Sec-WebSocket-Protocol", protocol);
     let (mut ws, _) = tokio_tungstenite::connect_async(req)
         .await
@@ -356,21 +365,29 @@ mod tests {
     use tokio_tungstenite::tungstenite::handshake::server::{
         Callback, ErrorResponse, Request, Response,
     };
+    use tokio_tungstenite::tungstenite::http::HeaderValue;
 
     const APP_VERSION: &str = "0.1.0";
 
-    /// The fake service's handshake check: only the `pahub.<token>` subprotocol is
-    /// accepted. A `Callback` impl, because tungstenite fixes the callback's error type.
+    /// The fake service's handshake check: like the real service, it takes the
+    /// one subprotocol it knows (`threadgarden.<token>`; `pahub.<token>` for a
+    /// pahub service) out of those offered and echoes it. A `Callback` impl,
+    /// because tungstenite fixes the callback's error type.
     struct RequireToken(String);
 
     impl Callback for RequireToken {
         fn on_request(self, req: &Request, mut res: Response) -> Result<Response, ErrorResponse> {
-            match req.headers().get("sec-websocket-protocol").cloned() {
-                Some(p) if p.to_str().ok() == Some(self.0.as_str()) => {
-                    res.headers_mut().insert("sec-websocket-protocol", p);
-                    Ok(res)
-                }
-                _ => Err(Response::builder().status(401).body(None).unwrap()),
+            let offered = req
+                .headers()
+                .get("sec-websocket-protocol")
+                .and_then(|p| p.to_str().ok())
+                .unwrap_or("");
+            if offered.split(',').any(|p| p.trim() == self.0) {
+                let chosen = HeaderValue::from_str(&self.0).unwrap();
+                res.headers_mut().insert("sec-websocket-protocol", chosen);
+                Ok(res)
+            } else {
+                Err(Response::builder().status(401).body(None).unwrap())
             }
         }
     }
@@ -381,12 +398,23 @@ mod tests {
         service_version: &'static str,
         protocol_version: u32,
     ) -> u16 {
+        fake_service_with_prefix("threadgarden", token, service_version, protocol_version).await
+    }
+
+    /// A stand-in service that knows only the `<prefix>.<token>` subprotocol
+    /// (`pahub`: a service from before v1.3).
+    async fn fake_service_with_prefix(
+        prefix: &'static str,
+        token: &'static str,
+        service_version: &'static str,
+        protocol_version: u32,
+    ) -> u16 {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         tokio::spawn(async move {
             while let Ok((stream, _)) = listener.accept().await {
                 tokio::spawn(async move {
-                    let check = RequireToken(format!("pahub.{token}"));
+                    let check = RequireToken(format!("{prefix}.{token}"));
                     let ws = tokio_tungstenite::accept_hdr_async(stream, check).await;
                     let Ok(mut ws) = ws else { return };
                     while let Some(Ok(msg)) = ws.next().await {
@@ -416,7 +444,7 @@ mod tests {
             while let Ok((stream, _)) = listener.accept().await {
                 let busy = first.swap(false, Ordering::SeqCst);
                 tokio::spawn(async move {
-                    let check = RequireToken(format!("pahub.{token}"));
+                    let check = RequireToken(format!("threadgarden.{token}"));
                     let Ok(mut ws) = tokio_tungstenite::accept_hdr_async(stream, check).await
                     else {
                         return;
@@ -454,7 +482,7 @@ mod tests {
             while let Ok((stream, _)) = listener.accept().await {
                 let (log, alive) = (log.clone(), alive.clone());
                 tokio::spawn(async move {
-                    let check = RequireToken(format!("pahub.{token}"));
+                    let check = RequireToken(format!("threadgarden.{token}"));
                     let Ok(mut ws) = tokio_tungstenite::accept_hdr_async(stream, check).await
                     else {
                         return;
@@ -620,6 +648,25 @@ mod tests {
         let port = fake_service("tok", "9.9.9", PROTOCOL_VERSION).await;
         let h = hello(port, "tok", Duration::from_secs(2)).await.unwrap();
         assert_eq!(h.service_version, "9.9.9");
+        assert!(hello(port, "wrong", Duration::from_secs(2)).await.is_err());
+    }
+
+    #[test]
+    fn offers_the_token_under_both_prefixes() {
+        assert_eq!(subprotocols("tok"), "threadgarden.tok, pahub.tok");
+    }
+
+    /// Spec v1.3 §9: a pahub service knows only `pahub.<token>`; it is reached,
+    /// and its older protocol makes the UI offer the restart that migrates.
+    #[tokio::test]
+    async fn reaches_a_pahub_service_and_reports_its_older_protocol() {
+        let port = fake_service_with_prefix("pahub", "tok", "0.2.0", 3).await;
+        let h = hello(port, "tok", Duration::from_secs(2)).await.unwrap();
+        assert_eq!(h.protocol_version, 3);
+        assert_eq!(
+            check_protocol(&h),
+            Err("service-version-mismatch".to_string())
+        );
         assert!(hello(port, "wrong", Duration::from_secs(2)).await.is_err());
     }
 

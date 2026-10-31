@@ -18,7 +18,7 @@ export const openApp = async (page: Page): Promise<void> => {
 
 /** One request to the mock service over its WebSocket, from the test process. */
 export const serviceCall = async <T>(method: string, params: unknown): Promise<T> => {
-  const ws = new WebSocket(`ws://127.0.0.1:${MOCK_PORT}`, [`pahub.${MOCK_TOKEN}`]);
+  const ws = new WebSocket(`ws://127.0.0.1:${MOCK_PORT}`, [`threadgarden.${MOCK_TOKEN}`]);
   try {
     return await new Promise<T>((resolve, reject) => {
       ws.onopen = () => ws.send(JSON.stringify({ id: 1, method, params }));

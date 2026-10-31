@@ -204,14 +204,19 @@ export class ServiceClient {
     if (this.closed) return;
     let ws: WebSocket;
     try {
-      ws = new this.Impl(this.url, [`pahub.${this.token}`]);
+      // A pahub service (before v1.3) knows only the old prefix; its `hello`
+      // then reports its older protocol, and the UI offers to restart it.
+      ws = new this.Impl(this.url, [`threadgarden.${this.token}`, `pahub.${this.token}`]);
     } catch {
       this.scheduleRetry();
       return;
     }
     this.ws = ws;
     ws.onopen = () => {
-      this.send('hello', { protocolVersion: PROTOCOL_VERSION, client: 'pahub-desktop' }).then(
+      this.send('hello', {
+        protocolVersion: PROTOCOL_VERSION,
+        client: 'threadgarden-desktop',
+      }).then(
         (r) => {
           if (this.ws !== ws) return;
           if ((r as { protocolVersion?: number }).protocolVersion !== PROTOCOL_VERSION) {

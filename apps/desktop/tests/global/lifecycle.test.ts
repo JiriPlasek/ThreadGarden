@@ -188,6 +188,6 @@ describe('client', () => {
     expect(server.live?.url).toBe('ws://new:2');
     expect(server.sockets.filter((s) => s.open)).toHaveLength(1);
     expect(reconnected).toHaveBeenCalledTimes(1);
-    expect(server.protocols.at(-1)).toEqual(['pahub.b']);
+    expect(server.protocols.at(-1)).toEqual(['threadgarden.b', 'pahub.b']);
   });
 });

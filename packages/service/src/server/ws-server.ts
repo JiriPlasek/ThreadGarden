@@ -11,7 +11,18 @@ import type { Router } from './router.js';
 
 const HOST = '127.0.0.1';
 const UNAUTHORIZED = 4401;
-const PROTOCOL_PREFIX = 'pahub.';
+/**
+ * Clients send the token as the WebSocket subprotocol `threadgarden.<token>`;
+ * `pahub.<token>` (clients before v1.3) is accepted too, for one release
+ * (spec v1.3 §9).
+ */
+const PROTOCOL_PREFIXES = ['threadgarden.', 'pahub.'] as const;
+
+/** The token a subprotocol carries, or null for one that is not ours. */
+const tokenOf = (protocol: string): string | null => {
+  const prefix = PROTOCOL_PREFIXES.find((p) => protocol.startsWith(p));
+  return prefix === undefined ? null : protocol.slice(prefix.length);
+};
 
 const tokenMatches = (offered: string, token: string): boolean => {
   const a = Buffer.from(offered);
@@ -38,9 +49,9 @@ export const startWsServer = async (opts: {
     host: HOST,
     port: opts.port ?? 0,
     maxPayload: MAX_REQUEST_BYTES,
-    // Echo the offered subprotocol so browsers complete the handshake; the token is verified on connection.
-    handleProtocols: (protocols) =>
-      [...protocols].find((p) => p.startsWith(PROTOCOL_PREFIX)) ?? false,
+    // Echo the first offered subprotocol of ours so browsers complete the
+    // handshake; the token is verified on connection.
+    handleProtocols: (protocols) => [...protocols].find((p) => tokenOf(p) !== null) ?? false,
   });
   await new Promise<void>((resolve, reject) => {
     const failed = (err: unknown): void => reject(err);
@@ -65,9 +76,7 @@ export const startWsServer = async (opts: {
   };
 
   wss.on('connection', (ws) => {
-    const offered = ws.protocol.startsWith(PROTOCOL_PREFIX)
-      ? ws.protocol.slice(PROTOCOL_PREFIX.length)
-      : null;
+    const offered = tokenOf(ws.protocol);
     if (offered === null || !tokenMatches(offered, opts.token)) {
       ws.close(UNAUTHORIZED, 'unauthorized');
       return;

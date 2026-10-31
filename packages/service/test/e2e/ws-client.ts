@@ -30,7 +30,7 @@ export class TestClient {
 
   static connect(port: number, token: string): Promise<TestClient> {
     return new Promise((resolve, reject) => {
-      const ws = new WebSocket(`ws://127.0.0.1:${port}`, `pahub.${token}`);
+      const ws = new WebSocket(`ws://127.0.0.1:${port}`, `threadgarden.${token}`);
       ws.once('error', reject);
       ws.once('open', () => resolve(new TestClient(ws)));
     });

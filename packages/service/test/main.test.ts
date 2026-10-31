@@ -22,7 +22,7 @@ afterEach(async () => {
 
 const rpc = (port: number, token: string, method: string, params: unknown) =>
   new Promise<unknown>((resolve, reject) => {
-    const ws = new WebSocket(`ws://127.0.0.1:${port}`, `pahub.${token}`);
+    const ws = new WebSocket(`ws://127.0.0.1:${port}`, `threadgarden.${token}`);
     ws.once('error', reject);
     // Skip broadcast events (they carry no id) that can arrive before the response.
     ws.on('message', (d) => {

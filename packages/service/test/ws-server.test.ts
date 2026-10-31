@@ -28,7 +28,7 @@ const start = async (
   servers.push(s);
   return s;
 };
-const open = (port: number, protocol?: string) =>
+const open = (port: number, protocol?: string | string[]) =>
   new Promise<WebSocket>((resolve, reject) => {
     const url = `ws://127.0.0.1:${port}`;
     const ws = protocol ? new WebSocket(url, protocol) : new WebSocket(url);
@@ -47,13 +47,38 @@ describe('ws server', () => {
   });
   it('rejects wrong token (4401)', async () => {
     const s = await start();
+    const ws = await open(s.port, 'threadgarden.wrong');
+    expect(await closeCode(ws)).toBe(4401);
+  });
+  it('accepts the legacy pahub.<token> subprotocol (spec v1.3 §9)', async () => {
+    const s = await start();
+    const ws = await open(s.port, 'pahub.tok');
+    expect(ws.protocol).toBe('pahub.tok');
+    const reply = nextMessage(ws);
+    ws.send(
+      JSON.stringify({ id: 1, method: 'hello', params: { protocolVersion: 1, client: 'c' } }),
+    );
+    expect(await reply).toMatchObject({ id: 1, result: { serviceVersion: 't' } });
+    ws.close();
+  });
+  it('picks the first of both offered subprotocols', async () => {
+    const s = await start();
+    const ws = await open(s.port, ['threadgarden.tok', 'pahub.tok']);
+    expect(ws.protocol).toBe('threadgarden.tok');
+    ws.close();
+    const legacyFirst = await open(s.port, ['other', 'pahub.tok', 'threadgarden.tok']);
+    expect(legacyFirst.protocol).toBe('pahub.tok');
+    legacyFirst.close();
+  });
+  it('rejects a wrong token under the legacy prefix too (4401)', async () => {
+    const s = await start();
     const ws = await open(s.port, 'pahub.wrong');
     expect(await closeCode(ws)).toBe(4401);
   });
   it('routes hello and returns protocolVersion 1', async () => {
     const s = await start();
-    const ws = await open(s.port, 'pahub.tok');
-    expect(ws.protocol).toBe('pahub.tok');
+    const ws = await open(s.port, 'threadgarden.tok');
+    expect(ws.protocol).toBe('threadgarden.tok');
     const reply = nextMessage(ws);
     ws.send(
       JSON.stringify({ id: 1, method: 'hello', params: { protocolVersion: 1, client: 'test' } }),
@@ -64,7 +89,7 @@ describe('ws server', () => {
   it('broadcasts events and tracks client count', async () => {
     const counts: number[] = [];
     const s = await start(makeRouter(), counts);
-    const ws = await open(s.port, 'pahub.tok');
+    const ws = await open(s.port, 'threadgarden.tok');
     const evt = nextMessage(ws);
     s.broadcast({ event: 'x', data: 1 });
     expect(await evt).toEqual({ event: 'x', data: 1 });
@@ -76,7 +101,7 @@ describe('ws server', () => {
   });
   it('answers malformed frames with an error and keeps the connection', async () => {
     const s = await start();
-    const ws = await open(s.port, 'pahub.tok');
+    const ws = await open(s.port, 'threadgarden.tok');
     const reply = nextMessage(ws);
     ws.send('not json');
     expect(await reply).toMatchObject({ error: { code: 'INVALID_PARAMS' } });
@@ -87,7 +112,7 @@ describe('ws server', () => {
     const router = makeRouter();
     vi.spyOn(router, 'dispatch').mockRejectedValue(new Error('router exploded'));
     const s = await start(router, [], (e) => errors.push(e));
-    const ws = await open(s.port, 'pahub.tok');
+    const ws = await open(s.port, 'threadgarden.tok');
     const reply = nextMessage(ws);
     ws.send(JSON.stringify({ id: 7, method: 'hello', params: {} }));
     expect(await reply).toEqual({
@@ -112,14 +137,14 @@ describe('ws server', () => {
     expect(() => servers[0]!.emit('error', new Error('late failure'))).not.toThrow();
     expect(String(errors[0])).toContain('late failure');
     // Still serving.
-    const ws = await open(s.port, 'pahub.tok');
+    const ws = await open(s.port, 'threadgarden.tok');
     ws.close();
   });
   it('accepts a message as large as the documented image limits allow', async () => {
     const router = makeRouter();
     router.register('ui.visibility', async () => ({}));
     const s = await start(router);
-    const ws = await open(s.port, 'pahub.tok');
+    const ws = await open(s.port, 'threadgarden.tok');
     const reply = nextMessage(ws);
     // 20 MiB of images (the composer's per-message cap) as base64, plus the envelope.
     const data = 'A'.repeat(Math.ceil((20 * 1024 * 1024 * 4) / 3));

@@ -50,7 +50,8 @@ describe('ServiceClient', () => {
     server.handlers['places.counts'] = () => ({ needsYou: 1, running: 2, all: 3 });
     server.handlers['projects.list'] = () => [];
     await connected();
-    expect(server.protocols[0]).toEqual(['pahub.tok']);
+    // Both prefixes: a pahub service (before v1.3) accepts only the old one (spec v1.3 §9).
+    expect(server.protocols[0]).toEqual(['threadgarden.tok', 'pahub.tok']);
     const [a, b] = await Promise.all([
       client.request('places.counts', {}),
       client.request('projects.list', {}),
@@ -166,6 +167,17 @@ describe('ServiceClient', () => {
     await assertion;
     expect(client.status).toBe('incompatible');
     expect(server.calls('sessions.list')).toHaveLength(0);
+  });
+
+  it('a pahub service (protocol 3) is incompatible: restarting it moves its data over', async () => {
+    // v1.3 §9: the renamed data dir; the new service migrates pahub's as it starts.
+    expect(PROTOCOL_VERSION).toBeGreaterThan(3);
+    server.handlers['hello'] = () => ({ serviceVersion: '0.2.0', protocolVersion: 3 });
+    const p = client.connect('ws://127.0.0.1:1', 'tok');
+    const assertion = expect(p).rejects.toMatchObject({ code: 'INCOMPATIBLE' });
+    await vi.advanceTimersByTimeAsync(0);
+    await assertion;
+    expect(client.status).toBe('incompatible');
   });
 
   it('reconnects and resyncs after reconnect without duplicates', async () => {
