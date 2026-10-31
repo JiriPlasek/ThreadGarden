@@ -5,7 +5,7 @@
     sanitizeFontFamily,
     type Settings,
     type SettingsPatch,
-  } from '@pahub/protocol';
+  } from '@threadgarden/protocol';
   import FileSearchIcon from '@lucide/svelte/icons/file-search';
   import KeyboardIcon from '@lucide/svelte/icons/keyboard';
   import { buildFlags } from '#lib/build-flags.js';

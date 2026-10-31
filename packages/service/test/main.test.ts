@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WebSocket } from 'ws';
-import { PROTOCOL_VERSION } from '@pahub/protocol';
+import { PROTOCOL_VERSION } from '@threadgarden/protocol';
 import { readDiscovery } from '../src/discovery.js';
 import { createLogger } from '../src/logger.js';
 import { SessionHost } from '../src/chat/session-host.js';

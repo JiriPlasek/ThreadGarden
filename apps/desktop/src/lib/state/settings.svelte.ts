@@ -1,4 +1,4 @@
-import { settingsDefaults, type Settings, type SettingsPatch } from '@pahub/protocol';
+import { settingsDefaults, type Settings, type SettingsPatch } from '@threadgarden/protocol';
 import { cacheAppearance, readCachedAppearance } from '../appearance';
 import {
   SCALE_KEY,

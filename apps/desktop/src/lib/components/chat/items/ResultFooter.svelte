@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { ChatItem } from '@pahub/protocol';
+  import type { ChatItem } from '@threadgarden/protocol';
   import { duration, tokens, usd } from '../format';
 
   /** The end-of-turn line: duration, cost and tokens, or that the turn failed. */

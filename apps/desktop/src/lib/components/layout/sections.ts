@@ -1,4 +1,4 @@
-import type { ChatSummary } from '@pahub/protocol';
+import type { ChatSummary } from '@threadgarden/protocol';
 import { isYourTurn } from './StatusIcon.svelte';
 
 /**

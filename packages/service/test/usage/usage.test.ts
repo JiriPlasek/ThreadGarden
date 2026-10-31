@@ -1,4 +1,4 @@
-import type { UsageState } from '@pahub/protocol';
+import type { UsageState } from '@threadgarden/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openDb, type Db } from '../../src/history/db.js';
 import {

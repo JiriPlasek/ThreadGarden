@@ -3,7 +3,7 @@
  * both into one transcript, so Threadgarden refuses to resume a session that might be
  * running elsewhere. The policy is biased toward blocking when in doubt.
  */
-import type { ChatStatus } from '@pahub/protocol';
+import type { ChatStatus } from '@threadgarden/protocol';
 import type { ExternalSession } from './poller.js';
 
 export const RECENT_MODIFIED_MS = 120_000;

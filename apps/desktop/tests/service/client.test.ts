@@ -1,4 +1,4 @@
-import { PROTOCOL_VERSION, type ChatItem, type ChatSummary } from '@pahub/protocol';
+import { PROTOCOL_VERSION, type ChatItem, type ChatSummary } from '@threadgarden/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RequestError, ServiceClient } from '../../src/lib/service/client';
 import { ChatsState } from '../../src/lib/state/chats.svelte';
@@ -71,7 +71,7 @@ describe('ServiceClient', () => {
   });
 
   it('refuses a request larger than the service accepts, with a clear error, without sending it', async () => {
-    const { MAX_REQUEST_BYTES } = await import('@pahub/protocol');
+    const { MAX_REQUEST_BYTES } = await import('@threadgarden/protocol');
     server.handlers['chat.send'] = () => ({ queued: false });
     await connected();
     const data = 'A'.repeat(MAX_REQUEST_BYTES);

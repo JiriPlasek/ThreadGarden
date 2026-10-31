@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { ChatItem } from '@pahub/protocol';
+  import type { ChatItem } from '@threadgarden/protocol';
   import CircleIcon from '@lucide/svelte/icons/circle';
   import CircleCheckIcon from '@lucide/svelte/icons/circle-check';
   import CircleDotIcon from '@lucide/svelte/icons/circle-dot';

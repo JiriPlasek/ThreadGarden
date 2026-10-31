@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { ImageRef } from '@pahub/protocol';
+  import type { ImageRef } from '@threadgarden/protocol';
   import XIcon from '@lucide/svelte/icons/x';
 
   /** Thumbnails of the images about to be sent, each with a remove button. */

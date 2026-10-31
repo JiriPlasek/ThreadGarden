@@ -7,7 +7,7 @@ import {
   type ChatItem,
   type ScheduledSend,
   type UsageState,
-} from '@pahub/protocol';
+} from '@threadgarden/protocol';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { LATE_NOTE, startService, type ServiceHandle, type StartOptions } from '../../src/main.js';
 import type { SessionMessage } from '../../src/sdk/adapter.js';

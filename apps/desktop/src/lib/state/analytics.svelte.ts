@@ -1,4 +1,4 @@
-import type { Analytics, AnalyticsRange } from '@pahub/protocol';
+import type { Analytics, AnalyticsRange } from '@threadgarden/protocol';
 import { RequestError } from '../service/client';
 import type { Api } from './api';
 

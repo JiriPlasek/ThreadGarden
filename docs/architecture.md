@@ -598,7 +598,7 @@ keeps `PATH`, `HOME`, proxies and everything else.
 Checked on 2026-10-30 with Claude Code 2.1.314 and
 `@anthropic-ai/claude-agent-sdk` 0.3.314 on Windows 11, signed in with a
 subscription, using the opt-in real test
-(`pnpm --filter @pahub/service test:real`, `test/real/smoke.real.test.ts`).
+(`pnpm --filter @threadgarden/service test:real`, `test/real/smoke.real.test.ts`).
 
 | Session environment | `accountInfo()` | `system/init` `apiKeySource` |
 | --- | --- | --- |
@@ -658,7 +658,7 @@ reports `unrunnable` with an explanation.
 
 ## Verified against the real Claude Code
 
-`pnpm --filter @pahub/service test:real` (`test/real/service.real.test.ts`)
+`pnpm --filter @threadgarden/service test:real` (`test/real/service.real.test.ts`)
 runs the whole service over the WebSocket against the installed `claude`, the
 user's login and their real history, in a throwaway git repo with a temp data
 dir. Last run on 2026-10-30 with Claude Code 2.1.314 and SDK 0.3.314 on

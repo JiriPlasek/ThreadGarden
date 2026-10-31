@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
-import type { ChatSummary } from '@pahub/protocol';
+import type { ChatSummary } from '@threadgarden/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import QuickSwitcher from '../../src/lib/components/QuickSwitcher.svelte';
 import PlacesColumn from '../../src/lib/components/layout/PlacesColumn.svelte';

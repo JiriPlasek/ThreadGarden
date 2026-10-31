@@ -1,6 +1,6 @@
 <script lang="ts">
   import CalendarClockIcon from '@lucide/svelte/icons/calendar-clock';
-  import type { ScheduledSend } from '@pahub/protocol';
+  import type { ScheduledSend } from '@threadgarden/protocol';
   import { sendTimeText } from '#lib/format/usage.js';
   import { cn } from '#lib/utils.js';
 

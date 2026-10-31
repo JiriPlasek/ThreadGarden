@@ -11,7 +11,7 @@ import {
   type MethodName,
   type Params,
   type Result,
-} from '@pahub/protocol';
+} from '@threadgarden/protocol';
 
 export type ClientStatus = 'connecting' | 'open' | 'reconnecting' | 'incompatible';
 

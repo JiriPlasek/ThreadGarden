@@ -4,7 +4,7 @@
  * list (`scheduled.list`, then every `scheduled.changed`) for the list above
  * the composer and the clock badges on chat rows and tabs.
  */
-import type { ImageRef, Result, ScheduledSend } from '@pahub/protocol';
+import type { ImageRef, Result, ScheduledSend } from '@threadgarden/protocol';
 import { quietly, type Api } from './api';
 
 /** When a scheduled send goes out: a time, or when the usage limit resets. */

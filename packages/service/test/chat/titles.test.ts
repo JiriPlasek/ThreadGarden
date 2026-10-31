@@ -1,5 +1,5 @@
 /** v1.2 C1: provisional and generated chat titles (Threadgarden's own metadata). */
-import type { EventMsg } from '@pahub/protocol';
+import type { EventMsg } from '@threadgarden/protocol';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   ChatTitles,

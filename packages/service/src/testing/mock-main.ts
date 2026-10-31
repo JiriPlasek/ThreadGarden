@@ -1,6 +1,6 @@
 /**
  * Mock Threadgarden service for UI development and Playwright
- * (`pnpm --filter @pahub/service mock`): the real service (`startService`)
+ * (`pnpm --filter @threadgarden/service mock`): the real service (`startService`)
  * over a synthetic history (`generateCorpus`) and a scripted fake Claude Code.
  *
  * Script, per user message:

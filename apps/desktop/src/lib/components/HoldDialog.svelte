@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { HOLD_NOTE_MAX } from '@pahub/protocol';
+  import { HOLD_NOTE_MAX } from '@threadgarden/protocol';
   import { Button } from '#lib/components/ui/button/index.js';
   import * as Dialog from '#lib/components/ui/dialog/index.js';
   import {

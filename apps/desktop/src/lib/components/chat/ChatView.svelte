@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { ImageRef, ScheduledSend } from '@pahub/protocol';
+  import type { ImageRef, ScheduledSend } from '@threadgarden/protocol';
   import CheckIcon from '@lucide/svelte/icons/check';
   import GaugeIcon from '@lucide/svelte/icons/gauge';
   import HandIcon from '@lucide/svelte/icons/hand';

@@ -47,7 +47,7 @@
  * tasks are kept, dropping the oldest finished task first. Unknown task types
  * and statuses get generic handling, never a throw.
  */
-import type { ChatTask, ChatTaskKind, ChatTaskStatus } from '@pahub/protocol';
+import type { ChatTask, ChatTaskKind, ChatTaskStatus } from '@threadgarden/protocol';
 
 export const MAX_TASKS = 200;
 /** Bound of the remembered ambient task ids (only used to ignore their later frames). */

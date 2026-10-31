@@ -1,4 +1,4 @@
-import type { EventMsg } from '@pahub/protocol';
+import type { EventMsg } from '@threadgarden/protocol';
 import type { LiveRegistry, Timers } from '../../src/chat/live-session.js';
 import type { SDKMessage } from '../../src/sdk/adapter.js';
 

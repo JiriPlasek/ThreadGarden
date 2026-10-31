@@ -26,7 +26,13 @@
  */
 import { randomUUID } from 'node:crypto';
 import { basename } from 'node:path';
-import type { ChatHeaderInfo, ChatItem, ChatStatus, ChatTask, EventMsg } from '@pahub/protocol';
+import type {
+  ChatHeaderInfo,
+  ChatItem,
+  ChatStatus,
+  ChatTask,
+  EventMsg,
+} from '@threadgarden/protocol';
 import type {
   AccountInfo,
   AgentAdapter,

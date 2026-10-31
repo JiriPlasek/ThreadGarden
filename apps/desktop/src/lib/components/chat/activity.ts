@@ -1,4 +1,4 @@
-import type { ChatTask } from '@pahub/protocol';
+import type { ChatTask } from '@threadgarden/protocol';
 import { taskEnded } from '#lib/state/chats.svelte.js';
 
 /** Deepest indent of a nested task; deeper ones still sit under their parent, at this indent. */

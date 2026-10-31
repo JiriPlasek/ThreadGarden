@@ -3,7 +3,7 @@ import { MOCK_PORT, MOCK_TOKEN, UI_PORT } from './env';
 
 /**
  * End-to-end and performance specs for the UI in a browser (Chromium) against
- * the mock service (`pnpm --filter @pahub/service mock`): synthetic history of
+ * the mock service (`pnpm --filter @threadgarden/service mock`): synthetic history of
  * 1,000 sessions and a scripted fake Claude Code. `pnpm --filter desktop test:e2e`.
  *
  * The UI is a production build served by `vite preview`, built into
@@ -34,7 +34,7 @@ export default defineConfig({
   projects: [{ name: 'chromium' }],
   webServer: [
     {
-      command: 'pnpm --filter @pahub/service mock',
+      command: 'pnpm --filter @threadgarden/service mock',
       env: { PAHUB_MOCK_PORT: String(MOCK_PORT), PAHUB_MOCK_TOKEN: MOCK_TOKEN },
       // The mock answers plain HTTP with 426 (WebSocket only); the port opening is the signal.
       port: MOCK_PORT,

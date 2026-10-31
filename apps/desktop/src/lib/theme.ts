@@ -1,4 +1,4 @@
-import type { Settings } from '@pahub/protocol';
+import type { Settings } from '@threadgarden/protocol';
 
 export type Theme = Settings['theme'];
 

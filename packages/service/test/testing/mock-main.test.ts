@@ -1,5 +1,5 @@
 import { createServer } from 'node:net';
-import type { ChatItem, EventMsg } from '@pahub/protocol';
+import type { ChatItem, EventMsg } from '@threadgarden/protocol';
 import { afterEach, describe, expect, it } from 'vitest';
 import { startMockService, type MockService } from '../../src/testing/mock-main.js';
 import { TestClient, chatStatus, eventually } from '../e2e/ws-client.js';

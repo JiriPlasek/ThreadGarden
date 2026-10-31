@@ -1,6 +1,6 @@
 <script lang="ts">
   import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
-  import type { UsageWindow } from '@pahub/protocol';
+  import type { UsageWindow } from '@threadgarden/protocol';
   import * as Dialog from '#lib/components/ui/dialog/index.js';
   import { agoText, percentText, resetText } from '#lib/format/usage.js';
   import { useApp } from '#lib/state/context.js';

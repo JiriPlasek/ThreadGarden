@@ -16,7 +16,7 @@ import {
   type RefusedChat,
   type UsageState,
   type UsageWindow,
-} from '@pahub/protocol';
+} from '@threadgarden/protocol';
 import type { Timers } from '../chat/live-session.js';
 
 type Rec = Record<string, unknown>;

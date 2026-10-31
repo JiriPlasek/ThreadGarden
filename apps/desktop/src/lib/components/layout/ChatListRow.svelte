@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { Bucket, ChatSummary, ScheduledSend } from '@pahub/protocol';
+  import type { Bucket, ChatSummary, ScheduledSend } from '@threadgarden/protocol';
   import AlarmClockIcon from '@lucide/svelte/icons/alarm-clock';
   import ArchiveIcon from '@lucide/svelte/icons/archive';
   import InboxIcon from '@lucide/svelte/icons/inbox';

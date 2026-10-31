@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { ChatItem } from '@pahub/protocol';
+  import type { ChatItem } from '@threadgarden/protocol';
   import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
 
   /** A thinking block, collapsed by default (spec §6.4). */

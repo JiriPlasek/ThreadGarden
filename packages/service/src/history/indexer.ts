@@ -1,4 +1,4 @@
-import type { EventMsg } from '@pahub/protocol';
+import type { EventMsg } from '@threadgarden/protocol';
 import type { AgentAdapter, SDKSessionInfo, SessionMessage } from '../sdk/adapter.js';
 import { chunkText, type Db } from './db.js';
 import {

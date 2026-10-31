@@ -1,4 +1,4 @@
-import type { ChatStatus, ChatSummary } from '@pahub/protocol';
+import type { ChatStatus, ChatSummary } from '@threadgarden/protocol';
 import { quietly, type Api } from './api';
 
 /** More agents than this at once is not a realistic workload; the strip shows what fits. */

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { ImageRef, Project } from '@pahub/protocol';
+  import type { ImageRef, Project } from '@threadgarden/protocol';
   import FolderOpenIcon from '@lucide/svelte/icons/folder-open';
   import { buildFlags } from '#lib/build-flags.js';
   import Composer from '#lib/components/composer/Composer.svelte';

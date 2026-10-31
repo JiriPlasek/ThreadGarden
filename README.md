@@ -151,17 +151,17 @@ pnpm format        # Prettier
 ```
 
 - **Run the app:** `pnpm --filter desktop tauri dev` builds the service, starts the UI on the Vite dev server and opens the app. A debug build runs the service with the `node` on your `PATH`.
-- **Mock service:** `pnpm --filter @pahub/service mock` starts the real service over a synthetic history (1,000 sessions, 50 projects) with a scripted fake Claude Code, in temp dirs, and prints its port and token. A message containing "perm", "ask" or "plan" raises a permission request, a question or a plan approval; "limit" makes the mock account hit its usage limit for two minutes. Nothing touches your real history.
+- **Mock service:** `pnpm --filter @threadgarden/service mock` starts the real service over a synthetic history (1,000 sessions, 50 projects) with a scripted fake Claude Code, in temp dirs, and prints its port and token. A message containing "perm", "ask" or "plan" raises a permission request, a question or a plan approval; "limit" makes the mock account hit its usage limit for two minutes. Nothing touches your real history.
 - **UI in a browser against the mock:**
   ```sh
-  PAHUB_MOCK_PORT=7357 PAHUB_MOCK_TOKEN=dev pnpm --filter @pahub/service mock
+  PAHUB_MOCK_PORT=7357 PAHUB_MOCK_TOKEN=dev pnpm --filter @threadgarden/service mock
   VITE_PAHUB_MOCK_URL=ws://127.0.0.1:7357 VITE_PAHUB_MOCK_TOKEN=dev pnpm --filter desktop dev
   ```
   (On Windows PowerShell set the variables with `$env:NAME = 'value'` first.)
 - **Performance budgets:** `pnpm test:perf` (part of `pnpm test`) runs the service budget tests one file at a time. `PAHUB_PERF_SLACK` multiplies every budget (default 1; CI uses 3, since the budgets are set for a developer machine).
 - **End-to-end and UI performance:** `pnpm test:e2e` runs the Playwright specs in Chromium against the mock service (a smoke flow and the UI budgets: tab switch, history chat open, Ctrl+K, composer keystroke). Install the browser once with `pnpm --filter desktop exec playwright install chromium`.
 - **Rust:** in `apps/desktop/src-tauri`, `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test` (build the UI first with `pnpm --filter desktop build`).
-- **Real Claude Code suite:** `pnpm --filter @pahub/service test:real` runs the service against your installed `claude` and your login, in throwaway git repos with tiny prompts (a handful of short turns on your account). It is opt-in and never runs in CI. It also checks that nothing under your Claude config dir changed, apart from what your other running Claude Code sessions wrote meanwhile.
+- **Real Claude Code suite:** `pnpm --filter @threadgarden/service test:real` runs the service against your installed `claude` and your login, in throwaway git repos with tiny prompts (a handful of short turns on your account). It is opt-in and never runs in CI. It also checks that nothing under your Claude config dir changed, apart from what your other running Claude Code sessions wrote meanwhile.
 
 Repository layout:
 
@@ -192,7 +192,7 @@ The only writes under the config dir are the ones Claude Code makes itself: the 
 | macOS   | `~/Library/Application Support/pahub`    |
 | Linux   | `${XDG_DATA_HOME:-~/.local/share}/pahub` |
 
-Threadgarden was called Threadgarden until v1.3; the data dir, `pahub.db`, the `PAHUB_*` environment variables and the `@pahub/*` packages keep that name for now, so nothing you already have moves. Set `PAHUB_DATA_DIR` to use another directory. It holds `pahub.db` (SQLite: a full-text index of your conversations' user and assistant text, Threadgarden-side titles, pins, hidden projects, drafts, settings, tab and layout state, which chats were running, for crash recovery, the latest usage-limit readings, and your scheduled messages with their images until they are sent), `service.json` (how the app finds the running service: pid, port, access token; readable only by you), a lock file, and `logs/` (rotating; message content is not logged). Deleting the directory resets Threadgarden completely and touches nothing of Claude Code's. Because the index holds the text of your conversations, treat this directory like `~/.claude` itself.
+Threadgarden was called Threadgarden until v1.3; the data dir, `pahub.db`, the `PAHUB_*` environment variables and the `@threadgarden/*` packages keep that name for now, so nothing you already have moves. Set `PAHUB_DATA_DIR` to use another directory. It holds `pahub.db` (SQLite: a full-text index of your conversations' user and assistant text, Threadgarden-side titles, pins, hidden projects, drafts, settings, tab and layout state, which chats were running, for crash recovery, the latest usage-limit readings, and your scheduled messages with their images until they are sent), `service.json` (how the app finds the running service: pid, port, access token; readable only by you), a lock file, and `logs/` (rotating; message content is not logged). Deleting the directory resets Threadgarden completely and touches nothing of Claude Code's. Because the index holds the text of your conversations, treat this directory like `~/.claude` itself.
 
 **API key:** if you enter one, it is kept in the OS credential store (Windows Credential Manager, macOS Keychain, Secret Service on Linux) and handed to the service in memory; it is never written to `pahub.db`, `service.json` or the logs.
 

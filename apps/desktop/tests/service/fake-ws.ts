@@ -1,4 +1,4 @@
-import { PROTOCOL_VERSION } from '@pahub/protocol';
+import { PROTOCOL_VERSION } from '@threadgarden/protocol';
 
 export type Sent = { id: number; method: string; params: unknown };
 

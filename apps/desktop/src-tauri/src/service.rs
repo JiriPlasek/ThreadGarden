@@ -76,7 +76,7 @@ pub fn dev_target(repo_root: &Path) -> Result<LaunchTarget, String> {
         .join("service.mjs");
     if !script.is_file() {
         return Err(format!(
-            "service-not-built: {} is missing; run `pnpm --filter @pahub/service build`",
+            "service-not-built: {} is missing; run `pnpm --filter @threadgarden/service build`",
             script.display()
         ));
     }

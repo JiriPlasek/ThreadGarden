@@ -7,7 +7,12 @@
  */
 import './sqlite-warning.js';
 import { DatabaseSync } from 'node:sqlite';
-import { SettingsSchema, type Bucket, type Settings, type SettingsPatch } from '@pahub/protocol';
+import {
+  SettingsSchema,
+  type Bucket,
+  type Settings,
+  type SettingsPatch,
+} from '@threadgarden/protocol';
 import type { ZodType } from 'zod';
 import type { LiveRegistry } from '../chat/live-session.js';
 import type { SDKSessionInfo } from '../sdk/adapter.js';

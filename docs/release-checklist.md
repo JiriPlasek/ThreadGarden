@@ -11,7 +11,7 @@ check in the pull request or release notes.
 
 - [ ] Build or download the installer for the commit under test
       (see the README's Install section) and install it.
-- [ ] Run `pnpm --filter @pahub/service test:real` on the same machine and
+- [ ] Run `pnpm --filter @threadgarden/service test:real` on the same machine and
       keep its output.
 - [ ] Have at least one Claude Code session running in a terminal, and one
       background session (`claude --bg …`) waiting on a permission prompt.

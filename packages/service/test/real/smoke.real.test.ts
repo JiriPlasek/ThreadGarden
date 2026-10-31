@@ -1,6 +1,6 @@
 /**
  * Opt-in smoke test against the installed `claude` and the user's own login
- * (`pnpm --filter @pahub/service test:real`, which sets PAHUB_REAL=1). It
+ * (`pnpm --filter @threadgarden/service test:real`, which sets PAHUB_REAL=1). It
  * sends one tiny prompt in a throwaway git repo; any tool request is denied.
  * Findings are printed with a `[pahub-real]` prefix for docs/architecture.md.
  */
@@ -10,7 +10,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { ChatItem, EventMsg } from '@pahub/protocol';
+import type { ChatItem, EventMsg } from '@threadgarden/protocol';
 import { LiveSession, type LiveRegistry } from '../../src/chat/live-session.js';
 import type {
   AgentAdapter,

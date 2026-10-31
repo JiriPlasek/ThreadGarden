@@ -2,7 +2,7 @@
  * Opt-in end-to-end suite: the whole Threadgarden service (`startService` with the
  * real Agent SDK adapter) against the installed `claude`, the user's own
  * login and their real Claude config dir, driven over the WebSocket like the
- * UI drives it. Run with `pnpm --filter @pahub/service test:real`
+ * UI drives it. Run with `pnpm --filter @threadgarden/service test:real`
  * (PAHUB_REAL=1); never part of `pnpm test` or CI.
  *
  * Every chat runs in a fresh temp git repo with tiny prompts; the only tool
@@ -25,7 +25,7 @@ import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from '
 import os from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import type { ChatItem, ChatSummary } from '@pahub/protocol';
+import type { ChatItem, ChatSummary } from '@threadgarden/protocol';
 import { resolveClaudeConfigDir } from '../../src/config.js';
 import { startService, type ServiceHandle } from '../../src/main.js';
 import { findInstalledClaude, type ClaudeFound } from '../../src/sdk/claude-path.js';

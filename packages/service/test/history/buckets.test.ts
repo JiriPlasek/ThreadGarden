@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
-import type { ChatStatus, EventMsg } from '@pahub/protocol';
+import type { ChatStatus, EventMsg } from '@threadgarden/protocol';
 import type { ExternalSession } from '../../src/external/poller.js';
 import { Buckets } from '../../src/history/buckets.js';
 import { Catalog, type LiveChat } from '../../src/history/catalog.js';

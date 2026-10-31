@@ -3,7 +3,7 @@
  * processes) counts as Running even while its turn is idle.
  */
 import { describe, expect, it } from 'vitest';
-import type { ChatStatus } from '@pahub/protocol';
+import type { ChatStatus } from '@threadgarden/protocol';
 import { Catalog, type LiveChat } from '../../src/history/catalog.js';
 import { openDb } from '../../src/history/db.js';
 import { Indexer } from '../../src/history/indexer.js';

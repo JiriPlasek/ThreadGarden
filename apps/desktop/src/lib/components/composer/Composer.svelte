@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { ImageRef } from '@pahub/protocol';
+  import type { ImageRef } from '@threadgarden/protocol';
   import ArrowUpIcon from '@lucide/svelte/icons/arrow-up';
   import CalendarClockIcon from '@lucide/svelte/icons/calendar-clock';
   import ChevronUpIcon from '@lucide/svelte/icons/chevron-up';

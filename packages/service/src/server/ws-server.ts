@@ -6,7 +6,7 @@ import {
   type EventMsg,
   type Request,
   type Response,
-} from '@pahub/protocol';
+} from '@threadgarden/protocol';
 import type { Router } from './router.js';
 
 const HOST = '127.0.0.1';

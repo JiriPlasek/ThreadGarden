@@ -17,7 +17,7 @@
  * while they had no title at all) are named, never history-only or external ones.
  */
 import { randomUUID } from 'node:crypto';
-import type { EventMsg } from '@pahub/protocol';
+import type { EventMsg } from '@threadgarden/protocol';
 import { FIRST_PROMPT_MAX, UNTITLED_TITLE, titleFor } from '../history/catalog.js';
 import type { Db } from '../history/db.js';
 import type { AgentAdapter } from '../sdk/adapter.js';

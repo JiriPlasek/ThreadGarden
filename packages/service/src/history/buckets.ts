@@ -4,7 +4,7 @@
  * run again, and ending holds whose time ran out. Buckets are Threadgarden's own
  * metadata (`pahub.db`), never written into Claude Code's data.
  */
-import type { Bucket, ChatStatus, EventMsg } from '@pahub/protocol';
+import type { Bucket, ChatStatus, EventMsg } from '@threadgarden/protocol';
 import type { ExternalSession } from '../external/poller.js';
 import { externalStatus } from '../external/resume-safety.js';
 import { isActiveNow, type Catalog } from './catalog.js';

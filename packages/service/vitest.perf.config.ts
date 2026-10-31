@@ -1,6 +1,6 @@
 import { defineConfig } from 'vitest/config';
 
-// Performance budgets (spec §8): `pnpm --filter @pahub/service test:perf`.
+// Performance budgets (spec §8): `pnpm --filter @threadgarden/service test:perf`.
 // One file at a time, after the regular tests, so timings are not skewed by
 // other test files running in parallel.
 export default defineConfig({

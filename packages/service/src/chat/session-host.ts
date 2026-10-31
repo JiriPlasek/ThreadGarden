@@ -14,7 +14,7 @@
  * failing session never escape the reclaim timer or `stopAll`; they are
  * reported through `onError` and the remaining sessions carry on.
  */
-import type { ChatStatus, EventMsg, Settings } from '@pahub/protocol';
+import type { ChatStatus, EventMsg, Settings } from '@threadgarden/protocol';
 import type { AgentAdapter } from '../sdk/adapter.js';
 import { EventLog, type ChatEvent } from './event-log.js';
 import {

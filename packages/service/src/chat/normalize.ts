@@ -35,7 +35,7 @@
  * item supersedes an earlier item with the same id. Consumers must always
  * upsert by id (one push can mix new and replacing items).
  */
-import type { ChatItem, ChatStatus, ImageRef } from '@pahub/protocol';
+import type { ChatItem, ChatStatus, ImageRef } from '@threadgarden/protocol';
 import type { SDKMessage, SessionMessage } from '../sdk/adapter.js';
 import {
   NON_VISUAL_SYSTEM_SUBTYPES,

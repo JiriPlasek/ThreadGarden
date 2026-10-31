@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "build": {
-    "beforeBuildCommand": "pnpm --filter @pahub/service build && pnpm build"
+    "beforeBuildCommand": "pnpm --filter @threadgarden/service build && pnpm build"
   },
   "bundle": {
     "externalBin": ["binaries/pahub-node"],

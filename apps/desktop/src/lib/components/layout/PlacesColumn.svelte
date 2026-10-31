@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { Place, Project } from '@pahub/protocol';
+  import type { Place, Project } from '@threadgarden/protocol';
   import ArchiveIcon from '@lucide/svelte/icons/archive';
   import ChartColumnIcon from '@lucide/svelte/icons/chart-column';
   import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';

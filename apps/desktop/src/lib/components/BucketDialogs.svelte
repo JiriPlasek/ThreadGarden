@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { ChatTask } from '@pahub/protocol';
+  import type { ChatTask } from '@threadgarden/protocol';
   import XIcon from '@lucide/svelte/icons/x';
   import { endSessionWarning } from '#lib/components/chat/end-session.js';
   import RunningTaskList from '#lib/components/chat/RunningTaskList.svelte';

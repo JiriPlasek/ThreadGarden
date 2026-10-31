@@ -6,7 +6,7 @@
  */
 import { invoke, isTauri as detectTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import type { ImageRef } from '@pahub/protocol';
+import type { ImageRef } from '@threadgarden/protocol';
 import pkg from '../../package.json';
 
 /**
@@ -30,7 +30,7 @@ const mockConnection = (): ServiceConnection => {
   const token = import.meta.env.VITE_PAHUB_MOCK_TOKEN as string | undefined;
   if (!url || !token) {
     throw new Error(
-      'No Threadgarden service outside the desktop app: set VITE_PAHUB_MOCK_URL and VITE_PAHUB_MOCK_TOKEN (see `pnpm --filter @pahub/service mock`)',
+      'No Threadgarden service outside the desktop app: set VITE_PAHUB_MOCK_URL and VITE_PAHUB_MOCK_TOKEN (see `pnpm --filter @threadgarden/service mock`)',
     );
   }
   const port = Number(new URL(url).port);

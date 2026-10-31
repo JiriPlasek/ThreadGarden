@@ -1,4 +1,4 @@
-import { LIMIT_RESET_MARGIN_MS, type EventMsg, type ImageRef } from '@pahub/protocol';
+import { LIMIT_RESET_MARGIN_MS, type EventMsg, type ImageRef } from '@threadgarden/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openDb, type Db } from '../../src/history/db.js';
 import {

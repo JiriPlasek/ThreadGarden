@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { ChatItem } from '@pahub/protocol';
+  import type { ChatItem } from '@threadgarden/protocol';
   import { onDestroy } from 'svelte';
   import { highlightCached, needsHighlight, renderCached, renderMarkdown } from '#lib/markdown.js';
   import { copyText, openExternal } from '#lib/native.js';

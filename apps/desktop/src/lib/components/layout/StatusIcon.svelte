@@ -1,5 +1,5 @@
 <script lang="ts" module>
-  import type { ChatStatus } from '@pahub/protocol';
+  import type { ChatStatus } from '@threadgarden/protocol';
 
   type Known = Exclude<ChatStatus, 'unknown' | 'history'>;
 

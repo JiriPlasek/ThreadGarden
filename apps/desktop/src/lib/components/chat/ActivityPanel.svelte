@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { ChatTask } from '@pahub/protocol';
+  import type { ChatTask } from '@threadgarden/protocol';
   import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
   import XIcon from '@lucide/svelte/icons/x';
   import { SvelteSet } from 'svelte/reactivity';

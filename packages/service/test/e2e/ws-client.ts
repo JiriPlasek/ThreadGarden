@@ -1,4 +1,4 @@
-import type { EventMsg } from '@pahub/protocol';
+import type { EventMsg } from '@threadgarden/protocol';
 import { WebSocket } from 'ws';
 
 export type RpcError = { code: string; message: string };

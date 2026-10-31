@@ -1,4 +1,4 @@
-import type { ChatItem, ChatSummary } from '@pahub/protocol';
+import type { ChatItem, ChatSummary } from '@threadgarden/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ServiceClient } from '../../src/lib/service/client';
 import { ChatsState } from '../../src/lib/state/chats.svelte';

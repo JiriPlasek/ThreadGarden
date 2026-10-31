@@ -8,7 +8,7 @@
  * Lists, counts and the agents strip follow by themselves: the service sends
  * `sessions.changed` for every move.
  */
-import type { Bucket, ChatSummary, Result } from '@pahub/protocol';
+import type { Bucket, ChatSummary, Result } from '@threadgarden/protocol';
 import type { Api } from './api';
 import type { ChatsState } from './chats.svelte';
 

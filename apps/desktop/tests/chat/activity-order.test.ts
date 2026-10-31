@@ -1,4 +1,4 @@
-import type { ChatTask } from '@pahub/protocol';
+import type { ChatTask } from '@threadgarden/protocol';
 import { describe, expect, it } from 'vitest';
 import {
   MAX_NEST_DEPTH,

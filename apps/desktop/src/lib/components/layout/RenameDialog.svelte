@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { ChatSummary } from '@pahub/protocol';
+  import type { ChatSummary } from '@threadgarden/protocol';
   import { Button } from '#lib/components/ui/button/index.js';
   import * as Dialog from '#lib/components/ui/dialog/index.js';
 

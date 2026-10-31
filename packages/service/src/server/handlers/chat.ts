@@ -14,7 +14,13 @@
  * `RESUME_BLOCKED` (§4.4, with the reason to show), `FORK_FAILED`,
  * `UNKNOWN_TASK`, `STOP_FAILED`, `INVALID_PARAMS`.
  */
-import type { ChatHeaderInfo, ChatItem, ChatTask, EventMsg, ImageRef } from '@pahub/protocol';
+import type {
+  ChatHeaderInfo,
+  ChatItem,
+  ChatTask,
+  EventMsg,
+  ImageRef,
+} from '@threadgarden/protocol';
 import {
   realTimers,
   type LiveSession,

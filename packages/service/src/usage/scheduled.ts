@@ -27,7 +27,7 @@ import {
   type EventMsg,
   type ImageRef,
   type ScheduledSend,
-} from '@pahub/protocol';
+} from '@threadgarden/protocol';
 import type { Timers } from '../chat/live-session.js';
 import { ServiceError } from '../server/router.js';
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ChatItem } from '@pahub/protocol';
+import type { ChatItem } from '@threadgarden/protocol';
 import { Normalizer, deriveStatus, type PushResult } from '../../src/chat/normalize.js';
 import type { SDKMessage, SessionMessage } from '../../src/sdk/adapter.js';
 

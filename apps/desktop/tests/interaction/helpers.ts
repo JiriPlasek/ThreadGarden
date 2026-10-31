@@ -1,4 +1,4 @@
-import type { ChatItem, ChatStatus, ChatSummary } from '@pahub/protocol';
+import type { ChatItem, ChatStatus, ChatSummary } from '@threadgarden/protocol';
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { expect } from 'vitest';
 import ChatView from '../../src/lib/components/chat/ChatView.svelte';

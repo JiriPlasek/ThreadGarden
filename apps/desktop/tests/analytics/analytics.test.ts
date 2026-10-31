@@ -1,4 +1,4 @@
-import type { Analytics } from '@pahub/protocol';
+import type { Analytics } from '@threadgarden/protocol';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';

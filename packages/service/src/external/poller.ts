@@ -5,7 +5,7 @@
  * unknown fields are kept in `raw`, unknown values are passed through as text.
  */
 import { execFile } from 'node:child_process';
-import type { EventMsg } from '@pahub/protocol';
+import type { EventMsg } from '@threadgarden/protocol';
 
 export type ExternalSession = {
   /** The short id of a background session (`id`); `claude attach` takes it. */

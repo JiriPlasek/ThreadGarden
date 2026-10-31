@@ -10,7 +10,7 @@ import type {
   ChatTask,
   ChatTasksEvent,
   Result,
-} from '@pahub/protocol';
+} from '@threadgarden/protocol';
 import { SvelteMap } from 'svelte/reactivity';
 import { RequestError } from '../service/client';
 import { quietly, type Api } from './api';

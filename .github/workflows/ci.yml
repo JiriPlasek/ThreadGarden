@@ -101,7 +101,7 @@ jobs:
           path: apps/desktop/src-tauri/binaries
           key: node-sidecar-${{ matrix.target }}-${{ hashFiles('scripts/fetch-node-sidecar.mjs') }}
       - run: node scripts/fetch-node-sidecar.mjs --target ${{ matrix.target }}
-      - run: pnpm --filter @pahub/service build
+      - run: pnpm --filter @threadgarden/service build
       - name: Build the release bundles (unsigned)
         run: pnpm --filter desktop tauri build --config src-tauri/tauri.bundle.conf.json
       - uses: actions/upload-artifact@v4

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { ChatTask } from '@pahub/protocol';
+  import type { ChatTask } from '@threadgarden/protocol';
 
   /** The background tasks ending a chat stops (End session, end and archive). */
   let { tasks }: { tasks: readonly ChatTask[] } = $props();

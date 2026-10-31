@@ -24,7 +24,7 @@
  * `FOCUS_OPENS_WITHIN_MS` of a notification, Threadgarden selects "Needs you" and
  * opens the waiting chat if it is the only one.
  */
-import type { ChatStatus, ChatSummary } from '@pahub/protocol';
+import type { ChatStatus, ChatSummary } from '@threadgarden/protocol';
 import { baseName } from './components/layout/chat-info';
 import { notify as nativeNotify, setTrayNeedsYou as nativeSetTray } from './native';
 import { quietly, type Api } from './state/api';

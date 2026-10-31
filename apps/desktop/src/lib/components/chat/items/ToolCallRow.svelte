@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { ChatItem } from '@pahub/protocol';
+  import type { ChatItem } from '@threadgarden/protocol';
   import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
   import { SUBAGENT_TOOLS, type ToolCallItem } from '../rows';
   import { editDiffs, prettyJson, str, summarize } from '../tools';

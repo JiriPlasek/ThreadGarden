@@ -1,4 +1,4 @@
-import { settingsDefaults, type Settings } from '@pahub/protocol';
+import { settingsDefaults, type Settings } from '@threadgarden/protocol';
 import { render, screen, waitFor, within } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';

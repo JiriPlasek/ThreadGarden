@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { ChatItem } from '@pahub/protocol';
+  import type { ChatItem } from '@threadgarden/protocol';
   import AssistantText from './AssistantText.svelte';
   import ItemBoundary from './ItemBoundary.svelte';
   import PermissionCard from './PermissionCard.svelte';

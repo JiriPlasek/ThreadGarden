@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { Settings } from '@pahub/protocol';
+  import type { Settings } from '@threadgarden/protocol';
   import { DEFAULT_MONO_STACK, appearanceAttributes, codeFontStack } from '#lib/appearance.js';
 
   /**

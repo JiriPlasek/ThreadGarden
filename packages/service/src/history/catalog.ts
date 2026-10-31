@@ -5,7 +5,7 @@ import type {
   ExternalInfo,
   Place,
   Project,
-} from '@pahub/protocol';
+} from '@threadgarden/protocol';
 import type { ExternalSession } from '../external/poller.js';
 import { externalStatus } from '../external/resume-safety.js';
 import type { BucketState, Db, SessionFilter, SessionRow } from './db.js';

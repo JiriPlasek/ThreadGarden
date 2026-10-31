@@ -7,7 +7,12 @@
  * Time matters here: a refusal ends at its reset, so `now` moves on by itself
  * at the next known reset time (one timer, no polling).
  */
-import { usageEmpty, type RefusedChat, type UsageState, type UsageWindow } from '@pahub/protocol';
+import {
+  usageEmpty,
+  type RefusedChat,
+  type UsageState,
+  type UsageWindow,
+} from '@threadgarden/protocol';
 import { quietly, type Api } from './api';
 
 /** The window the meter shows: the 5-hour one, else an event's window of unknown type. */

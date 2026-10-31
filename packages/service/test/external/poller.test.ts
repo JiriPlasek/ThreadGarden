@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { EventMsg } from '@pahub/protocol';
+import type { EventMsg } from '@threadgarden/protocol';
 import { ExternalPoller, parseAgents } from '../../src/external/poller.js';
 
 const SAMPLE = [

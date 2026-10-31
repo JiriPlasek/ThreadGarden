@@ -4,7 +4,7 @@
  * end today and are made of local calendar days; "all time" starts at the
  * first day with statistics and, past 120 days, is bucketed by week.
  */
-import type { Analytics, AnalyticsRange } from '@pahub/protocol';
+import type { Analytics, AnalyticsRange } from '@threadgarden/protocol';
 import { baseName, titleFor, UNTITLED_TITLE } from './catalog.js';
 import type { Db } from './db.js';
 import { localDay, STATS_VERSION } from './stats.js';

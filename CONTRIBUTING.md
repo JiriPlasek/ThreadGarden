@@ -31,21 +31,21 @@ You need Node.js 22, pnpm 11, and for the desktop app Rust (rustup installs the 
 ```sh
 pnpm install
 pnpm --filter desktop tauri dev                 # the app, against your real history
-pnpm --filter @pahub/service mock               # or: the service over a synthetic history
+pnpm --filter @threadgarden/service mock        # or: the service over a synthetic history
 ```
 
 The root [README](README.md#development) shows how to run the UI in a browser against the mock service, and how to build release installers.
 
 ## Tests
 
-| Command                                  | What it runs                                                                                                                              |
-| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `pnpm test`                              | Every package's unit and component tests (Vitest), then `pnpm test:perf`                                                                  |
-| `pnpm test:perf`                         | The service performance budgets, one file at a time; `PAHUB_PERF_SLACK` multiplies the budgets (CI uses 3)                                |
-| `pnpm test:e2e`                          | Playwright smoke and UI budget specs in Chromium against the mock service (`pnpm --filter desktop exec playwright install chromium` once) |
-| `pnpm --filter <package> test`           | One package's tests (`@pahub/protocol`, `@pahub/service`, `desktop`)                                                                      |
-| `cargo test` in `apps/desktop/src-tauri` | The Rust shell (build the UI first: `pnpm --filter desktop build`)                                                                        |
-| `pnpm --filter @pahub/service test:real` | Opt-in suite against your installed `claude` and your login; never in CI                                                                  |
+| Command                                         | What it runs                                                                                                                              |
+| ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm test`                                     | Every package's unit and component tests (Vitest), then `pnpm test:perf`                                                                  |
+| `pnpm test:perf`                                | The service performance budgets, one file at a time; `PAHUB_PERF_SLACK` multiplies the budgets (CI uses 3)                                |
+| `pnpm test:e2e`                                 | Playwright smoke and UI budget specs in Chromium against the mock service (`pnpm --filter desktop exec playwright install chromium` once) |
+| `pnpm --filter <package> test`                  | One package's tests (`@threadgarden/protocol`, `@threadgarden/service`, `desktop`)                                                        |
+| `cargo test` in `apps/desktop/src-tauri`        | The Rust shell (build the UI first: `pnpm --filter desktop build`)                                                                        |
+| `pnpm --filter @threadgarden/service test:real` | Opt-in suite against your installed `claude` and your login; never in CI                                                                  |
 
 Service logic is tested against a fake SDK adapter (`packages/service/src/testing/fake-adapter.ts`); only `src/sdk/real-adapter.ts` calls the SDK at run time. A performance budget is a requirement, not a target: do not raise one to make a test pass.
 

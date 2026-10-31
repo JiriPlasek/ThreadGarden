@@ -1,4 +1,4 @@
-import type { Place, Project } from '@pahub/protocol';
+import type { Place, Project } from '@threadgarden/protocol';
 import { quietly, type Api } from './api';
 import { ProjectIconsState } from './project-icons.svelte';
 

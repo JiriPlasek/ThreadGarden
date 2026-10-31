@@ -1,4 +1,4 @@
-import type { ChatStatus, ChatSummary, Project } from '@pahub/protocol';
+import type { ChatStatus, ChatSummary, Project } from '@threadgarden/protocol';
 import { ServiceClient } from '../../src/lib/service/client';
 import { AgentsState } from '../../src/lib/state/agents.svelte';
 import { AnalyticsState } from '../../src/lib/state/analytics.svelte';

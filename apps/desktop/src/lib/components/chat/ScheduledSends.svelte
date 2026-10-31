@@ -1,7 +1,7 @@
 <script lang="ts">
   import CalendarClockIcon from '@lucide/svelte/icons/calendar-clock';
   import OctagonAlertIcon from '@lucide/svelte/icons/octagon-alert';
-  import type { ScheduledSend } from '@pahub/protocol';
+  import type { ScheduledSend } from '@threadgarden/protocol';
   import ScheduleDialog from '#lib/components/composer/ScheduleDialog.svelte';
   import { fullTime } from '#lib/format/time.js';
   import { sendTimeText } from '#lib/format/usage.js';

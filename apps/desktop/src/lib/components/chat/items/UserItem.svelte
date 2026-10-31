@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { ChatItem } from '@pahub/protocol';
+  import type { ChatItem } from '@threadgarden/protocol';
   import GitForkIcon from '@lucide/svelte/icons/git-fork';
   import { chatActions } from '../context';
 

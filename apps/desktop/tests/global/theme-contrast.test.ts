@@ -6,7 +6,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { ACCENTS, DARK_STYLES, LIGHT_STYLES } from '@pahub/protocol';
+import { ACCENTS, DARK_STYLES, LIGHT_STYLES } from '@threadgarden/protocol';
 import { afterEach, describe, expect, it } from 'vitest';
 import { contrastRatio, gamutExcess, parseColor } from '../../src/lib/color';
 
@@ -101,7 +101,6 @@ const TEXT_PAIRS: [string, string][] = [
   ['--primary-foreground', '--primary'],
 ];
 const AA = 4.5;
-
 
 const combos = [
   ...LIGHT_STYLES.map((style) => ({ theme: 'light', attr: 'data-light-style', style })),

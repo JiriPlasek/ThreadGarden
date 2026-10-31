@@ -6,7 +6,7 @@
   "build": {
     "frontendDist": "../build",
     "devUrl": "http://127.0.0.1:1420",
-    "beforeDevCommand": "pnpm --filter @pahub/service build && pnpm dev",
+    "beforeDevCommand": "pnpm --filter @threadgarden/service build && pnpm dev",
     "beforeBuildCommand": "pnpm build"
   },
   "app": {

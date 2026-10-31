@@ -1,4 +1,4 @@
-import type { Result } from '@pahub/protocol';
+import type { Result } from '@threadgarden/protocol';
 import { quietly, type Api } from './api';
 
 /** Drafts are written this long after the last keystroke (spec §7: ≤ 300 ms). */

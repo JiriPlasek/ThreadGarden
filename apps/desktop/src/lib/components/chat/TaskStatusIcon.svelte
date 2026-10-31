@@ -1,5 +1,5 @@
 <script lang="ts" module>
-  import type { ChatTask } from '@pahub/protocol';
+  import type { ChatTask } from '@threadgarden/protocol';
 
   const LABELS: Record<string, string> = {
     pending: 'Pending',

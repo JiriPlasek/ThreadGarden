@@ -1,4 +1,4 @@
-import type { ChatSummary } from '@pahub/protocol';
+import type { ChatSummary } from '@threadgarden/protocol';
 
 /** The source's own status text for an external session (shown when Threadgarden does not know it). */
 export const rawStatus = (

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { Bucket, ChatSummary } from '@pahub/protocol';
+  import type { Bucket, ChatSummary } from '@threadgarden/protocol';
   import { untrack } from 'svelte';
   import { SvelteSet } from 'svelte/reactivity';
   import LayersIcon from '@lucide/svelte/icons/layers';

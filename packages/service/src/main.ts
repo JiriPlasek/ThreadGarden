@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { PROTOCOL_VERSION, type ChatStatus, type EventMsg } from '@pahub/protocol';
+import { PROTOCOL_VERSION, type ChatStatus, type EventMsg } from '@threadgarden/protocol';
 import pkg from '../package.json' with { type: 'json' };
 import { nextSeqEpoch, seqBaseForEpoch } from './chat/event-log.js';
 import { realTimers, type Timers } from './chat/live-session.js';

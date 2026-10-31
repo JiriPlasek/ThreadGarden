@@ -1,4 +1,4 @@
-import type { ChatSummary } from '@pahub/protocol';
+import type { ChatSummary } from '@threadgarden/protocol';
 import { quitApp, serviceConnection, stopService, type ServiceConnection } from '../native';
 import type { AgentsState } from './agents.svelte';
 import type { Api } from './api';

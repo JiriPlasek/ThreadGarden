@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { settingsDefaults, type ChatItem, type EventMsg, type Settings } from '@pahub/protocol';
+import {
+  settingsDefaults,
+  type ChatItem,
+  type EventMsg,
+  type Settings,
+} from '@threadgarden/protocol';
 import { MAX_SEQ_EPOCH, nextSeqEpoch, seqBaseForEpoch } from '../../src/chat/event-log.js';
 import { SessionHost, type SessionHostDeps } from '../../src/chat/session-host.js';
 import { FakeAdapter } from '../../src/testing/fake-adapter.js';

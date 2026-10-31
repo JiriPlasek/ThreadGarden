@@ -1,4 +1,4 @@
-import type { ChatSummary, Result } from '@pahub/protocol';
+import type { ChatSummary, Result } from '@threadgarden/protocol';
 import { quietly, type Api } from './api';
 import type { PlacesState } from './places.svelte';
 

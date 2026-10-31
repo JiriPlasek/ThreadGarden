@@ -5,7 +5,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { EventMsg } from '@pahub/protocol';
+import type { EventMsg } from '@threadgarden/protocol';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { realTimers, type Timers } from '../../src/chat/live-session.js';
 import { startService, type ServiceHandle, type StartOptions } from '../../src/main.js';

@@ -7,7 +7,7 @@
  * one from before a service restart) returns `'gap'` and the client reloads
  * the chat with `chat.open`.
  */
-import type { ChatItemsEvent, ChatStatusEvent, ChatTasksEvent } from '@pahub/protocol';
+import type { ChatItemsEvent, ChatStatusEvent, ChatTasksEvent } from '@threadgarden/protocol';
 
 export type ChatEvent =
   | { event: 'chat.items'; data: ChatItemsEvent }

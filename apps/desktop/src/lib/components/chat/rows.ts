@@ -1,4 +1,4 @@
-import type { ChatItem } from '@pahub/protocol';
+import type { ChatItem } from '@threadgarden/protocol';
 
 export type ToolCallItem = Extract<ChatItem, { kind: 'toolCall' }>;
 export type UnknownChatItem = Extract<ChatItem, { kind: 'unknown' }>;

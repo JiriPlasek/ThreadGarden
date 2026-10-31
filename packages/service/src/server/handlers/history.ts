@@ -2,7 +2,7 @@
  * Router handlers for places, projects, search, chat metadata, buckets,
  * analytics (v1.3), drafts and settings.
  */
-import type { EventMsg, SettingsPatch } from '@pahub/protocol';
+import type { EventMsg, SettingsPatch } from '@threadgarden/protocol';
 import { queryAnalytics } from '../../history/analytics.js';
 import { Buckets } from '../../history/buckets.js';
 import type { Catalog } from '../../history/catalog.js';

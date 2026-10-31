@@ -1,4 +1,4 @@
-import { settingsDefaults } from '@pahub/protocol';
+import { settingsDefaults } from '@threadgarden/protocol';
 import { applyAppearance, readCachedAppearance } from '#lib/appearance.js';
 import { applyScale, readCachedScale } from '#lib/interface-scale.js';
 

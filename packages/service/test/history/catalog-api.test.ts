@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { ChatStatus } from '@pahub/protocol';
+import type { ChatStatus } from '@threadgarden/protocol';
 import { Catalog, type LiveChat } from '../../src/history/catalog.js';
 import { openDb } from '../../src/history/db.js';
 import { Indexer } from '../../src/history/indexer.js';

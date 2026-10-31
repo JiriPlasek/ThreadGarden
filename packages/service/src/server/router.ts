@@ -5,7 +5,7 @@ import {
   type Request,
   type Response,
   type Result,
-} from '@pahub/protocol';
+} from '@threadgarden/protocol';
 
 export class ServiceError extends Error {
   constructor(

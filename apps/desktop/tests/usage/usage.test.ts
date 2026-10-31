@@ -1,4 +1,4 @@
-import type { ScheduledSend, UsageState } from '@pahub/protocol';
+import type { ScheduledSend, UsageState } from '@threadgarden/protocol';
 import { render, screen, waitFor, within } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';

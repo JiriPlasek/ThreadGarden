@@ -1,4 +1,4 @@
-import { SettingsSchema, sanitizeFontFamily, type Settings } from '@pahub/protocol';
+import { SettingsSchema, sanitizeFontFamily, type Settings } from '@threadgarden/protocol';
 
 /**
  * The appearance settings (spec v1.3 §6) as attributes and one custom

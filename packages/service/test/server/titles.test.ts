@@ -6,7 +6,7 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { ChatSummary, EventMsg } from '@pahub/protocol';
+import type { ChatSummary, EventMsg } from '@threadgarden/protocol';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { startService, type ServiceHandle, type StartOptions } from '../../src/main.js';
 import type { OneShotOptions, SessionMessage } from '../../src/sdk/adapter.js';
