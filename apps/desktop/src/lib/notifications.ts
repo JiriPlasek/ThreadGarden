@@ -30,7 +30,7 @@ import { notify as nativeNotify, setTrayNeedsYou as nativeSetTray } from './nati
 import { quietly, type Api } from './state/api';
 import type { PlacesState } from './state/places.svelte';
 import type { SettingsState } from './state/settings.svelte';
-import type { TabsState } from './state/tabs.svelte';
+import type { MachineTabs } from './state/tabs.svelte';
 
 export const FOCUS_OPENS_WITHIN_MS = 30_000;
 
@@ -46,7 +46,8 @@ const IN_USE: ReadonlySet<ChatStatus> = new Set(['needsYou', 'working']);
 export type AttentionDeps = {
   api: Api;
   settings: Pick<SettingsState, 'value'>;
-  tabs: Pick<TabsState, 'active' | 'openTab'>;
+  /** The machine's view of the tabs (session ids of that machine). */
+  tabs: Pick<MachineTabs, 'active' | 'openTab'>;
   places: Pick<PlacesState, 'select' | 'subscribeCounts' | 'projects'>;
   notify?: typeof nativeNotify;
   setTrayNeedsYou?: typeof nativeSetTray;

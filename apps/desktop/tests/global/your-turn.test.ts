@@ -42,7 +42,11 @@ const start = async (
   });
   await env.app.sessions.reload();
   const yourTurn = new YourTurnState();
-  yourTurn.init(env.client, env.app, { debounceMs: o.debounceMs ?? 0 });
+  yourTurn.init(
+    env.client,
+    { ...env.app, tabs: env.app.scopes.local().tabs },
+    { debounceMs: o.debounceMs ?? 0 },
+  );
   stops.push(yourTurn.stop);
   const seen = () =>
     env.server.calls('chat.markSeen').map((c) => (c.params as { sessionId: string }).sessionId);

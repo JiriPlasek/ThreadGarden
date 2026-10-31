@@ -4,23 +4,24 @@
  */
 import { serviceConnection, type ServiceConnection } from '../native';
 import { startAttention } from '../notifications';
-import { ServiceClient } from '../service/client';
 import { agents } from './agents.svelte';
 import { analytics } from './analytics.svelte';
-import { buckets } from './buckets.svelte';
-import { chats } from './chats.svelte';
 import { connection } from './connection.svelte';
-import { interaction } from './interaction.svelte';
 import { lifecycle } from './lifecycle.svelte';
+import { machines, relayUrl } from './machines.svelte';
 import { places } from './places.svelte';
-import { scheduled } from './scheduled.svelte';
-import { sessions } from './sessions.svelte';
+import { client, createScope, scopes, wireScope } from './scope';
 import { settings } from './settings.svelte';
 import { tabs } from './tabs.svelte';
 import { usage } from './usage.svelte';
-import { yourTurn } from './your-turn.svelte';
 
-export const client = new ServiceClient();
+export { client, scopes };
+
+/** This PC's scope: the app's singletons, so a single-machine user runs what always ran. */
+const localScope = scopes.local();
+
+/** The local service now (its port and token change when it restarts). */
+let current: ServiceConnection | null = null;
 
 let started: Promise<void> | null = null;
 let wired = false;
@@ -41,21 +42,21 @@ const wire = (): void => {
   if (wired) return;
   wired = true;
   connection.init(client);
-  places.init(client);
-  sessions.init(client, places);
-  chats.init(client);
-  tabs.init(client);
+  // This PC's places, sessions, chats, buckets, scheduled sends and "Your turn".
+  wireScope(localScope, { tabs, settings, agents });
+  tabs.init(client, { localMachineId: () => localScope.machineId });
   settings.init(client);
   agents.init(client);
-  interaction.init(client);
   lifecycle.init(client, agents, connection, connectTo);
-  buckets.init(client, chats);
   usage.init(client);
-  scheduled.init(client);
   analytics.init(client);
-  tabs.subscribe(() => chats.sync(tabs.open, tabs.active));
-  startAttention({ api: client, settings, tabs, places });
-  yourTurn.init(client, { tabs, chats, sessions, agents });
+  startAttention({ api: client, settings, tabs: localScope.tabs, places });
+  // Paired machines: a scope each, on its relay client through the local service.
+  scopes.follow(machines, tabs, (m) => createScope(m.id, m.client, { tabs, settings }));
+  machines.init(client, client, {
+    relayUrl: (id) => relayUrl(current?.port ?? 0, id),
+    localToken: () => current?.token ?? '',
+  });
 };
 
 /**
@@ -65,6 +66,7 @@ const wire = (): void => {
  */
 const connectTo = async (conn: ServiceConnection): Promise<void> => {
   connection.setVersions(conn);
+  current = conn;
   await client.connect(`ws://127.0.0.1:${conn.port}`, conn.token);
   if (loaded) return;
   await Promise.all([

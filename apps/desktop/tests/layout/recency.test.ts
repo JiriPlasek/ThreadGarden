@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import ChatList from '../../src/lib/components/layout/ChatList.svelte';
 import PlacesColumn from '../../src/lib/components/layout/PlacesColumn.svelte';
 import { DAY_MS } from '../../src/lib/components/layout/sections';
-import { project, setup, summary } from './harness';
+import { here, project, setup, summary } from './harness';
 
 type ListParams = { place: { kind: string }; cursor?: string };
 
@@ -110,11 +110,11 @@ describe('chat list recency sections (v1.2 §2)', () => {
     await userEvent.keyboard('{ArrowUp}{ArrowUp}');
     expect(list.getAttribute('aria-activedescendant')).toBe('chat-row-h1');
     await userEvent.keyboard('{Enter}');
-    expect(app.tabs.active).toBe('h1');
+    expect(app.tabs.active).toBe(here('h1'));
     await userEvent.keyboard('{Home}');
     expect(list.getAttribute('aria-activedescendant')).toBe('chat-row-n1');
     await userEvent.keyboard('{End} ');
-    expect(app.tabs.active).toBe('h3');
+    expect(app.tabs.active).toBe(here('h3'));
   });
 
   it('paging appends rows into the right sections and keeps counts right', async () => {

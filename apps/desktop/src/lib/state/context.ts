@@ -10,8 +10,10 @@ import { chats, type ChatsState } from './chats.svelte';
 import { connection, type ConnectionState } from './connection.svelte';
 import { interaction, type InteractionState } from './interaction.svelte';
 import { lifecycle, type LifecycleState } from './lifecycle.svelte';
+import { machines, type MachinesState } from './machines.svelte';
 import { places, type PlacesState } from './places.svelte';
 import { scheduled, type ScheduledState } from './scheduled.svelte';
+import { scopes, type Scopes } from './scope';
 import { sessions, type SessionsState } from './sessions.svelte';
 import { settings, type SettingsState } from './settings.svelte';
 import { tabs, type TabsState } from './tabs.svelte';
@@ -33,6 +35,13 @@ export type AppState = {
   scheduled: ScheduledState;
   /** v1.3: the Analytics view. */
   analytics: AnalyticsState;
+  /** Remote machines: This PC plus the paired ones. */
+  machines: MachinesState;
+  /**
+   * One scope of per-machine stores per machine. The keys above (`places`,
+   * `sessions`, `chats`, …) are This PC's scope.
+   */
+  scopes: Pick<Scopes, 'get' | 'all' | 'local'>;
 };
 
 export const APP_CONTEXT = Symbol('threadgarden.app');
@@ -51,6 +60,8 @@ const singletons: AppState = {
   usage,
   scheduled,
   analytics,
+  machines,
+  scopes,
 };
 
 /** Must be called during component initialisation. */

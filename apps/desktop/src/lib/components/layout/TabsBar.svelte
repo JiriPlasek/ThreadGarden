@@ -3,6 +3,7 @@
   import PlusIcon from '@lucide/svelte/icons/plus';
   import XIcon from '@lucide/svelte/icons/x';
   import { useApp } from '#lib/state/context.js';
+  import { parseChatKey } from '#lib/state/refs.js';
   import { cn } from '#lib/utils.js';
   import { shortcut } from '#lib/shortcuts.js';
   import { ANALYTICS_TAB_ID, rawStatus, tabId } from './chat-info';
@@ -15,8 +16,9 @@
    * One tab per open chat (spec §6.1). Middle-click, the × button or Ctrl/Cmd+W
    * close a tab (every key is listed in `shortcuts.ts`); closing only drops the view, the session keeps running.
    * "+" (Ctrl/Cmd+N) starts a new chat, in the selected project if there is one.
+   * Tabs are keyed by chat key (`machineId/sessionId`); each is described by its machine's scope.
    */
-  const { tabs, chats, sessions, places, interaction, scheduled, usage } = useApp();
+  const { tabs, places, interaction, usage, scopes } = useApp();
 
   const newChat = (): void => {
     const sel = places.selected;
@@ -25,20 +27,32 @@
     interaction.openNewChat(project?.path ?? null);
   };
 
-  const listed = $derived(new Map(sessions.items.map((s) => [s.sessionId, s])));
+  /** Each machine's listed chats by session id. */
+  const listed = $derived(
+    new Map(
+      scopes
+        .all()
+        .map((s) => [s.machineId, new Map(s.sessions.items.map((c) => [c.sessionId, c]))]),
+    ),
+  );
 
-  const info = (sessionId: string) => {
-    const chat = chats.get(sessionId);
-    const listedSummary = listed.get(sessionId);
+  const info = (key: string) => {
+    const ref = parseChatKey(key);
+    const scope = ref ? scopes.get(ref.machineId) : undefined;
+    const sessionId = ref?.sessionId ?? key;
+    const chat = scope?.chats.get(sessionId);
+    const listedSummary = ref ? listed.get(ref.machineId)?.get(sessionId) : undefined;
     // A background tab that was never shown has only a summary (see chats.sync).
-    const peek = chat ? undefined : chats.summaryOf(sessionId);
+    const peek = chat ? undefined : scope?.chats.summaryOf(sessionId);
     const summary = listedSummary ?? chat?.summary ?? peek ?? null;
     return {
+      sessionId,
       title: summary?.title ?? 'Loading…',
       status: chat?.loaded ? chat.status : (peek?.status ?? listedSummary?.status ?? 'history'),
       raw: rawStatus(summary),
       // Tasks are known for loaded chats only; closed or unseen tabs are never asked.
       running: chat?.running ?? 0,
+      scheduled: scope?.scheduled.forChat(sessionId) ?? [],
     };
   };
 
@@ -48,13 +62,13 @@
     const active = tabs.active;
     if (!active || !tablist) return;
     tablist
-      .querySelector<HTMLElement>(`[data-tab="${CSS.escape(active)}"]`)
+      .querySelector<HTMLElement>(`[data-chat-key="${CSS.escape(active)}"]`)
       ?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   });
 
-  const focusTab = (sessionId: string): void => {
-    tabs.activate(sessionId);
-    tablist?.querySelector<HTMLElement>(`[data-tab="${CSS.escape(sessionId)}"]`)?.focus();
+  const focusTab = (key: string): void => {
+    tabs.activate(key);
+    tablist?.querySelector<HTMLElement>(`[data-chat-key="${CSS.escape(key)}"]`)?.focus();
   };
 
   const onTabsKey = (e: KeyboardEvent): void => {
@@ -97,10 +111,10 @@
     }
   };
 
-  const onAux = (e: MouseEvent, sessionId: string): void => {
+  const onAux = (e: MouseEvent, key: string): void => {
     if (e.button !== 1) return;
     e.preventDefault();
-    tabs.close(sessionId);
+    tabs.close(key);
   };
 </script>
 
@@ -155,9 +169,9 @@
         </IconButton>
       </div>
     {/if}
-    {#each tabs.open as sessionId (sessionId)}
-      {@const t = info(sessionId)}
-      {@const active = sessionId === tabs.active}
+    {#each tabs.open as key (key)}
+      {@const t = info(key)}
+      {@const active = key === tabs.active}
       <div
         role="presentation"
         class={cn(
@@ -170,24 +184,25 @@
         <button
           type="button"
           role="tab"
-          id={tabId(sessionId)}
-          data-tab={sessionId}
+          id={tabId(key)}
+          data-tab={t.sessionId}
+          data-chat-key={key}
           aria-selected={active}
           aria-controls="chat-panel"
           tabindex={active ? 0 : -1}
           title={t.title}
           class="focus-visible:ring-ring/50 flex h-full min-w-0 flex-1 items-center gap-1.5 pr-1 pl-3 text-xs outline-none focus-visible:ring-2 focus-visible:ring-inset"
-          onclick={() => tabs.activate(sessionId)}
+          onclick={() => tabs.activate(key)}
           onmousedown={(e) => e.button === 1 && e.preventDefault()}
-          onauxclick={(e) => onAux(e, sessionId)}
+          onauxclick={(e) => onAux(e, key)}
         >
           <StatusIcon status={t.status} raw={t.raw} />
           <span class="truncate">{t.title}</span>
           {#if t.running > 0}
             <RunningBadge count={t.running} />
           {/if}
-          {#if scheduled.forChat(sessionId).length > 0}
-            <ScheduledBadge sends={scheduled.forChat(sessionId)} now={usage.now} />
+          {#if t.scheduled.length > 0}
+            <ScheduledBadge sends={t.scheduled} now={usage.now} />
           {/if}
         </button>
         <IconButton
@@ -198,8 +213,8 @@
             'mr-1 size-5 opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
             active && 'opacity-60',
           )}
-          onclick={() => tabs.close(sessionId)}
-          onauxclick={(e) => onAux(e, sessionId)}
+          onclick={() => tabs.close(key)}
+          onauxclick={(e) => onAux(e, key)}
         >
           <XIcon class="size-3.5" aria-hidden="true" />
         </IconButton>

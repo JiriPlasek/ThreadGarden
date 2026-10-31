@@ -41,7 +41,9 @@
    */
   let { sessionId }: { sessionId: string } = $props();
 
-  const { chats, tabs, interaction, settings, usage, scheduled } = useApp();
+  const { chats, tabs, interaction, settings, usage, scheduled, scopes } = useApp();
+  /** This view shows a chat of This PC (other machines' chats come with remote chats). */
+  const local = scopes.local();
   /** A chat just created from the new-chat dialog starts with its composer focused. */
   const focusComposer = untrack(() => interaction.takeComposerFocus(sessionId));
   const chat = $derived(chats.get(sessionId));
@@ -59,7 +61,7 @@
     forkError = null;
     chats
       .fork(sessionId, itemId)
-      .then((id) => tabs.openTab(id))
+      .then((id) => tabs.openTab({ machineId: local.machineId, sessionId: id }))
       .catch((err: unknown) => {
         forkError = err instanceof Error ? err.message : String(err);
       });
@@ -300,7 +302,7 @@
       seen = new Set(ids);
       primed = true;
       const last = fresh.at(-1);
-      if (last && tabs.active === sessionId && !busyElsewhere()) void focusRequest(last);
+      if (last && local.tabs.active === sessionId && !busyElsewhere()) void focusRequest(last);
     });
   });
 

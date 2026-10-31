@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { Place, Project } from '@threadgarden/protocol';
+  import type { Project } from '@threadgarden/protocol';
   import ArchiveIcon from '@lucide/svelte/icons/archive';
   import ChartColumnIcon from '@lucide/svelte/icons/chart-column';
   import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
@@ -16,7 +16,7 @@
   import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
   import * as ContextMenu from '#lib/components/ui/context-menu/index.js';
   import * as Tooltip from '#lib/components/ui/tooltip/index.js';
-  import { samePlace } from '#lib/state/places.svelte.js';
+  import { samePlace, type Place } from '#lib/state/places.svelte.js';
   import { useApp } from '#lib/state/context.js';
   import { cn } from '#lib/utils.js';
   import IconButton from './IconButton.svelte';

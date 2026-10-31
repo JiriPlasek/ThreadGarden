@@ -24,13 +24,14 @@ import type { AgentsState } from './agents.svelte';
 import { quietly, type Api } from './api';
 import type { ChatsState } from './chats.svelte';
 import type { SessionsState } from './sessions.svelte';
-import type { TabsState } from './tabs.svelte';
+import type { MachineTabs } from './tabs.svelte';
 
 /** How long a chat must stay on screen before it counts as seen. */
 export const SEEN_DEBOUNCE_MS = 400;
 
 export type YourTurnDeps = {
-  tabs: Pick<TabsState, 'active'>;
+  /** The machine's view of the tabs: `active` is a session id on this machine. */
+  tabs: Pick<MachineTabs, 'active'>;
   chats: Pick<ChatsState, 'get' | 'summaryOf'>;
   sessions: Pick<SessionsState, 'items'>;
   agents: Pick<AgentsState, 'items'>;

@@ -1,6 +1,24 @@
-import type { Place, Project } from '@threadgarden/protocol';
+import type { Place as WirePlace, Project } from '@threadgarden/protocol';
 import { quietly, type Api } from './api';
 import { ProjectIconsState } from './project-icons.svelte';
+
+type WireProjectPlace = Extract<WirePlace, { kind: 'project' }>;
+
+/**
+ * A place in the left column. A project lives on one machine: `machineId`
+ * names it (absent: This PC, for callers that do not know machines yet). The
+ * service is asked with `wirePlace()`, which leaves the machine out.
+ */
+export type Place =
+  Exclude<WirePlace, { kind: 'project' }> | (WireProjectPlace & { machineId?: string });
+
+/** The place as the service knows it (without the machine). */
+export const wirePlace = (place: Place): WirePlace => {
+  if (place.kind !== 'project') return place;
+  const { machineId, ...rest } = place;
+  void machineId;
+  return rest;
+};
 
 /** `uiState` key: whether the "Missing folders" group of the places column is expanded. */
 export const MISSING_OPEN_KEY = 'places.missingOpen';
@@ -30,7 +48,8 @@ export const samePlace = (a: Place, b: Place): boolean => {
   const y = normalize(b);
   return (
     x.kind === y.kind &&
-    (x.kind !== 'project' || (y.kind === 'project' && x.projectId === y.projectId))
+    (x.kind !== 'project' ||
+      (y.kind === 'project' && x.projectId === y.projectId && x.machineId === y.machineId))
   );
 };
 
@@ -90,9 +109,10 @@ export class PlacesState {
   setInclude = (on: boolean): void => {
     const p = this.selected;
     if (p.kind !== 'project' || includesOtherBuckets(p) === on) return;
+    const at = p.machineId === undefined ? {} : { machineId: p.machineId };
     this.selected = on
-      ? { kind: 'project', projectId: p.projectId, include: [...INCLUDE_OTHER_BUCKETS] }
-      : { kind: 'project', projectId: p.projectId };
+      ? { kind: 'project', projectId: p.projectId, ...at, include: [...INCLUDE_OTHER_BUCKETS] }
+      : { kind: 'project', projectId: p.projectId, ...at };
     for (const cb of this.subscribers) cb();
   };
 

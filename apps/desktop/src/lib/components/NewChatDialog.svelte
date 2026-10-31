@@ -16,7 +16,7 @@
    * composer (`@` files of the chosen folder, `/` commands, images); its draft
    * is kept per folder (`new:<cwd>`).
    */
-  const { interaction, places, chats, tabs, settings } = useApp();
+  const { interaction, places, chats, tabs, settings, scopes } = useApp();
 
   /** Ruling R11: Threadgarden never offers bypassPermissions. */
   const PERMISSION_MODES = [
@@ -100,7 +100,7 @@
       });
       created = true;
       interaction.focusComposer(id);
-      tabs.openTab(id);
+      tabs.openTab({ machineId: scopes.local().machineId, sessionId: id });
       interaction.closeNewChat();
       return true;
     } catch (err) {

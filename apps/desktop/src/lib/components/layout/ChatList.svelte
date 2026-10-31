@@ -39,7 +39,9 @@
    */
   let { onCollapse }: { onCollapse?: () => void } = $props();
 
-  const { sessions, places, tabs, agents, settings, chats, buckets, scheduled } = useApp();
+  const { sessions, places, tabs, agents, settings, chats, buckets, scheduled, scopes } = useApp();
+  /** The list shows This PC's chats (lists across machines come later). */
+  const local = scopes.local();
 
   /**
    * Fixed row heights of the virtual list, in rem so they follow the interface
@@ -97,7 +99,7 @@
   );
 
   /** The keyboard cursor follows the active tab until the user moves it. */
-  let cursor = $derived<string | null>(tabs.active);
+  let cursor = $derived<string | null>(local.tabs.active);
   const cursorIndex = $derived(cursor === null ? -1 : (grouped.indexOf.get(cursor) ?? -1));
 
   /** The selected chats still listed, in display order. */
@@ -157,7 +159,7 @@
 
   const open = (chat: ChatSummary): void => {
     cursor = chat.sessionId;
-    tabs.openTab(chat.sessionId);
+    tabs.openTab({ machineId: local.machineId, sessionId: chat.sessionId });
   };
 
   const clearSelection = (): void => {
@@ -488,7 +490,7 @@
           selected={selection.size > 0 ? selection.has(chat.sessionId) : chat.sessionId === cursor}
           checked={selection.has(chat.sessionId)}
           cursor={chat.sessionId === cursor}
-          active={chat.sessionId === tabs.active}
+          active={chat.sessionId === local.tabs.active}
           projectName={spansProjects
             ? (names.get(chat.projectId) ?? baseName(chat.cwd))
             : undefined}

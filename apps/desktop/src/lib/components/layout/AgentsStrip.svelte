@@ -18,7 +18,9 @@
    * live; it closes idle ones too) sits behind a confirmation. v1.3 B: the
    * usage meter sits before it (hidden while nothing is known).
    */
-  const { agents, chats, tabs, places } = useApp();
+  const { agents, chats, tabs, places, scopes } = useApp();
+  /** The strip lists This PC's agents (every machine's come with cross-machine lists). */
+  const local = scopes.local();
 
   let confirming = $state(false);
 
@@ -43,12 +45,12 @@
             type="button"
             class={cn(
               'hover:bg-accent focus-visible:ring-ring/50 flex h-6 max-w-60 items-center gap-1.5 rounded px-2 outline-none focus-visible:ring-2',
-              agent.sessionId === tabs.active && 'bg-accent text-accent-foreground',
+              agent.sessionId === local.tabs.active && 'bg-accent text-accent-foreground',
             )}
             title={`${agent.title} · ${project} · ${statusLabel(agent.status, rawStatus(agent), agent.unread)}${
               detail ? ` · ${detail}` : ''
             }`}
-            onclick={() => tabs.openTab(agent.sessionId)}
+            onclick={() => tabs.openTab({ machineId: local.machineId, sessionId: agent.sessionId })}
           >
             <StatusIcon status={agent.status} raw={rawStatus(agent)} unread={agent.unread} />
             <span class="truncate">{agent.title}</span>

@@ -7,7 +7,7 @@ import PlacesColumn from '../../src/lib/components/layout/PlacesColumn.svelte';
 import { DAY_MS } from '../../src/lib/components/layout/sections';
 import { RpcFail, type FakeServer } from '../service/fake-ws';
 import BucketsHarness from './BucketsHarness.svelte';
-import { project, setup, summary } from './harness';
+import { here, project, setup, summary } from './harness';
 
 type ListParams = { place: Record<string, unknown>; limit: number };
 type SetParams = { sessionIds: string[]; bucket: string; holdUntil?: number; holdNote?: string };
@@ -391,7 +391,7 @@ describe('multi-select and the bulk action bar', () => {
     // A plain click opens the chat and drops any selection.
     await fireEvent.click(row('b'), { ctrlKey: true });
     await fireEvent.click(row('c'));
-    expect(app.tabs.active).toBe('c');
+    expect(app.tabs.active).toBe(here('c'));
     expect(screen.queryByRole('toolbar', { name: 'Selected chats' })).toBeNull();
   });
 

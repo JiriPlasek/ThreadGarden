@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FOCUS_OPENS_WITHIN_MS, startAttention } from '../../src/lib/notifications';
-import { setup, summary } from '../layout/harness';
+import { here, setup, summary } from '../layout/harness';
 
 type ListParams = { place: { kind: string } };
 
@@ -29,7 +29,7 @@ const start = async (configure?: Parameters<typeof setup>[0]) => {
   const stop = startAttention({
     api: env.client,
     settings: env.app.settings,
-    tabs: env.app.tabs,
+    tabs: env.app.scopes.local().tabs,
     places: env.app.places,
     notify,
     setTrayNeedsYou,
@@ -93,7 +93,7 @@ describe('notifications', () => {
 
     env.advance(5_000);
     window.dispatchEvent(new Event('focus'));
-    await vi.waitFor(() => expect(env.app.tabs.active).toBe('s2'));
+    await vi.waitFor(() => expect(env.app.tabs.active).toBe(here('s2')));
     expect(env.app.places.selected).toEqual({ kind: 'needsYou' });
   });
 
@@ -176,7 +176,7 @@ describe('notifications', () => {
 
     env.advance(5_000);
     window.dispatchEvent(new Event('focus'));
-    await vi.waitFor(() => expect(env.app.tabs.active).toBe('s2'));
+    await vi.waitFor(() => expect(env.app.tabs.active).toBe(here('s2')));
     expect(env.app.places.selected).toEqual({ kind: 'needsYou' });
   });
 

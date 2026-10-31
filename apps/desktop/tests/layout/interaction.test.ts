@@ -8,7 +8,7 @@ import TabsBar from '../../src/lib/components/layout/TabsBar.svelte';
 import { mergeAgents } from '../../src/lib/state/agents.svelte';
 import { PAGE_SIZE } from '../../src/lib/state/sessions.svelte';
 import { COLUMNS_SAVE_DELAY_MS } from '../../src/lib/state/settings.svelte';
-import { setup, summary } from './harness';
+import { here, setup, summary } from './harness';
 
 type ListParams = { place: { kind: string }; query?: string; cursor?: string; limit: number };
 
@@ -29,12 +29,12 @@ describe('chat list interaction', () => {
     expect(app.tabs.open).toEqual([]);
 
     await userEvent.keyboard('{Enter}');
-    expect(app.tabs.open).toEqual(['b']);
-    expect(app.tabs.active).toBe('b');
+    expect(app.tabs.open).toEqual([here('b')]);
+    expect(app.tabs.active).toBe(here('b'));
 
     await userEvent.click(within(list).getAllByRole('option')[2]!);
-    expect(app.tabs.open).toEqual(['b', 'c']);
-    expect(app.tabs.active).toBe('c');
+    expect(app.tabs.open).toEqual([here('b'), here('c')]);
+    expect(app.tabs.active).toBe(here('c'));
   });
 
   it('search sends the query to sessions.list', async () => {
@@ -193,7 +193,7 @@ describe('shortcuts and scrolling', () => {
     render(ConfirmDialog, { props: { open: true, title: 'Sure?', onConfirm: () => {} } });
     await screen.findByRole('alertdialog');
     await fireEvent.keyDown(window, { key: 'w', ctrlKey: true });
-    expect(app.tabs.open).toEqual(['s1']);
+    expect(app.tabs.open).toEqual([here('s1')]);
   });
 
   it('resets the scroll position when the place changes', async () => {

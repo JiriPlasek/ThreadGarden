@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ChatView from '../../src/lib/components/chat/ChatView.svelte';
 import MessageList from '../../src/lib/components/chat/MessageList.svelte';
 import ToolCallRow from '../../src/lib/components/chat/items/ToolCallRow.svelte';
-import { setup, summary } from '../layout/harness';
+import { here, setup, summary } from '../layout/harness';
 import { manyItems, text, tool, unknownItem, user } from './fixtures';
 
 const rows = (root: HTMLElement) => root.querySelectorAll('[data-row]');
@@ -352,6 +352,6 @@ describe('chat view', () => {
         upToItemId: 'u1',
       }),
     );
-    await waitFor(() => expect(app.tabs.active).toBe('forked-1'));
+    await waitFor(() => expect(app.tabs.active).toBe(here('forked-1')));
   });
 });

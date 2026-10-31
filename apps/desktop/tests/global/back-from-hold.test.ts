@@ -77,7 +77,7 @@ const start = async (
   const stop = startAttention({
     api: env.client,
     settings: env.app.settings,
-    tabs: env.app.tabs,
+    tabs: env.app.scopes.local().tabs,
     places: env.app.places,
     notify,
     setTrayNeedsYou: vi.fn(async () => {}),
@@ -280,7 +280,7 @@ describe('"Back from hold": viewing the chat clears it', () => {
     });
     await env.app.sessions.reload();
     const yourTurn = new YourTurnState();
-    yourTurn.init(env.client, env.app, { debounceMs: 0 });
+    yourTurn.init(env.client, { ...env.app, tabs: env.app.scopes.local().tabs }, { debounceMs: 0 });
     stops.push(yourTurn.stop);
     focus();
     env.app.tabs.openTab('r1');
@@ -297,7 +297,11 @@ describe('"Back from hold": viewing the chat clears it', () => {
       server.handlers['chat.markSeen'] = () => ({});
     });
     const yourTurn = new YourTurnState();
-    yourTurn.init(env.client, env.app, { debounceMs: 60_000 });
+    yourTurn.init(
+      env.client,
+      { ...env.app, tabs: env.app.scopes.local().tabs },
+      { debounceMs: 60_000 },
+    );
     stops.push(yourTurn.stop);
     focus();
     env.app.tabs.openTab('r1');

@@ -7,7 +7,9 @@
   import { ANALYTICS_TAB_ID, tabId } from './chat-info';
 
   /** The right column's content: the active tab's chat, or (v1.3) the Analytics view. */
-  const { tabs } = useApp();
+  const { tabs, scopes } = useApp();
+  /** The active chat when it is This PC's (chats on other machines are shown from Task 13 on). */
+  const local = scopes.local().tabs;
 </script>
 
 {#if tabs.analyticsShown}
@@ -29,7 +31,9 @@
     class="flex min-h-0 flex-1 flex-col outline-none"
   >
     {#key tabs.active}
-      <ChatView sessionId={tabs.active} />
+      {#if local.active}
+        <ChatView sessionId={local.active} />
+      {/if}
     {/key}
   </div>
 {:else}

@@ -17,8 +17,8 @@ export const baseName = (path: string): string =>
 export const externalLabel = (s: Pick<ChatSummary, 'external'>): string =>
   s.external ? `Running outside Threadgarden (${s.external.kind})` : '';
 
-/** DOM id of a chat's tab (the chat panel is labelled by it). */
-export const tabId = (sessionId: string): string => `tab-${sessionId}`;
+/** DOM id of a chat's tab, from its chat key (the chat panel is labelled by it). */
+export const tabId = (key: string): string => `tab-${key}`;
 
-/** DOM id of the Analytics tab (v1.3); no session id has this form. */
+/** DOM id of the Analytics tab (v1.3); no chat key has this form (keys contain a `/`). */
 export const ANALYTICS_TAB_ID = 'tab-threadgarden-analytics';

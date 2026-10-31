@@ -32,7 +32,7 @@
    * and in Active or a project "Archive chats older than 30 days…". Archived
    * matches come last, in their own "Archived" group (v1.2 §3).
    */
-  const { interaction, sessions, tabs, lifecycle, places, buckets, usage } = useApp();
+  const { interaction, sessions, tabs, lifecycle, places, buckets, usage, scopes } = useApp();
 
   type Command = {
     id: string;
@@ -143,7 +143,7 @@
     if (!row) return;
     setOpen(false);
     if (row.command) row.command.run();
-    else tabs.openTab(row.hit.sessionId);
+    else tabs.openTab({ machineId: scopes.local().machineId, sessionId: row.hit.sessionId });
   };
 
   const optionId = (i: number): string => `quick-option-${i}`;

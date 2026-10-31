@@ -23,7 +23,7 @@ test.use({ trace: 'off' });
 
 /** The chat pane shows `sessionId`'s messages. */
 const showing = (sessionId: string): DoneWhen => ({
-  selector: `#chat-panel[aria-labelledby="tab-${sessionId}"] [data-row^="${sessionId}-m"]`,
+  selector: `#chat-panel[aria-labelledby$="/${sessionId}"] [data-row^="${sessionId}-m"]`,
 });
 
 /** Scrolls the row into the DOM first (not measured), then times the click. */

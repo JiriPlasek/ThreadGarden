@@ -42,6 +42,7 @@ export type ListMemory = {
   anchor: { key: string; delta: number } | null;
 };
 type Schedule = (cb: () => void) => void;
+export type ChatsOptions = { schedule?: Schedule };
 
 /** A task that has finished: it keeps its final status and stops counting time. */
 export const taskEnded = (t: ChatTask): boolean =>
@@ -171,7 +172,7 @@ export class ChatsState {
   private schedule: Schedule = defaultSchedule;
   private flushScheduled = false;
 
-  init = (api: Api, opts: { schedule?: Schedule } = {}): void => {
+  init = (api: Api, opts: ChatsOptions = {}): void => {
     this.api = api;
     if (opts.schedule) this.schedule = opts.schedule;
     api.on('chat.items', (e) => this.onItems(e));

@@ -7,6 +7,7 @@ import {
 import { machineTokens } from '../native';
 import { ServiceClient, type ClientOptions, type ClientStatus } from '../service/client';
 import type { Api } from './api';
+import { LOCAL_FALLBACK_ID } from './refs';
 
 export type MachineStatus =
   'connecting' | 'on' | 'unreachable' | 'locked' | 'incompatible' | 'mismatch' | 'refused';
@@ -31,7 +32,9 @@ export type MachinesOptions = {
   makeClient?: (o: ClientOptions) => ServiceClient;
 };
 
-const LOCAL_FALLBACK_ID = 'local';
+/** A machine's relay on the local service (the UI never connects anywhere but loopback). */
+export const relayUrl = (localPort: number, machineId: string): string =>
+  `ws://127.0.0.1:${localPort}/relay?machine=${encodeURIComponent(machineId)}`;
 
 const fromLocalStatus = (s: ClientStatus): MachineStatus =>
   s === 'open'
@@ -315,3 +318,5 @@ export class MachinesState {
     e.status = 'locked';
   };
 }
+
+export const machines = new MachinesState();

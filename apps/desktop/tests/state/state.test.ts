@@ -239,6 +239,8 @@ describe('chats', () => {
 });
 
 describe('tabs', () => {
+  /** Without a known local machine id, a bare session id is This PC's ('local'). */
+  const k = (sessionId: string): string => `local/${sessionId}`;
   const store = new Map<string, unknown>();
   beforeEach(() => {
     store.clear();
@@ -262,17 +264,17 @@ describe('tabs', () => {
     a.activate('s2');
     a.close('s1');
     await flushAsync();
-    expect(store.get('tabs')).toEqual({ open: ['s3', 's2'], active: 's2' });
+    expect(store.get('tabs')).toEqual({ open: [k('s3'), k('s2')], active: k('s2') });
 
     const b = new TabsState();
     b.init(client);
     const seen: string[][] = [];
     b.subscribe(() => seen.push([...b.open]));
     await b.restore();
-    expect(b.open).toEqual(['s3', 's2']);
-    expect(b.active).toBe('s2');
+    expect(b.open).toEqual([k('s3'), k('s2')]);
+    expect(b.active).toBe(k('s2'));
     expect(b.restored).toBe(true);
-    expect(seen).toEqual([['s3', 's2']]);
+    expect(seen).toEqual([[k('s3'), k('s2')]]);
   });
 
   it('closing the active tab activates a neighbour', () => {
@@ -281,9 +283,9 @@ describe('tabs', () => {
     ['a', 'b', 'c'].forEach(t.openTab);
     t.activate('b');
     t.close('b');
-    expect(t.active).toBe('c');
+    expect(t.active).toBe(k('c'));
     t.close('c');
-    expect(t.active).toBe('a');
+    expect(t.active).toBe(k('a'));
     t.close('a');
     expect(t.active).toBeNull();
   });
@@ -293,8 +295,8 @@ describe('tabs', () => {
     const t = new TabsState();
     t.init(client);
     await t.restore();
-    expect(t.open).toEqual(['x']);
-    expect(t.active).toBe('x');
+    expect(t.open).toEqual([k('x')]);
+    expect(t.active).toBe(k('x'));
   });
 
   it('column widths persist through uiState, debounced', async () => {

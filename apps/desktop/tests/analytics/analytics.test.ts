@@ -64,13 +64,14 @@ describe('TabsState and the Analytics view', () => {
     ['a', 'b'].forEach(t.openTab);
     t.showAnalytics();
     expect(t).toMatchObject({ analyticsOpen: true, analyticsShown: true, active: null });
-    expect(t.open).toEqual(['a', 'b']);
+    // A tab without a known local machine id is This PC's ('local').
+    expect(t.open).toEqual(['local/a', 'local/b']);
     // A chat tab takes over; the Analytics tab stays open behind it.
     t.activate('a');
-    expect(t).toMatchObject({ analyticsOpen: true, analyticsShown: false, active: 'a' });
+    expect(t).toMatchObject({ analyticsOpen: true, analyticsShown: false, active: 'local/a' });
     t.showAnalytics();
     t.closeAnalytics();
-    expect(t).toMatchObject({ analyticsOpen: false, analyticsShown: false, active: 'a' });
+    expect(t).toMatchObject({ analyticsOpen: false, analyticsShown: false, active: 'local/a' });
   });
 
   it('a chat closed behind it is not brought back', () => {
@@ -80,7 +81,7 @@ describe('TabsState and the Analytics view', () => {
     t.showAnalytics();
     t.close('b');
     t.closeAnalytics();
-    expect(t.active).toBe('c');
+    expect(t.active).toBe('local/c');
     const u = new TabsState();
     u.showAnalytics();
     u.closeAnalytics();
@@ -100,7 +101,9 @@ describe('TabsState and the Analytics view', () => {
     t.init(client);
     t.openTab('a');
     t.showAnalytics();
-    await waitFor(() => expect(store.get('tabs')).toEqual({ open: ['a'], active: 'a' }));
+    await waitFor(() =>
+      expect(store.get('tabs')).toEqual({ open: ['local/a'], active: 'local/a' }),
+    );
   });
 });
 

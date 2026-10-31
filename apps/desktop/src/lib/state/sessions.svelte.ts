@@ -1,6 +1,6 @@
 import type { ChatSummary, Result } from '@threadgarden/protocol';
 import { quietly, type Api } from './api';
-import type { PlacesState } from './places.svelte';
+import { wirePlace, type PlacesState } from './places.svelte';
 
 export const PAGE_SIZE = 50;
 
@@ -113,7 +113,7 @@ export class SessionsState {
     this.loading = true;
     try {
       const r = await api.request('sessions.list', {
-        place: places.selected,
+        place: wirePlace(places.selected),
         limit,
         ...(this.query ? { query: this.query } : {}),
       });
@@ -135,7 +135,7 @@ export class SessionsState {
     this.loading = true;
     try {
       const r = await api.request('sessions.list', {
-        place: places.selected,
+        place: wirePlace(places.selected),
         limit: PAGE_SIZE,
         cursor: nextCursor,
         ...(this.query ? { query: this.query } : {}),
