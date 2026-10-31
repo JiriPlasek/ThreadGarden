@@ -109,6 +109,21 @@ async fn api_key_clear() -> Result<(), String> {
     blocking(secrets::clear).await
 }
 
+#[tauri::command]
+async fn machine_token_get(machine_id: String) -> Result<Option<String>, String> {
+    blocking(move || secrets::machine_token_get(&machine_id)).await
+}
+
+#[tauri::command]
+async fn machine_token_set(machine_id: String, token: String) -> Result<(), String> {
+    blocking(move || secrets::machine_token_set(&machine_id, &token)).await
+}
+
+#[tauri::command]
+async fn machine_token_clear(machine_id: String) -> Result<(), String> {
+    blocking(move || secrets::machine_token_clear(&machine_id)).await
+}
+
 /// Exits the app only; the service and its agents keep running.
 #[tauri::command]
 fn app_quit(app: AppHandle) {
@@ -151,6 +166,9 @@ pub fn run() {
             api_key_get,
             api_key_set,
             api_key_clear,
+            machine_token_get,
+            machine_token_set,
+            machine_token_clear,
             app_quit,
             set_tray_needs_you,
             read_dropped_image,

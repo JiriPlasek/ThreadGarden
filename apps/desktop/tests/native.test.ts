@@ -42,6 +42,18 @@ describe('native (browser stubs)', () => {
     await expect(native.apiKey.get()).resolves.toBeNull();
   });
 
+  it('keeps machine device tokens in memory only, per machine', async () => {
+    const native = await load();
+    await expect(native.machineTokens.get('m1')).resolves.toBeNull();
+    await native.machineTokens.set('m1', 'tok1');
+    await native.machineTokens.set('m2', 'tok2');
+    await expect(native.machineTokens.get('m1')).resolves.toBe('tok1');
+    await native.machineTokens.clear('m1');
+    await expect(native.machineTokens.get('m1')).resolves.toBeNull();
+    await expect(native.machineTokens.get('m2')).resolves.toBe('tok2');
+    await expect(native.apiKey.get()).resolves.toBeNull();
+  });
+
   it('makes native-only calls harmless no-ops', async () => {
     const native = await load();
     const unlisten = await native.onTray('stop-all', () => {});

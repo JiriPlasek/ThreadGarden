@@ -10,20 +10,21 @@ const SERVICE: &str = "threadgarden";
 const LEGACY_SERVICE: &str = "pahub";
 const USER: &str = "anthropic-api-key";
 
-/// The credential store, by service name (the user is always `USER`).
+/// The credential store, by service name and user (account). The API key
+/// lives under `USER`, a machine's device token under `machine:<id>`.
 trait Store {
     /// A missing credential is `None`, not an error.
-    fn get(&self, service: &str) -> Result<Option<String>, String>;
-    fn set(&self, service: &str, key: &str) -> Result<(), String>;
+    fn get(&self, service: &str, user: &str) -> Result<Option<String>, String>;
+    fn set(&self, service: &str, user: &str, key: &str) -> Result<(), String>;
     /// Removing a credential that is not stored is fine.
-    fn delete(&self, service: &str) -> Result<(), String>;
+    fn delete(&self, service: &str, user: &str) -> Result<(), String>;
 }
 
 /// The OS credential store, through the `keyring` crate.
 struct Keyring;
 
-fn entry(service: &str) -> Result<keyring::Entry, String> {
-    keyring::Entry::new(service, USER).map_err(|e| format!("credential-store-unavailable: {e}"))
+fn entry(service: &str, user: &str) -> Result<keyring::Entry, String> {
+    keyring::Entry::new(service, user).map_err(|e| format!("credential-store-unavailable: {e}"))
 }
 
 /// A missing credential is `None`, not an error.
@@ -36,18 +37,18 @@ fn absent_ok<T>(result: keyring::Result<T>) -> Result<Option<T>, String> {
 }
 
 impl Store for Keyring {
-    fn get(&self, service: &str) -> Result<Option<String>, String> {
-        absent_ok(entry(service)?.get_password())
+    fn get(&self, service: &str, user: &str) -> Result<Option<String>, String> {
+        absent_ok(entry(service, user)?.get_password())
     }
 
-    fn set(&self, service: &str, key: &str) -> Result<(), String> {
-        entry(service)?
+    fn set(&self, service: &str, user: &str, key: &str) -> Result<(), String> {
+        entry(service, user)?
             .set_password(key)
             .map_err(|e| format!("credential-store-error: {e}"))
     }
 
-    fn delete(&self, service: &str) -> Result<(), String> {
-        absent_ok(entry(service)?.delete_credential()).map(|_| ())
+    fn delete(&self, service: &str, user: &str) -> Result<(), String> {
+        absent_ok(entry(service, user)?.delete_credential()).map(|_| ())
     }
 }
 
@@ -55,14 +56,14 @@ impl Store for Keyring {
 /// new name. A failed move is no error: the key was read, and the next read
 /// tries the move again.
 fn get_from(store: &impl Store) -> Result<Option<String>, String> {
-    if let Some(key) = store.get(SERVICE)? {
+    if let Some(key) = store.get(SERVICE, USER)? {
         return Ok(Some(key));
     }
-    let Some(key) = store.get(LEGACY_SERVICE)? else {
+    let Some(key) = store.get(LEGACY_SERVICE, USER)? else {
         return Ok(None);
     };
-    if store.set(SERVICE, &key).is_ok() {
-        let _ = store.delete(LEGACY_SERVICE);
+    if store.set(SERVICE, USER, &key).is_ok() {
+        let _ = store.delete(LEGACY_SERVICE, USER);
     }
     Ok(Some(key))
 }
@@ -72,14 +73,14 @@ fn set_in(store: &impl Store, key: &str) -> Result<(), String> {
     if key.is_empty() {
         return Err("api-key-empty".into());
     }
-    store.set(SERVICE, key)?;
-    store.delete(LEGACY_SERVICE)
+    store.set(SERVICE, USER, key)?;
+    store.delete(LEGACY_SERVICE, USER)
 }
 
 /// Removes the key under both names; both are tried even when one fails.
 fn clear_in(store: &impl Store) -> Result<(), String> {
-    let current = store.delete(SERVICE);
-    let legacy = store.delete(LEGACY_SERVICE);
+    let current = store.delete(SERVICE, USER);
+    let legacy = store.delete(LEGACY_SERVICE, USER);
     current.and(legacy)
 }
 
@@ -96,6 +97,47 @@ pub fn clear() -> Result<(), String> {
     clear_in(&Keyring)
 }
 
+/// The keychain account of a machine's device token. Ids are UUIDs
+/// (`^[0-9a-f-]{36}$`); anything else is refused so an id can never shape
+/// another account name.
+fn machine_user(machine_id: &str) -> Result<String, String> {
+    let valid = machine_id.len() == 36
+        && machine_id
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b) || b == b'-');
+    if valid {
+        Ok(format!("machine:{machine_id}"))
+    } else {
+        Err("machine-id-invalid".into())
+    }
+}
+
+fn machine_token_get_from(store: &impl Store, machine_id: &str) -> Result<Option<String>, String> {
+    store.get(SERVICE, &machine_user(machine_id)?)
+}
+
+fn machine_token_set_in(store: &impl Store, machine_id: &str, token: &str) -> Result<(), String> {
+    store.set(SERVICE, &machine_user(machine_id)?, token)
+}
+
+fn machine_token_clear_in(store: &impl Store, machine_id: &str) -> Result<(), String> {
+    store.delete(SERVICE, &machine_user(machine_id)?)
+}
+
+/// The device token this desktop received when it paired with a machine.
+pub fn machine_token_get(machine_id: &str) -> Result<Option<String>, String> {
+    machine_token_get_from(&Keyring, machine_id)
+}
+
+pub fn machine_token_set(machine_id: &str, token: &str) -> Result<(), String> {
+    machine_token_set_in(&Keyring, machine_id, token)
+}
+
+/// Removing a token that is not stored is fine.
+pub fn machine_token_clear(machine_id: &str) -> Result<(), String> {
+    machine_token_clear_in(&Keyring, machine_id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -105,7 +147,7 @@ mod tests {
     /// An in-memory store; `failing` names the services whose writes and deletes fail.
     #[derive(Default)]
     struct FakeStore {
-        entries: RefCell<HashMap<String, String>>,
+        entries: RefCell<HashMap<(String, String), String>>,
         failing: Vec<&'static str>,
     }
 
@@ -116,13 +158,21 @@ mod tests {
                 store
                     .entries
                     .borrow_mut()
-                    .insert(service.to_string(), key.to_string());
+                    .insert((service.to_string(), USER.to_string()), key.to_string());
             }
             store
         }
 
+        /// The API key entry of `service`.
         fn stored(&self, service: &str) -> Option<String> {
-            self.entries.borrow().get(service).cloned()
+            self.stored_as(service, USER)
+        }
+
+        fn stored_as(&self, service: &str, user: &str) -> Option<String> {
+            self.entries
+                .borrow()
+                .get(&(service.to_string(), user.to_string()))
+                .cloned()
         }
 
         fn check(&self, service: &str) -> Result<(), String> {
@@ -135,21 +185,23 @@ mod tests {
     }
 
     impl Store for FakeStore {
-        fn get(&self, service: &str) -> Result<Option<String>, String> {
-            Ok(self.stored(service))
+        fn get(&self, service: &str, user: &str) -> Result<Option<String>, String> {
+            Ok(self.stored_as(service, user))
         }
 
-        fn set(&self, service: &str, key: &str) -> Result<(), String> {
+        fn set(&self, service: &str, user: &str, key: &str) -> Result<(), String> {
             self.check(service)?;
             self.entries
                 .borrow_mut()
-                .insert(service.to_string(), key.to_string());
+                .insert((service.to_string(), user.to_string()), key.to_string());
             Ok(())
         }
 
-        fn delete(&self, service: &str) -> Result<(), String> {
+        fn delete(&self, service: &str, user: &str) -> Result<(), String> {
             self.check(service)?;
-            self.entries.borrow_mut().remove(service);
+            self.entries
+                .borrow_mut()
+                .remove(&(service.to_string(), user.to_string()));
             Ok(())
         }
     }
@@ -216,6 +268,60 @@ mod tests {
         assert_eq!(store.stored(SERVICE), None);
         assert_eq!(store.stored(LEGACY_SERVICE), None);
         assert_eq!(clear_in(&store), Ok(()));
+    }
+
+    const ID: &str = "0b9f3c1e-5a7d-4e2b-9c8a-1d2e3f4a5b6c";
+
+    #[test]
+    fn a_machine_token_round_trips_under_its_own_account() {
+        let store = FakeStore::default();
+        assert_eq!(machine_token_get_from(&store, ID), Ok(None));
+        assert_eq!(machine_token_set_in(&store, ID, "tok"), Ok(()));
+        assert_eq!(
+            machine_token_get_from(&store, ID),
+            Ok(Some("tok".to_string()))
+        );
+        assert_eq!(
+            store.stored_as(SERVICE, &format!("machine:{ID}")),
+            Some("tok".to_string())
+        );
+        assert_eq!(machine_token_clear_in(&store, ID), Ok(()));
+        assert_eq!(machine_token_get_from(&store, ID), Ok(None));
+        assert_eq!(machine_token_clear_in(&store, ID), Ok(()));
+    }
+
+    #[test]
+    fn an_invalid_machine_id_is_refused() {
+        let store = FakeStore::default();
+        for bad in [
+            "",
+            "../x",
+            "ABCDEFAB-5a7d-4e2b-9c8a-1d2e3f4a5b6c",
+            "short",
+            "0b9f3c1e-5a7d-4e2b-9c8a-1d2e3f4a5b6c0",
+        ] {
+            let err = "machine-id-invalid".to_string();
+            assert_eq!(machine_token_get_from(&store, bad), Err(err.clone()));
+            assert_eq!(machine_token_set_in(&store, bad, "t"), Err(err.clone()));
+            assert_eq!(machine_token_clear_in(&store, bad), Err(err));
+        }
+        assert!(store.entries.borrow().is_empty());
+    }
+
+    #[test]
+    fn machine_tokens_leave_the_api_key_alone() {
+        let store = FakeStore::with(&[(SERVICE, "sk-key")]);
+        machine_token_set_in(&store, ID, "tok").unwrap();
+        assert_eq!(get_from(&store), Ok(Some("sk-key".to_string())));
+        machine_token_clear_in(&store, ID).unwrap();
+        assert_eq!(get_from(&store), Ok(Some("sk-key".to_string())));
+        clear_in(&store).unwrap();
+        machine_token_set_in(&store, ID, "tok").unwrap();
+        clear_in(&store).unwrap();
+        assert_eq!(
+            machine_token_get_from(&store, ID),
+            Ok(Some("tok".to_string()))
+        );
     }
 
     #[test]

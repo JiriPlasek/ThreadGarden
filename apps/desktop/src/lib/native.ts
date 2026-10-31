@@ -70,6 +70,24 @@ export const apiKey = {
   },
 };
 
+const browserMachineTokens = new Map<string, string>();
+
+/** A paired machine's device token, kept in the OS credential store (in memory in a browser). */
+export const machineTokens = {
+  get: async (id: string): Promise<string | null> =>
+    isTauri
+      ? invoke<string | null>('machine_token_get', { machineId: id })
+      : (browserMachineTokens.get(id) ?? null),
+  set: async (id: string, token: string): Promise<void> => {
+    if (isTauri) await invoke('machine_token_set', { machineId: id, token });
+    else browserMachineTokens.set(id, token);
+  },
+  clear: async (id: string): Promise<void> => {
+    if (isTauri) await invoke('machine_token_clear', { machineId: id });
+    else browserMachineTokens.delete(id);
+  },
+};
+
 /**
  * Shows an OS notification. The notification plugin cannot report clicks back
  * (ruling R26): `sessionId` rides along in `extra` for platforms that might, and
