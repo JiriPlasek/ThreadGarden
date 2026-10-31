@@ -1,4 +1,4 @@
-import type { EventMsg } from '@pahub/protocol';
+import type { EventMsg } from '@threadgarden/protocol';
 import type { LiveRegistry, Timers } from '../../src/chat/live-session.js';
 import type { SDKMessage } from '../../src/sdk/adapter.js';
 
@@ -54,6 +54,34 @@ export const result = (uuid: string, extra: Record<string, unknown> = {}): SDKMe
 
 export const streamEvent = (uuid: string, event: Record<string, unknown>): SDKMessage =>
   sdk({ type: 'stream_event', uuid, session_id: 's', parent_tool_use_id: null, event });
+
+let taskMessageCounter = 0;
+
+/** A `system` message of `subtype` (task fixtures). */
+export const sys = (subtype: string, extra: Record<string, unknown>) =>
+  sdk({
+    type: 'system',
+    subtype,
+    uuid: `${subtype}-${++taskMessageCounter}`,
+    session_id: 's',
+    ...extra,
+  });
+
+export const started = (taskId: string, extra: Record<string, unknown> = {}) =>
+  sys('task_started', { task_id: taskId, description: `task ${taskId}`, ...extra });
+export const progress = (taskId: string, extra: Record<string, unknown> = {}) =>
+  sys('task_progress', {
+    task_id: taskId,
+    description: `task ${taskId}`,
+    usage: { total_tokens: 0, tool_uses: 0, duration_ms: 0 },
+    ...extra,
+  });
+export const updated = (taskId: string, patch: Record<string, unknown>, extra = {}) =>
+  sys('task_updated', { task_id: taskId, patch, ...extra });
+export const notification = (taskId: string, status: string, extra: Record<string, unknown> = {}) =>
+  sys('task_notification', { task_id: taskId, status, output_file: '', summary: '', ...extra });
+export const level = (tasks: Record<string, unknown>[]) =>
+  sys('background_tasks_changed', { tasks });
 
 export class MemoryRegistry implements LiveRegistry {
   readonly live = new Map<string, string>();

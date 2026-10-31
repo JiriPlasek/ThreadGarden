@@ -2,17 +2,17 @@
  * Native (Tauri) features behind one module. Inside the Tauri webview every
  * function calls a Rust command or plugin; in a plain browser (tests, UI work
  * against the mock service) harmless stubs stand in, and the service
- * connection comes from `VITE_PAHUB_MOCK_URL` / `VITE_PAHUB_MOCK_TOKEN`.
+ * connection comes from `VITE_THREADGARDEN_MOCK_URL` / `VITE_THREADGARDEN_MOCK_TOKEN`.
  */
 import { invoke, isTauri as detectTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import type { ImageRef } from '@pahub/protocol';
+import type { ImageRef } from '@threadgarden/protocol';
 import pkg from '../../package.json';
 
 /**
  * How to reach the service. `serviceVersion` differing from `appVersion` (with a
  * compatible protocol) means an older or newer service is still running: the UI
- * offers "Restart the pahub service to update" (spec §4.2). An incompatible
+ * offers "Restart the Threadgarden service to update" (spec §4.2). An incompatible
  * protocol rejects `serviceConnection()` with `service-version-mismatch` instead.
  */
 export type ServiceConnection = {
@@ -26,16 +26,16 @@ export type TrayEvent = 'stop-all' | 'quit-all';
 export const isTauri: boolean = detectTauri();
 
 const mockConnection = (): ServiceConnection => {
-  const url = import.meta.env.VITE_PAHUB_MOCK_URL as string | undefined;
-  const token = import.meta.env.VITE_PAHUB_MOCK_TOKEN as string | undefined;
+  const url = import.meta.env.VITE_THREADGARDEN_MOCK_URL as string | undefined;
+  const token = import.meta.env.VITE_THREADGARDEN_MOCK_TOKEN as string | undefined;
   if (!url || !token) {
     throw new Error(
-      'No pahub service outside the desktop app: set VITE_PAHUB_MOCK_URL and VITE_PAHUB_MOCK_TOKEN (see `pnpm --filter @pahub/service mock`)',
+      'No Threadgarden service outside the desktop app: set VITE_THREADGARDEN_MOCK_URL and VITE_THREADGARDEN_MOCK_TOKEN (see `pnpm --filter @threadgarden/service mock`)',
     );
   }
   const port = Number(new URL(url).port);
   if (!Number.isInteger(port) || port <= 0)
-    throw new Error(`VITE_PAHUB_MOCK_URL has no port: ${url}`);
+    throw new Error(`VITE_THREADGARDEN_MOCK_URL has no port: ${url}`);
   // The mock service is not paired with an app build: report the app's own version for both.
   return { port, token, serviceVersion: pkg.version, appVersion: pkg.version };
 };
@@ -56,7 +56,7 @@ export const stopService = async (): Promise<void> => {
 
 let browserApiKey: string | null = null;
 
-/** pahub's optional Anthropic API key, kept in the OS credential store (in memory in a browser). */
+/** Threadgarden's optional Anthropic API key, kept in the OS credential store (in memory in a browser). */
 export const apiKey = {
   get: async (): Promise<string | null> =>
     isTauri ? invoke<string | null>('api_key_get') : browserApiKey,
@@ -70,17 +70,36 @@ export const apiKey = {
   },
 };
 
+const browserMachineTokens = new Map<string, string>();
+
+/** A paired machine's device token, kept in the OS credential store (in memory in a browser). */
+export const machineTokens = {
+  get: async (id: string): Promise<string | null> =>
+    isTauri
+      ? invoke<string | null>('machine_token_get', { machineId: id })
+      : (browserMachineTokens.get(id) ?? null),
+  set: async (id: string, token: string): Promise<void> => {
+    if (isTauri) await invoke('machine_token_set', { machineId: id, token });
+    else browserMachineTokens.set(id, token);
+  },
+  clear: async (id: string): Promise<void> => {
+    if (isTauri) await invoke('machine_token_clear', { machineId: id });
+    else browserMachineTokens.delete(id);
+  },
+};
+
 /**
  * Shows an OS notification. The notification plugin cannot report clicks back
- * (ruling R26): `sessionId` rides along in `extra` for platforms that might, and
- * `notifications.ts` opens the chat when the window gains focus soon after.
+ * (ruling R26): the chat's key (`machineId/sessionId`, see `chatKey`) rides
+ * along in `extra` for platforms that might, and `notifications.ts` opens the
+ * chat when the window gains focus soon after.
  */
-export const notify = async (title: string, body: string, sessionId: string): Promise<void> => {
+export const notify = async (title: string, body: string, chatKey: string): Promise<void> => {
   if (!isTauri) return;
   const n = await import('@tauri-apps/plugin-notification');
   let granted = await n.isPermissionGranted();
   if (!granted) granted = (await n.requestPermission()) === 'granted';
-  if (granted) n.sendNotification({ title, body, extra: { sessionId } });
+  if (granted) n.sendNotification({ title, body, extra: { chatKey } });
 };
 
 export const copyText = async (s: string): Promise<void> => {
@@ -183,7 +202,7 @@ export const setTrayNeedsYou = async (n: number): Promise<void> => {
 
 /**
  * Tray menu items that need a confirmation in the UI ("Stop all work…",
- * "Quit pahub completely…"). Resolves to an unsubscribe function.
+ * "Quit Threadgarden completely…"). Resolves to an unsubscribe function.
  */
 export const onTray = async (event: TrayEvent, cb: () => void): Promise<() => void> =>
   isTauri ? listen(`tray://${event}`, () => cb()) : () => {};

@@ -4,14 +4,26 @@
 </script>
 
 <script lang="ts">
+  import ArchiveIcon from '@lucide/svelte/icons/archive';
+  import ChartColumnIcon from '@lucide/svelte/icons/chart-column';
   import MessageSquareIcon from '@lucide/svelte/icons/message-square';
   import CircleStopIcon from '@lucide/svelte/icons/circle-stop';
+  import GaugeIcon from '@lucide/svelte/icons/gauge';
+  import KeyboardIcon from '@lucide/svelte/icons/keyboard';
   import PlusIcon from '@lucide/svelte/icons/plus';
   import SearchIcon from '@lucide/svelte/icons/search';
   import SettingsIcon from '@lucide/svelte/icons/settings';
   import type { Component } from 'svelte';
+  import ProjectIcon from '#lib/components/layout/ProjectIcon.svelte';
   import * as Dialog from '#lib/components/ui/dialog/index.js';
   import { useApp } from '#lib/state/context.js';
+  import { formatShortcut, shortcut, type Combo } from '#lib/shortcuts.js';
+  import { ARCHIVE_OLDER_DAYS } from '#lib/state/buckets.svelte.js';
+  import { machineNameOf } from '#lib/state/machines.svelte.js';
+  import { askArchiveOlderIn } from '#lib/state/merged-list.svelte.js';
+  import { mergeQuickHits, type MachineHit } from '#lib/state/quick-search.js';
+  import { chatKey } from '#lib/state/refs.js';
+  import type { MachineScope } from '#lib/state/scope.js';
   import type { QuickHit } from '#lib/state/sessions.svelte.js';
   import { cn } from '#lib/utils.js';
 
@@ -20,12 +32,39 @@
    * full text across all projects with one `search.quick` per keystroke (the
    * service answers within its 50 ms budget; an answer overtaken by a newer
    * query is dropped). Enter opens the chat or focuses its tab. Also hosts
-   * commands: "New chat in…", "Stop all work", "Settings".
+   * commands: "New chat in…", "Stop all work", "Usage" (v1.3), "Analytics" (v1.3),
+   * "Settings", "Keyboard shortcuts",
+   * and in Active or a project "Archive chats older than 30 days…". Archived
+   * matches come last, in their own "Archived" group (v1.2 §3).
+   *
+   * Machines: every connected machine is searched at once (`QUICK_LIMIT`
+   * each), the answers merged by the service's score and cut to `QUICK_LIMIT`;
+   * a hit opens on its machine, and carries a machine chip while more than one
+   * machine is paired.
    */
-  const { interaction, sessions, tabs, lifecycle } = useApp();
+  const { interaction, tabs, lifecycle, places, usage, scopes, machines } = useApp();
 
-  type Command = { id: string; label: string; icon: Component; run: () => void };
-  type Row = { key: string; hit: QuickHit; command?: never } | { key: string; command: Command };
+  type Command = {
+    id: string;
+    label: string;
+    icon: Component;
+    run: () => void;
+    /** Shown at the end of the row: the key that does the same from anywhere. */
+    keys?: Combo;
+  };
+  type Row = { key: string; hit: MachineHit; command?: never } | { key: string; command: Command };
+
+  /** The tidy action applies to Active or to the selected project. */
+  const archiveOlderCommand = $derived.by((): Command | null => {
+    const p = places.selected;
+    if (p.kind !== 'active' && p.kind !== 'all' && p.kind !== 'project') return null;
+    return {
+      id: 'archive-older',
+      label: `Archive chats older than ${ARCHIVE_OLDER_DAYS} days…`,
+      icon: ArchiveIcon,
+      run: () => void askArchiveOlderIn(p, scopes),
+    };
+  });
 
   const COMMANDS: Command[] = [
     { id: 'new-chat', label: 'New chat in…', icon: PlusIcon, run: () => interaction.openNewChat() },
@@ -35,32 +74,64 @@
       icon: CircleStopIcon,
       run: () => (lifecycle.dialog = 'stopAll'),
     },
+    { id: 'usage', label: 'Usage', icon: GaugeIcon, run: () => usage.open() },
+    { id: 'analytics', label: 'Analytics', icon: ChartColumnIcon, run: () => tabs.showAnalytics() },
     {
       id: 'settings',
       label: 'Settings',
       icon: SettingsIcon,
       run: () => (interaction.settingsOpen = true),
     },
+    {
+      id: 'shortcuts',
+      label: 'Keyboard shortcuts',
+      icon: KeyboardIcon,
+      run: () => (interaction.shortcutsOpen = true),
+      keys: shortcut('shortcuts').combos[0],
+    },
   ];
 
   let input = $state<HTMLInputElement | null>(null);
   let query = $state('');
-  let hits = $state.raw<QuickHit[]>([]);
+  let hits = $state.raw<MachineHit[]>([]);
   let active = $state(0);
+  /** The user moved the cursor (arrows or mouse) since the query's first answer. */
+  let moved = false;
   /** The last query sent (trimmed): an edit that does not change it sends nothing. */
   let sent = '';
   /** Number of the newest request; older answers are dropped. */
   let latest = 0;
 
   const commands = $derived.by(() => {
+    const all = archiveOlderCommand ? [...COMMANDS, archiveOlderCommand] : COMMANDS;
     const q = query.trim().toLowerCase();
-    return q ? COMMANDS.filter((c) => c.label.toLowerCase().includes(q)) : COMMANDS;
+    return q ? all.filter((c) => c.label.toLowerCase().includes(q)) : all;
   });
-  const rows = $derived<Row[]>([
-    ...hits.map((hit) => ({ key: `chat:${hit.sessionId}`, hit })),
+  const local = scopes.local();
+  /** This PC's rows keep their plain key; another machine's add the machine. */
+  const chatRow = (hit: MachineHit): Row => ({
+    key: hit.machineId === local.machineId ? `chat:${hit.sessionId}` : `chat:${chatKey(hit)}`,
+    hit,
+  });
+  /** Hits carry their machine's name while more than one machine is paired. */
+  const multi = $derived(machines.several);
+  /** A hit's project icon comes from its machine. */
+  const iconsOf = (machineId: string) => (scopes.get(machineId) ?? local).places.icons;
+
+  /** Chats, then commands; archived chats last (shown as their own group). */
+  const main = $derived<Row[]>([
+    ...hits.filter((h) => !h.archived).map(chatRow),
     ...commands.map((command) => ({ key: `cmd:${command.id}`, command })),
   ]);
+  const archived = $derived<Row[]>(hits.filter((h) => h.archived).map(chatRow));
+  const rows = $derived<Row[]>([...main, ...archived]);
 
+  /**
+   * Asks This PC and every connected paired machine at once. Each answer is
+   * shown as it lands, merged with the ones before it, so a slow machine never
+   * holds back the others; a machine that fails counts as no hits. Answers to
+   * an older query are dropped.
+   */
   const search = (text: string): void => {
     const q = text.trim();
     if (q === sent) return;
@@ -70,16 +141,34 @@
       hits = [];
       return;
     }
-    sessions.quickSearch(q, QUICK_LIMIT).then(
-      (items) => {
-        if (seq !== latest) return;
-        hits = items;
-        active = 0;
-      },
-      () => {
-        if (seq === latest) hits = [];
-      },
-    );
+    const asked: MachineScope[] = [
+      local,
+      ...scopes.all().filter((s) => s !== local && s.api.status === 'open'),
+    ];
+    const answers = new Map<string, QuickHit[]>();
+    const land = (machineId: string, found: QuickHit[]): void => {
+      if (seq !== latest) return;
+      // A later answer keeps the cursor on the row the user moved it to; else it stays on top.
+      if (answers.size === 0) moved = false;
+      const at = moved ? rows[active]?.key : undefined;
+      answers.set(machineId, found);
+      hits = mergeQuickHits(
+        asked.flatMap((s) => {
+          const h = answers.get(s.machineId);
+          return h ? [{ machineId: s.machineId, hits: h }] : [];
+        }),
+        QUICK_LIMIT,
+      );
+      const i = at === undefined ? -1 : rows.findIndex((r) => r.key === at);
+      active = Math.max(i, 0);
+    };
+    for (const s of asked) {
+      const machineId = s.machineId;
+      s.sessions.quickSearch(q, QUICK_LIMIT).then(
+        (found) => land(machineId, found),
+        () => land(machineId, []),
+      );
+    }
   };
 
   const reset = (): void => {
@@ -99,7 +188,7 @@
     if (!row) return;
     setOpen(false);
     if (row.command) row.command.run();
-    else tabs.openTab(row.hit.sessionId);
+    else tabs.openTab({ machineId: row.hit.machineId, sessionId: row.hit.sessionId });
   };
 
   const optionId = (i: number): string => `quick-option-${i}`;
@@ -107,12 +196,14 @@
   const move = (delta: number): void => {
     if (rows.length === 0) return;
     active = (active + delta + rows.length) % rows.length;
+    moved = true;
     document.getElementById(optionId(active))?.scrollIntoView({ block: 'nearest' });
   };
 
   const onInput = (e: Event): void => {
     query = (e.currentTarget as HTMLInputElement).value;
     active = 0;
+    moved = false;
     search(query);
   };
 
@@ -172,7 +263,7 @@
       aria-label="Chats and commands"
       class="max-h-[min(60vh,28rem)] overflow-y-auto p-1 [scrollbar-width:thin]"
     >
-      {#each rows as row, i (row.key)}
+      {#snippet option(row: Row, i: number)}
         <!-- Keyboard selection happens in the combobox (arrows, Enter); a click picks directly. -->
         <!-- svelte-ignore a11y_click_events_have_key_events -->
         <li
@@ -181,27 +272,57 @@
           role="option"
           aria-selected={i === active}
           class={cn(
-            'flex cursor-default items-start gap-2 rounded-md px-2 py-1.5 text-sm',
+            'flex cursor-pointer items-start gap-2 rounded-md px-2 py-1.5 text-sm',
             i === active && 'bg-accent text-accent-foreground',
           )}
-          onmousemove={() => (active = i)}
+          onmousemove={() => {
+            active = i;
+            moved = true;
+          }}
           onclick={() => choose(row)}
         >
           {#if row.command}
             {@const Icon = row.command.icon}
             <Icon class="text-muted-foreground mt-0.5 size-4 shrink-0" aria-hidden="true" />
-            <span class="truncate">{row.command.label}</span>
+            <span class="truncate" data-label>{row.command.label}</span>
+            {#if row.command.keys}
+              <kbd
+                class="bg-muted text-muted-foreground ml-auto shrink-0 rounded border px-1.5 font-sans text-xs leading-5"
+                >{formatShortcut(row.command.keys)}</kbd
+              >
+            {/if}
           {:else}
-            <MessageSquareIcon
-              class="text-muted-foreground mt-0.5 size-4 shrink-0"
-              aria-hidden="true"
-            />
+            {#if row.hit.archived}
+              <ArchiveIcon
+                class="text-muted-foreground mt-0.5 size-4 shrink-0"
+                aria-hidden="true"
+              />
+            {:else}
+              <MessageSquareIcon
+                class="text-muted-foreground mt-0.5 size-4 shrink-0"
+                aria-hidden="true"
+              />
+            {/if}
             <span class="flex min-w-0 flex-1 flex-col">
               <span class="flex min-w-0 items-baseline gap-2">
                 <span class="truncate font-medium">{row.hit.title}</span>
-                <span class="text-muted-foreground ml-auto shrink-0 truncate text-xs"
-                  >{row.hit.projectName}</span
+                <span
+                  class="text-muted-foreground ml-auto flex max-w-[50%] shrink-0 items-center gap-1.5 self-center text-xs"
                 >
+                  {#if multi}
+                    <span class="bg-muted shrink-0 truncate rounded px-1 text-[0.6875rem]"
+                      >{machineNameOf(machines, row.hit.machineId)}</span
+                    >
+                  {/if}
+                  {#if row.hit.projectId}
+                    <ProjectIcon
+                      projectId={row.hit.projectId}
+                      name={row.hit.projectName}
+                      icons={iconsOf(row.hit.machineId)}
+                    />
+                  {/if}
+                  <span class="truncate">{row.hit.projectName}</span>
+                </span>
               </span>
               {#if row.hit.snippet}
                 <span class="text-muted-foreground truncate text-xs">{row.hit.snippet}</span>
@@ -209,7 +330,22 @@
             </span>
           {/if}
         </li>
+      {/snippet}
+      {#each main as row, i (row.key)}
+        {@render option(row, i)}
       {/each}
+      {#if archived.length > 0}
+        <li role="group" aria-label="Archived">
+          <div aria-hidden="true" class="text-muted-foreground px-2 pt-2 pb-1 text-xs font-medium">
+            Archived
+          </div>
+          <ul role="presentation">
+            {#each archived as row, j (row.key)}
+              {@render option(row, main.length + j)}
+            {/each}
+          </ul>
+        </li>
+      {/if}
     </ul>
     {#if query.trim() && hits.length === 0 && commands.length === 0}
       <p class="text-muted-foreground px-3 pb-3 text-sm">No matching chats.</p>

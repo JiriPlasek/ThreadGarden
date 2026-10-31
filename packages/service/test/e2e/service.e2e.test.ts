@@ -5,7 +5,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { ChatItem, EventMsg } from '@pahub/protocol';
+import type { ChatItem, EventMsg } from '@threadgarden/protocol';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { readDiscovery } from '../../src/discovery.js';
 import { startService, type ServiceHandle, type StartOptions } from '../../src/main.js';
@@ -17,7 +17,7 @@ let dir: string;
 const open: { svc: ServiceHandle[]; clients: TestClient[] } = { svc: [], clients: [] };
 
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'pahub-e2e-'));
+  dir = await mkdtemp(join(tmpdir(), 'threadgarden-e2e-'));
 });
 afterEach(async () => {
   for (const c of open.clients.splice(0)) await c.close();

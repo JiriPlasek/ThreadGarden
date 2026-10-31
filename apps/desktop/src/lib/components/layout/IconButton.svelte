@@ -2,8 +2,13 @@
   import type { Snippet } from 'svelte';
   import { Button } from '#lib/components/ui/button/index.js';
   import * as Tooltip from '#lib/components/ui/tooltip/index.js';
+  import { ariaKeyShortcuts, formatShortcut, type Combo } from '#lib/shortcuts.js';
 
-  /** Icon-only button: `label` is its accessible name and its tooltip. */
+  /**
+   * Icon-only button: `label` is its accessible name and its tooltip. A
+   * `shortcut` (keys as in `shortcuts.ts`) follows the label in the tooltip
+   * ("New chat · Ctrl+N") and is announced through `aria-keyshortcuts`.
+   */
   let {
     label,
     onclick,
@@ -11,6 +16,10 @@
     class: className,
     side = 'bottom',
     disabled = false,
+    shortcut,
+    tabindex,
+    onauxclick,
+    pressed,
   }: {
     label: string;
     onclick: () => void;
@@ -18,7 +27,15 @@
     class?: string;
     side?: 'top' | 'bottom' | 'left' | 'right';
     disabled?: boolean;
+    shortcut?: Combo;
+    tabindex?: number;
+    onauxclick?: (e: MouseEvent) => void;
+    /** A toggle: announced as pressed or not (`aria-pressed`). */
+    pressed?: boolean;
   } = $props();
+
+  const keys = $derived(shortcut ? formatShortcut(shortcut) : null);
+  const aria = $derived(shortcut ? ariaKeyShortcuts([shortcut]) || undefined : undefined);
 </script>
 
 <Tooltip.Provider delayDuration={400}>
@@ -31,13 +48,18 @@
           size="icon-xs"
           class="text-muted-foreground hover:text-foreground {className ?? ''}"
           aria-label={label}
+          aria-keyshortcuts={aria}
+          aria-pressed={pressed}
+          {tabindex}
           {disabled}
           {onclick}
+          {onauxclick}
         >
           {@render children()}
         </Button>
       {/snippet}
     </Tooltip.Trigger>
-    <Tooltip.Content {side} class="px-2 py-1">{label}</Tooltip.Content>
+    <Tooltip.Content {side} class="px-2 py-1">{keys ? `${label} · ${keys}` : label}</Tooltip.Content
+    >
   </Tooltip.Root>
 </Tooltip.Provider>

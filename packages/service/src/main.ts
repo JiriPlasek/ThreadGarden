@@ -2,34 +2,67 @@ import { randomBytes } from 'node:crypto';
 import { mkdir } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { PROTOCOL_VERSION, type EventMsg } from '@pahub/protocol';
+import {
+  CAPABILITIES,
+  PROTOCOL_VERSION,
+  type ChatStatus,
+  type EventMsg,
+  type MachineInfo,
+} from '@threadgarden/protocol';
 import pkg from '../package.json' with { type: 'json' };
 import { nextSeqEpoch, seqBaseForEpoch } from './chat/event-log.js';
-import type { Timers } from './chat/live-session.js';
+import { realTimers, type Timers } from './chat/live-session.js';
 import { SessionHost } from './chat/session-host.js';
+import { RoutingSettingsCheck, routingSettingsPaths } from './chat/title-routing.js';
+import { ChatTitles } from './chat/titles.js';
 import { resolveClaudeConfigDir } from './config.js';
 import { acquireInstanceLock, removeDiscovery, writeDiscovery } from './discovery.js';
 import { FileIndex } from './files/file-index.js';
 import { ExternalPoller, makeClaudeRunner, type ExternalSession } from './external/poller.js';
-import { Catalog, titleFor, type LiveChat } from './history/catalog.js';
+import { Buckets } from './history/buckets.js';
+import { Catalog, UNTITLED_TITLE, titleFor, type LiveChat } from './history/catalog.js';
 import { openDb, type Db } from './history/db.js';
+import { DeviceRegistry } from './machine/devices.js';
+import { loadMachineIdentity } from './machine/identity.js';
+import { PairedMachines } from './machine/paired-machines.js';
+import { privateListenAddresses } from './machine/interfaces.js';
+import { loadOrCreateTlsIdentity, type TlsIdentity } from './machine/tls.js';
 import { Indexer } from './history/indexer.js';
+import { FolderCheck, ProjectOrderNotifier } from './history/project-activity.js';
+import { ProjectIcons, type FoundIcon } from './history/project-icons.js';
 import { createQuickSearch } from './history/search.js';
 import { watchProjects } from './history/watcher.js';
 import { createLogger, type Logger } from './logger.js';
+import { DB_FILE, migrateDataDir } from './migrate-data-dir.js';
 import type { AgentAdapter } from './sdk/adapter.js';
 import type { ClaudeFound, ClaudeProblem } from './sdk/claude-path.js';
 import { buildSessionEnv } from './sdk/real-adapter.js';
 import { registerChatHandlers } from './server/handlers/chat.js';
 import { makeResumeChecker, registerExternalHandlers } from './server/handlers/external.js';
 import { registerFileHandlers } from './server/handlers/files.js';
+import { machineFor, registerMachineHandlers } from './server/handlers/machines.js';
 import { registerHistoryHandlers } from './server/handlers/history.js';
+import { registerUsageHandlers } from './server/handlers/usage.js';
+import { REMOTE_PORT, startRemoteServer } from './server/remote-server.js';
 import { Router } from './server/router.js';
+import { createRelay, type Relay } from './server/relay.js';
 import { startWsServer } from './server/ws-server.js';
+import { ScheduledSends } from './usage/scheduled.js';
+import { UsageTracker } from './usage/usage.js';
 
 export const IDLE_EXIT_MS = 30 * 60_000;
+/**
+ * The idle check; it also ends on-hold chats' holds whose time ran out (v1.2,
+ * ≤ 60 s late) and catches up on scheduled sends (v1.3 B; their own timer is
+ * the precise one).
+ */
 const IDLE_CHECK_MS = 60_000;
-/** pahub-db key of the last chat seq epoch (see `nextSeqEpoch`). */
+/** A chat in a turn (working, waiting on the user): its next scheduled send waits (v1.3 B). */
+const IN_TURN: ReadonlySet<ChatStatus> = new Set(['working', 'needsYou', 'unknown']);
+/** Said in a chat whose scheduled message was due while the service was not running. */
+export const LATE_NOTE =
+  'This scheduled message went out late: Threadgarden was not running when it was due.';
+/** UI-state key (`threadgarden.db`) of the last chat seq epoch (see `nextSeqEpoch`). */
 const SEQ_EPOCH_KEY = 'service:seqEpoch';
 
 type ClaudeStatus = ClaudeFound | ClaudeProblem;
@@ -37,6 +70,13 @@ const errorText = (err: unknown): string => (err instanceof Error ? err.message 
 
 export type StartOptions = {
   dataDir: string;
+  /**
+   * pahub's data dir (spec v1.3 §9; `dataDir` itself for an override): its
+   * `pahub.db` is copied to `threadgarden.db` once, before the service takes
+   * its lock. The start fails while a pahub service still runs there. Unset:
+   * no migration (tests, the mock service).
+   */
+  legacyDataDir?: string;
   /** Number of live sessions; they keep the service alive. Default: the session host's. */
   liveCount?: () => number;
   clock?: () => number;
@@ -45,14 +85,14 @@ export type StartOptions = {
   installSignalHandlers?: boolean;
   logger?: Logger;
   /**
-   * Enables history and chats: opens `pahub.db`, indexes sessions through
+   * Enables history and chats: opens `threadgarden.db`, indexes sessions through
    * this adapter, watches `<claudeConfigDir>/projects`, serves the places API
    * and runs the session host (every `chat.*` method).
    */
   adapter?: AgentAdapter;
-  /** Claude Code's config dir (`CLAUDE_CONFIG_DIR` or `~/.claude`); read-only for pahub. */
+  /** Claude Code's config dir (`CLAUDE_CONFIG_DIR` or `~/.claude`); read-only for Threadgarden. */
   claudeConfigDir?: string;
-  /** Overrides the session host as the source of pahub-owned chats for lists and the poller. */
+  /** Overrides the session host as the source of Threadgarden-owned chats for lists and the poller. */
   live?: { list(): LiveChat[] };
   /**
    * External sessions snapshot. Overrides the built-in poller's (tests, or a
@@ -62,7 +102,7 @@ export type StartOptions = {
   /** Where `claude` was found (or why not), as `findInstalledClaude` reports it. */
   claude?: ClaudeStatus;
   /**
-   * Finds `claude` given pahub's `claudePath` setting, when `claude` is not
+   * Finds `claude` given Threadgarden's `claudePath` setting, when `claude` is not
    * passed; run at start and again whenever that setting changes.
    */
   locateClaude?: (settingPath: string | null) => Promise<ClaudeStatus>;
@@ -77,17 +117,46 @@ export type StartOptions = {
   historyCacheChars?: number;
   /** Base environment of session processes (default `process.env`); the API key is added on top. */
   sessionEnv?: NodeJS.ProcessEnv;
-  /** Timers for the session host (coalescing, idle reclaim); default Node timers. */
+  /**
+   * Timers for the session host (coalescing, idle reclaim) and `chat.end`'s
+   * index wait; default Node timers.
+   */
   sessionTimers?: Timers;
+  /** Whether a project folder exists (v1.1 §4); default one `fs.stat` per folder. */
+  folderStat?: (path: string) => Promise<boolean>;
+  /** Where a project's icon is looked up (v1.3 §5); default the project folder itself. */
+  projectIconSearch?: (projectPath: string) => Promise<FoundIcon | null>;
   /** Fixed port and token (mock service, UI tests); default a random port and a fresh token. */
   port?: number;
   token?: string;
   /**
-   * API-key-only configuration (spec §5.5; build flag `PAHUB_API_KEY_ONLY`):
+   * API-key-only configuration (spec §5.5; build flag `THREADGARDEN_API_KEY_ONLY`):
    * chats start or resume only with an API key set (`auth.setApiKey`), never
    * on the installed Claude Code's own sign-in.
    */
   apiKeyOnly?: boolean;
+  /**
+   * v1.4 headless (a machine desktops pair with): the service never exits when
+   * idle (holds and scheduled sends are still looked after), listens for paired
+   * devices over TLS and says `headless` in `hello.machine`. Needs `adapter`
+   * (devices live in the database). Default: neither, as on a desktop.
+   */
+  headless?: boolean;
+  /**
+   * Headless only: the remote listener's port (default `REMOTE_PORT`; 0 = any
+   * free one) and where it listens. `addresses` fixes the addresses (tests:
+   * loopback; never re-read); otherwise `addressSource` (default this
+   * machine's private IPv4 addresses) is read at start and on every idle tick,
+   * and the listener follows it (Ruling R12). Without any address there is no
+   * remote listener.
+   */
+  remote?: { port?: number; addresses?: string[]; addressSource?: () => string[] };
+  /**
+   * Random bytes for pairing codes (default `crypto.randomBytes`). Tests and
+   * the mock service (`mock --remote --pairing-code`) fix the code with it;
+   * `bin.ts` never sets it.
+   */
+  pairingRandom?: (n: number) => Buffer;
 };
 
 /** How long shutdown waits for a running index pass to reach a stopping point. */
@@ -99,6 +168,12 @@ export type ServiceHandle = {
   router: Router;
   /** The session host (present when an adapter was given). */
   host?: SessionHost;
+  /** v1.3 B: plan usage and scheduled sends (present when an adapter was given). */
+  usage?: UsageTracker;
+  scheduled?: ScheduledSends;
+  /** v1.4: where paired devices reach this service (headless, with a private address only). */
+  remote?: { addresses: string[]; port: number };
+  /** Sends an event to every local client and paired device. */
   broadcast: (e: { event: string; data: unknown }) => void;
   close(): Promise<void>;
   onClosed(cb: () => void): void;
@@ -110,14 +185,21 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   const setTimer = opts.setInterval ?? ((fn, ms) => setInterval(fn, ms));
   const clearTimer = opts.clearInterval ?? ((t) => clearInterval(t));
   const log = opts.logger ?? createLogger(dataDir);
+  const headless = opts.headless === true;
+  if (headless && !opts.adapter) throw new Error('A headless service needs history (an adapter)');
 
   await mkdir(dataDir, { recursive: true });
+  if (opts.legacyDataDir !== undefined) {
+    await migrateDataDir({ dataDir, legacyDir: opts.legacyDataDir, log: (m) => log.info(m) });
+  }
   const lock = await acquireInstanceLock(dataDir);
-  if (!lock) throw new Error('pahub service is already running for this data directory');
+  if (!lock) throw new Error('Threadgarden service is already running for this data directory');
 
   const token = opts.token ?? randomBytes(32).toString('hex');
   const router = new Router(log);
-  let clientCount = 0;
+  /** Connected clients: local ones and paired devices. */
+  let localClients = 0;
+  let remoteClients = 0;
   let lastActive = clock();
   let closing: Promise<void> | null = null;
   const closedCallbacks: (() => void)[] = [];
@@ -130,14 +212,29 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     }
   };
 
-  router.register('hello', async () => ({
+  /** This machine's identity; it lives in the database, so there is none without one. */
+  const machineOf = (d: Db): MachineInfo => {
+    const { id, name } = loadMachineIdentity(d, os.hostname());
+    return {
+      id,
+      name,
+      platform: process.platform as MachineInfo['platform'],
+      headless,
+      home: os.homedir(),
+      capabilities: [...CAPABILITIES],
+    };
+  };
+  router.register('hello', async (_p, ctx) => ({
     serviceVersion: pkg.version,
     protocolVersion: PROTOCOL_VERSION,
+    ...(db ? { machine: machineFor(ctx, machineOf(db)) } : {}),
   }));
 
   const broadcastRef: { fn: (e: EventMsg) => void } = { fn: () => {} };
+  /** v1.2: runs once the catalog exists (the poller is created before it). */
+  const bucketsRef: { onExternals: () => void } = { onExternals: () => {} };
   const claude: { current: ClaudeStatus | undefined } = { current: opts.claude };
-  /** pahub's optional API key (§5.5): in memory only, never logged or stored. */
+  /** Threadgarden's optional API key (§5.5): in memory only, never logged or stored. */
   let apiKey: string | null = null;
   let db: Db | undefined;
   let host: SessionHost | undefined;
@@ -145,7 +242,18 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   let indexer: Indexer | undefined;
   let watcher: { close(): void } | undefined;
   let server: Awaited<ReturnType<typeof startWsServer>> | undefined;
+  /** The remote listener (headless) while it listens; see `moveRemote`. */
+  let remote: Awaited<ReturnType<typeof startRemoteServer>> | undefined;
+  /** What every remote listener starts with (headless, with a database). */
+  let listen: { tls: TlsIdentity; devices: DeviceRegistry } | undefined;
+  /** The UI's connections to paired machines (with a database). */
+  let relay: Relay | undefined;
   let poller: ExternalPoller | undefined;
+  let projectOrder: ProjectOrderNotifier | undefined;
+  let buckets: Buckets | undefined;
+  let titles: ChatTitles | undefined;
+  let usage: UsageTracker | undefined;
+  let scheduled: ScheduledSends | undefined;
   let startSync: (() => void) | undefined;
   const live = (): { list(): LiveChat[] } | undefined => opts.live ?? host;
   const claudeRunner = opts.claudeRunner ?? makeClaudeRunner;
@@ -189,8 +297,138 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   /** Waits for the search for `claude` in progress, if any. */
   const whenLocated = (): Promise<void> => located;
 
+  let startedAt = 0;
+  /** `service.json`, with where paired devices reach this service when it listens for them. */
+  const writeOwnDiscovery = (port: number): Promise<void> =>
+    writeDiscovery(dataDir, {
+      pid: process.pid,
+      port,
+      token,
+      version: pkg.version,
+      protocolVersion: PROTOCOL_VERSION,
+      startedAt,
+      ...(remote ? { remotePort: remote.port, remoteAddresses: [...remote.addresses] } : {}),
+    });
+  const addressSource =
+    opts.remote?.addressSource ?? (() => privateListenAddresses(os.networkInterfaces()));
+  /** Where the remote listener should listen now, sorted; none when they cannot be read. */
+  const wantedAddresses = (): string[] => {
+    try {
+      return [...(opts.remote?.addresses ?? addressSource())].sort();
+    } catch (err) {
+      log.error(`network addresses: ${errorText(err)}`);
+      return [];
+    }
+  };
+  /** Counts of a replaced listener's sockets closing late must not count. */
+  let remoteGeneration = 0;
+  /**
+   * Puts the remote listener on `addresses` (sorted; none stops it): the
+   * current one is closed and a new one started with the same port, identity,
+   * registry and router. A failed start is logged; the next tick tries again.
+   */
+  const moveRemote = async (addresses: string[]): Promise<void> => {
+    if (!listen) return;
+    const current = remote ? [...remote.addresses].sort() : [];
+    if (current.length === addresses.length && current.every((a, i) => a === addresses[i])) {
+      return;
+    }
+    const old = remote;
+    remote = undefined;
+    const generation = ++remoteGeneration;
+    remoteClients = 0;
+    if (old) {
+      await step('remote server', () => old.close());
+      log.info(`stopped listening for devices on ${old.addresses.join(', ')}`);
+    }
+    if (addresses.length === 0 || closing) return;
+    const { tls, devices } = listen;
+    try {
+      const started = await startRemoteServer({
+        addresses,
+        port: opts.remote?.port ?? REMOTE_PORT,
+        tls,
+        devices,
+        router,
+        // Pairing sockets only while the owner has a code out (`threadgarden pair`).
+        pairingOpen: () => devices.hasLiveCode(),
+        onClientCountChange: (n) => {
+          if (generation !== remoteGeneration) return;
+          remoteClients = n;
+          lastActive = clock();
+        },
+        // Anyone on the network can break a socket: those stay out of the default log.
+        onError: (err, kind) => {
+          if (kind === 'peer') log.debug(`remote socket: ${errorText(err)}`);
+          else log.error(`remote server: ${errorText(err)}`);
+        },
+      });
+      remote = started;
+      const where = started.addresses.map((a) => `${a}:${started.port}`).join(', ');
+      log.info(`listening for devices on ${where}`);
+    } catch (err) {
+      log.error(`listening for devices on ${addresses.join(', ')} failed: ${errorText(err)}`);
+    }
+  };
+  /** The move in progress, if any (one at a time; `close()` waits for it). */
+  let following: Promise<void> | undefined;
+  /** On every idle tick: the listener follows the machine's addresses (Ruling R12). */
+  const followAddresses = (): void => {
+    const local = server;
+    if (!listen || !local || following || closing) return;
+    following = (async () => {
+      const before = remote;
+      await moveRemote(wantedAddresses());
+      if (remote !== before && !closing) await writeOwnDiscovery(local.port);
+    })()
+      .catch((err: unknown) => log.error(`following network addresses: ${errorText(err)}`))
+      .finally(() => {
+        following = undefined;
+      });
+  };
+
   try {
-    if (opts.adapter) db = openDb(path.join(dataDir, 'pahub.db'));
+    if (opts.adapter) {
+      const opened = openDb(path.join(dataDir, DB_FILE));
+      db = opened;
+      // One registry for the handlers and the remote listener: the live pairing
+      // code and the revoke listeners belong to it.
+      const devices = new DeviceRegistry(
+        opened.raw,
+        opts.pairingRandom ? { random: opts.pairingRandom } : {},
+      );
+      let tls: TlsIdentity | undefined;
+      if (headless) {
+        // Loaded up front, whether or not there is an address yet: the handlers
+        // get it once, and `pair.proof` always has it on a headless machine.
+        tls = await loadOrCreateTlsIdentity(dataDir, machineOf(opened).name, {
+          onRegenerate: (reason) =>
+            log.warn(
+              `TLS identity was ${reason}; created a new one — paired devices must pair again`,
+            ),
+        });
+        listen = { tls, devices };
+      }
+      // The machines this one pairs with, and the relay to them (v1.4).
+      const paired = new PairedMachines(opened.raw);
+      const machineRelay = createRelay({
+        machines: paired,
+        onLinkFailed: (machineId, err) =>
+          log.debug(`relay to machine ${machineId}: ${errorText(err)}`),
+      });
+      relay = machineRelay;
+      // machine.*, pairing, devices and machines.* (v1.4); none of them without a database.
+      registerMachineHandlers(router, {
+        db: opened,
+        devices,
+        identity: () => machineOf(opened),
+        ...(tls ? { tls } : {}),
+        paired,
+        relay: machineRelay,
+        // Paired machines are this machine's business: never told to its devices.
+        emitLocal: (e) => server?.broadcast(e),
+      });
+    }
     const found = claude.current;
     noteProblem(found);
 
@@ -209,10 +447,25 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     if (run) {
       poller = new ExternalPoller(
         run,
-        // Only *live* pahub chats are pahub's own processes. A paused or failed
+        // Only *live* Threadgarden chats are Threadgarden's own processes. A paused or failed
         // chat has none, so one that is running now runs in a terminal (§4.4).
-        () => new Set((live()?.list() ?? []).filter((c) => c.live).map((c) => c.sessionId)),
-        (e) => broadcastRef.fn(e),
+        // v1.2 C1: so are the title queries Threadgarden runs (`claude` lists them while they run).
+        () =>
+          new Set([
+            ...(live()?.list() ?? []).filter((c) => c.live).map((c) => c.sessionId),
+            ...(titles?.runningIds() ?? []),
+          ]),
+        (e) => {
+          // v1.2: archived chats running elsewhere return to Active first.
+          if (e.event === 'external.changed') {
+            try {
+              bucketsRef.onExternals();
+            } catch (err) {
+              log.error(`auto-unarchive: ${errorText(err)}`);
+            }
+          }
+          broadcastRef.fn(e);
+        },
         {
           enabled: () => externalUsable() && (db?.getSettings().externalPolling ?? true),
           onError: (err) => log.error(`external poller: ${String(err)}`),
@@ -234,6 +487,41 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       const epoch = nextSeqEpoch(opened.getUiState(SEQ_EPOCH_KEY));
       opened.setUiState(SEQ_EPOCH_KEY, epoch);
       const onError = (err: unknown, context: string) => log.error(`${context}: ${errorText(err)}`);
+      const projectsChanged = () => broadcastRef.fn({ event: 'projects.changed', data: {} });
+      // v1.1 §4: project folders that no longer exist (stat only, cached).
+      const folders = new FolderCheck({
+        onChange: projectsChanged,
+        onError,
+        ...(opts.folderStat ? { stat: opts.folderStat } : {}),
+      });
+      const projectOrderRef: { current?: ProjectOrderNotifier } = {};
+      /** v1.2 C1: set once the catalog exists (after the session host). */
+      const titlesRef: { current?: ChatTitles } = {};
+      // v1.3 B: the account's plan usage, from every session's rate-limit events.
+      const usageTracker = new UsageTracker({
+        raw: opened.raw,
+        now: clock,
+        emit: (state) => broadcastRef.fn({ event: 'usage.changed', data: state }),
+        timers: opts.sessionTimers ?? realTimers,
+        onError,
+      });
+      usage = usageTracker;
+      /** Set once the chat handlers exist (scheduled sends go out through `chat.send`). */
+      const scheduledRef: { current?: ScheduledSends } = {};
+      /** Title and project of a chat for notifications (`needsYou`, `scheduledSent`). */
+      const describeChat = (id: string): { title?: string; projectName?: string } => {
+        const row = opened.getSession(id);
+        if (!row) {
+          // Not indexed yet: Threadgarden's own title of it, if any (v1.2 C1).
+          const title = titleFor(opened.metaOf(id));
+          return title === UNTITLED_TITLE ? {} : { title };
+        }
+        const project = opened.listProjects().find((p) => p.projectId === row.projectId);
+        return {
+          title: titleFor(row),
+          ...(project ? { projectName: project.displayName } : {}),
+        };
+      };
       const sessionHost = new SessionHost({
         adapter,
         registry: opened,
@@ -247,17 +535,28 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         ...(opts.sessionTimers ? { timers: opts.sessionTimers } : {}),
         isPinned: (id) => opened.isSessionPinned(id),
         getSettings: () => opened.getSettings(),
-        describe: (id) => {
-          const row = opened.getSession(id);
-          if (!row) return {};
-          const project = opened.listProjects().find((p) => p.projectId === row.projectId);
-          return {
-            title: titleFor(row),
-            ...(project ? { projectName: project.displayName } : {}),
-          };
-        },
+        describe: describeChat,
         onError,
         seqBase: seqBaseForEpoch(epoch),
+        // v1.1 "Your turn": Threadgarden's own record of the turn end; lists show the chat unread.
+        onTurnEnded: (id, at) => {
+          opened.setTurnEnded(id, at);
+          emitChat({ event: 'sessions.changed', data: { sessionIds: [id] } });
+          // v1.2 C1: a new chat's first turn is over: it gets its generated title.
+          titlesRef.current?.turnEnded(id);
+        },
+        // v1.1 §4: live activity may reorder the projects.
+        onActivity: () => projectOrderRef.current?.notify(),
+        // Ruling R29: running background tasks put a chat under Running, idle or not.
+        onRunningTasks: (id) => emitChat({ event: 'sessions.changed', data: { sessionIds: [id] } }),
+        // v1.3 B: usage limits, and the scheduled send whose turn this was.
+        onRateLimit: (id, info) => usageTracker.observeEvent(id, info),
+        onLimitError: (id) => usageTracker.noteRefusal(id),
+        onTurnResult: (id) => {
+          const refused = usageTracker.turnEnded(id);
+          // After the session has finished handling this result.
+          setImmediate(() => scheduledRef.current?.turnEnded(id, refused));
+        },
       });
       host = sessionHost;
 
@@ -287,6 +586,10 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       /** Chat events go to clients; a turn that ended lets deferred indexing run. */
       const emitChat = (e: EventMsg): void => {
         broadcastRef.fn(e);
+        if (e.event === 'chat.status') {
+          const { sessionId, status } = e.data as { sessionId: string; status: ChatStatus };
+          setImmediate(() => scheduledRef.current?.statusChanged(sessionId, status));
+        }
         if (e.event !== 'chat.status' && e.event !== 'sessions.changed') return;
         // After the host has finished the transition that emitted this.
         setImmediate(() => {
@@ -299,17 +602,67 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         db: opened,
         live: live() ?? sessionHost,
         externals: opts.externals ?? (() => poller?.snapshot() ?? []),
+        folderExists: (p) => folders.exists(p),
       });
       catalogRef.current = cat;
+      const routing = new RoutingSettingsCheck();
+      const chatTitles = new ChatTitles({
+        db: opened,
+        adapter,
+        enabled: () => opened.getSettings().autoTitles,
+        // Exactly when a chat could start (`API_KEY_REQUIRED`, `CLAUDE_MISSING`).
+        run: () => {
+          const c = claude.current;
+          if ((opts.apiKeyOnly === true && apiKey === null) || !c || !('path' in c)) {
+            return undefined;
+          }
+          return {
+            claudePath: c.path,
+            env: buildSessionEnv(opts.sessionEnv ?? process.env, apiKey),
+          };
+        },
+        firstReply: (id) => sessionHost.get(id)?.firstReplyText() ?? '',
+        // Ruling R33: never around the provider the user's settings choose.
+        routedElsewhere: (cwd) => routing.check(routingSettingsPaths(claudeDir, cwd)),
+        titleChanged: (id) => cat.titleChanged(id),
+        emit: (e) => broadcastRef.fn(e),
+        debug: (m) => log.debug(m),
+        now: clock,
+      });
+      titles = chatTitles;
+      titlesRef.current = chatTitles;
+      const bucketList = new Buckets({
+        db: opened,
+        catalog: cat,
+        emit: (e) => broadcastRef.fn(e),
+        now: clock,
+      });
+      buckets = bucketList;
+      const externalsNow = opts.externals ?? (() => poller?.snapshot() ?? []);
+      bucketsRef.onExternals = () => bucketList.unarchiveRunning(externalsNow());
+      projectOrder = new ProjectOrderNotifier({
+        changed: () => cat.projectOrderChanged(),
+        emit: projectsChanged,
+        timers: opts.sessionTimers ?? realTimers,
+        now: clock,
+        onError,
+      });
+      projectOrderRef.current = projectOrder;
       registerHistoryHandlers(router, {
         db: opened,
         catalog: cat,
         quickSearch: createQuickSearch(opened, cat),
+        buckets: bucketList,
+        icons: new ProjectIcons({
+          onError,
+          ...(opts.projectIconSearch ? { find: opts.projectIconSearch } : {}),
+        }),
+        folderExists: (p) => folders.exists(p),
         onSettingsChanged: (patch) => {
           if (patch.claudePath !== undefined && opts.locateClaude) relocate();
         },
       });
-      registerChatHandlers(router, {
+      const chatHandlers = registerChatHandlers(router, {
         host: sessionHost,
         adapter,
         db: opened,
@@ -324,6 +677,35 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
           : { historyCacheChars: opts.historyCacheChars }),
         emit: (e) => emitChat(e),
         onError,
+        now: clock,
+        timers: opts.sessionTimers ?? realTimers,
+        titles: chatTitles,
+      });
+      const scheduledSends = new ScheduledSends({
+        raw: opened.raw,
+        now: clock,
+        timers: opts.sessionTimers ?? realTimers,
+        emit: (e) => broadcastRef.fn(e),
+        send: (sessionId, text, images) => chatHandlers.send({ sessionId, text, images }),
+        busy: (id) => {
+          const s = sessionHost.get(id);
+          return s !== undefined && s.live && IN_TURN.has(s.status);
+        },
+        limitResetAt: () => usageTracker.limitResetAt(),
+        exists: (id) => sessionHost.get(id) !== undefined || cat.summary(id) !== undefined,
+        describe: (id) => {
+          const d = describeChat(id);
+          return { title: d.title ?? UNTITLED_TITLE, projectName: d.projectName ?? '' };
+        },
+        noteLate: (id) => sessionHost.get(id)?.note('info', LATE_NOTE),
+        onError,
+      });
+      scheduled = scheduledSends;
+      scheduledRef.current = scheduledSends;
+      registerUsageHandlers(router, {
+        usage: usageTracker,
+        scheduled: scheduledSends,
+        reader: () => sessionHost.usageReader(),
       });
       watcher = watchProjects(
         path.join(claudeDir, 'projects'),
@@ -332,12 +714,19 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         { onError: (err) => log.error(`watcher: ${String(err)}`) },
       );
       startSync = () =>
-        void index.fullSync().catch((err: unknown) => log.error(`full sync: ${String(err)}`));
+        void index
+          .fullSync()
+          // A sync is when folders are known to be worth checking again (v1.1 §4).
+          .then(() =>
+            closing ? undefined : folders.refresh(opened.listProjects().map((p) => p.path)),
+          )
+          .catch((err: unknown) => log.error(`full sync: ${String(err)}`));
     }
 
     registerFileHandlers(router, { index: new FileIndex() });
     registerExternalHandlers(router, {
       ...(poller ? { poller } : {}),
+      ...(run ? { run } : {}),
       located: whenLocated,
       externalUsable,
       lastModifiedOf: (id) => db?.getSession(id)?.lastModified,
@@ -346,37 +735,49 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       now: clock,
     });
 
-    router.register('auth.setApiKey', async (p) => {
-      apiKey = p.key === null || p.key.trim() === '' ? null : p.key.trim();
-      return {};
-    });
+    router.register(
+      'auth.setApiKey',
+      async (p) => {
+        apiKey = p.key === null || p.key.trim() === '' ? null : p.key.trim();
+        return {};
+      },
+      { localOnly: true },
+    );
     router.register('work.stopAll', async () => ({ stopped: host?.stopAll() ?? 0 }));
 
     server = await startWsServer({
       token,
       router,
       ...(opts.port === undefined ? {} : { port: opts.port }),
+      ...(relay ? { relay } : {}),
       onClientCountChange: (n) => {
-        clientCount = n;
+        localClients = n;
         lastActive = clock();
       },
       onError: (err) => log.error(`ws server: ${errorText(err)}`),
     });
-    broadcastRef.fn = server.broadcast;
-    await writeDiscovery(dataDir, {
-      pid: process.pid,
-      port: server.port,
-      token,
-      version: pkg.version,
-      protocolVersion: PROTOCOL_VERSION,
-      startedAt: clock(),
-    });
+    if (listen) {
+      const wanted = wantedAddresses();
+      if (wanted.length === 0) {
+        log.warn('no private network address yet: not listening for devices until one appears');
+      }
+      await moveRemote(wanted);
+    }
+    const local = server;
+    broadcastRef.fn = (e) => {
+      local.broadcast(e);
+      remote?.broadcast(e);
+    };
+    startedAt = clock();
+    await writeOwnDiscovery(local.port);
     // Clients can connect now; `claude` is found in the background (§8 cold start).
     if (!claude.current && opts.locateClaude) void relocate();
   } catch (err) {
     await step('poller', () => poller?.stop());
     await step('watcher', () => watcher?.close());
     await step('indexer', () => indexer?.stop());
+    await step('remote server', () => remote?.close());
+    await step('relay', () => relay?.close());
     await step('server', () => server?.close());
     await step('database', () => db?.close());
     await step('lock', () => lock.release());
@@ -386,7 +787,28 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   const liveCount = opts.liveCount ?? (() => host?.liveCount() ?? 0);
   // Chats that were live when the service last stopped show as interrupted (§4.2).
   host?.recoverAfterRestart();
+  /** Ends the holds whose time ran out (v1.2); a failure is logged, never fatal. */
+  const sweepHolds = (): void => {
+    try {
+      buckets?.sweepHolds();
+    } catch (err) {
+      log.error(`hold timer: ${errorText(err)}`);
+    }
+  };
+  // Holds that ran out while the service was not running end now.
+  sweepHolds();
   host?.start();
+  /** Scheduled sends that are due go out (v1.3 B); a failure is logged, never fatal. */
+  const checkScheduled = (start = false): void => {
+    try {
+      if (start) scheduled?.start();
+      else scheduled?.check();
+    } catch (err) {
+      log.error(`scheduled sends: ${errorText(err)}`);
+    }
+  };
+  // Sends due while the service was not running go out now (marked late).
+  checkScheduled(true);
   startSync?.();
   poller?.start();
 
@@ -413,13 +835,22 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     closing ??= (async () => {
       try {
         clearTimer(timer);
+        await step('scheduled sends', () => scheduled?.dispose());
         // Live sessions end with the process; the registry still lists them,
         // so the next start shows them as interrupted (§4.2).
         await step('sessions', () => host?.dispose());
+        await step('titles', () => titles?.dispose());
+        await step('project order', () => projectOrder?.dispose());
         await step('poller', () => poller?.stop());
         await step('watcher', () => watcher?.close());
         // No index write may race the database close below.
         await step('indexer', stopIndexer);
+        // After a move in progress, so the listener it may start is closed too.
+        await step('remote server', async () => {
+          await following;
+          await remote?.close();
+        });
+        await step('relay', () => relay?.close());
         await step('server', () => wsServer.close());
         await step('discovery', () => removeDiscovery(dataDir));
         await step('database', () => db?.close());
@@ -432,21 +863,39 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     return closing;
   };
 
+  /** Scheduled sends waiting to go out keep the service running (v1.3 B). */
+  const sendsPending = (): boolean => {
+    try {
+      return (scheduled?.pendingCount() ?? 0) > 0;
+    } catch (err) {
+      log.error(`scheduled sends: ${errorText(err)}`);
+      return true; // when unsure, stay: exiting would miss a send
+    }
+  };
+  // A headless service belongs to its machine: it never exits on its own.
   const timer = setTimer(() => {
-    if (liveCount() > 0 || clientCount > 0) lastActive = clock();
-    else if (clock() - lastActive >= IDLE_EXIT_MS) {
+    sweepHolds();
+    checkScheduled();
+    followAddresses();
+    if (liveCount() > 0 || localClients + remoteClients > 0 || sendsPending()) {
+      lastActive = clock();
+    } else if (!headless && clock() - lastActive >= IDLE_EXIT_MS) {
       log.info('idle for 30 minutes, exiting');
       void close();
     }
   }, IDLE_CHECK_MS);
   timer.unref?.();
 
-  // Quit pahub completely (§4.2): stop all work, then the service.
-  router.register('service.shutdown', async () => {
-    host?.stopAll();
-    setImmediate(() => void close());
-    return {};
-  });
+  // Quit Threadgarden completely (§4.2): stop all work, then the service.
+  router.register(
+    'service.shutdown',
+    async () => {
+      host?.stopAll();
+      setImmediate(() => void close());
+      return {};
+    },
+    { localOnly: true },
+  );
 
   if (opts.installSignalHandlers ?? true) {
     for (const sig of ['SIGINT', 'SIGTERM'] as const) process.once(sig, () => void close());
@@ -458,7 +907,12 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     token,
     router,
     ...(host ? { host } : {}),
-    broadcast: wsServer.broadcast,
+    ...(usage ? { usage } : {}),
+    ...(scheduled ? { scheduled } : {}),
+    get remote() {
+      return remote ? { addresses: [...remote.addresses], port: remote.port } : undefined;
+    },
+    broadcast: (e) => broadcastRef.fn(e),
     close,
     onClosed: (cb) => void closedCallbacks.push(cb),
   };

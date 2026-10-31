@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { openDb } from '../../src/history/db.js';
+import { DatabaseSync } from 'node:sqlite';
+import { Db, openDb } from '../../src/history/db.js';
 import { migrate } from '../../src/history/migrations.js';
 import type { SDKSessionInfo } from '../../src/sdk/adapter.js';
 
@@ -36,6 +37,103 @@ describe('migrations', () => {
     ]) {
       expect(names).toContain(t);
     }
+    db.close();
+  });
+
+  it('on upgrade, notifyOnFinish starts as the stored notifications setting (v1.1)', () => {
+    /** A database as v1.1 found it: the first three steps, `notifications` maybe stored. */
+    const before = (notifications: string | undefined) => {
+      const raw = new DatabaseSync(':memory:');
+      migrate(raw);
+      raw.exec('DELETE FROM settings');
+      raw.exec('PRAGMA user_version = 3');
+      if (notifications !== undefined) {
+        raw
+          .prepare("INSERT INTO settings (key, json) VALUES ('notifications', ?)")
+          .run(notifications);
+      }
+      migrate(raw);
+      return new Db(raw);
+    };
+    // A user who silenced Threadgarden stays silenced…
+    const silenced = before('false');
+    expect(silenced.getSettings()).toMatchObject({ notifications: false, notifyOnFinish: false });
+    // …and from then on the two settings are independent.
+    silenced.patchSettings({ notifications: true });
+    expect(silenced.getSettings()).toMatchObject({ notifications: true, notifyOnFinish: false });
+    expect(before('true').getSettings().notifyOnFinish).toBe(true);
+    expect(before(undefined).getSettings().notifyOnFinish).toBe(true);
+    // A stored value that is not a boolean is not copied (it would void every setting).
+    expect(before('"loud"').getSettings().notifyOnFinish).toBe(true);
+    // A new install: turning notifications off later leaves notifyOnFinish alone.
+    const fresh = openDb(':memory:');
+    fresh.patchSettings({ notifications: false });
+    expect(fresh.getSettings()).toMatchObject({ notifications: false, notifyOnFinish: true });
+  });
+});
+
+describe('Db settings', () => {
+  const store = (db: Db, key: string, json: string): void => {
+    db.raw
+      .prepare(
+        'INSERT INTO settings (key, json) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET json = excluded.json',
+      )
+      .run(key, json);
+  };
+
+  it('an invalid stored value falls back to its own default, never voiding the others', () => {
+    const db = openDb(':memory:');
+    db.patchSettings({ notifications: false, idleReclaimMinutes: 3, accent: 'teal' });
+    store(db, 'theme', '"purple"');
+    store(db, 'enterToSend', 'not json');
+    store(db, 'darkStyle', '"oled-ultra"');
+    store(db, 'codeFont', '{"family":1}');
+    store(db, 'retired', '"setting from an older Threadgarden"');
+    const s = db.getSettings();
+    expect(s).toMatchObject({
+      notifications: false,
+      idleReclaimMinutes: 3,
+      accent: 'teal',
+      theme: 'system',
+      enterToSend: true,
+      darkStyle: 'default',
+      codeFont: null,
+    });
+    expect(s).not.toHaveProperty('retired');
+    db.close();
+  });
+
+  it('stores the v1.3 appearance settings, defaulting to today’s look', () => {
+    const db = openDb(':memory:');
+    expect(db.getSettings()).toMatchObject({
+      accent: 'graphite',
+      darkStyle: 'default',
+      lightStyle: 'default',
+      uiFont: 'inter',
+      codeFont: null,
+    });
+    const after = db.patchSettings({
+      accent: 'violet',
+      darkStyle: 'midnight',
+      lightStyle: 'warm',
+      uiFont: 'system',
+      codeFont: 'Fira Code',
+    });
+    expect(after).toMatchObject({
+      accent: 'violet',
+      darkStyle: 'midnight',
+      lightStyle: 'warm',
+      uiFont: 'system',
+      codeFont: 'Fira Code',
+    });
+    expect(db.patchSettings({ codeFont: null }).codeFont).toBeNull();
+    db.close();
+  });
+
+  it('sanitises a code font stored by hand', () => {
+    const db = openDb(':memory:');
+    store(db, 'codeFont', JSON.stringify('Fira"; } * { color: red'));
+    expect(db.getSettings().codeFont).toBe('Fira color red');
     db.close();
   });
 });
@@ -148,6 +246,58 @@ describe('Db', () => {
       .prepare("SELECT count(*) AS n FROM messages_fts WHERE session_id LIKE 'a#%'")
       .get();
     expect(n?.n).toBe(1);
+    db.close();
+  });
+});
+
+// ── v1.2 C1: chat titles ──
+
+describe('v1.2 chat titles', () => {
+  it('stores provisional and generated titles apart from the custom title', () => {
+    const db = openDb(':memory:');
+    expect(tables(db)).toContain('chat_titles');
+    expect(db.metaOf('x')).toMatchObject({
+      customTitle: null,
+      autoTitle: null,
+      generatedTitle: null,
+    });
+    db.setAutoTitle('x', 'Provisional');
+    db.setGeneratedTitle('x', 'Generated');
+    db.setCustomTitle('x', 'Custom');
+    expect(db.metaOf('x')).toMatchObject({
+      customTitle: 'Custom',
+      autoTitle: 'Provisional',
+      generatedTitle: 'Generated',
+    });
+    // Each write leaves the other fields alone.
+    db.setAutoTitle('x', 'Provisional 2');
+    expect(db.metaOf('x')).toMatchObject({
+      autoTitle: 'Provisional 2',
+      generatedTitle: 'Generated',
+    });
+    db.close();
+  });
+
+  it('session rows carry the Threadgarden titles (indexed or not yet)', () => {
+    const db = openDb(':memory:');
+    db.setAutoTitle('s1', 'Provisional');
+    db.upsertSession(info('s1', { summary: 'first', firstPrompt: 'first' }), 'p');
+    expect(db.getSession('s1')).toMatchObject({ autoTitle: 'Provisional', generatedTitle: null });
+    db.setGeneratedTitle('s1', 'Generated');
+    expect(db.listSessions({}, 10, undefined).items[0]).toMatchObject({
+      autoTitle: 'Provisional',
+      generatedTitle: 'Generated',
+    });
+    db.close();
+  });
+
+  it('upgrading a v1.2 B1 database keeps everything and adds the titles table', () => {
+    const raw = new DatabaseSync(':memory:');
+    migrate(raw, 5);
+    raw.prepare("INSERT INTO meta (session_id, custom_title) VALUES ('s', 'Kept')").run();
+    migrate(raw);
+    const db = new Db(raw);
+    expect(db.metaOf('s')).toMatchObject({ customTitle: 'Kept', autoTitle: null });
     db.close();
   });
 });

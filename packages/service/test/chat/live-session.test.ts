@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { ChatItem, EventMsg } from '@pahub/protocol';
+import type { ChatItem, ChatTask, EventMsg } from '@threadgarden/protocol';
 import { LiveSession, authLabel, type LiveSessionOptions } from '../../src/chat/live-session.js';
+import { Normalizer } from '../../src/chat/normalize.js';
 import { ServiceError } from '../../src/server/router.js';
 import type { PermissionUpdate } from '../../src/sdk/adapter.js';
 import { FakeAdapter } from '../../src/testing/fake-adapter.js';
@@ -10,8 +11,13 @@ import {
   assistantText,
   init,
   result,
+  level,
+  notification,
+  progress,
   sdk,
+  updated,
   settle,
+  started,
   statuses,
   streamEvent,
 } from './live-helpers.js';
@@ -54,7 +60,9 @@ const latest = (events: EventMsg[], id: string): ChatItem | undefined =>
 
 const seqOf = (e: EventMsg): number => (e.data as { seq: number }).seq;
 const chatEvents = (events: EventMsg[]) =>
-  events.filter((e) => e.event === 'chat.items' || e.event === 'chat.status');
+  events.filter(
+    (e) => e.event === 'chat.items' || e.event === 'chat.status' || e.event === 'chat.tasks',
+  );
 
 const suggestion = (toolName: string): PermissionUpdate => ({
   type: 'addRules',
@@ -274,7 +282,10 @@ describe('LiveSession', () => {
     await settle();
     const id = s.pendingRequests()[0]!.id;
     s.respond('d1', { decision: 'deny' });
-    await expect(plain).resolves.toEqual({ behavior: 'deny', message: 'Denied by user in pahub' });
+    await expect(plain).resolves.toEqual({
+      behavior: 'deny',
+      message: 'Denied by user in Threadgarden',
+    });
     expect(latest(events, id)).toMatchObject({ state: 'denied' });
 
     const reasoned = fake.requestPermission('Write', { file_path: 'y' }, { requestId: 'd2' });
@@ -447,7 +458,7 @@ describe('LiveSession', () => {
     expect(errors[0]).toMatchObject({ text: expect.stringContaining('background session') });
   });
 
-  it('shows the raw reason for a startup failure this pahub does not know', async () => {
+  it('shows the raw reason for a startup failure this Threadgarden does not know', async () => {
     const { adapter, events, opts } = setup();
     const s = LiveSession.create('/p', { text: 'go' }, opts);
     const fake = adapter.lastSession();
@@ -595,6 +606,41 @@ describe('LiveSession', () => {
       markdown: 'x'.repeat(100) + 'y'.repeat(60),
     });
     expect(s.status).toBe('working');
+  });
+
+  it('v1.2 C1: firstReplyText reads the first reply, buffered parts included, publishing nothing', async () => {
+    const { adapter, timers, events, opts } = setup();
+    const s = LiveSession.create('/p', { text: 'go' }, opts);
+    const fake = adapter.lastSession();
+    expect(s.firstReplyText()).toBe('');
+    timers.advance(100);
+    fake.emit(streamEvent('m', { type: 'message_start', message: { id: 'api1' } }));
+    fake.emit(
+      streamEvent('b', {
+        type: 'content_block_start',
+        index: 0,
+        content_block: { type: 'text', text: '' },
+      }),
+    );
+    await settle();
+    for (const text of ['Let me ', 'look.']) {
+      fake.emit(
+        streamEvent(`d-${text}`, {
+          type: 'content_block_delta',
+          index: 0,
+          delta: { type: 'text_delta', text },
+        }),
+      );
+    }
+    await settle();
+    const emitted = events.length;
+    // The deltas wait in the coalescing buffer; reading them publishes nothing.
+    expect(s.firstReplyText()).toBe('Let me look.');
+    expect(events.length).toBe(emitted);
+    fake.emit(assistantText('a2', 'A second reply'));
+    await settle();
+    timers.advance(100);
+    expect(s.firstReplyText()).toBe('Let me look.');
   });
 
   it('flushes coalesced items before a status change so order is preserved', async () => {
@@ -867,5 +913,582 @@ describe('LiveSession', () => {
     await settle();
     expect(s.messageUuidOf('sb')).toBe('final');
     expect(s.resolveItemId('final')).toBe('sb');
+  });
+});
+
+const taskEvents = (events: EventMsg[]) =>
+  events
+    .filter((e) => e.event === 'chat.tasks')
+    .map((e) => e.data as { sessionId: string; seq: number; tasks: ChatTask[] });
+const lastTasks = (events: EventMsg[]): ChatTask[] | undefined => taskEvents(events).at(-1)?.tasks;
+
+describe('LiveSession tasks', () => {
+  it('folds SDK task messages into chat.tasks events, without chat items for them', async () => {
+    const { adapter, timers, events, opts } = setup();
+    const s = LiveSession.create('/p', { text: 'go' }, opts);
+    const fake = adapter.lastSession();
+    await settle();
+    const itemsBefore = itemsOf(events).length;
+    fake.emit(
+      started('a1', {
+        task_type: 'local_agent',
+        subagent_type: 'Explore',
+        description: 'Look around',
+        tool_use_id: 'toolu_1',
+      }),
+    );
+    fake.emit(progress('a1', { usage: { total_tokens: 7, tool_uses: 1, duration_ms: 5 } }));
+    fake.emit(level([]));
+    await settle();
+    timers.advance(33);
+    expect(itemsOf(events)).toHaveLength(itemsBefore);
+    expect(lastTasks(events)).toEqual([
+      expect.objectContaining({
+        taskId: 'a1',
+        kind: 'agent',
+        subagentType: 'Explore',
+        status: 'running',
+        tokens: 7,
+        toolUses: 1,
+        toolUseId: 'toolu_1',
+        startedAt: expect.any(Number),
+      }),
+    ]);
+    expect(taskEvents(events).every((e) => e.sessionId === s.sessionId)).toBe(true);
+    expect(s.tasks()).toEqual(lastTasks(events));
+  });
+
+  it("publishes an agent's model from the messages its subagent streams", async () => {
+    const { adapter, timers, events, opts } = setup();
+    const s = LiveSession.create('/p', { text: 'go' }, opts);
+    const fake = adapter.lastSession();
+    await settle();
+    fake.emit(started('a1', { task_type: 'local_agent', tool_use_id: 'toolu_1', prompt: 'Look' }));
+    fake.emit(
+      sdk({
+        type: 'assistant',
+        uuid: 'sub1',
+        session_id: 's',
+        parent_tool_use_id: 'toolu_1',
+        message: {
+          id: 'api-sub',
+          role: 'assistant',
+          model: 'claude-haiku-5',
+          content: [{ type: 'tool_use', id: 'toolu_r', name: 'Read', input: { file_path: 'a' } }],
+        },
+      }),
+    );
+    await settle();
+    timers.advance(33);
+    expect(lastTasks(events)).toEqual([
+      expect.objectContaining({ taskId: 'a1', model: 'claude-haiku-5', prompt: 'Look' }),
+    ]);
+    expect(s.tasks()).toEqual(lastTasks(events));
+  });
+
+  it('tracks tasks even when rendering a task message throws', async () => {
+    const { adapter, timers, events, opts } = setup();
+    const s = LiveSession.create('/p', { text: 'go' }, opts);
+    const fake = adapter.lastSession();
+    await settle();
+    const push = vi.spyOn(Normalizer.prototype, 'push').mockImplementation(() => {
+      throw new Error('render failed');
+    });
+    try {
+      fake.emit(started('b1', { task_type: 'local_bash', description: 'npm run dev' }));
+      await settle();
+      timers.advance(33);
+    } finally {
+      push.mockRestore();
+    }
+    expect(s.tasks()).toEqual([
+      expect.objectContaining({ taskId: 'b1', kind: 'shell', status: 'running' }),
+    ]);
+    expect(lastTasks(events)).toEqual(s.tasks());
+    // The odd message is still reported in the chat.
+    expect(itemsOf(events).some((i) => i.kind === 'system' && /render failed/.test(i.text))).toBe(
+      true,
+    );
+  });
+
+  it('coalesces task changes into at most one chat.tasks emit per 33 ms', async () => {
+    const { adapter, timers, events, opts } = setup();
+    const times: number[] = [];
+    LiveSession.create(
+      '/p',
+      { text: 'go' },
+      {
+        ...opts,
+        emit: (e) => {
+          events.push(e);
+          if (e.event === 'chat.tasks') times.push(timers.now());
+        },
+      },
+    );
+    const fake = adapter.lastSession();
+    await settle();
+    timers.advance(100);
+    fake.emit(started('a1', { task_type: 'local_agent' }));
+    for (let i = 1; i <= 50; i++) {
+      fake.emit(progress('a1', { usage: { total_tokens: i, tool_uses: i, duration_ms: i } }));
+    }
+    await settle();
+    // A burst in one tick: one leading emit at most, the rest wait for the window.
+    expect(times.length).toBeLessThanOrEqual(1);
+    timers.advance(33);
+    expect(lastTasks(events)?.[0]).toMatchObject({ tokens: 50 });
+    // Steady trickle: one change every 5 ms for 300 ms.
+    for (let i = 51; i <= 110; i++) {
+      fake.emit(progress('a1', { usage: { total_tokens: i, tool_uses: i, duration_ms: i } }));
+      await settle();
+      timers.advance(5);
+    }
+    timers.advance(33);
+    for (let i = 1; i < times.length; i++) {
+      expect(times[i]! - times[i - 1]!).toBeGreaterThanOrEqual(33);
+    }
+    expect(times.length).toBeLessThanOrEqual(2 + Math.ceil((300 + 33) / 33));
+    expect(lastTasks(events)?.[0]).toMatchObject({ tokens: 110 });
+  });
+
+  it('chat.tasks events share the session seq: since() replays them and snapshot() lists the tasks', async () => {
+    const { adapter, events, opts } = setup();
+    const s = LiveSession.create('/p', { text: 'go' }, opts);
+    const fake = adapter.lastSession();
+    fake.emit(init(s.sessionId));
+    fake.emit(started('b1', { task_type: 'local_bash', description: 'npm run dev' }));
+    fake.emit(assistantText('a1', 'started the server'));
+    fake.emit(result('r1'));
+    await settle();
+    // Buffered (coalesced) task changes are flushed by snapshot and since.
+    fake.emit(progress('b1', { description: 'npm run dev (port 5173)' }));
+    await settle();
+    const snap = s.snapshot(10);
+    expect(snap.tasks).toEqual([
+      expect.objectContaining({
+        taskId: 'b1',
+        kind: 'shell',
+        description: 'npm run dev (port 5173)',
+      }),
+    ]);
+    const emitted = chatEvents(events);
+    expect(emitted.map(seqOf)).toEqual(Array.from({ length: emitted.length }, (_, i) => i + 1));
+    expect(snap.seq).toBe(emitted.length);
+    const replay = s.since(0);
+    expect(replay).toEqual(emitted);
+    expect(replay !== 'gap' && replay.some((e) => e.event === 'chat.tasks')).toBe(true);
+    expect(lastTasks(events)).toEqual(snap.tasks);
+  });
+
+  it('skips a chat.tasks emit when nothing visible changed', async () => {
+    const { adapter, timers, events, opts } = setup();
+    LiveSession.create('/p', { text: 'go' }, opts);
+    const fake = adapter.lastSession();
+    fake.emit(started('b1', { task_type: 'local_bash' }));
+    await settle();
+    timers.advance(100);
+    const n = taskEvents(events).length;
+    fake.emit(level([{ task_id: 'b1', task_type: 'local_bash', description: 'task b1' }]));
+    await settle();
+    timers.advance(100);
+    expect(taskEvents(events).length).toBe(n + 1); // now backgrounded
+    fake.emit(level([{ task_id: 'b1', task_type: 'local_bash', description: 'task b1' }]));
+    await settle();
+    timers.advance(100);
+    expect(taskEvents(events).length).toBe(n + 1);
+  });
+
+  it('stopTask asks the SDK to stop the task; the stopped notification updates it', async () => {
+    const { adapter, timers, events, opts } = setup();
+    const s = LiveSession.create('/p', { text: 'go' }, opts);
+    const fake = adapter.lastSession();
+    fake.emit(started('b1', { task_type: 'local_bash', is_backgrounded: true }));
+    await settle();
+    await s.stopTask('b1');
+    expect(fake.stoppedTasks).toEqual(['b1']);
+    fake.emit(notification('b1', 'stopped'));
+    await settle();
+    timers.advance(33);
+    expect(lastTasks(events)?.[0]).toMatchObject({
+      status: 'stopped',
+      endedAt: expect.any(Number),
+    });
+    // Stopping a task that already ended is a no-op.
+    await s.stopTask('b1');
+    expect(fake.stoppedTasks).toEqual(['b1']);
+  });
+
+  it('counts the running tasks and reports each change of the count (R29)', async () => {
+    const changes: [string, number][] = [];
+    const { adapter, timers, opts } = setup({ onRunningTasks: (id, n) => changes.push([id, n]) });
+    const s = LiveSession.create('/p', { text: 'go' }, opts);
+    const fake = adapter.lastSession();
+    await settle();
+    expect(s.runningTasks).toBe(0);
+    fake.emit(started('b1', { task_type: 'local_bash', is_backgrounded: true }));
+    await settle();
+    timers.advance(33);
+    expect(s.runningTasks).toBe(1);
+    expect(changes).toEqual([[s.sessionId, 1]]);
+    // Progress of a running task does not change the count.
+    fake.emit(progress('b1', { usage: { total_tokens: 3, tool_uses: 1, duration_ms: 1 } }));
+    fake.emit(started('a1', { task_type: 'local_agent' }));
+    await settle();
+    timers.advance(33);
+    expect(changes).toEqual([
+      [s.sessionId, 1],
+      [s.sessionId, 2],
+    ]);
+    // Paused and ended tasks do not count; the turn's own status is irrelevant.
+    fake.emit(updated('a1', { status: 'paused' }));
+    fake.emit(result('r1'));
+    await settle();
+    timers.advance(33);
+    expect(s.status).toBe('idle');
+    expect(s.runningTasks).toBe(1);
+    fake.emit(notification('b1', 'stopped'));
+    await settle();
+    timers.advance(33);
+    expect(s.runningTasks).toBe(0);
+    expect(changes.at(-1)).toEqual([s.sessionId, 0]);
+    // The process ending empties the list: nothing left to report.
+    const before = changes.length;
+    s.end();
+    expect(s.runningTasks).toBe(0);
+    expect(changes).toHaveLength(before);
+  });
+
+  it('a process that ends with tasks running reports the count back to 0', async () => {
+    const changes: number[] = [];
+    const { adapter, timers, opts } = setup({ onRunningTasks: (_id, n) => changes.push(n) });
+    const s = LiveSession.create('/p', { text: 'go' }, opts);
+    adapter.lastSession().emit(started('b1', { task_type: 'local_bash' }));
+    await settle();
+    timers.advance(33);
+    s.end();
+    expect(changes).toEqual([1, 0]);
+    expect(s.runningTasks).toBe(0);
+  });
+
+  it('stopTask errors: UNKNOWN_TASK, STOP_FAILED, NOT_LIVE', async () => {
+    const { adapter, opts } = setup();
+    const s = LiveSession.create('/p', { text: 'go' }, opts);
+    const fake = adapter.lastSession();
+    fake.emit(started('b1', { task_type: 'local_bash' }));
+    await settle();
+    const codeOf = (p: Promise<unknown>) =>
+      p.then(
+        () => 'ok',
+        (e: unknown) => (e instanceof ServiceError ? e.code : String(e)),
+      );
+    expect(await codeOf(s.stopTask('nope'))).toBe('UNKNOWN_TASK');
+    fake.stopTaskError = new Error('Task b1 is not running');
+    expect(await codeOf(s.stopTask('b1'))).toBe('STOP_FAILED');
+    s.end();
+    expect(await codeOf(s.stopTask('b1'))).toBe('NOT_LIVE');
+  });
+
+  it("ends a foreground task with no end edge at its turn's result; background tasks keep running", async () => {
+    const changes: number[] = [];
+    const { adapter, timers, events, opts } = setup({
+      onRunningTasks: (_id, n) => changes.push(n),
+    });
+    const s = LiveSession.create('/p', { text: 'go' }, opts);
+    const fake = adapter.lastSession();
+    fake.emit(started('a1', { task_type: 'local_agent', is_backgrounded: false }));
+    fake.emit(started('b1', { task_type: 'local_bash', is_backgrounded: true }));
+    await settle();
+    timers.advance(33);
+    expect(s.runningTasks).toBe(2);
+    fake.emit(result('r1'));
+    await settle();
+    timers.advance(33);
+    expect(s.status).toBe('idle');
+    expect(lastTasks(events)).toEqual([
+      expect.objectContaining({ taskId: 'a1', status: 'unknown', endedAt: expect.any(Number) }),
+      expect.objectContaining({ taskId: 'b1', status: 'running' }),
+    ]);
+    expect(s.runningTasks).toBe(1);
+    expect(changes).toEqual([1, 2, 1]);
+  });
+
+  it('forgets the tasks when the process ends (ended, paused or crashed)', async () => {
+    for (const how of ['end', 'pause', 'crash'] as const) {
+      const { adapter, events, opts } = setup();
+      const s = LiveSession.create('/p', { text: 'go' }, opts);
+      const fake = adapter.lastSession();
+      fake.emit(started('b1', { task_type: 'local_bash' }));
+      await settle();
+      expect(s.tasks()).toHaveLength(1);
+      if (how === 'end') s.end();
+      else if (how === 'pause') s.pause();
+      else fake.end(new Error('boom'));
+      await s.whenEnded();
+      await settle();
+      expect(s.tasks(), how).toEqual([]);
+      expect(lastTasks(events), how).toEqual([]);
+      expect(s.snapshot(0).tasks, how).toEqual([]);
+    }
+  });
+});
+
+// ── v1.1 T2: "Your turn" and live activity ───────────────────────────────────
+
+describe('LiveSession turn ends and activity (v1.1)', () => {
+  const finished = (events: EventMsg[]) => events.filter((e) => e.event === 'chatFinished');
+
+  it('reports each turn end once (onTurnEnded, then chatFinished) after the status is idle', async () => {
+    const turns: [string, number, string][] = [];
+    const ctx = setup();
+    const s = LiveSession.create(
+      '/work/proj',
+      { text: 'Fix the build\nplease' },
+      {
+        ...ctx.opts,
+        onTurnEnded: (id, at) => turns.push([id, at, s.status]),
+      },
+    );
+    const fake = ctx.adapter.lastSession();
+    fake.emit(init(s.sessionId));
+    fake.emit(assistantText('a1', 'done'));
+    await settle();
+    expect(turns).toEqual([]);
+    expect(finished(ctx.events)).toEqual([]);
+
+    ctx.timers.advance(500);
+    fake.emit(result('r1'));
+    await settle();
+    expect(turns).toEqual([[s.sessionId, ctx.timers.now(), 'idle']]);
+    expect(finished(ctx.events)).toEqual([
+      {
+        event: 'chatFinished',
+        data: { sessionId: s.sessionId, title: 'Fix the build', projectName: 'proj' },
+      },
+    ]);
+    // chatFinished follows the idle status (a client acting on it sees the new state).
+    const order = ctx.events.map((e) =>
+      e.event === 'chat.status' ? (e.data as { status: string }).status : e.event,
+    );
+    expect(order.lastIndexOf('idle')).toBeLessThan(order.indexOf('chatFinished'));
+
+    s.send({ text: 'again' });
+    fake.emit(assistantText('a2', 'ok'));
+    fake.emit(result('r2'));
+    await settle();
+    expect(turns).toHaveLength(2);
+    expect(finished(ctx.events)).toHaveLength(2);
+  });
+
+  it('a turn the user stopped from Threadgarden is not a finished turn; the next one is', async () => {
+    const turns: string[] = [];
+    const ctx = setup({ onTurnEnded: (id) => turns.push(id) });
+    const s = LiveSession.create('/p', { text: 'long job' }, ctx.opts);
+    const fake = ctx.adapter.lastSession();
+    fake.emit(assistantText('a1', 'working on it'));
+    await settle();
+    await s.interrupt(); // Stop / Esc
+    expect(fake.interrupted).toBe(1);
+    fake.emit(result('r1', { subtype: 'error_during_execution', is_error: true }));
+    await settle();
+    expect(s.status).toBe('idle');
+    expect(turns).toEqual([]);
+    expect(finished(ctx.events)).toEqual([]);
+
+    // The next turn is announced as usual.
+    s.send({ text: 'go on' });
+    fake.emit(result('r2'));
+    await settle();
+    expect(turns).toEqual([s.sessionId]);
+    expect(finished(ctx.events)).toHaveLength(1);
+
+    // Stop pressed while idle (nothing to stop) does not swallow the next turn end.
+    await s.interrupt();
+    s.send({ text: 'one more' });
+    fake.emit(result('r3'));
+    await settle();
+    expect(turns).toHaveLength(2);
+    expect(finished(ctx.events)).toHaveLength(2);
+  });
+
+  it('a failed interrupt leaves the turn end announced', async () => {
+    const turns: string[] = [];
+    const ctx = setup({ onTurnEnded: (id) => turns.push(id) });
+    const s = LiveSession.create('/p', { text: 'job' }, ctx.opts);
+    const fake = ctx.adapter.lastSession();
+    vi.spyOn(fake, 'interrupt').mockRejectedValueOnce(new Error('no'));
+    await expect(s.interrupt()).rejects.toThrow('no');
+    fake.emit(result('r1'));
+    await settle();
+    expect(turns).toEqual([s.sessionId]);
+    expect(finished(ctx.events)).toHaveLength(1);
+  });
+
+  it('a result with a queued follow-up is not a finished turn (R28); the last result is', async () => {
+    const turns: string[] = [];
+    const ctx = setup({ onTurnEnded: (id) => turns.push(id) });
+    const s = LiveSession.create('/p', { text: 'first' }, ctx.opts);
+    const fake = ctx.adapter.lastSession();
+    expect(s.send({ text: 'second' })).toEqual({ queued: true });
+    fake.emit(result('r1')); // Claude goes straight on to "second"
+    await settle();
+    expect(turns).toEqual([]);
+    expect(finished(ctx.events)).toEqual([]);
+
+    fake.emit(assistantText('a2', 'answering second'));
+    fake.emit(result('r2'));
+    await settle();
+    expect(turns).toEqual([s.sessionId]);
+    expect(finished(ctx.events)).toHaveLength(1);
+  });
+
+  it('follow-ups queued during one turn are picked up together by the next (R28)', async () => {
+    const ctx = setup();
+    const s = LiveSession.create('/p', { text: 'first' }, ctx.opts);
+    const fake = ctx.adapter.lastSession();
+    s.send({ text: 'second' });
+    s.send({ text: 'third' });
+    fake.emit(result('r1'));
+    await settle();
+    expect(finished(ctx.events)).toEqual([]);
+    fake.emit(result('r2')); // the turn that answered both
+    await settle();
+    expect(finished(ctx.events)).toHaveLength(1);
+    // The next turn starts with an empty queue: its end is reported.
+    s.send({ text: 'fourth' });
+    fake.emit(result('r3'));
+    await settle();
+    expect(finished(ctx.events)).toHaveLength(2);
+  });
+
+  it('names the chat with describe when it can', async () => {
+    const ctx = setup({
+      describe: () => ({ title: 'Indexed title', projectName: 'Threadgarden' }),
+    });
+    const s = LiveSession.create('/work/proj', { text: 'hi' }, ctx.opts);
+    ctx.adapter.lastSession().emit(result('r1'));
+    await settle();
+    expect(finished(ctx.events)[0]?.data).toEqual({
+      sessionId: s.sessionId,
+      title: 'Indexed title',
+      projectName: 'Threadgarden',
+    });
+  });
+
+  it('a startup failure is not a finished turn; a failing onTurnEnded is contained', async () => {
+    const onError = vi.fn();
+    const ctx = setup({
+      onError,
+      onTurnEnded: () => {
+        throw new Error('db is locked');
+      },
+    });
+    LiveSession.create('/p', { text: 'go' }, ctx.opts);
+    const fake = ctx.adapter.lastSession();
+    fake.emit(
+      result('r-start', {
+        subtype: 'error_during_execution',
+        is_error: true,
+        startup_failure_reason: 'cli_version_too_old',
+      }),
+    );
+    await settle();
+    expect(finished(ctx.events)).toEqual([]);
+    expect(onError).not.toHaveBeenCalled();
+
+    const ok = LiveSession.create('/p', { text: 'go' }, ctx.opts);
+    ctx.adapter.lastSession().emit(result('r1'));
+    await settle();
+    expect(ok.status).toBe('idle');
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(finished(ctx.events)).toHaveLength(1); // still announced
+  });
+
+  it('tracks the time of the last real activity (sends and SDK messages) and reports it', async () => {
+    const activity = vi.fn();
+    const ctx = setup({ onActivity: activity });
+    const restored = LiveSession.restore('old', '/p', 'failed', ctx.opts, {
+      level: 'error',
+      text: 'Interrupted',
+    });
+    expect(restored.lastActivity).toBeNull(); // a recovery note is not activity
+    expect(activity).not.toHaveBeenCalled();
+
+    const s = LiveSession.create('/p', { text: 'go' }, ctx.opts);
+    const sentAt = ctx.timers.now();
+    expect(s.lastActivity).toBe(sentAt);
+    expect(activity).toHaveBeenLastCalledWith(s.sessionId);
+    ctx.timers.advance(2_000);
+    ctx.adapter.lastSession().emit(assistantText('a1', 'hello'));
+    await settle();
+    expect(s.lastActivity).toBe(sentAt + 2_000);
+    const calls = activity.mock.calls.length;
+    s.end(); // closing is not activity
+    expect(s.lastActivity).toBe(sentAt + 2_000);
+    expect(activity.mock.calls.length).toBe(calls);
+  });
+});
+
+// ── v1.3 B: usage limits ─────────────────────────────────────────────────────
+
+describe('LiveSession usage limits', () => {
+  it('reports rate-limit events, refused turns and every result', async () => {
+    const calls: string[] = [];
+    const { adapter, opts } = setup({
+      onRateLimit: (id, info) => calls.push(`event ${id} ${(info as { status: string }).status}`),
+      onLimitError: (id) => calls.push(`refused ${id}`),
+      onTurnResult: (id) => calls.push(`result ${id}`),
+    });
+    const s = LiveSession.create('/proj', { text: 'hi' }, { ...opts, sessionId: 's' });
+    const fake = adapter.lastSession();
+    fake.emit(init('s'));
+    fake.emit(
+      sdk({
+        type: 'rate_limit_event',
+        uuid: 'rl',
+        session_id: 's',
+        rate_limit_info: { status: 'rejected', resetsAt: 1_800_000_000 },
+      }),
+    );
+    fake.emit(
+      sdk({
+        type: 'assistant',
+        uuid: 'a1',
+        session_id: 's',
+        parent_tool_use_id: null,
+        error: 'rate_limit',
+        message: {
+          id: 'msg_a1',
+          role: 'assistant',
+          content: [{ type: 'text', text: "You've hit your limit · resets 3pm" }],
+        },
+      }),
+    );
+    fake.emit(result('r1', { is_error: true }));
+    await settle();
+    expect(calls).toEqual(['event s rejected', 'refused s', 'result s']);
+    // The CLI's own reply about the limit still shows in the chat.
+    expect(s.snapshot(10).items.some((i) => i.kind === 'assistantText')).toBe(true);
+  });
+
+  it('offers the usage reading of its process only when the SDK has one', async () => {
+    const { adapter, opts } = setup();
+    const s = LiveSession.create('/proj', { text: 'hi' }, opts);
+    expect(s.readUsage()).toBeUndefined();
+    const fake = adapter.lastSession();
+    fake.usage = async () => ({ rate_limits_available: false });
+    await expect(s.readUsage()!()).resolves.toEqual({ rate_limits_available: false });
+    s.end();
+    expect(s.readUsage()).toBeUndefined();
+  });
+
+  it('note adds a line of its own to the chat', () => {
+    const { opts } = setup();
+    const s = LiveSession.create('/proj', { text: 'hi' }, opts);
+    s.note('info', 'Sent late');
+    expect(s.snapshot(10).items.at(-1)).toMatchObject({
+      kind: 'system',
+      level: 'info',
+      text: 'Sent late',
+    });
   });
 });

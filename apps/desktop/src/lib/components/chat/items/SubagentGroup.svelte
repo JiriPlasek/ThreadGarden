@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { ChatItem } from '@pahub/protocol';
+  import type { ChatItem } from '@threadgarden/protocol';
   import BotIcon from '@lucide/svelte/icons/bot';
   import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
   import { buildRows, type ToolCallItem } from '../rows';
@@ -52,11 +52,11 @@
     onclick={() => (open = !open)}
   >
     <ChevronRightIcon
-      class="text-muted-foreground size-3.5 shrink-0 transition-transform {open ? 'rotate-90' : ''}"
+      class="text-muted-foreground size-4 shrink-0 transition-transform {open ? 'rotate-90' : ''}"
       aria-hidden="true"
     />
     <ToolStatus status={item.status} />
-    <BotIcon class="text-muted-foreground size-3.5 shrink-0" aria-hidden="true" />
+    <BotIcon class="text-muted-foreground size-4 shrink-0" aria-hidden="true" />
     <span class="min-w-0 truncate font-medium">{summary.target || item.name}</span>
     {#if summary.detail}
       <span class="bg-muted text-muted-foreground shrink-0 rounded px-1 py-px font-mono"

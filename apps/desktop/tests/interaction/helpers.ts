@@ -1,8 +1,8 @@
-import type { ChatItem, ChatStatus, ChatSummary } from '@pahub/protocol';
-import { render, screen, waitFor } from '@testing-library/svelte';
+import type { ChatItem, ChatStatus, ChatSummary } from '@threadgarden/protocol';
+import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { expect } from 'vitest';
 import ChatView from '../../src/lib/components/chat/ChatView.svelte';
-import { setup, summary } from '../layout/harness';
+import { LOCAL, setup, summary } from '../layout/harness';
 import type { FakeServer } from '../service/fake-ws';
 
 export const SID = 's1';
@@ -67,7 +67,10 @@ export const renderChat = async (o: ChatOptions = {}) => {
     o.configure?.(server);
   });
   env.app.tabs.openTab(SID);
-  const view = render(ChatView, { props: { sessionId: SID }, context: env.context });
+  const view = render(ChatView, {
+    props: { ref: { machineId: LOCAL, sessionId: SID } },
+    context: env.context,
+  });
   await waitFor(() => expect(env.app.chats.get(SID)?.loaded).toBe(true));
   const composer = (): HTMLTextAreaElement =>
     screen.getByRole('textbox', { name: /message/i }) as HTMLTextAreaElement;
@@ -80,3 +83,16 @@ export const pushItems = (server: FakeServer, seq: number, items: ChatItem[]): v
 
 export const pushStatus = (server: FakeServer, seq: number, status: ChatStatus): void =>
   server.push('chat.status', { sessionId: SID, seq, status });
+
+/**
+ * Puts `text` in a text field in one input event, the caret at its end, and
+ * leaves the field focused. Typing key by key (`userEvent.type`) re-renders
+ * the chat on every key; under a loaded parallel test run that made tests
+ * with long chats time out now and then.
+ */
+export const fill = async (field: HTMLTextAreaElement, text: string): Promise<void> => {
+  field.focus();
+  field.value = text;
+  field.setSelectionRange(text.length, text.length);
+  await fireEvent.input(field);
+};

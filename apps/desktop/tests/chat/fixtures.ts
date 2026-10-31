@@ -1,4 +1,4 @@
-import type { ChatItem } from '@pahub/protocol';
+import type { ChatItem } from '@threadgarden/protocol';
 
 type Of<K extends ChatItem['kind']> = Extract<ChatItem, { kind: K }>;
 

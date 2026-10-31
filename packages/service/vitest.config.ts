@@ -1,10 +1,12 @@
 import { configDefaults, defineConfig } from 'vitest/config';
+import { protocolAlias } from './protocol-alias.mjs';
 
 // Real tests (test/real/**) spawn the user's `claude` and use their login;
 // they run only through `pnpm test:real` (vitest.real.config.ts), never in CI.
 // Perf tests (test/perf/**) run in their own serial pass: `pnpm test:perf`
 // (vitest.perf.config.ts).
 export default defineConfig({
+  resolve: { alias: protocolAlias },
   test: {
     exclude: [...configDefaults.exclude, 'test/real/**', 'test/perf/**'],
   },

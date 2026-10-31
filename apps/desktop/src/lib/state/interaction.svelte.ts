@@ -1,4 +1,4 @@
-import type { Result } from '@pahub/protocol';
+import type { Result } from '@threadgarden/protocol';
 import { quietly, type Api } from './api';
 
 /** Drafts are written this long after the last keystroke (spec §7: ≤ 300 ms). */
@@ -20,12 +20,25 @@ export type ModelChoice = Result<'chat.models'>[number];
 export class InteractionState {
   /** `system.status`; null until loaded. */
   status = $state.raw<SystemStatus | null>(null);
-  /** The new-chat dialog; `cwd` preselects a project folder. */
-  newChat = $state<{ open: boolean; cwd: string | null }>({ open: false, cwd: null });
+  /**
+   * The new-chat dialog; `cwd` preselects a project folder of `machineId`'s
+   * (null: the selected project's machine, else This PC).
+   */
+  newChat = $state<{ open: boolean; cwd: string | null; machineId: string | null }>({
+    open: false,
+    cwd: null,
+    machineId: null,
+  });
   /** The Ctrl/Cmd+K quick switcher (spec §6.1). */
   switcherOpen = $state(false);
-  /** pahub's settings dialog (spec §6.5). */
+  /** Threadgarden's settings dialog (spec §6.5). */
   settingsOpen = $state(false);
+  /** The Add machine dialog (Settings → Machines). */
+  addMachineOpen = $state(false);
+  /** A section of the settings dialog to scroll to and focus when it opens (cleared once shown). */
+  settingsSection = $state<'machines' | null>(null);
+  /** The keyboard shortcuts dialog (Ctrl/Cmd+/ or ?). */
+  shortcutsOpen = $state(false);
   /** The user chose to browse history although Claude Code is missing. */
   setupDismissed = $state(false);
   /** A chat whose composer takes focus when it opens (a chat just created). */
@@ -140,12 +153,12 @@ export class InteractionState {
     return true;
   };
 
-  openNewChat = (cwd: string | null = null): void => {
-    this.newChat = { open: true, cwd };
+  openNewChat = (cwd: string | null = null, machineId: string | null = null): void => {
+    this.newChat = { open: true, cwd, machineId };
   };
 
   closeNewChat = (): void => {
-    this.newChat = { open: false, cwd: this.newChat.cwd };
+    this.newChat = { ...this.newChat, open: false };
   };
 }
 

@@ -1,21 +1,35 @@
 /**
  * Router handlers for one chat (§4.3–§4.5, §6.4): open / page / replay,
- * create / send / resume, controls, permission answers, fork, and the
- * command and model lists.
+ * create / send / resume, controls, permission answers, fork, stopping a
+ * task (v1.1 §2), the command and model lists, the seen state behind
+ * "Your turn" (v1.1 `chat.markSeen`) and "Back from hold" (v1.2), and the
+ * names of the chats Threadgarden starts (v1.2 C1, `chat/titles.ts`).
  *
  * Validation that the protocol schema leaves open happens here: permission
- * modes are limited to what pahub offers (Ruling R11: never
+ * modes are limited to what Threadgarden offers (Ruling R11: never
  * `bypassPermissions`), effort to the SDK's levels, models to non-empty names.
  *
  * Errors the UI acts on carry a code: `NOT_FOUND`, `NOT_LIVE`, `GAP` (the
  * client's seq is not replayable → `chat.open` again), `CLAUDE_MISSING`,
  * `RESUME_BLOCKED` (§4.4, with the reason to show), `FORK_FAILED`,
- * `INVALID_PARAMS`.
+ * `UNKNOWN_TASK`, `STOP_FAILED`, `INVALID_PARAMS`.
  */
-import type { ChatHeaderInfo, ChatItem, EventMsg, ImageRef } from '@pahub/protocol';
-import type { LiveSession, UserInput } from '../../chat/live-session.js';
+import type {
+  ChatHeaderInfo,
+  ChatItem,
+  ChatTask,
+  EventMsg,
+  ImageRef,
+} from '@threadgarden/protocol';
+import {
+  realTimers,
+  type LiveSession,
+  type Timers,
+  type UserInput,
+} from '../../chat/live-session.js';
 import { Normalizer } from '../../chat/normalize.js';
 import type { SessionHost } from '../../chat/session-host.js';
+import type { ChatTitles } from '../../chat/titles.js';
 import type { ResumeCheck } from '../../external/resume-safety.js';
 import type { Catalog } from '../../history/catalog.js';
 import type { Db } from '../../history/db.js';
@@ -29,7 +43,7 @@ import type {
 import type { ClaudeFound, ClaudeProblem } from '../../sdk/claude-path.js';
 import { ServiceError, type Router } from '../router.js';
 
-/** Permission modes pahub offers (Ruling R11). */
+/** Permission modes Threadgarden offers (Ruling R11). */
 export const PERMISSION_MODES: readonly PermissionMode[] = [
   'default',
   'acceptEdits',
@@ -45,6 +59,13 @@ export const EFFORT_LEVELS: readonly Effort[] = ['low', 'medium', 'high', 'xhigh
  */
 export const HISTORY_CACHE_CHARS = 32 * 1024 * 1024;
 
+/**
+ * How long `chat.end` waits for the ended chat to be indexed. The index
+ * queue can be busy (a first-run full sync takes minutes); the indexing
+ * still finishes afterwards.
+ */
+export const END_INDEX_WAIT_MS = 5_000;
+
 export type ChatHandlerDeps = {
   host: SessionHost;
   adapter: AgentAdapter;
@@ -59,12 +80,22 @@ export type ChatHandlerDeps = {
    */
   apiKeyMissing?: () => boolean;
   resumeCheck: (sessionId: string) => Promise<ResumeCheck>;
-  /** Indexes sessions that pahub just caused to exist (a fork), so they can be opened at once. */
+  /**
+   * Indexes sessions now: a fork Threadgarden just made, so it can be opened at
+   * once, and a chat that ends (its index may have waited for its turn).
+   */
   indexNow: (sessionIds: string[]) => Promise<void>;
   emit: (e: EventMsg) => void;
   onError: (err: unknown, context: string) => void;
   /** Overrides `HISTORY_CACHE_CHARS`. */
   historyCacheChars?: number;
+  /** Clock for the seen time of `chat.markSeen` (v1.1); default `Date.now`. */
+  now?: () => number;
+  /** Timer for `END_INDEX_WAIT_MS`; default Node's. */
+  timers?: Pick<Timers, 'setTimeout' | 'clearTimeout'>;
+  // ── v1.2 C1: chat titles ──
+  /** Names the chats Threadgarden starts (provisional title, then a generated one). */
+  titles?: ChatTitles;
 };
 
 /** Rough memory weight of an item: its text plus a fixed overhead. */
@@ -85,7 +116,7 @@ const itemChars = (i: ChatItem): number => {
 };
 
 type CacheEntry = {
-  /** The host's session object when read while pahub held the chat, else undefined. */
+  /** The host's session object when read while Threadgarden held the chat, else undefined. */
   owner: LiveSession | undefined;
   /** For history-only chats: the indexed `lastModified:fileSize` at read time. */
   key: string | undefined;
@@ -108,7 +139,7 @@ const permissionMode = (v: string | undefined): PermissionMode | undefined => {
   if (!(PERMISSION_MODES as readonly string[]).includes(v)) {
     throw new ServiceError(
       'INVALID_PARAMS',
-      `Unsupported permission mode "${v}" (pahub offers ${PERMISSION_MODES.join(', ')})`,
+      `Unsupported permission mode "${v}" (Threadgarden offers ${PERMISSION_MODES.join(', ')})`,
     );
   }
   return v as PermissionMode;
@@ -151,7 +182,16 @@ const toModel = (m: ModelInfo): Model => ({
   ...(m.supportedEffortLevels ? { supportedEffortLevels: [...m.supportedEffortLevels] } : {}),
 });
 
-export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): void => {
+export type ChatHandlers = {
+  /** What `chat.send` does (scheduled sends go out through it). */
+  send: (p: {
+    sessionId: string;
+    text: string;
+    images?: ImageRef[] | undefined;
+  }) => Promise<{ queued: boolean }>;
+};
+
+export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): ChatHandlers => {
   const { host, adapter, db, catalog } = deps;
   const historyCache = new Map<string, CacheEntry>();
   const cacheBudget = deps.historyCacheChars ?? HISTORY_CACHE_CHARS;
@@ -169,12 +209,50 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): voi
   const changed = (sessionIds: string[]) =>
     deps.emit({ event: 'sessions.changed', data: { sessionIds } });
 
+  /**
+   * v1.1 "Your turn": the user has seen the chat's latest turn, and (v1.2)
+   * that it came back from hold. Lists change (Needs you, counts) only when
+   * that cleared something.
+   */
+  const markSeen = (sessionId: string): void => {
+    const seen = db.markSeen(sessionId, (deps.now ?? Date.now)());
+    const back = db.clearBackFromHold(sessionId);
+    if (seen || back) changed([sessionId]);
+  };
+  /**
+   * v1.2 auto-unarchive: an archived chat that is sent a message returns to
+   * Active; so does one on hold, its hold ended (Ruling R36).
+   */
+  const activate = (sessionId: string): void => {
+    if (db.activate([sessionId]).length === 0) return;
+    catalog.bucketChanged([sessionId], 'active');
+    changed([sessionId]);
+  };
+
+  /**
+   * v1.2 C1: names a chat Threadgarden starts (`untitledOnly`: one it continues,
+   * only while it has no title at all). True when its title changed. A
+   * failure is reported and never fails the request.
+   */
+  const nameChat = (sessionId: string, cwd: string, text: string, untitledOnly: boolean) => {
+    const titles = deps.titles;
+    if (!titles) return false;
+    try {
+      return untitledOnly
+        ? titles.startedIfUntitled(sessionId, cwd, text)
+        : titles.started(sessionId, cwd, text);
+    } catch (err) {
+      deps.onError(err, `title of ${sessionId}`);
+      return false;
+    }
+  };
+
   /** A Claude Code process may be started: `claude` is found and the auth policy is met. */
   const requireRunnable = async (): Promise<void> => {
     if (deps.apiKeyMissing?.()) {
       throw new ServiceError(
         'API_KEY_REQUIRED',
-        'This build of pahub runs chats only on an Anthropic API key. Add your key in Settings to start or continue a chat.',
+        'This build of Threadgarden runs chats only on an Anthropic API key. Add your key in Settings to start or continue a chat.',
       );
     }
     await deps.located?.();
@@ -238,26 +316,32 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): voi
    * the host holds (live, paused or failed). History entries the live
    * process already rendered — same id, or a streamed item's final message
    * (`resolveItemId`) — are dropped in favour of the live version. The live
-   * snapshot is taken after the history read, so `seq` covers every item.
+   * snapshot is taken after the history read, so `seq` covers every item
+   * (and the task list, which only a chat the host holds has).
    */
   const view = async (
     sessionId: string,
-  ): Promise<{ items: ChatItem[]; seq: number; header: ChatHeaderInfo }> => {
+  ): Promise<{ items: ChatItem[]; seq: number; header: ChatHeaderInfo; tasks: ChatTask[] }> => {
     let history: ChatItem[];
     try {
       history = await historyItems(sessionId);
     } catch (err) {
-      // A chat pahub runs may not have a transcript yet; a history-only chat needs one.
+      // A chat Threadgarden runs may not have a transcript yet; a history-only chat needs one.
       if (!host.get(sessionId)) throw err;
       deps.onError(err, `history of ${sessionId}`);
       history = [];
     }
     const s = host.get(sessionId);
-    if (!s) return { items: history, seq: host.seqOf(sessionId), header: {} };
+    if (!s) return { items: history, seq: host.seqOf(sessionId), header: {}, tasks: [] };
     const snap = s.snapshot(Number.MAX_SAFE_INTEGER);
     const own = new Set(snap.items.map((i) => i.id));
     const earlier = history.filter((i) => !own.has(i.id) && !own.has(s.resolveItemId(i.id) ?? ''));
-    return { items: [...earlier, ...snap.items], seq: snap.seq, header: snap.header };
+    return {
+      items: [...earlier, ...snap.items],
+      seq: snap.seq,
+      header: snap.header,
+      tasks: snap.tasks,
+    };
   };
 
   router.register('chat.open', async (p) => {
@@ -275,6 +359,7 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): voi
       items,
       hasMore: v.items.length > items.length,
       seq: v.seq,
+      tasks: v.tasks,
     };
   });
 
@@ -307,11 +392,17 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): voi
     };
     await requireRunnable();
     const s = host.create(p.cwd, toInput(p), choices);
+    nameChat(s.sessionId, p.cwd, p.text, false); // shown with the change below
+    markSeen(s.sessionId); // a new chat has nothing unseen; kept for symmetry with chat.send
     changed([s.sessionId]);
     return { sessionId: s.sessionId };
   });
 
-  router.register('chat.send', async (p) => {
+  /**
+   * `chat.send`, also the path scheduled sends (v1.3 B) go out by: resumes
+   * the chat when Threadgarden is not running it (behind the resume-safety check).
+   */
+  const send = async (p: { sessionId: string; text: string; images?: ImageRef[] | undefined }) => {
     const input = toInput(p);
     let s = host.get(p.sessionId);
     if (!s?.live) {
@@ -329,7 +420,19 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): voi
       s = host.ensureLive(p.sessionId, cwd);
       changed([p.sessionId]);
     }
-    return s.send(input);
+    // Nothing gets lost in the archive or on hold: a chat being sent a message
+    // (and perhaps running now) is active, even if the send itself then fails.
+    activate(p.sessionId);
+    const sent = s.send(input);
+    markSeen(p.sessionId); // replying means the last turn was seen
+    if (nameChat(p.sessionId, s.cwd, p.text, true)) changed([p.sessionId]);
+    return sent;
+  };
+  router.register('chat.send', send);
+
+  router.register('chat.markSeen', async (p) => {
+    markSeen(p.sessionId);
+    return {};
   });
 
   router.register('chat.interrupt', async (p) => {
@@ -338,11 +441,32 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): voi
     return {};
   });
 
+  /**
+   * Indexing waits while a turn runs, so a chat ended mid-turn may not be
+   * indexed yet. It is indexed before this answers (for at most
+   * `END_INDEX_WAIT_MS`), so it stays listed and can be moved at once ("End
+   * this chat and archive it?"). Past the cap the answer comes anyway; a move
+   * right after may then skip the chat as `NOT_FOUND`, which the UI reports.
+   */
   router.register('chat.end', async (p) => {
     if (host.get(p.sessionId)) {
       forget(p.sessionId); // the transcript now holds the live turns
+      deps.titles?.forget(p.sessionId); // a first turn cut short gets no generated title
       host.end(p.sessionId);
       changed([p.sessionId]);
+      const timers = deps.timers ?? realTimers;
+      let timer: unknown;
+      const capped = new Promise<void>((resolve) => {
+        timer = timers.setTimeout(resolve, END_INDEX_WAIT_MS);
+      });
+      const indexed = deps.indexNow([p.sessionId]).catch((err: unknown) => {
+        deps.onError(err, `index ended chat ${p.sessionId}`);
+      });
+      try {
+        await Promise.race([indexed, capped]);
+      } finally {
+        timers.clearTimeout(timer);
+      }
     }
     return {};
   });
@@ -362,6 +486,12 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): voi
   router.register('chat.setEffort', async (p) => {
     const value = effort(p.value)!;
     await requireLive(p.sessionId).setEffort(value);
+    return {};
+  });
+
+  /** Only a chat Threadgarden runs has tasks it can stop (`NOT_LIVE` otherwise). */
+  router.register('chat.stopTask', async (p) => {
+    await requireLive(p.sessionId).stopTask(p.taskId);
     return {};
   });
 
@@ -443,4 +573,6 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): voi
     }
     return lastModels ?? [];
   });
+
+  return { send };
 };

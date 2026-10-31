@@ -1,4 +1,4 @@
-import { settingsDefaults } from '@pahub/protocol';
+import { settingsDefaults } from '@threadgarden/protocol';
 import { render, screen, within } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -31,7 +31,7 @@ const openSettings = async (e: Awaited<ReturnType<typeof env>>) => {
   return screen.findByRole('dialog', { name: /settings/i });
 };
 
-describe('API-key-only build (PAHUB_API_KEY_ONLY)', () => {
+describe('API-key-only build (THREADGARDEN_API_KEY_ONLY)', () => {
   afterEach(async () => {
     buildFlags.apiKeyOnly = false;
     await apiKey.clear();

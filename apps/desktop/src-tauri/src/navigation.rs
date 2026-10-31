@@ -1,4 +1,4 @@
-//! Keeps pahub's webview on pahub's own pages. Links in chat content are
+//! Keeps Threadgarden's webview on Threadgarden's own pages. Links in chat content are
 //! opened in the system browser by the UI (ruling R23); this guard is the
 //! defence in depth: any other top-level navigation is refused.
 
@@ -79,7 +79,7 @@ pub fn guard<R: Runtime>() -> TauriPlugin<R> {
         .on_navigation(|webview, url| {
             let allowed = is_app_url(url, &AppOrigin::of(webview.app_handle()));
             if !allowed {
-                eprintln!("pahub: blocked navigation away from the app to {url}");
+                eprintln!("Threadgarden: blocked navigation away from the app to {url}");
             }
             allowed
         })

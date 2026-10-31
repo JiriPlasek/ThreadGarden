@@ -1,24 +1,24 @@
-import { expect, type Page } from '@playwright/test';
+import { expect, type Locator, type Page } from '@playwright/test';
 import { MOCK_PORT, MOCK_TOKEN } from './env';
 
 /** Chats in the mock's history: 1,000 generated sessions plus one big one. */
 export const MOCK_CHATS = 1001;
 
-/** Budget multiplier for slower machines (`PAHUB_PERF_SLACK`, CI sets 3 — ruling R3). */
-export const slack = Number(process.env.PAHUB_PERF_SLACK ?? 1);
+/** Budget multiplier for slower machines (`THREADGARDEN_PERF_SLACK`, CI sets 3 — ruling R3). */
+export const slack = Number(process.env.THREADGARDEN_PERF_SLACK ?? 1);
 
 /** Opens the app and waits until the mock's whole history is indexed and listed. */
 export const openApp = async (page: Page): Promise<void> => {
   await page.goto('/');
   const places = page.getByRole('navigation', { name: 'Places' });
-  await expect(places.locator('[title="All chats"]')).toHaveText(String(MOCK_CHATS), {
+  await expect(places.locator('[title="Active chats"]')).toHaveText(String(MOCK_CHATS), {
     timeout: 60_000,
   });
 };
 
 /** One request to the mock service over its WebSocket, from the test process. */
 export const serviceCall = async <T>(method: string, params: unknown): Promise<T> => {
-  const ws = new WebSocket(`ws://127.0.0.1:${MOCK_PORT}`, [`pahub.${MOCK_TOKEN}`]);
+  const ws = new WebSocket(`ws://127.0.0.1:${MOCK_PORT}`, [`threadgarden.${MOCK_TOKEN}`]);
   try {
     return await new Promise<T>((resolve, reject) => {
       ws.onopen = () => ws.send(JSON.stringify({ id: 1, method, params }));
@@ -33,6 +33,30 @@ export const serviceCall = async <T>(method: string, params: unknown): Promise<T
   } finally {
     ws.close();
   }
+};
+
+/**
+ * Nothing unread: a spec that ends right after a chat's turn finished leaves
+ * it unread ("Your turn", counted under Needs you) in the shared mock, as the
+ * window closed before the chat counted as seen. A spec can also end while a
+ * turn it started still runs (it saw what it waited for mid-turn): that turn
+ * ends first (at most 15 s), or it would turn unread afterwards.
+ */
+export const markAllSeen = async (): Promise<void> => {
+  const deadline = Date.now() + 15_000;
+  for (;;) {
+    const running = await serviceCall<{ items: { status: string }[] }>('sessions.list', {
+      place: { kind: 'running' },
+      limit: 200,
+    });
+    if (!running.items.some((s) => s.status === 'working') || Date.now() > deadline) break;
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  const { items } = await serviceCall<{ items: { sessionId: string }[] }>('sessions.list', {
+    place: { kind: 'needsYou' },
+    limit: 200,
+  });
+  for (const s of items) await serviceCall('chat.markSeen', { sessionId: s.sessionId });
 };
 
 /** No open tabs: the mock service keeps the tab layout between tests (`uiState`). */
@@ -61,7 +85,7 @@ type Armed = { trigger: 'click' | 'keydown'; done: DoneWhen | null };
  */
 const arm = (page: Page, a: Armed) =>
   page.evaluate(({ trigger, done }) => {
-    const w = window as unknown as { __pahubPerf?: Promise<number> };
+    const w = window as unknown as { __threadgardenPerf?: Promise<number> };
     const holds = (d: DoneWhen): boolean => {
       if (!document.querySelector(d.selector)) return false;
       if (!d.keys) return true;
@@ -72,7 +96,7 @@ const arm = (page: Page, a: Armed) =>
     };
     if (done && holds(done))
       throw new Error(`already done before the interaction: ${done.selector}`);
-    w.__pahubPerf = new Promise<number>((resolve, reject) => {
+    w.__threadgardenPerf = new Promise<number>((resolve, reject) => {
       let t0: number | null = null;
       const finish = () => {
         void document.documentElement.offsetHeight; // style + layout
@@ -118,7 +142,9 @@ const arm = (page: Page, a: Armed) =>
   }, a);
 
 const result = (page: Page): Promise<number> =>
-  page.evaluate(() => (window as unknown as { __pahubPerf: Promise<number> }).__pahubPerf);
+  page.evaluate(
+    () => (window as unknown as { __threadgardenPerf: Promise<number> }).__threadgardenPerf,
+  );
 
 /** Milliseconds from a real click to `done` (see `arm`). */
 export const timeClick = async (
@@ -148,3 +174,27 @@ export const median = (xs: number[]): number => {
 };
 
 export const fmt = (xs: number[]): string => xs.map((x) => x.toFixed(1)).join(', ');
+
+/**
+ * The chat list row of `sessionId`, scrolled into the DOM first: the list is
+ * virtual (and has section headers), so a row further down is not rendered
+ * until the list scrolls near it. Scrolls down a viewport at a time.
+ */
+export const chatRow = async (page: Page, sessionId: string): Promise<Locator> => {
+  const list = page.getByRole('region', { name: 'Chat list' });
+  const row = list.locator(`[role="option"][data-session-id="${sessionId}"]`);
+  const box = list.getByRole('listbox');
+  await expect(box).toBeVisible();
+  await expect
+    .poll(
+      async () => {
+        if ((await row.count()) > 0) return true;
+        await box.evaluate((el) => (el.scrollTop += el.clientHeight * 0.8));
+        return false;
+      },
+      { message: `chat list row ${sessionId}`, intervals: [50] },
+    )
+    .toBe(true);
+  await row.scrollIntoViewIfNeeded();
+  return row;
+};

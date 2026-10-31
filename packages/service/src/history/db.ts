@@ -1,14 +1,23 @@
 /**
- * pahub's own SQLite store (`node:sqlite`, WAL). It holds the history index,
- * pahub-side titles/pins, drafts, settings, UI state and the live-session
- * registry. It never touches Claude Code's data.
+ * Threadgarden's own SQLite store (`node:sqlite`, WAL). It holds the history index,
+ * Threadgarden-side titles/pins, drafts, settings, UI state, the live-session
+ * registry, the seen/turn-ended times behind "Your turn", the chats'
+ * buckets (v1.2) and Threadgarden's own chat titles (v1.2 C1). It never touches
+ * Claude Code's data.
  */
 import './sqlite-warning.js';
 import { DatabaseSync } from 'node:sqlite';
-import { SettingsSchema, type Settings, type SettingsPatch } from '@pahub/protocol';
+import {
+  SettingsSchema,
+  type Bucket,
+  type Settings,
+  type SettingsPatch,
+} from '@threadgarden/protocol';
+import type { ZodType } from 'zod';
 import type { LiveRegistry } from '../chat/live-session.js';
 import type { SDKSessionInfo } from '../sdk/adapter.js';
 import { migrate } from './migrations.js';
+import { localDay, type SessionStats } from './stats.js';
 
 export type SessionRow = {
   sessionId: string;
@@ -23,6 +32,25 @@ export type SessionRow = {
   fileSize: number | null;
   customTitle: string | null;
   pinned: boolean;
+} & BucketState &
+  ThreadgardenTitles;
+
+/** v1.2 C1: Threadgarden's own titles of a chat it started (see `chat/titles.ts`). */
+export type ThreadgardenTitles = {
+  /** Provisional title from the first message. */
+  autoTitle: string | null;
+  /** The small model's title, after the first turn. */
+  generatedTitle: string | null;
+};
+
+/** v1.2: a chat's bucket (Threadgarden's own metadata). */
+export type BucketState = {
+  bucket: Bucket;
+  /** On hold until (epoch ms); null when not on hold or on hold indefinitely. */
+  holdUntil: number | null;
+  holdNote: string | null;
+  /** When a hold that ran out brought the chat back, until it is seen; else null. */
+  backAt: number | null;
 };
 
 export type ProjectRow = {
@@ -40,13 +68,57 @@ export type SessionFilter = {
   excludeProjectIds?: string[];
   /** These session ids are left out (already shown from a live source). */
   excludeIds?: string[];
+  /** v1.2: only chats in these buckets (default: any). */
+  buckets?: readonly Bucket[];
 };
+
+const KNOWN_BUCKETS: readonly Bucket[] = ['active', 'onHold', 'archived'];
+
+/** A stored bucket; anything this version does not know is `active` (forward compatibility). */
+export const toBucket = (v: unknown): Bucket => (v === 'onHold' || v === 'archived' ? v : 'active');
+
+/**
+ * SQL condition: `column` (`b.bucket`, NULL without a `chat_buckets` row) is one
+ * of `buckets`. Unknown stored values count as `active`, as `toBucket` reads them.
+ */
+const bucketIn = (column: string, buckets: readonly Bucket[]): string => {
+  const quote = (b: Bucket) => `'${b}'`;
+  if (buckets.includes('active')) {
+    const others = KNOWN_BUCKETS.filter((b) => !buckets.includes(b));
+    return others.length === 0
+      ? '1'
+      : `(${column} IS NULL OR ${column} NOT IN (${others.map(quote).join(',')}))`;
+  }
+  return buckets.length === 0 ? '0' : `${column} IN (${buckets.map(quote).join(',')})`;
+};
+
+/** SQL expression: the bucket of `column` as `toBucket` reads it. */
+const bucketOf = (column: string): string =>
+  `CASE WHEN ${column} IN ('onHold', 'archived') THEN ${column} ELSE 'active' END`;
+
+/** SQL condition: the chat in `s` has an unseen finished turn ("Your turn"). */
+const UNREAD_SQL = `EXISTS (SELECT 1 FROM turn_state t WHERE t.session_id = s.session_id
+  AND t.last_turn_ended_at IS NOT NULL
+  AND (t.last_seen_at IS NULL OR t.last_turn_ended_at > t.last_seen_at))`;
 
 const notIn = (column: string, values: string[] | undefined, where: string[], params: string[]) => {
   if (!values || values.length === 0) return;
   where.push(`${column} NOT IN (${values.map(() => '?').join(',')})`);
   params.push(...values);
 };
+
+/** v1.3 analytics: every table of the per-session statistics and their sums. */
+export const STATS_TABLES = [
+  'stats_sessions',
+  'stats_days',
+  'stats_hours',
+  'stats_tools',
+  'stats_agents',
+  'stats_all_days',
+  'stats_all_hours',
+  'stats_all_tools',
+  'stats_all_agents',
+] as const;
 
 /** FTS rows hold at most this many characters, so one insert never blocks long. */
 export const FTS_CHUNK_CHARS = 32 * 1024;
@@ -84,10 +156,34 @@ const toSession = (r: Row): SessionRow => ({
   fileSize: (r.file_size as number | null) ?? null,
   customTitle: (r.custom_title as string | null) ?? null,
   pinned: r.pinned === 1,
+  ...toBucketState(r),
+  ...toTitles(r),
 });
 
-const SESSION_SELECT = `SELECT s.*, m.custom_title AS custom_title, COALESCE(m.pinned, 0) AS pinned
-  FROM sessions s LEFT JOIN meta m ON m.session_id = s.session_id`;
+const toTitles = (r: Row | undefined): ThreadgardenTitles => ({
+  autoTitle: (r?.auto_title as string | null | undefined) ?? null,
+  generatedTitle: (r?.generated_title as string | null | undefined) ?? null,
+});
+
+const toBucketState = (r: Row | undefined): BucketState => {
+  const bucket = toBucket(r?.bucket);
+  const onHold = bucket === 'onHold';
+  return {
+    bucket,
+    holdUntil: onHold ? ((r?.hold_until as number | null | undefined) ?? null) : null,
+    holdNote: onHold ? ((r?.hold_note as string | null | undefined) ?? null) : null,
+    backAt: (r?.back_at as number | null | undefined) ?? null,
+  };
+};
+
+/** Sessions with their bucket (v1.2) as `b`. */
+const WITH_BUCKET = `sessions s LEFT JOIN chat_buckets b ON b.session_id = s.session_id`;
+
+const SESSION_SELECT = `SELECT s.*, m.custom_title AS custom_title, COALESCE(m.pinned, 0) AS pinned,
+    b.bucket AS bucket, b.hold_until AS hold_until, b.hold_note AS hold_note, b.back_at AS back_at,
+    ct.auto_title AS auto_title, ct.generated_title AS generated_title
+  FROM ${WITH_BUCKET} LEFT JOIN meta m ON m.session_id = s.session_id
+  LEFT JOIN chat_titles ct ON ct.session_id = s.session_id`;
 
 export class Db implements LiveRegistry {
   constructor(readonly raw: DatabaseSync) {}
@@ -149,6 +245,7 @@ export class Db implements LiveRegistry {
     }
     notIn('s.project_id', filter.excludeProjectIds, where, params as string[]);
     notIn('s.session_id', filter.excludeIds, where, params as string[]);
+    if (filter.buckets) where.push(bucketIn('b.bucket', filter.buckets));
     if (cursor) {
       const at = cursor.indexOf(':');
       const modified = Number(cursor.slice(0, at));
@@ -169,17 +266,20 @@ export class Db implements LiveRegistry {
       : { items };
   }
 
-  /** Number of indexed sessions, optionally leaving out some projects. */
-  countSessions(excludeProjectIds: string[] = []): number {
+  /** v1.2: indexed sessions per bucket, optionally leaving out some projects (one query). */
+  countBuckets(excludeProjectIds: string[] = []): Record<Bucket, number> {
     const where: string[] = [];
     const params: string[] = [];
-    notIn('project_id', excludeProjectIds, where, params);
-    const r = this.raw
+    notIn('s.project_id', excludeProjectIds, where, params);
+    const rows = this.raw
       .prepare(
-        `SELECT COUNT(*) AS n FROM sessions ${where.length ? `WHERE ${where.join(' AND ')}` : ''}`,
+        `SELECT ${bucketOf('b.bucket')} AS kind, COUNT(*) AS n FROM ${WITH_BUCKET}
+         ${where.length ? `WHERE ${where.join(' AND ')}` : ''} GROUP BY kind`,
       )
-      .get(...params);
-    return Number(r?.n ?? 0);
+      .all(...params);
+    const out: Record<Bucket, number> = { active: 0, onHold: 0, archived: 0 };
+    for (const r of rows) out[toBucket(r.kind)] += Number(r.n);
+    return out;
   }
 
   /** Newest transcript change per project. */
@@ -288,16 +388,30 @@ export class Db implements LiveRegistry {
    * Substring search (trigram, case-insensitive) with one hit per session, best
    * rank first. Queries shorter than 3 characters cannot match a trigram index
    * and return nothing. The query is matched literally (never as FTS syntax).
-   * A match spanning two chunks of one session may be missed.
+   * A match spanning two chunks of one session may be missed. v1.2:
+   * `archived` limits the hits to archived chats (true) or the others (false),
+   * in SQL, so neither group can crowd the other out.
    */
-  searchFts(query: string, limit: number): { sessionId: string; snippet: string }[] {
+  searchFts(
+    query: string,
+    limit: number,
+    archived?: boolean,
+  ): { sessionId: string; snippet: string }[] {
     const q = query.trim();
     if ([...q].length < 3 || limit <= 0) return [];
     const phrase = `"${q.replaceAll('"', '""')}"`;
+    // The session id of a `<sessionId>#<generation>` key.
+    const id = `substr(messages_fts.session_id, 1,
+      length(rtrim(messages_fts.session_id, '0123456789')) - 1)`;
+    const bucket =
+      archived === undefined
+        ? ''
+        : `AND ${archived ? '' : 'NOT '}EXISTS (SELECT 1 FROM chat_buckets b
+             WHERE b.bucket = 'archived' AND b.session_id = ${id})`;
     const rows = this.raw
       .prepare(
         `SELECT session_id, snippet(messages_fts, 1, '', '', '…', 16) AS snip
-         FROM messages_fts WHERE messages_fts MATCH ? ORDER BY rank LIMIT ?`,
+         FROM messages_fts WHERE messages_fts MATCH ? ${bucket} ORDER BY rank LIMIT ?`,
       )
       .all(phrase, limit * 5 + 20);
     const gens = this.raw.prepare('SELECT gen FROM fts_gen WHERE session_id = ?');
@@ -316,6 +430,146 @@ export class Db implements LiveRegistry {
     return out;
   }
 
+  // --- statistics (v1.3 C analytics) ---------------------------------------------
+  //
+  // One session's statistics (`history/stats.ts`) are replaced as a whole, in
+  // one transaction, so a query never sees half of them. The `stats_all_*`
+  // sums lose the session's old figures and gain its new ones in the same
+  // transaction.
+
+  /** Replaces the session's statistics and marks them gathered at `version`. */
+  replaceStats(sessionId: string, stats: SessionStats, version: number): void {
+    this.inTransaction(() => {
+      this.deleteStatsRows(sessionId);
+      const first = stats.firstAt;
+      const last = stats.lastAt;
+      const messages = stats.days.reduce((n, d) => n + d.userMessages + d.assistantMessages, 0);
+      this.raw
+        .prepare(
+          `INSERT INTO stats_sessions (session_id, version, first_at, last_at, first_day,
+             last_day, messages)
+           VALUES (?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(session_id) DO UPDATE SET version = excluded.version,
+             first_at = excluded.first_at, last_at = excluded.last_at,
+             first_day = excluded.first_day, last_day = excluded.last_day,
+             messages = excluded.messages`,
+        )
+        .run(
+          sessionId,
+          version,
+          first,
+          last,
+          first === null ? null : localDay(first),
+          last === null ? null : localDay(last),
+          messages,
+        );
+      const day = this.raw.prepare(
+        `INSERT INTO stats_days (session_id, day, model, user_messages, assistant_messages,
+           input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      );
+      for (const d of stats.days) {
+        day.run(
+          sessionId,
+          d.day,
+          d.model,
+          d.userMessages,
+          d.assistantMessages,
+          d.inputTokens,
+          d.outputTokens,
+          d.cacheReadTokens,
+          d.cacheCreationTokens,
+        );
+      }
+      const hour = this.raw.prepare(
+        'INSERT INTO stats_hours (session_id, day, hour, messages) VALUES (?, ?, ?, ?)',
+      );
+      for (const h of stats.hours) hour.run(sessionId, h.day, h.hour, h.messages);
+      const tool = this.raw.prepare(
+        'INSERT INTO stats_tools (session_id, day, tool, calls) VALUES (?, ?, ?, ?)',
+      );
+      for (const t of stats.tools) tool.run(sessionId, t.day, t.name, t.calls);
+      const agent = this.raw.prepare(
+        'INSERT INTO stats_agents (session_id, day, agent_type, calls) VALUES (?, ?, ?, ?)',
+      );
+      for (const a of stats.agents) agent.run(sessionId, a.day, a.type, a.calls);
+      this.sumStats(sessionId, 1);
+    });
+  }
+
+  /**
+   * Indexed sessions without statistics of `version` (the backfill's work),
+   * newest first, leaving out `skip`.
+   */
+  sessionsNeedingStats(version: number, limit: number, skip: readonly string[] = []): string[] {
+    const where: string[] = [];
+    const params: string[] = [];
+    notIn('s.session_id', [...skip], where, params);
+    return this.raw
+      .prepare(
+        `SELECT s.session_id FROM sessions s
+         LEFT JOIN stats_sessions st ON st.session_id = s.session_id
+         WHERE s.indexed_modified IS NOT NULL AND (st.version IS NULL OR st.version < ?)
+         ${where.length ? `AND ${where.join(' AND ')}` : ''}
+         ORDER BY s.last_modified DESC, s.session_id LIMIT ?`,
+      )
+      .all(version, ...params, limit)
+      .map((r) => r.session_id as string);
+  }
+
+  /** How many indexed sessions still lack statistics of `version`. */
+  countSessionsNeedingStats(version: number): number {
+    const r = this.raw
+      .prepare(
+        `SELECT COUNT(*) AS n FROM sessions s
+         LEFT JOIN stats_sessions st ON st.session_id = s.session_id
+         WHERE s.indexed_modified IS NOT NULL AND (st.version IS NULL OR st.version < ?)`,
+      )
+      .get(version);
+    return Number(r?.n ?? 0);
+  }
+
+  /** Takes the session's rows out of the `stats_all_*` sums, then deletes them. */
+  private deleteStatsRows(sessionId: string): void {
+    this.sumStats(sessionId, -1);
+    for (const table of ['stats_days', 'stats_hours', 'stats_tools', 'stats_agents']) {
+      this.raw.prepare(`DELETE FROM ${table} WHERE session_id = ?`).run(sessionId);
+    }
+  }
+
+  /** Adds (`sign` 1) or subtracts (-1) the session's rows to the `stats_all_*` sums. */
+  private sumStats(sessionId: string, sign: 1 | -1): void {
+    const s = sign === 1 ? '' : '-';
+    const run = (sql: string) => this.raw.prepare(sql).run(sessionId);
+    run(
+      `INSERT INTO stats_all_days (day, model, messages, input_tokens, output_tokens,
+         cache_read_tokens, cache_creation_tokens)
+       SELECT day, model, ${s}(user_messages + assistant_messages), ${s}input_tokens,
+         ${s}output_tokens, ${s}cache_read_tokens, ${s}cache_creation_tokens
+       FROM stats_days WHERE session_id = ?
+       ON CONFLICT(day, model) DO UPDATE SET messages = messages + excluded.messages,
+         input_tokens = input_tokens + excluded.input_tokens,
+         output_tokens = output_tokens + excluded.output_tokens,
+         cache_read_tokens = cache_read_tokens + excluded.cache_read_tokens,
+         cache_creation_tokens = cache_creation_tokens + excluded.cache_creation_tokens`,
+    );
+    run(
+      `INSERT INTO stats_all_hours (day, hour, messages)
+       SELECT day, hour, ${s}messages FROM stats_hours WHERE session_id = ?
+       ON CONFLICT(day, hour) DO UPDATE SET messages = messages + excluded.messages`,
+    );
+    run(
+      `INSERT INTO stats_all_tools (day, tool, calls)
+       SELECT day, tool, ${s}calls FROM stats_tools WHERE session_id = ?
+       ON CONFLICT(day, tool) DO UPDATE SET calls = calls + excluded.calls`,
+    );
+    run(
+      `INSERT INTO stats_all_agents (day, agent_type, calls)
+       SELECT day, agent_type, ${s}calls FROM stats_agents WHERE session_id = ?
+       ON CONFLICT(day, agent_type) DO UPDATE SET calls = calls + excluded.calls`,
+    );
+  }
+
   // --- removal ----------------------------------------------------------------
 
   allSessionIds(): string[] {
@@ -326,15 +580,19 @@ export class Db implements LiveRegistry {
   }
 
   /**
-   * Removes a session's row and index text. `meta` and `drafts` are kept on
-   * purpose (cheap, and a pahub title survives a transcript that reappears).
+   * Removes a session's row, index text and "Your turn" state. `meta` and
+   * `drafts` are kept on purpose (cheap, and a Threadgarden title survives a
+   * transcript that reappears).
    */
   deleteSession(sessionId: string): void {
     this.raw.exec('BEGIN');
     try {
       this.raw.prepare('DELETE FROM sessions WHERE session_id = ?').run(sessionId);
+      this.raw.prepare('DELETE FROM turn_state WHERE session_id = ?').run(sessionId);
       this.raw.prepare('DELETE FROM fts_gen WHERE session_id = ?').run(sessionId);
       this.deleteFtsRowids(this.ftsRows(sessionId).map((r) => r.rowid));
+      this.deleteStatsRows(sessionId);
+      this.raw.prepare('DELETE FROM stats_sessions WHERE session_id = ?').run(sessionId);
       this.raw.exec('COMMIT');
     } catch (e) {
       this.raw.exec('ROLLBACK');
@@ -392,7 +650,7 @@ export class Db implements LiveRegistry {
 
   // --- meta -------------------------------------------------------------------
 
-  /** pahub-side title (spec §5.3); `null` or empty clears it. */
+  /** Threadgarden-side title (spec §5.3); `null` or empty clears it. */
   setCustomTitle(sessionId: string, title: string | null): void {
     const t = title?.trim() ? title.trim() : null;
     this.raw
@@ -418,6 +676,221 @@ export class Db implements LiveRegistry {
     );
   }
 
+  // --- titles (v1.2 C1) ----------------------------------------------------------
+  //
+  // Threadgarden's own names for chats it starts, kept apart from the user's custom
+  // title; never written to Claude Code's data.
+
+  /** The provisional title (from the first message); `null` clears it. */
+  setAutoTitle(sessionId: string, title: string | null): void {
+    this.raw
+      .prepare(
+        `INSERT INTO chat_titles (session_id, auto_title) VALUES (?, ?)
+         ON CONFLICT(session_id) DO UPDATE SET auto_title = excluded.auto_title`,
+      )
+      .run(sessionId, title?.trim() || null);
+  }
+
+  /** The small model's title; `null` clears it. */
+  setGeneratedTitle(sessionId: string, title: string | null): void {
+    this.raw
+      .prepare(
+        `INSERT INTO chat_titles (session_id, generated_title) VALUES (?, ?)
+         ON CONFLICT(session_id) DO UPDATE SET generated_title = excluded.generated_title`,
+      )
+      .run(sessionId, title?.trim() || null);
+  }
+
+  // --- buckets (v1.2) -------------------------------------------------------------
+  //
+  // A chat's bucket lives in `chat_buckets` (kept when a transcript
+  // disappears, like titles); a chat without a row there is active.
+
+  /** A chat's pin, bucket and (v1.2 C1) Threadgarden-side titles, whether or not it is indexed. */
+  metaOf(
+    sessionId: string,
+  ): { pinned: boolean; customTitle: string | null } & BucketState & ThreadgardenTitles {
+    const r = this.raw.prepare('SELECT * FROM chat_buckets WHERE session_id = ?').get(sessionId);
+    const m = this.raw
+      .prepare('SELECT custom_title, pinned FROM meta WHERE session_id = ?')
+      .get(sessionId);
+    const t = this.raw.prepare('SELECT * FROM chat_titles WHERE session_id = ?').get(sessionId);
+    return {
+      pinned: m?.pinned === 1,
+      customTitle: (m?.custom_title as string | null | undefined) ?? null,
+      ...toBucketState(r),
+      ...toTitles(t),
+    };
+  }
+
+  /**
+   * Moves chats into `bucket` (one transaction). `hold` applies to `onHold`
+   * only; every move clears "back from hold". With `seenAt` the chats are
+   * also marked seen at that time (Ruling R32: archiving), in the same
+   * transaction.
+   */
+  setBucket(
+    sessionIds: readonly string[],
+    bucket: Bucket,
+    hold: { until?: number | undefined; note?: string | undefined } = {},
+    seenAt?: number,
+  ): void {
+    if (sessionIds.length === 0) return;
+    const onHold = bucket === 'onHold';
+    const note = onHold && hold.note?.trim() ? hold.note.trim() : null;
+    const until = onHold ? (hold.until ?? null) : null;
+    this.inTransaction(() => {
+      this.setBucketRows(sessionIds, bucket, until, note);
+      if (seenAt !== undefined) for (const id of sessionIds) this.markSeen(id, seenAt);
+    });
+  }
+
+  /** Archived chats among `sessionIds` become active; returns those, in the given order. */
+  unarchive(sessionIds: readonly string[]): string[] {
+    if (sessionIds.length === 0) return [];
+    const marks = sessionIds.map(() => '?').join(',');
+    const changed = new Set(
+      this.raw
+        .prepare(
+          `UPDATE chat_buckets SET bucket = 'active' WHERE bucket = 'archived'
+           AND session_id IN (${marks}) RETURNING session_id`,
+        )
+        .all(...sessionIds)
+        .map((r) => r.session_id as string),
+    );
+    return sessionIds.filter((id) => changed.has(id));
+  }
+
+  /**
+   * Archived and on-hold chats among `sessionIds` become active, their hold
+   * (until, note) and "back from hold" cleared (Ruling R36: a chat sent a
+   * message). Returns those, in the given order.
+   */
+  activate(sessionIds: readonly string[]): string[] {
+    if (sessionIds.length === 0) return [];
+    const marks = sessionIds.map(() => '?').join(',');
+    const changed = new Set(
+      this.raw
+        .prepare(
+          `UPDATE chat_buckets
+           SET bucket = 'active', hold_until = NULL, hold_note = NULL, back_at = NULL
+           WHERE bucket IN ('archived', 'onHold') AND session_id IN (${marks})
+           RETURNING session_id`,
+        )
+        .all(...sessionIds)
+        .map((r) => r.session_id as string),
+    );
+    return sessionIds.filter((id) => changed.has(id));
+  }
+
+  /**
+   * Holds that ran out by `now` end (one statement): those chats become
+   * active and "back from hold" as of the hold's end. Returns them in the
+   * order they came due.
+   */
+  releaseHolds(now: number): string[] {
+    return this.raw
+      .prepare(
+        `UPDATE chat_buckets
+         SET bucket = 'active', back_at = hold_until, hold_until = NULL, hold_note = NULL
+         WHERE bucket = 'onHold' AND hold_until IS NOT NULL AND hold_until <= ?
+         RETURNING session_id, back_at`,
+      )
+      .all(now)
+      .map((r) => ({ id: r.session_id as string, at: r.back_at as number }))
+      .sort((a, b) => a.at - b.at || a.id.localeCompare(b.id))
+      .map((r) => r.id);
+  }
+
+  /** The user has seen a chat that came back from hold; true when that cleared the flag. */
+  clearBackFromHold(sessionId: string): boolean {
+    const r = this.raw
+      .prepare(
+        'UPDATE chat_buckets SET back_at = NULL WHERE session_id = ? AND back_at IS NOT NULL',
+      )
+      .run(sessionId);
+    return Number(r.changes) > 0;
+  }
+
+  /** Chats back from hold → when they came back, most recent first. */
+  backFromHold(): Map<string, number> {
+    const rows = this.raw
+      .prepare(
+        `SELECT session_id, back_at FROM chat_buckets WHERE back_at IS NOT NULL
+         ORDER BY back_at DESC, session_id`,
+      )
+      .all();
+    return new Map(rows.map((r) => [r.session_id as string, r.back_at as number]));
+  }
+
+  /**
+   * Archives (with `dryRun`: only finds) the active indexed chats last
+   * modified before `before`, of one project or outside `excludeProjectIds`,
+   * in one transaction. Pinned chats (Ruling R35), unread chats, chats back
+   * from hold and `excludeIds` are left alone. Returns the ids.
+   */
+  archiveOlder(o: {
+    before: number;
+    projectId?: string | undefined;
+    excludeProjectIds?: string[];
+    excludeIds?: string[];
+    dryRun?: boolean;
+  }): string[] {
+    const where = [
+      's.last_modified < ?',
+      bucketIn('b.bucket', ['active']),
+      'b.back_at IS NULL',
+      `NOT ${UNREAD_SQL}`,
+      'NOT EXISTS (SELECT 1 FROM meta m WHERE m.session_id = s.session_id AND m.pinned = 1)',
+    ];
+    const params: (string | number)[] = [o.before];
+    if (o.projectId !== undefined) {
+      where.push('s.project_id = ?');
+      params.push(o.projectId);
+    }
+    notIn('s.project_id', o.excludeProjectIds, where, params as string[]);
+    notIn('s.session_id', o.excludeIds, where, params as string[]);
+    const select = this.raw.prepare(
+      `SELECT s.session_id FROM ${WITH_BUCKET}
+       WHERE ${where.join(' AND ')} ORDER BY s.last_modified DESC, s.session_id`,
+    );
+    const find = () => select.all(...params).map((r) => r.session_id as string);
+    if (o.dryRun) return find();
+    let ids: string[] = [];
+    this.inTransaction(() => {
+      ids = find();
+      this.setBucketRows(ids, 'archived', null, null);
+    });
+    return ids;
+  }
+
+  private setBucketRows(
+    sessionIds: readonly string[],
+    bucket: Bucket,
+    until: number | null,
+    note: string | null,
+  ): void {
+    const upsert = this.raw.prepare(
+      `INSERT INTO chat_buckets (session_id, bucket, hold_until, hold_note, back_at)
+       VALUES (?, ?, ?, ?, NULL)
+       ON CONFLICT(session_id) DO UPDATE SET bucket = excluded.bucket,
+         hold_until = excluded.hold_until, hold_note = excluded.hold_note, back_at = NULL`,
+    );
+    for (const id of sessionIds) upsert.run(id, bucket, until, note);
+  }
+
+  /** Runs `fn` in one transaction (rolled back if it throws). */
+  private inTransaction(fn: () => void): void {
+    this.raw.exec('BEGIN');
+    try {
+      fn();
+      this.raw.exec('COMMIT');
+    } catch (e) {
+      this.raw.exec('ROLLBACK');
+      throw e;
+    }
+  }
+
   // --- drafts -------------------------------------------------------------------
 
   getDraft(key: string): { text: string; updatedAt: number } | undefined {
@@ -440,18 +913,26 @@ export class Db implements LiveRegistry {
 
   // --- settings / ui state ------------------------------------------------------
 
-  /** Stored values merged over the schema defaults; invalid stored values fall back to defaults. */
+  /**
+   * Stored values merged over the schema defaults. Each value is checked on
+   * its own: an invalid or corrupt one falls back to its default and never
+   * voids the others; keys this build does not know are ignored.
+   */
   getSettings(): Settings {
+    const fields: Record<string, ZodType> = SettingsSchema.shape;
     const stored: Record<string, unknown> = {};
     for (const r of this.raw.prepare('SELECT key, json FROM settings').all()) {
+      const key = r.key as string;
+      const field = Object.hasOwn(fields, key) ? fields[key] : undefined;
+      if (!field) continue;
       try {
-        stored[r.key as string] = JSON.parse(r.json as string);
+        const value: unknown = JSON.parse(r.json as string);
+        if (field.safeParse(value).success) stored[key] = value;
       } catch {
         // ignore a corrupt value; the default applies
       }
     }
-    const parsed = SettingsSchema.safeParse(stored);
-    return parsed.success ? parsed.data : SettingsSchema.parse({});
+    return SettingsSchema.parse(stored);
   }
 
   patchSettings(patch: SettingsPatch): Settings {
@@ -480,6 +961,53 @@ export class Db implements LiveRegistry {
         'INSERT INTO ui_state (key, json) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET json = excluded.json',
       )
       .run(key, JSON.stringify(value));
+  }
+
+  // --- "Your turn" (v1.1) -----------------------------------------------------------
+  //
+  // A chat is unread while its last turn ended after Threadgarden last saw it. The
+  // two times are ordered by operation, not only by the clock: a turn end is
+  // stored after the last seen time and a seen time after the last turn end,
+  // so two events in the same millisecond (or a clock that went back) still
+  // compare in the order they happened.
+
+  /** Records that a turn of `sessionId` ended at `at`. */
+  setTurnEnded(sessionId: string, at: number): void {
+    this.raw
+      .prepare(
+        `INSERT INTO turn_state (session_id, last_turn_ended_at) VALUES (?1, ?2)
+         ON CONFLICT(session_id) DO UPDATE SET last_turn_ended_at =
+           MAX(?2, COALESCE(last_seen_at + 1, ?2), COALESCE(last_turn_ended_at, ?2))`,
+      )
+      .run(sessionId, at);
+  }
+
+  /** The user has seen the chat at `at`; true when that cleared an unread turn. */
+  markSeen(sessionId: string, at: number): boolean {
+    const r = this.raw
+      .prepare('SELECT last_seen_at, last_turn_ended_at FROM turn_state WHERE session_id = ?')
+      .get(sessionId);
+    const ended = r?.last_turn_ended_at as number | null | undefined;
+    const seen = r?.last_seen_at as number | null | undefined;
+    if (ended === null || ended === undefined) return false; // no finished turn: nothing to see
+    if (seen !== null && seen !== undefined && seen >= ended) return false;
+    this.raw
+      .prepare('UPDATE turn_state SET last_seen_at = ? WHERE session_id = ?')
+      .run(Math.max(at, ended), sessionId);
+    return true;
+  }
+
+  /** Unread chats → when their last turn ended, most recent first. */
+  unreadTurns(): Map<string, number> {
+    const rows = this.raw
+      .prepare(
+        `SELECT session_id, last_turn_ended_at FROM turn_state
+         WHERE last_turn_ended_at IS NOT NULL
+           AND (last_seen_at IS NULL OR last_turn_ended_at > last_seen_at)
+         ORDER BY last_turn_ended_at DESC, session_id`,
+      )
+      .all();
+    return new Map(rows.map((r) => [r.session_id as string, r.last_turn_ended_at as number]));
   }
 
   // --- LiveRegistry ---------------------------------------------------------------

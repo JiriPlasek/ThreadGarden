@@ -1,29 +1,64 @@
 /**
- * Mock pahub service for UI development and Playwright
- * (`pnpm --filter @pahub/service mock`): the real service (`startService`)
+ * Mock Threadgarden service for UI development and Playwright
+ * (`pnpm --filter @threadgarden/service mock`): the real service (`startService`)
  * over a synthetic history (`generateCorpus`) and a scripted fake Claude Code.
  *
  * Script, per user message:
  * - every reply streams a few sentences with partial (`stream_event`) messages;
  * - a message containing "perm" asks for permission to run a Bash command;
  * - "ask" asks an AskUserQuestion question; "plan" asks to approve a plan
- *   (ExitPlanMode).
+ *   (ExitPlanMode);
+ * - "agent" runs an Explore subagent on `haiku` (an Agent tool call and its
+ *   task) that reports progress, spawns a nested subagent whose model is
+ *   streamed, and completes after about 3 s;
+ * - "server" starts a background shell task ("npm run dev") that keeps
+ *   running until it is stopped with `chat.stopTask` (or the chat ends);
+ * - "limit" reaches the (mock) account's usage limit for `MOCK_LIMIT_MS`
+ *   (2 min): that turn and every turn until the reset is refused, like the
+ *   CLI does (a rejected `rate_limit_event`, an assistant message with the
+ *   `rate_limit` error, an error result), so "Send when the limit resets"
+ *   can be tried.
  *
- * Everything lives in temporary directories (pahub data dir and a fixture
+ * Usage (v1.3 B): every turn reports the mock account's 5-hour window in a
+ * `rate_limit_event` (a little more used each turn, a warning from 80 %), and
+ * sessions answer the experimental usage reading with 5-hour, 7-day and
+ * per-model windows. The service starts with that usage already known, so the
+ * usage meter shows at once.
+ *
+ * A new chat is named after its first turn (v1.2 C1): the fake small model
+ * answers about half a second later with "Mock: " and the first words of the
+ * first message.
+ *
+ * Everything lives in temporary directories (Threadgarden data dir and a fixture
  * `CLAUDE_CONFIG_DIR`), removed on exit. The mock's fake Claude Code writes a
  * placeholder transcript per chat into that fixture, like the real CLI, so the
  * watcher and indexer pick new chats up. On start it prints the discovery
- * record (port, token, …) as one JSON line on stdout. `PAHUB_MOCK_PORT` and
- * `PAHUB_MOCK_TOKEN` (or `--port` / `--token`) fix the port and token.
+ * record (port, token, …) as one JSON line on stdout. `THREADGARDEN_MOCK_PORT` and
+ * `THREADGARDEN_MOCK_TOKEN` (or `--port` / `--token`) fix the port and token.
+ *
+ * Remote machines (v1.4): `--remote [--remote-port <port>] --pairing-code
+ * <code>` starts a second machine to pair with instead: headless, named
+ * "Ubuntu", with a history of its own (20 chats in the project `tg-cli`), its
+ * device listener on 127.0.0.1 (default port 47380) and `<code>` kept live as
+ * its pairing code. Loopback is for tests only: the real service listens on
+ * private addresses only (`bin.ts` never sets the addresses), ledger Ruling R4.
  */
 import { randomUUID } from 'node:crypto';
-import { appendFile, mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { appendFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { readDiscovery } from '../discovery.js';
+import { findProjectIcon } from '../history/project-icons.js';
+import {
+  PAIRING_ALPHABET,
+  isWellFormedPairingCode,
+  normalisePairingCode,
+} from '../machine/devices.js';
 import { startService, type ServiceHandle } from '../main.js';
+import { REMOTE_PORT } from '../server/remote-server.js';
 import type {
+  OneShotOptions,
   PermissionResult,
   PermissionUpdate,
   SDKMessage,
@@ -35,10 +70,41 @@ import { generateCorpus } from './corpus.js';
 import { FakeAdapter, FakeSession } from './fake-adapter.js';
 
 const MOCK_VERSION = '0.0.0-mock';
+/** The model named on the scripted replies (v1.3 analytics). */
+const MOCK_MODEL = 'claude-sonnet-4-5';
+/** The synthetic history spans this many days before the mock's start (v1.3 analytics). */
+const HISTORY_DAYS = 150;
 const DELTA_MS = 40;
+/** The "agent" subagent reports progress this often, `AGENT_STEPS.length` times (~3 s). */
+const AGENT_STEP_MS = 600;
+const AGENT_STEPS = [
+  { tool: 'Glob', summary: 'Listing the project files' },
+  { tool: 'Read', summary: 'Reading package.json' },
+  { tool: 'Grep', summary: 'Searching for the entry points' },
+  { tool: 'Read', summary: 'Reading the service entry point' },
+  { tool: 'Read', summary: 'Reading the desktop app layout' },
+];
+const DEV_SERVER_COMMAND = 'npm run dev';
+/** How long "limit" keeps the mock account refused. */
+export const MOCK_LIMIT_MS = 2 * 60_000;
+/** The mock account's 5-hour window resets this long after the service starts. */
+const MOCK_WINDOW_MS = 3 * 3_600_000 + 12 * 60_000;
+/** 5-hour utilization (a fraction, like the CLI's events) at start, and added per turn. */
+const MOCK_USAGE_START = 0.42;
+const MOCK_USAGE_STEP = 0.03;
+
+/** The `--remote` mock (v1.4): a second machine's name, its one project and its history's size. */
+export const REMOTE_MACHINE_NAME = 'Ubuntu';
+export const REMOTE_PROJECT_PATH = '/home/owner/tg-cli';
+const REMOTE_SESSIONS = 20;
+/**
+ * The fixed pairing code is made live again this often: a spent or
+ * expired code is back at once, so a spec can pair again right away.
+ */
+const PAIRING_REFRESH_MS = 1_000;
 
 const SENTENCES = [
-  'This is the pahub mock service answering.',
+  'This is the Threadgarden mock service answering.',
   'Replies stream word by word so the UI can show partial output.',
   'Mention "perm", "ask" or "plan" to see a permission request, a question or a plan approval.',
   'Nothing here talks to a real model.',
@@ -60,10 +126,17 @@ const textOf = (m: SDKUserMessage): string => {
     .join('\n');
 };
 
+/** The "agent" subagent's nested subagent: its task, its Agent call, its one tool call. */
+type NestedAgent = { taskId: string; toolUseId: string; parentToolUseId: string; grepId: string };
+
 /** A fake Claude Code session that answers every message with the script above. */
 class ScriptedSession extends FakeSession {
   private turn: Promise<void> = Promise.resolve();
   private abort = new AbortController();
+  /** Running "server" shell tasks: task id → command. */
+  private readonly shells = new Map<string, string>();
+  /** Running "agent" subagent tasks: task id → its stop signal. */
+  private readonly agents = new Map<string, AbortController>();
 
   constructor(
     options: StartOptions,
@@ -91,6 +164,7 @@ class ScriptedSession extends FakeSession {
       },
     ];
     this.account = { subscriptionType: 'max', apiProvider: 'firstParty' };
+    this.usage = async () => this.adapter.usageReading();
     setImmediate(() => this.out(this.init()));
   }
 
@@ -106,6 +180,29 @@ class ScriptedSession extends FakeSession {
   override async interrupt(): Promise<void> {
     await super.interrupt();
     this.abort.abort();
+  }
+
+  /** Stops a running "agent" or "server" task, like the CLI: killed, then a stopped notification. */
+  override async stopTask(taskId: string): Promise<void> {
+    await super.stopTask(taskId);
+    const agent = this.agents.get(taskId);
+    if (agent) {
+      agent.abort();
+      return;
+    }
+    const command = this.shells.get(taskId);
+    if (command === undefined) throw new Error(`No running task ${taskId}`);
+    this.shells.delete(taskId);
+    this.out(this.system('task_updated', { task_id: taskId, patch: { status: 'killed' } }));
+    this.out(
+      this.system('task_notification', {
+        task_id: taskId,
+        status: 'stopped',
+        output_file: '',
+        summary: `${command} was stopped`,
+      }),
+    );
+    this.out(this.backgroundTasks());
   }
 
   /** Emits unless the session was closed meanwhile. */
@@ -144,9 +241,17 @@ class ScriptedSession extends FakeSession {
     this.abort = new AbortController();
     const started = Date.now();
     const lower = text.toLowerCase();
+    if (lower.includes('limit')) this.adapter.reachLimit();
+    if (this.adapter.limited()) {
+      await this.refusedTurn(started);
+      return;
+    }
+    this.out(this.adapter.rateLimitEvent(this.id));
     if (lower.includes('perm')) await this.permissionTurn();
     else if (lower.includes('ask')) await this.questionTurn();
     else if (lower.includes('plan')) await this.planTurn();
+    else if (lower.includes('agent')) await this.agentTurn();
+    else if (lower.includes('server')) await this.serverTurn();
     else await this.say(SENTENCES.slice(0, 3).join(' '));
     const interrupted = this.abort.signal.aborted;
     this.out(
@@ -162,6 +267,46 @@ class ScriptedSession extends FakeSession {
         modelUsage: { [this.model ?? 'default']: { contextWindow: 200_000 } },
         num_turns: 1,
         result: '',
+      }),
+    );
+  }
+
+  /** A turn the usage limit refuses, as the CLI reports one. */
+  private async refusedTurn(started: number): Promise<void> {
+    this.out(this.adapter.rateLimitEvent(this.id));
+    await sleep(DELTA_MS * 3);
+    const reset = new Date(this.adapter.limitedUntil);
+    const at = `${String(reset.getHours()).padStart(2, '0')}:${String(reset.getMinutes()).padStart(2, '0')}`;
+    const uuid = randomUUID();
+    const message = {
+      id: `msg_${randomUUID()}`,
+      role: 'assistant',
+      content: [{ type: 'text', text: `You've hit your usage limit (mock) · resets ${at}` }],
+    };
+    this.out(
+      msg({
+        type: 'assistant',
+        uuid,
+        session_id: this.id,
+        parent_tool_use_id: null,
+        error: 'rate_limit',
+        message,
+      }),
+    );
+    await this.adapter.record(this, { type: 'assistant', uuid, message });
+    this.out(
+      msg({
+        type: 'result',
+        subtype: 'success',
+        uuid: randomUUID(),
+        session_id: this.id,
+        is_error: true,
+        duration_ms: Date.now() - started,
+        total_cost_usd: 0,
+        usage: {},
+        modelUsage: {},
+        num_turns: 1,
+        result: message.content[0]!.text,
       }),
     );
   }
@@ -192,41 +337,221 @@ class ScriptedSession extends FakeSession {
       await this.say('Okay, I will not run it.');
       return;
     }
+    const toolUseId = this.toolUse('Bash', input);
+    await sleep(DELTA_MS * 3);
+    this.toolResult(toolUseId, 'README.md\npackage.json\nsrc\n');
+    await this.say('There are three entries: README.md, package.json and src.');
+  }
+
+  /**
+   * A foreground Explore subagent on the `haiku` model (task_started, progress
+   * every step, then its end). Its second step spawns a nested subagent (a
+   * depth-2 task with `parent_task_id`) whose model is only known from the
+   * messages it streams, like a real one without a `model` input.
+   */
+  private async agentTurn(): Promise<void> {
+    await this.say('I will ask a subagent to explore the project.');
+    const description = 'Explore the project structure';
+    const prompt = 'Map the main parts of this project.';
+    const toolUseId = this.toolUse('Agent', {
+      description,
+      subagent_type: 'Explore',
+      model: 'haiku',
+      prompt,
+    });
+    const taskId = `a${randomUUID().replaceAll('-', '').slice(0, 16)}`;
+    const task = { task_id: taskId, tool_use_id: toolUseId, description, subagent_type: 'Explore' };
+    this.out(
+      this.system('task_started', {
+        ...task,
+        task_type: 'local_agent',
+        is_backgrounded: false,
+        prompt,
+        spawn_depth: 1,
+      }),
+    );
+    const stop = new AbortController();
+    this.agents.set(taskId, stop);
+    const started = Date.now();
+    const usage = (steps: number) => ({
+      total_tokens: 1800 * steps,
+      tool_uses: steps,
+      duration_ms: Date.now() - started,
+    });
+    let nested: NestedAgent | undefined;
+    let steps = 0;
+    for (const step of AGENT_STEPS) {
+      await sleep(AGENT_STEP_MS);
+      if (this.abort.signal.aborted || stop.signal.aborted || this.closed) break;
+      steps++;
+      this.out(
+        this.system('task_progress', {
+          ...task,
+          usage: usage(steps),
+          last_tool_name: step.tool,
+          summary: step.summary,
+        }),
+      );
+      if (steps === 2) nested = this.nestedAgent(taskId, toolUseId);
+    }
+    if (nested) this.endNestedAgent(nested, steps === AGENT_STEPS.length);
+    this.agents.delete(taskId);
+    const done = steps === AGENT_STEPS.length;
+    this.out(
+      this.system('task_updated', {
+        task_id: taskId,
+        patch: { status: done ? 'completed' : 'killed', end_time: Date.now() },
+      }),
+    );
+    const summary = done
+      ? 'The project has a service, a protocol package and a desktop app.'
+      : 'The subagent was stopped.';
+    this.out(
+      this.system('task_notification', {
+        task_id: taskId,
+        tool_use_id: toolUseId,
+        status: done ? 'completed' : 'stopped',
+        output_file: '',
+        summary,
+        usage: usage(steps),
+      }),
+    );
+    this.toolResult(toolUseId, summary, !done);
+    await this.say(done ? `The subagent reports: ${summary}` : 'The subagent did not finish.');
+  }
+
+  /** The "agent" subagent's own subagent: its Agent call and first message come from inside the parent. */
+  private nestedAgent(parentTaskId: string, parentToolUseId: string): NestedAgent {
+    const description = 'Find the entry points';
+    const prompt = 'List the entry points of the service and the desktop app.';
+    const toolUseId = this.toolUse(
+      'Agent',
+      { description, subagent_type: 'general-purpose', prompt },
+      parentToolUseId,
+    );
+    const taskId = `a${randomUUID().replaceAll('-', '').slice(0, 16)}`;
+    this.out(
+      this.system('task_started', {
+        task_id: taskId,
+        tool_use_id: toolUseId,
+        description,
+        subagent_type: 'general-purpose',
+        task_type: 'local_agent',
+        is_backgrounded: false,
+        parent_task_id: parentTaskId,
+        prompt,
+        spawn_depth: 2,
+      }),
+    );
+    const grepId = this.toolUse('Grep', { pattern: 'main' }, toolUseId, 'claude-sonnet-4-5');
+    return { taskId, toolUseId, parentToolUseId, grepId };
+  }
+
+  private endNestedAgent(n: NestedAgent, done: boolean): void {
+    const summary = done ? 'Two entry points: main.ts and the app layout.' : 'Stopped.';
+    this.toolResult(n.grepId, 'src/main.ts\napps/desktop/src/routes/+layout.svelte\n', false, {
+      parent: n.toolUseId,
+    });
+    this.out(
+      this.system('task_notification', {
+        task_id: n.taskId,
+        tool_use_id: n.toolUseId,
+        status: done ? 'completed' : 'stopped',
+        output_file: '',
+        summary,
+        usage: { total_tokens: 2400, tool_uses: 1, duration_ms: AGENT_STEP_MS * 3 },
+      }),
+    );
+    this.toolResult(n.toolUseId, summary, !done, { parent: n.parentToolUseId });
+  }
+
+  /** A background shell ("npm run dev") that runs until `stopTask`. */
+  private async serverTurn(): Promise<void> {
+    await this.say('Starting the dev server in the background.');
+    const toolUseId = this.toolUse('Bash', {
+      command: DEV_SERVER_COMMAND,
+      description: 'Start the dev server',
+      run_in_background: true,
+    });
+    const taskId = `b${randomUUID().replaceAll('-', '').slice(0, 16)}`;
+    this.shells.set(taskId, DEV_SERVER_COMMAND);
+    // Like the CLI: a task started in the background joins the level before its task_started.
+    this.out(this.backgroundTasks());
+    this.out(
+      this.system('task_started', {
+        task_id: taskId,
+        tool_use_id: toolUseId,
+        description: DEV_SERVER_COMMAND,
+        task_type: 'local_bash',
+        is_backgrounded: true,
+      }),
+    );
+    await sleep(DELTA_MS * 3);
+    this.toolResult(toolUseId, `Command running in background with ID: ${taskId}`);
+    await this.say('The dev server is running at http://localhost:5173.');
+  }
+
+  private system(subtype: string, extra: Record<string, unknown>): SDKMessage {
+    return msg({ type: 'system', subtype, uuid: randomUUID(), session_id: this.id, ...extra });
+  }
+
+  /** The level of running background tasks (`background_tasks_changed`). */
+  private backgroundTasks(): SDKMessage {
+    return this.system('background_tasks_changed', {
+      tasks: [...this.shells].map(([taskId, command]) => ({
+        task_id: taskId,
+        task_type: 'local_bash',
+        description: command,
+      })),
+    });
+  }
+
+  /**
+   * Emits an assistant message with one tool call (inside the subagent of
+   * `parent` when given, streamed with `model`); returns its tool_use id.
+   */
+  private toolUse(
+    name: string,
+    input: Record<string, unknown>,
+    parent: string | null = null,
+    model?: string,
+  ): string {
     const toolUseId = `toolu_${randomUUID()}`;
     this.out(
       msg({
         type: 'assistant',
         uuid: randomUUID(),
         session_id: this.id,
-        parent_tool_use_id: null,
+        parent_tool_use_id: parent,
         message: {
           id: `msg_${randomUUID()}`,
           role: 'assistant',
-          content: [{ type: 'tool_use', id: toolUseId, name: 'Bash', input }],
+          ...(model === undefined ? {} : { model }),
+          content: [{ type: 'tool_use', id: toolUseId, name, input }],
         },
       }),
     );
-    await sleep(DELTA_MS * 3);
+    return toolUseId;
+  }
+
+  private toolResult(
+    toolUseId: string,
+    content: string,
+    isError = false,
+    o: { parent?: string } = {},
+  ): void {
     this.out(
       msg({
         type: 'user',
         uuid: randomUUID(),
         session_id: this.id,
-        parent_tool_use_id: null,
+        parent_tool_use_id: o.parent ?? null,
         message: {
           role: 'user',
-          content: [
-            {
-              type: 'tool_result',
-              tool_use_id: toolUseId,
-              content: 'README.md\npackage.json\nsrc\n',
-              is_error: false,
-            },
-          ],
+          content: [{ type: 'tool_result', tool_use_id: toolUseId, content, is_error: isError }],
         },
       }),
     );
-    await this.say('There are three entries: README.md, package.json and src.');
   }
 
   private async questionTurn(): Promise<void> {
@@ -278,7 +603,13 @@ class ScriptedSession extends FakeSession {
     }
     stream({ type: 'content_block_stop', index: 0 });
     const uuid = randomUUID();
-    const message = { id: apiId, role: 'assistant', content: [{ type: 'text', text: sent }] };
+    const message = {
+      id: apiId,
+      role: 'assistant',
+      model: MOCK_MODEL,
+      content: [{ type: 'text', text: sent }],
+      usage: { input_tokens: 1200, output_tokens: sent.length, cache_read_input_tokens: 18_000 },
+    };
     this.out(msg({ type: 'assistant', uuid, ...base, message }));
     await this.adapter.record(this, { type: 'assistant', uuid, message });
   }
@@ -286,14 +617,92 @@ class ScriptedSession extends FakeSession {
 
 /** FakeAdapter whose sessions follow the script and leave a history behind. */
 class ScriptedAdapter extends FakeAdapter {
+  /** The mock account's 5-hour window (v1.3 B): used fraction and reset time. */
+  private fiveHour = MOCK_USAGE_START;
+  private windowResets = Date.now() + MOCK_WINDOW_MS;
+  /** Until when the mock account is refused ("limit"); 0 when it is not. */
+  limitedUntil = 0;
+
   constructor(private readonly claudeDir: string) {
     super();
+  }
+
+  limited(): boolean {
+    if (this.limitedUntil === 0) return false;
+    if (Date.now() < this.limitedUntil) return true;
+    // The limit reset: a fresh window.
+    this.limitedUntil = 0;
+    this.fiveHour = 0.05;
+    this.windowResets = Date.now() + 5 * 3_600_000;
+    return false;
+  }
+
+  reachLimit(): void {
+    if (this.limited()) return;
+    this.limitedUntil = Date.now() + MOCK_LIMIT_MS;
+    this.fiveHour = 1;
+  }
+
+  /** The `rate_limit_event` a turn starts with; each allowed turn uses a little more. */
+  rateLimitEvent(sessionId: string): SDKMessage {
+    const limited = this.limited();
+    if (!limited) this.fiveHour = Math.min(0.99, this.fiveHour + MOCK_USAGE_STEP);
+    const resetsAt = limited ? this.limitedUntil : this.windowResets;
+    return msg({
+      type: 'rate_limit_event',
+      uuid: randomUUID(),
+      session_id: sessionId,
+      rate_limit_info: {
+        status: limited ? 'rejected' : this.fiveHour >= 0.8 ? 'allowed_warning' : 'allowed',
+        rateLimitType: 'five_hour',
+        utilization: this.fiveHour,
+        // Seconds, like Claude Code 2.1.314.
+        resetsAt: Math.floor(resetsAt / 1000),
+      },
+    });
+  }
+
+  /** The experimental usage reading (`SDKControlGetUsageResponse`) of the mock account. */
+  usageReading(): unknown {
+    this.limited();
+    const iso = (t: number) => new Date(Math.floor(t / 1000) * 1000).toISOString();
+    const weekly = Date.now() + 4 * 24 * 3_600_000;
+    return {
+      session: { total_cost_usd: 0.0123 },
+      subscription_type: 'max',
+      rate_limits_available: true,
+      rate_limits: {
+        five_hour: {
+          utilization: Math.round(this.fiveHour * 100),
+          resets_at: iso(this.limitedUntil || this.windowResets),
+        },
+        seven_day: { utilization: 23, resets_at: iso(weekly) },
+        seven_day_opus: { utilization: 8, resets_at: iso(weekly) },
+        model_scoped: [{ display_name: 'Fable', utilization: 4, resets_at: iso(weekly) }],
+        extra_usage: {
+          is_enabled: false,
+          monthly_limit: null,
+          used_credits: null,
+          utilization: null,
+        },
+      },
+      behaviors: null,
+    };
   }
 
   override start(o: StartOptions): FakeSession {
     const s = new ScriptedSession(o, this);
     this.started.push(s);
     return s;
+  }
+
+  /** The fake small model (v1.2 C1 titles): "Mock: " and the message's first four words. */
+  override async oneShot(o: OneShotOptions): Promise<string> {
+    this.oneShots.push(o);
+    await new Promise((r) => setTimeout(r, 500));
+    const message = /<first_message>\n([\s\S]*?)\n<\/first_message>/.exec(o.prompt)?.[1] ?? '';
+    const words = message.split(/\s+/).filter(Boolean).slice(0, 4).join(' ');
+    return `Mock: ${words || 'new chat'}`;
   }
 
   /**
@@ -322,6 +731,8 @@ class ScriptedAdapter extends FakeAdapter {
     }
     entry.messages.push({
       ...m,
+      // Like the CLI's transcript entries (v1.3 analytics reads it).
+      timestamp: new Date().toISOString(),
       session_id: s.id,
       parent_tool_use_id: null,
       parent_agent_id: null,
@@ -342,6 +753,12 @@ export type MockOptions = {
   port?: number;
   token?: string;
   installSignalHandlers?: boolean;
+  /**
+   * v1.4: a second machine to pair with instead (see the file comment): its
+   * device listener on 127.0.0.1:`port` (0: any free port; tests only) and
+   * the well-formed `pairingCode` it keeps live.
+   */
+  remote?: { port: number; pairingCode: string };
 };
 
 export type MockService = {
@@ -353,22 +770,101 @@ export type MockService = {
   removed: Promise<void>;
 };
 
+/** A rounded square with a letter, as a mock project's favicon. */
+const iconSvg = (fill: string, letter: string): string =>
+  `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">` +
+  `<rect width="32" height="32" rx="7" fill="${fill}"/>` +
+  `<text x="16" y="22" font-family="sans-serif" font-size="18" font-weight="700" ` +
+  `text-anchor="middle" fill="#fff">${letter}</text></svg>`;
+
+/**
+ * Icon fixtures for some mock projects (v1.3 §5), laid out the ways real
+ * projects keep them, so the real icon search runs on them. The corpus's
+ * project folders (`/work/proj-N`) are not on disk; their icons live in
+ * `<temp>/projects/proj-N` instead. The other projects get letter tiles.
+ */
+const MOCK_ICONS: { project: number; files: Record<string, string> }[] = [
+  { project: 0, files: { 'favicon.svg': iconSvg('#2563eb', 'P') } },
+  {
+    project: 1,
+    files: {
+      'index.html': '<link rel="icon" type="image/svg+xml" href="/brand.svg">',
+      'public/brand.svg': iconSvg('#0d9488', 'B'),
+    },
+  },
+  {
+    project: 2,
+    files: {
+      'src/app.html': '<link rel="icon" href="%sveltekit.assets%/favicon.svg" />',
+      'static/favicon.svg': iconSvg('#c026d3', 'S'),
+    },
+  },
+  { project: 4, files: { 'apps/web/public/favicon.svg': iconSvg('#ea580c', 'W') } },
+  { project: 7, files: { '.github/logo.svg': iconSvg('#16a34a', 'G') } },
+];
+
+const writeMockIcons = async (root: string): Promise<Map<string, string>> => {
+  const dirs = new Map<string, string>();
+  for (const { project, files } of MOCK_ICONS) {
+    const dir = join(root, 'projects', `proj-${project}`);
+    for (const [rel, body] of Object.entries(files)) {
+      const file = join(dir, ...rel.split('/'));
+      await mkdir(join(file, '..'), { recursive: true });
+      await writeFile(file, body);
+    }
+    dirs.set(`/work/proj-${project}`, dir);
+  }
+  return dirs;
+};
+
+/**
+ * Random bytes that make `DeviceRegistry.createPairingCode` produce `code`
+ * (each byte an alphabet index, below its rejection limit).
+ */
+const fixedPairingRandom = (code: string): ((n: number) => Buffer) => {
+  const indexes = [...normalisePairingCode(code)].map((c) => PAIRING_ALPHABET.indexOf(c));
+  return (n) => Buffer.from(Array.from({ length: n }, (_, i) => indexes[i % indexes.length]!));
+};
+
+/** Calls `method` as this machine's own desktop would (origin local); throws its error. */
+const callLocal = async (svc: ServiceHandle, method: string, params: unknown): Promise<void> => {
+  const res = await svc.router.dispatch(
+    { id: 0, method, params },
+    { clientId: 'mock', origin: 'local' },
+  );
+  if ('error' in res) throw new Error(`${method}: ${res.error.message}`);
+};
+
 /** Starts the mock service; its temp dirs are removed when it closes. */
 export const startMockService = async (o: MockOptions = {}): Promise<MockService> => {
-  const root = await mkdtemp(join(tmpdir(), 'pahub-mock-'));
+  const remote = o.remote;
+  if (remote && !isWellFormedPairingCode(remote.pairingCode)) {
+    throw new Error(
+      `Invalid pairing code ${remote.pairingCode}: 12 of ${PAIRING_ALPHABET}, dashes allowed`,
+    );
+  }
+  const root = await mkdtemp(join(tmpdir(), 'threadgarden-mock-'));
   const dataDir = join(root, 'data');
   const claudeDir = join(root, 'claude');
   await mkdir(join(claudeDir, 'projects'), { recursive: true });
   const adapter = new ScriptedAdapter(claudeDir);
   const corpus = generateCorpus({
-    sessions: o.sessions ?? 1000,
-    projects: o.projects ?? 50,
-    bigSessionMessages: o.bigSessionMessages ?? 2000,
+    sessions: o.sessions ?? (remote ? REMOTE_SESSIONS : 1000),
+    projects: o.projects ?? (remote ? 1 : 50),
+    bigSessionMessages: o.bigSessionMessages ?? (remote ? 0 : 2000),
+    // Dated up to now, with models, tokens and tool calls: the Analytics view has data.
+    recent: { now: Date.now(), days: HISTORY_DAYS },
   });
-  for (const [id, s] of corpus.sessions) adapter.sessions.set(id, s);
+  for (const [id, s] of corpus.sessions) {
+    // The second machine's chats all belong to its one project.
+    if (remote) s.info.cwd = REMOTE_PROJECT_PATH;
+    adapter.sessions.set(id, s);
+  }
+  const iconDirs = remote ? new Map<string, string>() : await writeMockIcons(root);
 
-  // One "external" Claude Code session, so the UI's external states and resume block show.
-  const externalId = corpus.sessions.keys().next().value;
+  // One "external" Claude Code session (This PC's mock only), so the UI's
+  // external states and resume block show.
+  const externalId = remote ? undefined : corpus.sessions.keys().next().value;
   const externals = externalId
     ? [
         {
@@ -389,9 +885,54 @@ export const startMockService = async (o: MockOptions = {}): Promise<MockService
       adapter,
       claude: { path: 'mock-claude', version: MOCK_VERSION },
       externalRun: async () => JSON.stringify(externals),
+      // The corpus's project folders (/work/proj-N) are not on disk: none is missing.
+      folderStat: async () => true,
+      projectIconSearch: async (projectPath) => {
+        const dir = iconDirs.get(projectPath.replace(/\\/g, '/'));
+        return dir ? findProjectIcon(dir) : null;
+      },
       ...(o.port === undefined ? {} : { port: o.port }),
       ...(o.token === undefined ? {} : { token: o.token }),
       installSignalHandlers: o.installSignalHandlers ?? true,
+      ...(remote
+        ? {
+            headless: true,
+            // Test-only: loopback (Ruling R4). `bin.ts` lets the service find its private addresses.
+            remote: { port: remote.port, addresses: ['127.0.0.1'] },
+            pairingRandom: fixedPairingRandom(remote.pairingCode),
+          }
+        : {}),
+    });
+    if (remote) {
+      // The real service retries a listener that failed to start; a test mock must say so at once.
+      if (!svc.remote) {
+        await svc.close();
+        throw new Error(`The device listener did not start on 127.0.0.1:${remote.port}`);
+      }
+      // A recognisable name, and the code live from the start for as long as the mock runs
+      // (as if the owner ran `threadgarden pair` again whenever it expired or was spent).
+      await callLocal(svc, 'machine.rename', { name: REMOTE_MACHINE_NAME });
+      const keepCodeLive = (): void =>
+        void callLocal(svc, 'pairing.create', {}).catch((err: unknown) =>
+          process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`),
+        );
+      keepCodeLive();
+      const timer = setInterval(keepCodeLive, PAIRING_REFRESH_MS);
+      timer.unref();
+      svc.onClosed(() => clearInterval(timer));
+    }
+    // The mock account's usage is known from the start (v1.3 B), so the meter shows at once.
+    svc.usage?.observeEvent('mock', {
+      status: 'allowed',
+      rateLimitType: 'five_hour',
+      utilization: MOCK_USAGE_START,
+      resetsAt: Math.floor((Date.now() + MOCK_WINDOW_MS) / 1000),
+    });
+    svc.usage?.observeEvent('mock', {
+      status: 'allowed',
+      rateLimitType: 'seven_day',
+      utilization: 0.23,
+      resetsAt: Math.floor((Date.now() + 4 * 24 * 3_600_000) / 1000),
     });
     const removed = new Promise<void>((resolve) =>
       svc.onClosed(() => {
@@ -407,31 +948,50 @@ export const startMockService = async (o: MockOptions = {}): Promise<MockService
   }
 };
 
+/** Whether the flag `--name` is in argv. */
+const flag = (name: string): boolean => process.argv.slice(2).includes(`--${name}`);
+
 /** `--name value` / `--name=value` from argv, else the env variable. */
-const option = (name: string, envName: string): string | undefined => {
+const option = (name: string, envName?: string): string | undefined => {
   const argv = process.argv.slice(2);
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
     if (a === `--${name}`) return argv[i + 1];
     if (a.startsWith(`--${name}=`)) return a.slice(name.length + 3);
   }
-  return process.env[envName] || undefined;
+  return (envName && process.env[envName]) || undefined;
+};
+
+/** A port option (0: any free port); exits with a message when it is not one. */
+const portOption = (name: string, envName?: string): number | undefined => {
+  const text = option(name, envName);
+  const port = text === undefined ? undefined : Number(text);
+  if (port !== undefined && !(Number.isInteger(port) && port >= 0 && port < 65536)) {
+    process.stderr.write(`Invalid port: ${text}\n`);
+    process.exit(1);
+  }
+  return port;
 };
 
 const isEntry = (): boolean =>
   process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
 
 if (isEntry()) {
-  const portText = option('port', 'PAHUB_MOCK_PORT');
-  const port = portText === undefined ? undefined : Number(portText);
-  if (port !== undefined && !(Number.isInteger(port) && port >= 0 && port < 65536)) {
-    process.stderr.write(`Invalid port: ${portText}\n`);
-    process.exit(1);
+  const port = portOption('port', 'THREADGARDEN_MOCK_PORT');
+  const token = option('token', 'THREADGARDEN_MOCK_TOKEN');
+  let remote: MockOptions['remote'];
+  if (flag('remote')) {
+    const pairingCode = option('pairing-code');
+    if (pairingCode === undefined) {
+      process.stderr.write('--remote needs --pairing-code <code>, such as TEST-TEST-TEST\n');
+      process.exit(1);
+    }
+    remote = { port: portOption('remote-port') ?? REMOTE_PORT, pairingCode };
   }
-  const token = option('token', 'PAHUB_MOCK_TOKEN');
   startMockService({
     ...(port === undefined ? {} : { port }),
     ...(token === undefined ? {} : { token }),
+    ...(remote ? { remote } : {}),
   })
     .then(async ({ dataDir, claudeDir, removed }) => {
       const discovery = await readDiscovery(dataDir);

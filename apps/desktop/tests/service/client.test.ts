@@ -1,4 +1,4 @@
-import { PROTOCOL_VERSION, type ChatItem, type ChatSummary } from '@pahub/protocol';
+import { PROTOCOL_VERSION, type ChatItem, type ChatSummary } from '@threadgarden/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RequestError, ServiceClient } from '../../src/lib/service/client';
 import { ChatsState } from '../../src/lib/state/chats.svelte';
@@ -15,6 +15,9 @@ const summary = (sessionId: string): ChatSummary => ({
   pinned: false,
   live: true,
   external: null,
+  unread: false,
+  bucket: 'active',
+  backFromHold: false,
 });
 const text = (id: string, markdown: string): ChatItem => ({
   kind: 'assistantText',
@@ -47,7 +50,8 @@ describe('ServiceClient', () => {
     server.handlers['places.counts'] = () => ({ needsYou: 1, running: 2, all: 3 });
     server.handlers['projects.list'] = () => [];
     await connected();
-    expect(server.protocols[0]).toEqual(['pahub.tok']);
+    // Both prefixes: a pahub service (before v1.3) accepts only the old one (spec v1.3 §9).
+    expect(server.protocols[0]).toEqual(['threadgarden.tok', 'pahub.tok']);
     const [a, b] = await Promise.all([
       client.request('places.counts', {}),
       client.request('projects.list', {}),
@@ -68,7 +72,7 @@ describe('ServiceClient', () => {
   });
 
   it('refuses a request larger than the service accepts, with a clear error, without sending it', async () => {
-    const { MAX_REQUEST_BYTES } = await import('@pahub/protocol');
+    const { MAX_REQUEST_BYTES } = await import('@threadgarden/protocol');
     server.handlers['chat.send'] = () => ({ queued: false });
     await connected();
     const data = 'A'.repeat(MAX_REQUEST_BYTES);
@@ -153,6 +157,29 @@ describe('ServiceClient', () => {
     expect(server.sockets.length).toBe(before); // no reconnect loop
   });
 
+  it('a v1.1 service (protocol 1) is incompatible: the restart screen, never broken lists', async () => {
+    // v1.2 added places (active, onHold) and methods a v1.1 service rejects.
+    expect(PROTOCOL_VERSION).toBeGreaterThan(1);
+    server.handlers['hello'] = () => ({ serviceVersion: '0.1.0', protocolVersion: 1 });
+    const p = client.connect('ws://127.0.0.1:1', 'tok');
+    const assertion = expect(p).rejects.toMatchObject({ code: 'INCOMPATIBLE' });
+    await vi.advanceTimersByTimeAsync(0);
+    await assertion;
+    expect(client.status).toBe('incompatible');
+    expect(server.calls('sessions.list')).toHaveLength(0);
+  });
+
+  it('a pahub service (protocol 3) is incompatible: restarting it moves its data over', async () => {
+    // v1.3 §9: the renamed data dir; the new service migrates pahub's as it starts.
+    expect(PROTOCOL_VERSION).toBeGreaterThan(3);
+    server.handlers['hello'] = () => ({ serviceVersion: '0.2.0', protocolVersion: 3 });
+    const p = client.connect('ws://127.0.0.1:1', 'tok');
+    const assertion = expect(p).rejects.toMatchObject({ code: 'INCOMPATIBLE' });
+    await vi.advanceTimersByTimeAsync(0);
+    await assertion;
+    expect(client.status).toBe('incompatible');
+  });
+
   it('reconnects and resyncs after reconnect without duplicates', async () => {
     const chats = new ChatsState();
     chats.init(client, { schedule: (cb) => queueMicrotask(cb) });
@@ -190,6 +217,46 @@ describe('ServiceClient', () => {
     expect(server.calls('chat.open')).toHaveLength(1);
   });
 
+  it('a replayed chat.tasks event advances the seq without touching the chat status', async () => {
+    const chats = new ChatsState();
+    chats.init(client, { schedule: (cb) => queueMicrotask(cb) });
+    server.handlers['chat.open'] = () => ({
+      summary: summary('s1'),
+      header: {},
+      items: [text('a', 'one')],
+      hasMore: false,
+      seq: 3,
+      tasks: [],
+    });
+    await connected();
+    await chats.open('s1');
+    const status = chats.get('s1')!.status;
+    server.handlers['chat.since'] = () => ({
+      events: [
+        {
+          sessionId: 's1',
+          seq: 4,
+          tasks: [
+            {
+              taskId: 'b1',
+              kind: 'shell',
+              description: 'npm run dev',
+              status: 'running',
+              startedAt: 1,
+            },
+          ],
+        },
+      ],
+      seq: 4,
+    });
+    server.drop();
+    await vi.advanceTimersByTimeAsync(250);
+    const chat = chats.get('s1')!;
+    expect(chat.seq).toBe(4);
+    expect(chat.status).toBe(status);
+    expect(chat.items.map((i) => i.id)).toEqual(['a']);
+  });
+
   it('falls back to chat.open when chat.since reports GAP', async () => {
     const chats = new ChatsState();
     chats.init(client, { schedule: (cb) => queueMicrotask(cb) });
@@ -211,5 +278,49 @@ describe('ServiceClient', () => {
     expect(server.calls('chat.open')).toHaveLength(2);
     expect(chats.get('s1')?.seq).toBe(200);
     expect(chats.get('s1')?.items.map((i) => i.id)).toEqual(['fresh']);
+  });
+
+  it('onClose stop ends reconnecting; retry keeps the backoff; hello is kept', async () => {
+    const codes: number[] = [];
+    const c = new ServiceClient({
+      WebSocketImpl: server.Impl,
+      acceptProtocol: (v) => v === PROTOCOL_VERSION || v === 4,
+      onClose: (code) => {
+        codes.push(code);
+        return code === 4409 ? 'stop' : 'retry';
+      },
+    });
+    server.handlers.hello = () => ({ serviceVersion: 'x', protocolVersion: 4 });
+    const p = c.connect('ws://127.0.0.1:1', 'tok');
+    await vi.advanceTimersByTimeAsync(0);
+    await p;
+    expect(c.hello?.protocolVersion).toBe(4);
+    server.drop(4502);
+    await vi.advanceTimersByTimeAsync(300);
+    expect(c.status).toBe('open');
+    server.drop(4409);
+    const sockets = server.sockets.length;
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(codes).toEqual([4502, 4409]);
+    expect(server.sockets).toHaveLength(sockets);
+    c.close();
+  });
+
+  it('acceptHello false closes before open: no open listeners, no retry', async () => {
+    const statuses: string[] = [];
+    const opened = vi.fn();
+    const c = new ServiceClient({ WebSocketImpl: server.Impl, acceptHello: () => false });
+    c.onStatus((s) => statuses.push(s));
+    c.onOpen(opened);
+    const failed = c.connect('ws://127.0.0.1:1', 'tok').catch((e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(await failed).toMatchObject({ code: 'DISCONNECTED' });
+    expect(c.status).toBe('closed');
+    expect(c.hello).toBeNull();
+    expect(statuses).not.toContain('open');
+    expect(opened).not.toHaveBeenCalled();
+    const sockets = server.sockets.length;
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(server.sockets).toHaveLength(sockets);
   });
 });

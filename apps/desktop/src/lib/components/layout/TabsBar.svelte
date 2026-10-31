@@ -1,37 +1,63 @@
 <script lang="ts">
+  import ChartColumnIcon from '@lucide/svelte/icons/chart-column';
   import PlusIcon from '@lucide/svelte/icons/plus';
   import XIcon from '@lucide/svelte/icons/x';
   import { useApp } from '#lib/state/context.js';
+  import { parseChatKey } from '#lib/state/refs.js';
   import { cn } from '#lib/utils.js';
-  import { rawStatus, tabId } from './chat-info';
+  import { shortcut } from '#lib/shortcuts.js';
+  import { ANALYTICS_TAB_ID, rawStatus, tabId } from './chat-info';
+  import IconButton from './IconButton.svelte';
+  import RunningBadge from './RunningBadge.svelte';
+  import ScheduledBadge from './ScheduledBadge.svelte';
   import StatusIcon from './StatusIcon.svelte';
 
   /**
    * One tab per open chat (spec §6.1). Middle-click, the × button or Ctrl/Cmd+W
-   * close a tab; closing only drops the view, the session keeps running.
+   * close a tab (every key is listed in `shortcuts.ts`); closing only drops the view, the session keeps running.
    * "+" (Ctrl/Cmd+N) starts a new chat, in the selected project if there is one.
+   * Tabs are keyed by chat key (`machineId/sessionId`); each is described by its machine's scope.
    */
-  const { tabs, chats, sessions, places, interaction } = useApp();
+  const { tabs, places, interaction, usage, scopes } = useApp();
 
+  /** In the selected project, on its machine (This PC's when it names none). */
   const newChat = (): void => {
     const sel = places.selected;
+    const scope =
+      sel.kind === 'project' ? scopes.get(sel.machineId ?? scopes.local().machineId) : undefined;
     const project =
-      sel.kind === 'project' ? places.projects.find((p) => p.projectId === sel.projectId) : null;
-    interaction.openNewChat(project?.path ?? null);
+      sel.kind === 'project'
+        ? scope?.places.projects.find((p) => p.projectId === sel.projectId)
+        : null;
+    interaction.openNewChat(project?.path ?? null, scope?.machineId ?? null);
   };
 
-  const listed = $derived(new Map(sessions.items.map((s) => [s.sessionId, s])));
+  /** Each machine's listed chats by session id. */
+  const listed = $derived(
+    new Map(
+      scopes
+        .all()
+        .map((s) => [s.machineId, new Map(s.sessions.items.map((c) => [c.sessionId, c]))]),
+    ),
+  );
 
-  const info = (sessionId: string) => {
-    const chat = chats.get(sessionId);
-    const listedSummary = listed.get(sessionId);
+  const info = (key: string) => {
+    const ref = parseChatKey(key);
+    const scope = ref ? scopes.get(ref.machineId) : undefined;
+    const sessionId = ref?.sessionId ?? key;
+    const chat = scope?.chats.get(sessionId);
+    const listedSummary = ref ? listed.get(ref.machineId)?.get(sessionId) : undefined;
     // A background tab that was never shown has only a summary (see chats.sync).
-    const peek = chat ? undefined : chats.summaryOf(sessionId);
+    const peek = chat ? undefined : scope?.chats.summaryOf(sessionId);
     const summary = listedSummary ?? chat?.summary ?? peek ?? null;
     return {
+      sessionId,
       title: summary?.title ?? 'Loading…',
       status: chat?.loaded ? chat.status : (peek?.status ?? listedSummary?.status ?? 'history'),
       raw: rawStatus(summary),
+      // Tasks are known for loaded chats only; closed or unseen tabs are never asked.
+      running: chat?.running ?? 0,
+      scheduled: scope?.scheduled.forChat(sessionId) ?? [],
     };
   };
 
@@ -41,13 +67,13 @@
     const active = tabs.active;
     if (!active || !tablist) return;
     tablist
-      .querySelector<HTMLElement>(`[data-tab="${CSS.escape(active)}"]`)
+      .querySelector<HTMLElement>(`[data-chat-key="${CSS.escape(active)}"]`)
       ?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   });
 
-  const focusTab = (sessionId: string): void => {
-    tabs.activate(sessionId);
-    tablist?.querySelector<HTMLElement>(`[data-tab="${CSS.escape(sessionId)}"]`)?.focus();
+  const focusTab = (key: string): void => {
+    tabs.activate(key);
+    tablist?.querySelector<HTMLElement>(`[data-chat-key="${CSS.escape(key)}"]`)?.focus();
   };
 
   const onTabsKey = (e: KeyboardEvent): void => {
@@ -76,6 +102,9 @@
     if (e.key.toLowerCase() === 'n' && !e.shiftKey) {
       e.preventDefault();
       newChat();
+    } else if (e.key.toLowerCase() === 'w' && !e.shiftKey && tabs.analyticsShown) {
+      e.preventDefault();
+      tabs.closeAnalytics();
     } else if (e.key.toLowerCase() === 'w' && !e.shiftKey && tabs.active) {
       e.preventDefault();
       tabs.close(tabs.active);
@@ -87,10 +116,10 @@
     }
   };
 
-  const onAux = (e: MouseEvent, sessionId: string): void => {
+  const onAux = (e: MouseEvent, key: string): void => {
     if (e.button !== 1) return;
     e.preventDefault();
-    tabs.close(sessionId);
+    tabs.close(key);
   };
 </script>
 
@@ -105,9 +134,49 @@
     class="flex min-w-0 items-stretch overflow-x-auto [scrollbar-width:none]"
     onkeydown={onTabsKey}
   >
-    {#each tabs.open as sessionId (sessionId)}
-      {@const t = info(sessionId)}
-      {@const active = sessionId === tabs.active}
+    {#if tabs.analyticsOpen}
+      <!-- v1.3: the Analytics view's own tab, first; it is not a chat. -->
+      <div
+        role="presentation"
+        class={cn(
+          'group relative flex max-w-56 min-w-28 shrink-0 items-center border-r',
+          tabs.analyticsShown
+            ? 'bg-background text-foreground after:bg-primary after:absolute after:inset-x-0 after:top-0 after:h-0.5'
+            : 'text-muted-foreground hover:bg-background/60 hover:text-foreground',
+        )}
+      >
+        <button
+          type="button"
+          role="tab"
+          id={ANALYTICS_TAB_ID}
+          aria-selected={tabs.analyticsShown}
+          aria-controls="chat-panel"
+          tabindex={tabs.analyticsShown ? 0 : -1}
+          class="focus-visible:ring-ring/50 flex h-full min-w-0 flex-1 items-center gap-1.5 pr-1 pl-3 text-xs outline-none focus-visible:ring-2 focus-visible:ring-inset"
+          onclick={tabs.showAnalytics}
+          onmousedown={(e) => e.button === 1 && e.preventDefault()}
+          onauxclick={(e) => e.button === 1 && tabs.closeAnalytics()}
+        >
+          <ChartColumnIcon class="size-3.5 shrink-0" aria-hidden="true" />
+          <span class="truncate">Analytics</span>
+        </button>
+        <IconButton
+          label="Close Analytics"
+          shortcut={tabs.analyticsShown ? shortcut('tab-close').combos[0] : undefined}
+          tabindex={-1}
+          class={cn(
+            'mr-1 size-5 opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
+            tabs.analyticsShown && 'opacity-60',
+          )}
+          onclick={tabs.closeAnalytics}
+        >
+          <XIcon class="size-3.5" aria-hidden="true" />
+        </IconButton>
+      </div>
+    {/if}
+    {#each tabs.open as key (key)}
+      {@const t = info(key)}
+      {@const active = key === tabs.active}
       <div
         role="presentation"
         class={cn(
@@ -120,44 +189,46 @@
         <button
           type="button"
           role="tab"
-          id={tabId(sessionId)}
-          data-tab={sessionId}
+          id={tabId(key)}
+          data-tab={t.sessionId}
+          data-chat-key={key}
           aria-selected={active}
           aria-controls="chat-panel"
           tabindex={active ? 0 : -1}
           title={t.title}
           class="focus-visible:ring-ring/50 flex h-full min-w-0 flex-1 items-center gap-1.5 pr-1 pl-3 text-xs outline-none focus-visible:ring-2 focus-visible:ring-inset"
-          onclick={() => tabs.activate(sessionId)}
+          onclick={() => tabs.activate(key)}
           onmousedown={(e) => e.button === 1 && e.preventDefault()}
-          onauxclick={(e) => onAux(e, sessionId)}
+          onauxclick={(e) => onAux(e, key)}
         >
           <StatusIcon status={t.status} raw={t.raw} />
           <span class="truncate">{t.title}</span>
+          {#if t.running > 0}
+            <RunningBadge count={t.running} />
+          {/if}
+          {#if t.scheduled.length > 0}
+            <ScheduledBadge sends={t.scheduled} now={usage.now} />
+          {/if}
         </button>
-        <button
-          type="button"
-          tabindex="-1"
-          aria-label="Close {t.title}"
-          title="Close (middle-click)"
+        <IconButton
+          label="Close {t.title}"
+          shortcut={active ? shortcut('tab-close').combos[0] : undefined}
+          tabindex={-1}
           class={cn(
-            'hover:bg-muted mr-1 flex size-5 shrink-0 items-center justify-center rounded opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
+            'mr-1 size-5 opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
             active && 'opacity-60',
           )}
-          onclick={() => tabs.close(sessionId)}
-          onauxclick={(e) => onAux(e, sessionId)}
+          onclick={() => tabs.close(key)}
+          onauxclick={(e) => onAux(e, key)}
         >
-          <XIcon class="size-3" aria-hidden="true" />
-        </button>
+          <XIcon class="size-3.5" aria-hidden="true" />
+        </IconButton>
       </div>
     {/each}
   </div>
-  <button
-    type="button"
-    aria-label="New chat"
-    title="New chat (Ctrl/Cmd+N)"
-    class="text-muted-foreground hover:text-foreground hover:bg-background/60 flex w-8 shrink-0 items-center justify-center"
-    onclick={newChat}
-  >
-    <PlusIcon class="size-4" aria-hidden="true" />
-  </button>
+  <div class="flex w-9 shrink-0 items-center justify-center">
+    <IconButton label="New chat" shortcut={shortcut('new-chat').combos[0]} onclick={newChat}>
+      <PlusIcon />
+    </IconButton>
+  </div>
 </div>

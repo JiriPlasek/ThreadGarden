@@ -6,7 +6,7 @@ import ChatList from '../../src/lib/components/layout/ChatList.svelte';
 import PlacesColumn from '../../src/lib/components/layout/PlacesColumn.svelte';
 import StatusIcon from '../../src/lib/components/layout/StatusIcon.svelte';
 import TabsBar from '../../src/lib/components/layout/TabsBar.svelte';
-import { project, setup, summary } from './harness';
+import { here, project, setup, summary } from './harness';
 
 type ListParams = { place: { kind: string; projectId?: string }; query?: string };
 
@@ -113,11 +113,11 @@ describe('agents strip', () => {
     expect(titles[3]).toContain('idle one');
   });
 
-  it('stop all is enabled for an idle pahub chat but not for external sessions only', async () => {
+  it('stop all is enabled for an idle Threadgarden chat but not for external sessions only', async () => {
     let items = [summary('i1', { status: 'idle', live: true })];
     const { app, context } = await setup((server) => {
       server.handlers['sessions.list'] = (p) =>
-        (p as ListParams).place.kind === 'all' ? { items } : { items: [] };
+        (p as ListParams).place.kind === 'active' ? { items } : { items: [] };
     });
     render(AgentsStrip, { context });
     const stop = await screen.findByRole('button', { name: /stop all work/i });
@@ -166,12 +166,12 @@ describe('tabs', () => {
     // Middle-click closes.
     const first = within(tablist).getAllByRole('tab')[0]!;
     await fireEvent(first, new MouseEvent('auxclick', { button: 1, bubbles: true }));
-    expect(app.tabs.open).toEqual(['s2', 's3']);
+    expect(app.tabs.open).toEqual([here('s2'), here('s3')]);
 
     // Ctrl+W closes the active tab.
-    expect(app.tabs.active).toBe('s3');
+    expect(app.tabs.active).toBe(here('s3'));
     await fireEvent.keyDown(window, { key: 'w', ctrlKey: true });
-    expect(app.tabs.open).toEqual(['s2']);
+    expect(app.tabs.open).toEqual([here('s2')]);
 
     // The close button closes too.
     await userEvent.click(screen.getByRole('button', { name: /close chat s2/i }));

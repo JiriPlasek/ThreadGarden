@@ -1,6 +1,6 @@
 /**
  * Slash commands that only exist in Claude Code's terminal UI (ruling R25,
- * spec §6.4). Those with a matching pahub control open it instead of being
+ * spec §6.4). Those with a matching Threadgarden control open it instead of being
  * sent; the others are listed as unavailable with the reason, and typing one
  * shows that notice instead of sending it as text. A command the SDK reports
  * as supported (`chat.commands`) always wins over this table.
@@ -12,9 +12,9 @@ import type { SlashCommand } from '#lib/state/interaction.svelte.js';
 export type Control = 'model' | 'effort' | 'permissionMode';
 
 export type MenuCommand = SlashCommand & {
-  /** Opens a pahub control instead of being sent. */
+  /** Opens a Threadgarden control instead of being sent. */
   control?: Control;
-  /** Not available in pahub; the reason shown. */
+  /** Not available in Threadgarden; the reason shown. */
   unavailable?: string;
 };
 
@@ -40,28 +40,31 @@ const mapped: MenuCommand[] = [
 ];
 
 const terminalOnly: [name: string, reason: string][] = [
-  ['config', "Claude Code's terminal settings screen; edit settings.json, or pahub's own settings"],
-  ['login', 'Sign in by running `claude` in a terminal; pahub uses that sign-in'],
+  [
+    'config',
+    "Claude Code's terminal settings screen; edit settings.json, or Threadgarden's own settings",
+  ],
+  ['login', 'Sign in by running `claude` in a terminal; Threadgarden uses that sign-in'],
   ['logout', 'Sign out by running `claude` in a terminal'],
   ['doctor', 'Run `claude doctor` in a terminal'],
   ['vim', 'Editor modes belong to the terminal prompt'],
-  ['terminal-setup', 'Configures terminal keybindings; not needed in pahub'],
+  ['terminal-setup', 'Configures terminal keybindings; not needed in Threadgarden'],
   ['ide', 'IDE integration is a terminal feature'],
-  ['resume', "Open the chat from pahub's chat list or Ctrl/Cmd+K instead"],
+  ['resume', "Open the chat from Threadgarden's chat list or Ctrl/Cmd+K instead"],
   ['exit', 'Close the tab, or use End session in the chat header'],
-  ['theme', 'pahub follows its own theme setting'],
-  ['statusline', 'pahub shows model, context and cost in the chat header'],
-  ['status', 'pahub shows version, model and account in the chat header'],
-  ['keybindings', "Terminal keyboard shortcuts; pahub's shortcuts are fixed"],
+  ['theme', 'Threadgarden follows its own theme setting'],
+  ['statusline', 'Threadgarden shows model, context and cost in the chat header'],
+  ['status', 'Threadgarden shows version, model and account in the chat header'],
+  ['keybindings', "Terminal keyboard shortcuts; Threadgarden's shortcuts are fixed"],
   ['tui', 'Terminal rendering mode'],
   ['focus', 'Terminal view mode'],
   ['scroll-speed', 'Terminal scrolling setting'],
   ['rewind', 'Use "Fork from this message" on a message instead'],
   ['hooks', 'Interactive terminal menu; edit hooks in settings.json'],
-  ['mobile', 'Terminal QR code; not available in pahub'],
+  ['mobile', 'Terminal QR code; not available in Threadgarden'],
 ];
 
-/** The pahub-side table: mapped commands, then terminal-only ones. */
+/** The Threadgarden-side table: mapped commands, then terminal-only ones. */
 export const LOCAL_COMMANDS: readonly MenuCommand[] = [
   ...mapped,
   ...terminalOnly.map(([name, reason]) => ({
@@ -92,4 +95,4 @@ export const localCommand = (
 };
 
 export const unavailableNotice = (c: MenuCommand): string =>
-  `/${c.name} is unavailable in pahub: ${c.unavailable ?? ''}`;
+  `/${c.name} is unavailable in Threadgarden: ${c.unavailable ?? ''}`;

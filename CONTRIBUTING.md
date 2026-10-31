@@ -1,20 +1,28 @@
-# Contributing to pahub
+# Contributing to Threadgarden
 
 Thanks for helping. This file covers the workflow, local setup and the rules the code base keeps. How the system fits together is in [docs/architecture.md](docs/architecture.md).
 
 ## Hard rule: Claude Code's data is read-only
 
-pahub must never write, rename, move or delete anything under the Claude config dir (`~/.claude`, or `CLAUDE_CONFIG_DIR` when set). A change that breaks this is not accepted, however useful the feature. In practice:
+Threadgarden must never write, rename, move or delete anything under the Claude config dir (`~/.claude`, or `CLAUDE_CONFIG_DIR` when set). A change that breaks this is not accepted, however useful the feature. In practice:
 
 - Read history only through the Agent SDK (`listSessions`, `getSessionInfo`, `getSessionMessages`, `forkSession`). Never open or parse transcript `.jsonl` files; their format is internal to Claude Code.
 - File-system access under `~/.claude/projects` is limited to watching for changes (names, sizes, mtimes). Never read `~/.claude/jobs/`.
-- Never call the SDK's `renameSession()` or `tagSession()`; titles and tags live in pahub's own database.
+- Never call the SDK's `renameSession()` or `tagSession()`; titles and tags live in Threadgarden's own database.
 - Read running sessions only from `claude agents --json`.
 - Parse every external input leniently: unknown SDK message types, content blocks and `claude agents` fields must render as a generic "unrecognised" item with the raw JSON, never crash or be dropped.
 
 `packages/service/test/e2e/read-only.test.ts` enforces this against a fixture config dir in every test run, and the opt-in real suite checks it against your real one.
 
-Two related rules: pahub never offers `bypassPermissions`, and it is never presented as Claude Code (it may say it works with Claude Code) or styled to look like it.
+Two related rules: Threadgarden never offers `bypassPermissions`, and it is never presented as Claude Code (it may say it works with Claude Code) or styled to look like it.
+
+## Rules for remote machines
+
+A headless service answers paired devices over the network ([Machines](docs/architecture.md#machines)), so the service keeps three rules:
+
+- **Methods a paired device must not call are registered local only:** `router.register('pairing.create', handler, { localOnly: true })`. A remote caller gets `FORBIDDEN` before its params are read. Setup, pairing, device and machine management, secrets and shutdown are local only; when in doubt, make a new method local only. Every `router.dispatch` passes an origin (`{ clientId, origin: 'local' | 'remote' }`); there is deliberately no default, so a call site cannot grant local-only methods by forgetting it. A handler that must behave differently for a remote caller (like `devices.revoke`, which lets a device revoke only itself) checks `ctx.origin` and `ctx.deviceId`.
+- **The relay never parses frames.** `server/relay.ts` pipes the UI's socket to the machine verbatim, both ways: it never parses, logs, rewrites or filters a frame, so it needs no change when the protocol grows and leaks no chat content into logs. Behaviour belongs in the services at either end.
+- **The network side stays narrow.** The remote listener binds private addresses only (`privateListenAddresses`), never a wildcard or a public address; device tokens travel only in the WebSocket subprotocol, never in a URL or a log; nothing sends a pairing code before the machine has proved it knows it. Only tests and the mock service may listen on `127.0.0.1`, through test-only options (`remote.addresses` in `startService`, `src/testing/mock-main.ts --remote` for the Playwright specs); never through `bin.ts` or a `main.ts` default.
 
 ## Workflow
 
@@ -31,21 +39,21 @@ You need Node.js 22, pnpm 11, and for the desktop app Rust (rustup installs the 
 ```sh
 pnpm install
 pnpm --filter desktop tauri dev                 # the app, against your real history
-pnpm --filter @pahub/service mock               # or: the service over a synthetic history
+pnpm --filter @threadgarden/service mock        # or: the service over a synthetic history
 ```
 
 The root [README](README.md#development) shows how to run the UI in a browser against the mock service, and how to build release installers.
 
 ## Tests
 
-| Command                                  | What it runs                                                                                                                              |
-| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `pnpm test`                              | Every package's unit and component tests (Vitest), then `pnpm test:perf`                                                                  |
-| `pnpm test:perf`                         | The service performance budgets, one file at a time; `PAHUB_PERF_SLACK` multiplies the budgets (CI uses 3)                                |
-| `pnpm test:e2e`                          | Playwright smoke and UI budget specs in Chromium against the mock service (`pnpm --filter desktop exec playwright install chromium` once) |
-| `pnpm --filter <package> test`           | One package's tests (`@pahub/protocol`, `@pahub/service`, `desktop`)                                                                      |
-| `cargo test` in `apps/desktop/src-tauri` | The Rust shell (build the UI first: `pnpm --filter desktop build`)                                                                        |
-| `pnpm --filter @pahub/service test:real` | Opt-in suite against your installed `claude` and your login; never in CI                                                                  |
+| Command                                         | What it runs                                                                                                                                                                                            |
+| ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm test`                                     | Every package's unit and component tests (Vitest), then `pnpm test:perf`                                                                                                                                |
+| `pnpm test:perf`                                | The service performance budgets, one file at a time; `THREADGARDEN_PERF_SLACK` multiplies the budgets (CI uses 3)                                                                                       |
+| `pnpm test:e2e`                                 | Playwright smoke and UI budget specs in Chromium against the mock service and a second, headless one that `machines.spec.ts` pairs with (`pnpm --filter desktop exec playwright install chromium` once) |
+| `pnpm --filter <package> test`                  | One package's tests (`@threadgarden/protocol`, `@threadgarden/service`, `desktop`)                                                                                                                      |
+| `cargo test` in `apps/desktop/src-tauri`        | The Rust shell (build the UI first: `pnpm --filter desktop build`)                                                                                                                                      |
+| `pnpm --filter @threadgarden/service test:real` | Opt-in suite against your installed `claude` and your login; never in CI                                                                                                                                |
 
 Service logic is tested against a fake SDK adapter (`packages/service/src/testing/fake-adapter.ts`); only `src/sdk/real-adapter.ts` calls the SDK at run time. A performance budget is a requirement, not a target: do not raise one to make a test pass.
 

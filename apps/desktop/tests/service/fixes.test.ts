@@ -1,4 +1,4 @@
-import type { ChatItem, ChatSummary } from '@pahub/protocol';
+import type { ChatItem, ChatSummary } from '@threadgarden/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ServiceClient } from '../../src/lib/service/client';
 import { ChatsState } from '../../src/lib/state/chats.svelte';
@@ -17,6 +17,9 @@ const summary = (sessionId: string): ChatSummary => ({
   pinned: false,
   live: true,
   external: null,
+  unread: false,
+  bucket: 'active',
+  backFromHold: false,
 });
 const text = (id: string, markdown: string): ChatItem => ({
   kind: 'assistantText',

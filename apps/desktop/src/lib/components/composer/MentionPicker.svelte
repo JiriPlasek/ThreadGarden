@@ -46,9 +46,9 @@
       onmousemove={() => onHover(i)}
     >
       {#if f.kind === 'dir'}
-        <FolderIcon class="text-muted-foreground size-3.5 shrink-0" aria-hidden="true" />
+        <FolderIcon class="text-muted-foreground size-4 shrink-0" aria-hidden="true" />
       {:else}
-        <FileIcon class="text-muted-foreground size-3.5 shrink-0" aria-hidden="true" />
+        <FileIcon class="text-muted-foreground size-4 shrink-0" aria-hidden="true" />
       {/if}
       <span class="shrink-0 font-medium">{p.name}{f.kind === 'dir' ? '/' : ''}</span>
       <span class="text-muted-foreground min-w-0 truncate">{p.dir}</span>

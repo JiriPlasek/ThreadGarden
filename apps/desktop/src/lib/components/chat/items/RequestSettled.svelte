@@ -26,15 +26,15 @@
 >
   <div class="flex items-center gap-2">
     {#if item.state === 'allowed'}
-      <CircleCheckIcon class="size-3.5 shrink-0 text-emerald-600" aria-hidden="true" />
+      <CircleCheckIcon class="size-4 shrink-0 text-emerald-600" aria-hidden="true" />
     {:else}
-      <CircleSlashIcon class="size-3.5 shrink-0" aria-hidden="true" />
+      <CircleSlashIcon class="size-4 shrink-0" aria-hidden="true" />
     {/if}
     <span class="text-foreground shrink-0 font-medium">{label}</span>
     <span class="min-w-0 truncate">{requestWhat(item)}</span>
   </div>
   {#if answers.length > 0}
-    <dl class="mt-1 space-y-0.5 pl-5">
+    <dl class="mt-1 space-y-0.5 pl-6">
       {#each answers as [question, answer] (question)}
         <div class="flex gap-1.5">
           <dt class="min-w-0 truncate">{question}</dt>

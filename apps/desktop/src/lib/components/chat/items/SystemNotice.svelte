@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { ChatItem } from '@pahub/protocol';
+  import type { ChatItem } from '@threadgarden/protocol';
   import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
   import InfoIcon from '@lucide/svelte/icons/info';
   import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
@@ -30,11 +30,11 @@
   role={item.level === 'error' ? 'alert' : 'note'}
 >
   {#if item.level === 'error'}
-    <CircleAlertIcon class="mt-px size-3.5 shrink-0" aria-hidden="true" />
+    <CircleAlertIcon class="mt-px size-4 shrink-0" aria-hidden="true" />
   {:else if item.level === 'warning'}
-    <TriangleAlertIcon class="mt-px size-3.5 shrink-0" aria-hidden="true" />
+    <TriangleAlertIcon class="mt-px size-4 shrink-0" aria-hidden="true" />
   {:else}
-    <InfoIcon class="mt-px size-3.5 shrink-0" aria-hidden="true" />
+    <InfoIcon class="mt-px size-4 shrink-0" aria-hidden="true" />
   {/if}
   <div class="min-w-0 flex-1">
     <div class="break-words whitespace-pre-wrap">{shown}</div>

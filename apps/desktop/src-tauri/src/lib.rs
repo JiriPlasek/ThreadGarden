@@ -1,4 +1,4 @@
-//! pahub's native shell: window, tray, notifications, keychain, and finding
+//! Threadgarden's native shell: window, tray, notifications, keychain, and finding
 //! or starting the detached service. The UI talks to the service directly.
 
 pub mod discovery;
@@ -8,7 +8,7 @@ pub mod secrets;
 pub mod service;
 pub mod tray;
 
-use std::path::PathBuf;
+use std::sync::Once;
 
 use tauri::{AppHandle, DragDropEvent, Manager, RunEvent, WindowEvent};
 use tokio::sync::Mutex;
@@ -16,16 +16,28 @@ use tokio::sync::Mutex;
 /// Serialises `service_connection` so concurrent calls never start two services.
 static CONNECT: Mutex<()> = Mutex::const_new(());
 
-fn data_dir(app: &AppHandle) -> Result<PathBuf, String> {
+/// Said once per run when the data dir comes from the deprecated `PAHUB_DATA_DIR`.
+static DEPRECATED_ENV_NOTE: Once = Once::new();
+
+fn data_dirs(app: &AppHandle) -> Result<discovery::DataDirs, String> {
     let home = app
         .path()
         .home_dir()
         .map_err(|e| format!("no-home-dir: {e}"))?;
-    Ok(discovery::resolve_data_dir(
+    let dirs = discovery::resolve_data_dirs(
         |name| std::env::var(name).ok(),
         discovery::Os::current(),
         &home,
-    ))
+    );
+    if dirs.deprecated_env {
+        DEPRECATED_ENV_NOTE.call_once(|| {
+            eprintln!(
+                "Threadgarden: PAHUB_DATA_DIR is deprecated and will be ignored in a later \
+                 release; set THREADGARDEN_DATA_DIR instead"
+            );
+        });
+    }
+    Ok(dirs)
 }
 
 /// Debug builds run the repo's service with the system `node`; release builds
@@ -50,11 +62,11 @@ fn launch_target(app: &AppHandle) -> Result<service::LaunchTarget, String> {
 /// Finds the running service or starts it (see `service::connect`).
 async fn connect_service(app: &AppHandle) -> Result<service::Connection, String> {
     let _guard = CONNECT.lock().await;
-    let dir = data_dir(app)?;
+    let dirs = data_dirs(app)?;
     let app_version = app.package_info().version.to_string();
-    service::connect(&dir, &app_version, service::START_TIMEOUT, || {
+    service::connect(&dirs, &app_version, service::START_TIMEOUT, || {
         let target = launch_target(app)?;
-        service::spawn_detached(&target, &dir).map(|_| ())
+        service::spawn_detached(&target, &dirs).map(|_| ())
     })
     .await
 }
@@ -70,8 +82,8 @@ async fn service_connection(app: AppHandle) -> Result<service::Connection, Strin
 #[tauri::command]
 async fn service_stop(app: AppHandle) -> Result<(), String> {
     let _guard = CONNECT.lock().await;
-    let dir = data_dir(&app)?;
-    service::stop(&dir, service::STOP_TIMEOUT, discovery::pid_alive).await
+    let dirs = data_dirs(&app)?;
+    service::stop(&dirs, service::STOP_TIMEOUT, discovery::pid_alive).await
 }
 
 async fn blocking<T: Send + 'static>(
@@ -95,6 +107,21 @@ async fn api_key_set(key: String) -> Result<(), String> {
 #[tauri::command]
 async fn api_key_clear() -> Result<(), String> {
     blocking(secrets::clear).await
+}
+
+#[tauri::command]
+async fn machine_token_get(machine_id: String) -> Result<Option<String>, String> {
+    blocking(move || secrets::machine_token_get(&machine_id)).await
+}
+
+#[tauri::command]
+async fn machine_token_set(machine_id: String, token: String) -> Result<(), String> {
+    blocking(move || secrets::machine_token_set(&machine_id, &token)).await
+}
+
+#[tauri::command]
+async fn machine_token_clear(machine_id: String) -> Result<(), String> {
+    blocking(move || secrets::machine_token_clear(&machine_id)).await
 }
 
 /// Exits the app only; the service and its agents keep running.
@@ -139,6 +166,9 @@ pub fn run() {
             api_key_get,
             api_key_set,
             api_key_clear,
+            machine_token_get,
+            machine_token_set,
+            machine_token_clear,
             app_quit,
             set_tray_needs_you,
             read_dropped_image,
@@ -168,7 +198,7 @@ pub fn run() {
             }
         })
         .build(tauri::generate_context!())
-        .expect("error while building pahub")
+        .expect("error while building Threadgarden")
         .run(on_run_event);
 }
 

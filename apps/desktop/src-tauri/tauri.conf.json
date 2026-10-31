@@ -1,19 +1,19 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "pahub",
-  "version": "0.1.0",
-  "identifier": "dev.pahub.desktop",
+  "productName": "Threadgarden",
+  "version": "0.2.0",
+  "identifier": "dev.threadgarden.desktop",
   "build": {
     "frontendDist": "../build",
     "devUrl": "http://127.0.0.1:1420",
-    "beforeDevCommand": "pnpm --filter @pahub/service build && pnpm dev",
+    "beforeDevCommand": "pnpm --filter @threadgarden/service build && pnpm dev",
     "beforeBuildCommand": "pnpm build"
   },
   "app": {
     "windows": [
       {
         "label": "main",
-        "title": "pahub",
+        "title": "Threadgarden",
         "width": 1200,
         "height": 800,
         "minWidth": 720,

@@ -1,11 +1,11 @@
-import type { ChatItem } from '@pahub/protocol';
+import type { ChatItem } from '@threadgarden/protocol';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ChatView from '../../src/lib/components/chat/ChatView.svelte';
 import MessageList from '../../src/lib/components/chat/MessageList.svelte';
 import ToolCallRow from '../../src/lib/components/chat/items/ToolCallRow.svelte';
-import { setup, summary } from '../layout/harness';
+import { LOCAL, here, setup, summary } from '../layout/harness';
 import { manyItems, text, tool, unknownItem, user } from './fixtures';
 
 const rows = (root: HTMLElement) => root.querySelectorAll('[data-row]');
@@ -266,7 +266,10 @@ describe('chat view', () => {
   it('streaming text updates one element', async () => {
     const { server, app, context } = await streamingSetup();
     await app.chats.open('s');
-    const { container } = render(ChatView, { context, props: { sessionId: 's' } });
+    const { container } = render(ChatView, {
+      context,
+      props: { ref: { machineId: LOCAL, sessionId: 's' } },
+    });
     const el = await waitFor(() => {
       const found = container.querySelector('[data-item-id="s1"]');
       expect(found?.textContent).toContain('Hel');
@@ -292,7 +295,7 @@ describe('chat view', () => {
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
     const { app, context } = await streamingSetup();
     await app.chats.open('abc-123');
-    render(ChatView, { context, props: { sessionId: 'abc-123' } });
+    render(ChatView, { context, props: { ref: { machineId: LOCAL, sessionId: 'abc-123' } } });
     await userEvent.click(await screen.findByRole('button', { name: /copy resume command/i }));
     await waitFor(() => expect(writeText).toHaveBeenCalledWith('claude --resume abc-123'));
   });
@@ -300,7 +303,7 @@ describe('chat view', () => {
   it('header pickers change the model of a live chat', async () => {
     const { server, app, context } = await streamingSetup();
     await app.chats.open('s');
-    render(ChatView, { context, props: { sessionId: 's' } });
+    render(ChatView, { context, props: { ref: { machineId: LOCAL, sessionId: 's' } } });
     const model = await screen.findByRole('combobox', { name: /model/i });
     await waitFor(() => expect(within(model).getAllByRole('option').length).toBe(2));
     await userEvent.selectOptions(model, 'sonnet');
@@ -320,7 +323,7 @@ describe('chat view', () => {
   it('pickers are disabled for a history-only chat', async () => {
     const { app, context } = await setup();
     await app.chats.open('h');
-    render(ChatView, { context, props: { sessionId: 'h' } });
+    render(ChatView, { context, props: { ref: { machineId: LOCAL, sessionId: 'h' } } });
     const model = await screen.findByRole('combobox', { name: /model/i });
     expect((model as HTMLSelectElement).disabled).toBe(true);
     expect(
@@ -334,7 +337,7 @@ describe('chat view', () => {
   it('ending a working chat asks for confirmation', async () => {
     const { server, app, context } = await streamingSetup();
     await app.chats.open('s');
-    render(ChatView, { context, props: { sessionId: 's' } });
+    render(ChatView, { context, props: { ref: { machineId: LOCAL, sessionId: 's' } } });
     await userEvent.click(await screen.findByRole('button', { name: /end session/i }));
     expect(server.calls('chat.end')).toHaveLength(0);
     await userEvent.click(await screen.findByRole('button', { name: /end anyway/i }));
@@ -344,7 +347,7 @@ describe('chat view', () => {
   it('forks from a user message into a new tab', async () => {
     const { server, app, context } = await streamingSetup();
     await app.chats.open('s');
-    render(ChatView, { context, props: { sessionId: 's' } });
+    render(ChatView, { context, props: { ref: { machineId: LOCAL, sessionId: 's' } } });
     await userEvent.click(await screen.findByRole('button', { name: /fork from this message/i }));
     await waitFor(() =>
       expect(server.calls('chat.fork').at(-1)?.params).toEqual({
@@ -352,6 +355,6 @@ describe('chat view', () => {
         upToItemId: 'u1',
       }),
     );
-    await waitFor(() => expect(app.tabs.active).toBe('forked-1'));
+    await waitFor(() => expect(app.tabs.active).toBe(here('forked-1')));
   });
 });

@@ -4,8 +4,8 @@
  * timings are not skewed by parallel test files.
  */
 
-/** Budget multiplier for slower machines (`PAHUB_PERF_SLACK`, CI sets 3 — ruling R3). */
-export const slack = Number(process.env.PAHUB_PERF_SLACK ?? 1);
+/** Budget multiplier for slower machines (`THREADGARDEN_PERF_SLACK`, CI sets 3 — ruling R3). */
+export const slack = Number(process.env.THREADGARDEN_PERF_SLACK ?? 1);
 
 /**
  * The fastest of `n` timed runs of `fn`, in ms: the cost of the work itself,

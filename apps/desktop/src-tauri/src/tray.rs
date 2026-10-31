@@ -5,7 +5,7 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
-const TRAY_ID: &str = "pahub";
+const TRAY_ID: &str = "threadgarden";
 /// Emitted to the webview; the UI confirms, then calls the service.
 pub const EVENT_STOP_ALL: &str = "tray://stop-all";
 pub const EVENT_QUIT_ALL: &str = "tray://quit-all";
@@ -19,19 +19,19 @@ pub fn show_main_window<R: Runtime>(app: &AppHandle<R>) {
 }
 
 pub fn create<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
-    let open = MenuItem::with_id(app, "open", "Open pahub", true, None::<&str>)?;
+    let open = MenuItem::with_id(app, "open", "Open Threadgarden", true, None::<&str>)?;
     let stop_all = MenuItem::with_id(app, "stop-all", "Stop all work…", true, None::<&str>)?;
     let quit = MenuItem::with_id(
         app,
         "quit",
-        "Quit pahub (keep agents running)",
+        "Quit Threadgarden (keep agents running)",
         true,
         None::<&str>,
     )?;
     let quit_all = MenuItem::with_id(
         app,
         "quit-all",
-        "Quit pahub completely…",
+        "Quit Threadgarden completely…",
         true,
         None::<&str>,
     )?;
@@ -83,9 +83,9 @@ pub fn create<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<()> {
 
 pub fn needs_you_tooltip(count: u32) -> String {
     match count {
-        0 => "pahub".to_string(),
-        1 => "pahub — 1 chat needs you".to_string(),
-        n => format!("pahub — {n} chats need you"),
+        0 => "Threadgarden".to_string(),
+        1 => "Threadgarden — 1 chat needs you".to_string(),
+        n => format!("Threadgarden — {n} chats need you"),
     }
 }
 
@@ -104,8 +104,8 @@ mod tests {
 
     #[test]
     fn tooltip_counts_chats_waiting() {
-        assert_eq!(needs_you_tooltip(0), "pahub");
-        assert_eq!(needs_you_tooltip(1), "pahub — 1 chat needs you");
-        assert_eq!(needs_you_tooltip(4), "pahub — 4 chats need you");
+        assert_eq!(needs_you_tooltip(0), "Threadgarden");
+        assert_eq!(needs_you_tooltip(1), "Threadgarden — 1 chat needs you");
+        assert_eq!(needs_you_tooltip(4), "Threadgarden — 4 chats need you");
     }
 }

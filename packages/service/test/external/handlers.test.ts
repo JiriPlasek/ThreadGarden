@@ -32,7 +32,10 @@ const setup = (run: () => Promise<string>, withPoller = true) => {
     now: () => NOW,
   });
   const call = async (method: string, params: unknown = {}) => {
-    const r = await router.dispatch({ id: 1, method, params } as never, { clientId: 'c' });
+    const r = await router.dispatch({ id: 1, method, params } as never, {
+      clientId: 'c',
+      origin: 'local',
+    });
     if ('error' in r) throw new Error(`${r.error.code}: ${r.error.message}`);
     return r.result as Record<string, unknown>;
   };
@@ -72,7 +75,7 @@ describe('external handlers', () => {
     const call = async (sessionId: string) => {
       const r = await router.dispatch(
         { id: 1, method: 'chat.resumeCheck', params: { sessionId } } as never,
-        { clientId: 'c' },
+        { clientId: 'c', origin: 'local' },
       );
       return 'result' in r ? r.result : r;
     };
@@ -127,5 +130,90 @@ describe('external handlers', () => {
       externalAvailable: true,
       indexing: { done: 3, total: 9 },
     });
+  });
+});
+
+describe('external.stop', () => {
+  const stopSetup = (agents: unknown[] = AGENTS, stopFails = false) => {
+    const run = vi.fn(async (args: string[]) => {
+      if (args[0] === 'stop') {
+        if (stopFails) throw new Error('claude stop exited with code 1');
+        return '';
+      }
+      return JSON.stringify(agents);
+    });
+    const poller = new ExternalPoller(
+      run,
+      () => new Set(),
+      () => {},
+    );
+    const router = new Router();
+    registerExternalHandlers(router, {
+      poller,
+      run,
+      lastModifiedOf: () => undefined,
+      claude: () => ({ path: '/bin/claude', version: '2.1.314' }),
+      indexing: () => ({ done: 0, total: 0 }),
+      now: () => NOW,
+    });
+    const stop = async (sessionId: string) => {
+      const r = await router.dispatch(
+        { id: 1, method: 'external.stop', params: { sessionId } } as never,
+        { clientId: 'c', origin: 'local' },
+      );
+      return 'result' in r ? { ok: r.result } : { code: r.error.code, message: r.error.message };
+    };
+    return { run, stop };
+  };
+
+  it('stops a background session with claude stop <short id>', async () => {
+    const t = stopSetup();
+    expect(await t.stop('bg')).toEqual({ ok: {} });
+    expect(t.run).toHaveBeenCalledWith(['stop', 'abc12345']);
+  });
+
+  it('refuses a session running in a terminal', async () => {
+    const t = stopSetup();
+    expect(await t.stop('term')).toMatchObject({ code: 'NOT_STOPPABLE' });
+    expect(t.run).not.toHaveBeenCalledWith(expect.arrayContaining(['stop']));
+  });
+
+  it('refuses a session that is not running outside Threadgarden', async () => {
+    const t = stopSetup();
+    expect(await t.stop('nope')).toMatchObject({ code: 'NOT_EXTERNAL' });
+  });
+
+  it('refuses a short id that could be read as an option', async () => {
+    const t = stopSetup([
+      {
+        id: '-rf',
+        cwd: '/p',
+        kind: 'background',
+        startedAt: 1,
+        sessionId: 'evil',
+        state: 'working',
+      },
+    ]);
+    expect(await t.stop('evil')).toMatchObject({ code: 'NOT_STOPPABLE' });
+    expect(t.run).not.toHaveBeenCalledWith(expect.arrayContaining(['stop']));
+  });
+
+  it('reports a failed claude stop', async () => {
+    const t = stopSetup(AGENTS, true);
+    expect(await t.stop('bg')).toMatchObject({ code: 'STOP_FAILED' });
+  });
+
+  it('is unavailable without a way to run claude', async () => {
+    const router = new Router();
+    registerExternalHandlers(router, {
+      lastModifiedOf: () => undefined,
+      claude: () => undefined,
+      indexing: () => ({ done: 0, total: 0 }),
+    });
+    const r = await router.dispatch(
+      { id: 1, method: 'external.stop', params: { sessionId: 'bg' } } as never,
+      { clientId: 'c', origin: 'local' },
+    );
+    expect('error' in r && r.error.code).toBe('EXTERNAL_UNAVAILABLE');
   });
 });

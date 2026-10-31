@@ -1,131 +1,198 @@
-# pahub
+<img src="docs/images/logo.png" alt="" width="96" align="right">
 
-pahub is a desktop app for running, watching and returning to your [Claude Code](https://code.claude.com/docs) work on one machine. It lists every Claude Code conversation you have had, grouped by project and searchable in full text, and runs new and resumed chats in tabs through the official Claude Agent SDK and your own installed `claude`. Chats that wait for you (a permission prompt, a question, a plan to approve) are collected in one place and announced with a notification, and sessions you started elsewhere (a terminal, an editor, `claude --bg`) show up next to pahub's own. Agents keep running when you close the window.
+# Threadgarden
 
-pahub works with Claude Code; it is not affiliated with or endorsed by Anthropic.
+**A desktop home for your [Claude Code](https://code.claude.com/docs) work.** Threadgarden lists every Claude Code conversation on your machine, runs new and resumed chats in tabs through the official Agent SDK and your own installed `claude`, and gathers everything that waits for you in one place. Agents keep running when you close the window, and an old PC on your network can do the work while your main one is busy.
 
-**Status:** v1, experimental. Expect rough edges; the data it keeps is its own and can be deleted at any time (see [Data and privacy](#data-and-privacy)).
+> **Status:** experimental (v1.3). Windows, macOS and Linux. Threadgarden works with Claude Code; it is not affiliated with or endorsed by Anthropic.
 
 <!-- Screenshots will live in docs/images/. -->
 
 ## Features
 
-- **History of every Claude Code conversation** on the machine, grouped by project (git worktrees under their repository), with titles, previews and full-text search. Reading history never changes it.
-- **Live chats in tabs**: streaming markdown with highlighted code, tool calls as compact expandable rows, edits as diffs, subagent activity under the call that started it, todo checklists, thinking blocks, and the model, context use, cost and authentication in the chat header.
-- **Needs you** and **Running** across all projects, a bottom strip with every running agent, a tray badge and desktop notifications. Permission prompts, questions and plan approvals are answered inline.
-- **Composer** with `@` file mentions (fuzzy, respecting `.gitignore`), slash commands from the running Claude Code, pasted or dropped images, queued messages while Claude works, and drafts that survive restarts.
-- **Resume, fork and end** any chat. Idle chats release their process after 15 minutes (configurable) and resume transparently on the next message.
-- **External sessions** from `claude agents --json`, with copyable `claude --resume` / `claude attach` commands. pahub refuses to resume a session that is still running in another process.
-- **Ctrl/Cmd+K quick switcher** over titles, projects and full text, plus commands such as "New chat in…" and "Stop all work".
-- Windows, macOS and Linux; light and dark themes.
+**Your history**
 
-## Requirements
+- Every Claude Code conversation, grouped by project (worktrees under their repository), with titles, previews and full-text search. Reading history never changes it.
+- Chats sorted into **Now**, last 24 hours, 7 days, 30 days and older; filed as **Active**, **On hold** (until a time you pick, with a note) or **Archived**.
+- New chats get a short title from a small model after their first turn (optional).
+- **Analytics**: activity over time, tokens per model, busiest projects, most-used tools and a weekday × hour heatmap.
 
-- **Claude Code** installed and signed in, as you would use it in a terminal. pahub runs your installed `claude` (found on `PATH`, in the standard install locations, or at a path set in pahub's settings); it does not ship its own copy. v1 was developed and tested against Claude Code 2.1.314. Alternatively, set an Anthropic API key in pahub's settings (see [Authentication and terms](#authentication-and-terms)).
-- **External sessions** need `claude agents --json`. Without it that one feature hides itself and resuming asks for confirmation instead of checking.
-- **Operating system:**
-  - Windows 10 or 11, x64 (uses the system WebView2; the installer adds it if missing).
-  - macOS on Apple silicon (CI builds `aarch64-apple-darwin`; Intel Macs can build from source with `--target x86_64-apple-darwin`).
-  - Linux x64 with WebKitGTK 4.1 (built on Ubuntu 22.04 as deb, rpm and AppImage).
+**Live chats**
+
+- Tabs with streaming markdown, highlighted code, diffs, todo lists, thinking blocks and subagent activity under the call that started it.
+- **Needs you** and **Running** across all projects, a strip with every running agent, a tray badge and notifications. Permission prompts, questions and plan approvals are answered inline.
+- **Activity panel** (Ctrl/Cmd+.): a chat's subagents and background processes, with model, progress and details; processes can be stopped from there.
+- Composer with `@` file mentions, slash commands, pasted images, queued messages and drafts that survive restarts.
+- **Usage meter** for your plan's limits, and **scheduled sends**: "Send when the limit resets", or at any time you pick.
+- Resume, fork and end any chat. Sessions started elsewhere (a terminal, `claude --bg`) show up too, with hand-off commands.
+
+**Remote machines**
+
+- Run chats on another computer on your network, such as an always-on Ubuntu PC, from the same window. Pair it once with a code; it gets its own group in the sidebar, and Needs you, Running and notifications cover every machine.
+- The connection stays on your network, uses TLS pinned to the machine's certificate, and can be revoked from either side. Setup: [docs/remote-machines.md](docs/remote-machines.md).
+
+**Comfort**
+
+- Ctrl/Cmd+K quick switcher over chats, projects, messages and commands; every action has a [keyboard shortcut](#keyboard-shortcuts).
+- Themes: light, dark or system, seven accents, a warm paper tint, Dim or true-black Midnight, your own fonts (WCAG AA contrast throughout).
+- Project icons from each project's own favicon or logo; adjustable interface size.
 
 ## Install
 
 There are no published releases yet.
 
-**From CI artifacts.** Every push builds unsigned installers on all three platforms; open a successful run of the CI workflow on GitHub and download the `pahub-<target triple>` artifact for your platform (kept for 7 days): MSI or NSIS `setup.exe` on Windows, DMG on macOS, deb, rpm or AppImage on Linux. The builds are not code-signed, so Windows SmartScreen and macOS Gatekeeper warn before the first launch. On macOS an unsigned app downloaded from the internet may be reported as damaged; remove the quarantine attribute after copying it to Applications (`xattr -dr com.apple.quarantine /Applications/pahub.app`) only if you trust the build.
+**From CI.** Every push builds unsigned installers. Open a successful run of the [CI workflow](https://github.com/JiriPlasek/ThreadGarden/actions/workflows/ci.yml) and download the `threadgarden-<target>` artifact for your platform (kept 7 days): MSI or NSIS `setup.exe` on Windows, DMG on macOS, deb, rpm or AppImage on Linux. Builds are not code-signed, so SmartScreen and Gatekeeper warn on first launch.
 
-**From source.** You need Node.js 22, pnpm 11, Rust (rustup installs the version pinned in `rust-toolchain.toml`) and the [Tauri 2 prerequisites](https://v2.tauri.app/start/prerequisites/) for your OS; on Debian or Ubuntu that is `libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev`.
+**From source.** Node.js 22, pnpm 11, Rust (rustup picks the version in `rust-toolchain.toml`) and the [Tauri 2 prerequisites](https://v2.tauri.app/start/prerequisites/):
 
 ```sh
 pnpm install
-# Downloads the Node.js runtime that ships inside the app and checks it against
-# pinned SHA-256 hashes. --target defaults to your host (rustc -vV); pass
-# x86_64-pc-windows-msvc, aarch64-apple-darwin, x86_64-apple-darwin,
-# x86_64-unknown-linux-gnu, … to build for another one.
-node scripts/fetch-node-sidecar.mjs
+node scripts/fetch-node-sidecar.mjs   # the Node.js runtime bundled into the app, hash-checked
 pnpm --filter desktop tauri build --config src-tauri/tauri.bundle.conf.json
 ```
 
-The installers land in `apps/desktop/src-tauri/target/release/bundle/`. Release builds ship the service as one bundled file (`packages/service/dist/service.mjs`) run by a Node.js 22 LTS runtime packaged as the Tauri sidecar `pahub-node`, so users need no Node.js installation. The sidecar binary is downloaded from nodejs.org at build time, verified against `SHASUMS256.txt` and the hashes pinned in `scripts/fetch-node-sidecar.mjs`, and never committed.
+Installers land in `apps/desktop/src-tauri/target/release/bundle/`. Users need no Node.js: the app ships its own runtime.
+
+**A remote machine** (optional) runs only the headless service: `./install.sh` from the `threadgarden-headless` package, then `threadgarden pair`. Step by step in [docs/remote-machines.md](docs/remote-machines.md).
+
+<details>
+<summary><b>Upgrading from pahub</b></summary>
+
+Threadgarden was called pahub before v1.3. Install Threadgarden and start it; nothing is lost:
+
+- **Your data moves.** On first start the service copies `pahub.db` from pahub's data dir to `threadgarden.db` in Threadgarden's, in one step, and uses only that afterwards. The old folder stays as it was, plus a `MOVED-TO-THREADGARDEN.txt`; delete it once Threadgarden runs fine.
+- **A pahub service still running** shows as a service of another version: restart it from that screen and the new one takes over.
+- **Your API key** moves from the `pahub` credential entry to `threadgarden` the first time it is read.
+- **Not moved:** the notification permission and the start-on-login entry. Uninstall the old pahub app, and toggle Start on login again if you used it.
+- `PAHUB_DATA_DIR` and `PAHUB_API_KEY_ONLY` still work for one release; use the `THREADGARDEN_` names.
+
+</details>
+
+## Requirements
+
+- **Claude Code**, installed and signed in as you would use it in a terminal. Threadgarden runs your own `claude` and ships no copy of it. Alternatively, set an Anthropic API key in Settings.
+- **Windows** 10/11 x64 (WebView2), **macOS** on Apple silicon, or **Linux** x64 with WebKitGTK 4.1.
+- **Remote machine** (optional): Linux x64 with systemd and its own signed-in Claude Code.
+
+## Data and privacy
+
+- **Claude Code's data is read-only to Threadgarden.** It never writes, renames, moves or deletes anything under `~/.claude`. History is read only through the Agent SDK; running sessions through `claude agents --json`. The only writes there are Claude Code's own (the transcripts of chats you run, and the new file of a fork).
+- **Threadgarden's own data** lives in `%APPDATA%\threadgarden`, `~/Library/Application Support/threadgarden` or `~/.local/share/threadgarden` (override with `THREADGARDEN_DATA_DIR`): a SQLite index of your conversations' text, your titles, buckets, drafts, settings and scheduled messages, plus logs without message content. Deleting the folder resets Threadgarden and touches nothing of Claude Code's. Treat it like `~/.claude` itself.
+- **Secrets** (an API key, remote-machine pairing tokens) stay in the OS credential store and in memory; never in the database, files or logs.
+- **Network:** the desktop service listens on `127.0.0.1` only, behind a random token. A headless remote machine also listens on its private network addresses (port 47380, TLS) for paired devices. Threadgarden contacts nothing else; the `claude` processes it starts talk to Anthropic exactly as in a terminal. Remote images in chats are not loaded.
+
+## Authentication and terms
+
+Threadgarden has no login of its own. Sessions use whatever authentication your Claude Code already uses (subscription, API key or a third-party provider), or the API key set in Settings; the chat header shows which. An API-key-only build is available: build with `THREADGARDEN_API_KEY_ONLY=1`.
+
+You are responsible for complying with Anthropic's terms for the authentication you use. The Agent SDK documentation states that, unless previously approved, Anthropic does not allow third-party developers to offer claude.ai login or rate limits for their products and points to API keys instead; use of the SDK is governed by Anthropic's Commercial Terms. Read the current terms yourself; this is not legal advice. Details: [docs/architecture.md](docs/architecture.md#authentication).
+
+## Known limitations
+
+- No agent teams or embedded terminal (the Agent SDK has no interactive terminal session); tabs only, no split view yet.
+- `bypassPermissions` is not offered; terminal-only slash commands (`/config`, `/login`, `/doctor`…) are listed as unavailable.
+- Sessions running in another process are shown, not driven: Threadgarden offers hand-off commands and continues them once they stop.
+- After Claude Code compacts a conversation, history shows it from the compaction onward (the SDK returns only the compacted part).
+- Clicking a notification only focuses the window. Builds are unsigned, with no auto-update. macOS and Linux builds are tested in CI, not yet by hand.
 
 ## Development
 
 ```sh
 pnpm install
-pnpm lint          # ESLint in every package, plus scripts/
-pnpm typecheck     # tsc and svelte-check
-pnpm test          # unit and component tests, then the performance budgets
-pnpm format        # Prettier
+pnpm lint && pnpm typecheck && pnpm test   # tests include the performance budgets
+pnpm --filter desktop tauri dev            # run the app
+pnpm test:e2e                              # Playwright against the mock service
 ```
 
-- **Run the app:** `pnpm --filter desktop tauri dev` builds the service, starts the UI on the Vite dev server and opens the app. A debug build runs the service with the `node` on your `PATH`.
-- **Mock service:** `pnpm --filter @pahub/service mock` starts the real service over a synthetic history (1,000 sessions, 50 projects) with a scripted fake Claude Code, in temp dirs, and prints its port and token. A message containing "perm", "ask" or "plan" raises a permission request, a question or a plan approval. Nothing touches your real history.
-- **UI in a browser against the mock:**
-  ```sh
-  PAHUB_MOCK_PORT=7357 PAHUB_MOCK_TOKEN=dev pnpm --filter @pahub/service mock
-  VITE_PAHUB_MOCK_URL=ws://127.0.0.1:7357 VITE_PAHUB_MOCK_TOKEN=dev pnpm --filter desktop dev
-  ```
-  (On Windows PowerShell set the variables with `$env:NAME = 'value'` first.)
-- **Performance budgets:** `pnpm test:perf` (part of `pnpm test`) runs the service budget tests one file at a time. `PAHUB_PERF_SLACK` multiplies every budget (default 1; CI uses 3, since the budgets are set for a developer machine).
-- **End-to-end and UI performance:** `pnpm test:e2e` runs the Playwright specs in Chromium against the mock service (a smoke flow and the UI budgets: tab switch, history chat open, Ctrl+K, composer keystroke). Install the browser once with `pnpm --filter desktop exec playwright install chromium`.
-- **Rust:** in `apps/desktop/src-tauri`, `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test` (build the UI first with `pnpm --filter desktop build`).
-- **Real Claude Code suite:** `pnpm --filter @pahub/service test:real` runs the service against your installed `claude` and your login, in throwaway git repos with tiny prompts (a handful of short turns on your account). It is opt-in and never runs in CI. It also checks that nothing under your Claude config dir changed, apart from what your other running Claude Code sessions wrote meanwhile.
+- **Mock service:** `pnpm --filter @threadgarden/service mock` serves a synthetic history (1,000 chats) with a scripted fake Claude Code. Messages containing "perm", "ask", "plan" or "limit" trigger those flows. Point the UI at it in a browser with `VITE_THREADGARDEN_MOCK_URL` and `VITE_THREADGARDEN_MOCK_TOKEN`.
+- **Rust:** in `apps/desktop/src-tauri`, `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` (build the UI first).
+- **Real Claude Code suite:** `pnpm --filter @threadgarden/service test:real`, opt-in, uses your login for a few tiny turns.
 
-Repository layout:
+Layout: `packages/protocol` (shared schemas), `packages/service` (the Node.js service), `apps/desktop` (Tauri shell and SvelteKit UI), `packaging/headless` (the remote-machine package), `scripts/` (release tooling). How it fits together: [docs/architecture.md](docs/architecture.md). Workflow and rules: [CONTRIBUTING.md](CONTRIBUTING.md).
 
-- `packages/protocol` — shared types and zod schemas for the service/UI protocol.
-- `packages/service` — the long-lived Node.js service: Claude Code sessions, history index, external sessions.
-- `apps/desktop` — the Tauri 2 shell (Rust) and the SvelteKit UI.
-- `scripts/` — release tooling (the Node.js sidecar download).
+## Keyboard shortcuts
 
-Each package's README has the details. How the pieces fit together is in [docs/architecture.md](docs/architecture.md); [CONTRIBUTING.md](CONTRIBUTING.md) has the workflow and project rules.
+Press **Ctrl+/** (**⌘/** on macOS) or **?** to see them in the app. "Ctrl" means ⌘ on macOS, except in Ctrl+Tab.
 
-## Data and privacy
+<details>
+<summary><b>All shortcuts</b></summary>
 
-**Claude Code's data is read-only to pahub.** pahub never writes, renames, moves or deletes anything under your Claude config dir (`~/.claude`, or `CLAUDE_CONFIG_DIR` when set). It reads:
+**Global**
 
-- your sessions' list, metadata and messages only through the Agent SDK (`listSessions`, `getSessionInfo`, `getSessionMessages`); it never parses transcript files itself;
-- file-system change events under `~/.claude/projects/` (file names only), to know when to ask the SDK again;
-- running sessions from `claude agents --json --all`, the documented interface for that.
+| Keys        | Action                                                           |
+| ----------- | ---------------------------------------------------------------- |
+| Ctrl+K      | Open the quick switcher (chats, projects, messages and commands) |
+| Ctrl+/ or ? | Show keyboard shortcuts                                          |
+| Ctrl+N      | Start a new chat (in the selected project)                       |
+| Esc         | Close a dialog or menu                                           |
 
-The only writes under the config dir are the ones Claude Code makes itself: the transcripts of the sessions you run in pahub, and the new session file the SDK writes when you fork a chat (the original is left untouched). Renaming a chat in pahub stores a pahub-side title; it never changes Claude Code's session name. Uninstalling pahub leaves Claude Code exactly as it was, and switching back to the terminal is always safe. Sessions pahub starts do not appear in the terminal's `/resume` picker (an Agent SDK behaviour); `claude --resume <session-id>` resumes them, and pahub copies that command for you.
+**Tabs**
 
-**What pahub stores**, all in its own data dir:
+| Keys           | Action                                |
+| -------------- | ------------------------------------- |
+| Ctrl+W         | Close the active tab                  |
+| Middle-click   | Close the tab under the pointer       |
+| Ctrl+Tab       | Next tab                              |
+| Ctrl+Shift+Tab | Previous tab                          |
+| ← or →         | Previous or next tab (focus on a tab) |
+| Home or End    | First or last tab (focus on a tab)    |
+| Delete         | Close the focused tab                 |
 
-| OS      | Location                                 |
-| ------- | ---------------------------------------- |
-| Windows | `%APPDATA%\pahub`                        |
-| macOS   | `~/Library/Application Support/pahub`    |
-| Linux   | `${XDG_DATA_HOME:-~/.local/share}/pahub` |
+**Chat list**
 
-Set `PAHUB_DATA_DIR` to use another directory. It holds `pahub.db` (SQLite: a full-text index of your conversations' user and assistant text, pahub-side titles, pins, hidden projects, drafts, settings, tab and layout state, and which chats were running, for crash recovery), `service.json` (how the app finds the running service: pid, port, access token; readable only by you), a lock file, and `logs/` (rotating; message content is not logged). Deleting the directory resets pahub completely and touches nothing of Claude Code's. Because the index holds the text of your conversations, treat this directory like `~/.claude` itself.
+| Keys                 | Action                                                                    |
+| -------------------- | ------------------------------------------------------------------------- |
+| ↑ or ↓               | Move through the chats                                                    |
+| Page Up or Page Down | Move a page of chats at a time                                            |
+| Home or End          | First or last chat                                                        |
+| Enter or Space       | Open the selected chat                                                    |
+| ↓                    | From the search field, go to the list                                     |
+| Esc                  | Clear the search                                                          |
+| E                    | Archive the selected chats (or the one under the cursor)                  |
+| H                    | Put on hold: choose until when and add a note                             |
+| A                    | Make active (back from On hold or Archived)                               |
+| Ctrl+Click           | Add a chat to the selection, or remove it                                 |
+| Shift+Click          | Select a range of chats                                                   |
+| Shift+Space          | Add the chat under the cursor to the selection, or remove it              |
+| Ctrl+A               | Select every chat of the cursor's section (else of the first one in view) |
+| Esc                  | Clear the selection                                                       |
 
-**API key:** if you enter one, it is kept in the OS credential store (Windows Credential Manager, macOS Keychain, Secret Service on Linux) and handed to the service in memory; it is never written to `pahub.db`, `service.json` or the logs.
+**Composer**
 
-**Network:** the service listens on `127.0.0.1` only, on a random port, and accepts only connections that present the random token from `service.json`. pahub itself contacts no servers: the `claude` processes it starts talk to Anthropic exactly as they do in a terminal. Remote images in chat content are not loaded (they show as links), and links open in your system browser.
+| Keys                                                           | Action                                                       |
+| -------------------------------------------------------------- | ------------------------------------------------------------ |
+| Enter (Ctrl+Enter when "Enter sends the message" is off)       | Send the message (queued while Claude works)                 |
+| Shift+Enter (also Enter when "Enter sends the message" is off) | New line                                                     |
+| Esc                                                            | Stop Claude while it is working                              |
+| @                                                              | Mention a file or folder                                     |
+| /                                                              | Slash commands (at the start of the message)                 |
+| Ctrl+V                                                         | Paste images, or a file path as a mention                    |
+| Esc                                                            | Close the "Deny with feedback" field of a permission request |
 
-## Authentication and terms
+**Pickers** (the `@` and `/` suggestions, and the quick switcher)
 
-pahub has no login of its own. By default every session it starts uses whatever authentication your installed Claude Code already uses (a Claude subscription login, an API key in the environment, or a configured third-party provider). If you set an Anthropic API key in pahub's settings, pahub passes it to the sessions it starts as `ANTHROPIC_API_KEY`, and they use the key instead; removing it returns to the inherited authentication. The chat header shows which authentication a session reports, so you can see whether it runs on a subscription or on API billing. What was verified about this is in [docs/architecture.md](docs/architecture.md#authentication).
+| Keys         | Action                                           |
+| ------------ | ------------------------------------------------ |
+| ↑ or ↓       | Move through the suggestions                     |
+| Enter or Tab | Insert the selected file or command              |
+| Esc          | Close the suggestions                            |
+| ↑ or ↓       | Quick switcher: move through the results         |
+| Enter        | Quick switcher: open the chat or run the command |
 
-**API-key-only build.** To ship pahub without the option of inheriting Claude Code's own sign-in (spec §5.5), build it with `PAHUB_API_KEY_ONLY=1` set, for example `PAHUB_API_KEY_ONLY=1 pnpm --filter desktop tauri build`. The flag is baked into both the UI and the bundled service at build time (it cannot be switched on or off by the environment of an installed app). In such a build, chats start or continue only once an Anthropic API key is set in Settings: the service refuses `chat.create` and resuming a chat without one (`API_KEY_REQUIRED`), the settings and new-chat dialogs say that a key is required, and history stays browsable without a key.
+**Interface**
 
-You are responsible for complying with Anthropic's terms for the authentication you use. For reference, the Agent SDK documentation states that, unless previously approved, Anthropic does not allow third-party developers to offer claude.ai login or rate limits for their products, including agents built on the Claude Agent SDK, and points to API key authentication instead; use of the SDK is governed by Anthropic's Commercial Terms. Read the current documentation and terms yourself; this section is not legal advice.
+| Keys             | Action                                                                      |
+| ---------------- | --------------------------------------------------------------------------- |
+| Ctrl+.           | Show or hide the Activity panel (agents and background processes)           |
+| Ctrl+= or Ctrl++ | Larger interface                                                            |
+| Ctrl+-           | Smaller interface                                                           |
+| Ctrl+0           | Default interface size                                                      |
+| ← or →           | Narrow or widen a column (focus on its divider; with Shift in bigger steps) |
+| Home or End      | Narrowest or widest column (focus on its divider)                           |
+| Double-click     | Reset a column's width (on its divider)                                     |
 
-## Known limitations (v1)
-
-- No agent teams and no embedded terminal pane: teams need an interactive terminal session, which the Agent SDK does not provide.
-- Open chats are tabs only; side-by-side split view is planned.
-- The `bypassPermissions` permission mode is not offered; use the terminal for sessions that need it.
-- Terminal-only slash commands (for example `/config`, `/login`, `/doctor`, `/vim`) are listed as unavailable; `/model`, `/permissions` and `/effort` open the matching pickers in the chat header.
-- Clicking a notification only focuses pahub (the notification plugin reports no clicks); pahub then opens the "Needs you" list, and the chat itself when it is the only one waiting.
-- Sessions running in other processes are shown, not driven: pahub offers hand-off commands, and continues them only once they have stopped.
-- New files appear in `@` suggestions up to 30 seconds after they are created.
-- After Claude Code compacts a conversation, reopening it from history shows it from the compaction onward: the Agent SDK returns only the compacted conversation.
-- Background-task notifications and subagent hand-backs that Claude Code records as user turns show as one-line notices (the full text on demand), as the terminal shows them; other tagged entries Claude Code may add in later versions show as raw text until pahub learns them.
-- macOS and Linux builds are built and tested in CI but have not been tried by hand.
-- Builds are unsigned, and there is no auto-update.
+</details>
 
 ## License
 
-Not yet chosen — all rights reserved until a license is added.
+Not yet chosen: all rights reserved until a license is added.

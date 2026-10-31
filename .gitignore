@@ -1,6 +1,7 @@
 .superpowers/
 node_modules/
 dist/
+dist-headless/
 target/
 coverage/
 build/
@@ -11,3 +12,6 @@ apps/desktop/src-tauri/binaries/
 build-e2e/
 test-results/
 playwright-report/
+
+# Local Claude Code state (agent worktrees, settings)
+.claude/

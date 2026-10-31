@@ -1,6 +1,6 @@
-import type { ChatSummary } from '@pahub/protocol';
+import type { ChatSummary } from '@threadgarden/protocol';
 
-/** The source's own status text for an external session (shown when pahub does not know it). */
+/** The source's own status text for an external session (shown when Threadgarden does not know it). */
 export const rawStatus = (
   s: Pick<ChatSummary, 'external'> | null | undefined,
 ): string | undefined => s?.external?.state ?? s?.external?.status ?? undefined;
@@ -15,11 +15,10 @@ export const baseName = (path: string): string =>
 
 /** Describes an external session for its glyph's tooltip. */
 export const externalLabel = (s: Pick<ChatSummary, 'external'>): string =>
-  s.external ? `Running outside pahub (${s.external.kind})` : '';
+  s.external ? `Running outside Threadgarden (${s.external.kind})` : '';
 
-/** The shortcut hint for the quick switcher, by platform. */
-export const modKey = (): string =>
-  typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform) ? '⌘' : 'Ctrl+';
+/** DOM id of a chat's tab, from its chat key (the chat panel is labelled by it). */
+export const tabId = (key: string): string => `tab-${key}`;
 
-/** DOM id of a chat's tab (the chat panel is labelled by it). */
-export const tabId = (sessionId: string): string => `tab-${sessionId}`;
+/** DOM id of the Analytics tab (v1.3); no chat key has this form (keys contain a `/`). */
+export const ANALYTICS_TAB_ID = 'tab-threadgarden-analytics';

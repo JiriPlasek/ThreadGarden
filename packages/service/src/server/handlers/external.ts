@@ -2,7 +2,7 @@
 import type { ExternalPoller } from '../../external/poller.js';
 import { checkResume, resumeCommand, type ResumeCheck } from '../../external/resume-safety.js';
 import type { ClaudeFound, ClaudeProblem } from '../../sdk/claude-path.js';
-import type { Router } from '../router.js';
+import { ServiceError, type Router } from '../router.js';
 
 export type ExternalHandlerDeps = {
   /** Absent when `claude` cannot be run; resume checks then answer `unverified`. */
@@ -21,7 +21,12 @@ export type ExternalHandlerDeps = {
   located?: () => Promise<void>;
   indexing: () => { done: number; total: number };
   now?: () => number;
+  /** Runs `claude <args>` (the poller's runner); needed by `external.stop`. */
+  run?: (args: string[]) => Promise<string>;
 };
+
+/** Background-session short ids as `claude agents` prints them; anything else is refused. */
+const SHORT_ID = /^[A-Za-z0-9][A-Za-z0-9_]*$/;
 
 /**
  * Resume safety (§4.4) for `sessionId`, with a fresh `claude agents` answer
@@ -60,6 +65,39 @@ export const registerExternalHandlers = (router: Router, deps: ExternalHandlerDe
   router.register('chat.resumeCommand', async (p) => ({
     command: resumeCommand(p.sessionId, poller?.available ? poller.snapshot() : null),
   }));
+
+  /**
+   * Stops a background session run by Claude Code's own background service,
+   * through its documented `claude stop <id>`. Sessions open in a terminal are
+   * not Threadgarden's to stop.
+   */
+  router.register('external.stop', async (p) => {
+    await deps.located?.();
+    const usable = deps.externalUsable?.() ?? true;
+    const list = poller && deps.run && usable ? await poller.current() : null;
+    if (!list || !deps.run || !poller) {
+      throw new ServiceError(
+        'EXTERNAL_UNAVAILABLE',
+        'Claude Code’s session list is not available.',
+      );
+    }
+    const entry = list.find((e) => e.sessionId === p.sessionId);
+    if (!entry)
+      throw new ServiceError('NOT_EXTERNAL', 'This chat is not running outside Threadgarden.');
+    if (entry.kind !== 'background' || !entry.shortId || !SHORT_ID.test(entry.shortId)) {
+      throw new ServiceError('NOT_STOPPABLE', 'This chat is running in a terminal. Stop it there.');
+    }
+    try {
+      await deps.run(['stop', entry.shortId]);
+    } catch (err) {
+      throw new ServiceError(
+        'STOP_FAILED',
+        `claude stop ${entry.shortId} failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    await poller.refresh();
+    return {};
+  });
 
   router.register('system.status', async () => {
     // Not "missing" while still looking: the setup screen must not flash at start.

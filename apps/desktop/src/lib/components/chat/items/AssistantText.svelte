@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { ChatItem } from '@pahub/protocol';
+  import type { ChatItem } from '@threadgarden/protocol';
   import { onDestroy } from 'svelte';
   import { highlightCached, needsHighlight, renderCached, renderMarkdown } from '#lib/markdown.js';
   import { copyText, openExternal } from '#lib/native.js';
@@ -66,7 +66,7 @@
     if (frame) cancelFrame(frame);
   });
 
-  /** Links open outside pahub; code blocks' copy buttons copy their code. */
+  /** Links open outside Threadgarden; code blocks' copy buttons copy their code. */
   const onclick = (e: MouseEvent): void => {
     const target = e.target as Element | null;
     const copy = target?.closest('[data-copy-code]');

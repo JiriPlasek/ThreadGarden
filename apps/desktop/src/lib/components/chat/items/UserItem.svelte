@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { ChatItem } from '@pahub/protocol';
+  import type { ChatItem } from '@threadgarden/protocol';
   import GitForkIcon from '@lucide/svelte/icons/git-fork';
   import { chatActions } from '../context';
 
@@ -49,7 +49,7 @@
       title="Fork from this message"
       onclick={() => actions.fork?.(item.id)}
     >
-      <GitForkIcon class="size-3.5" aria-hidden="true" />
+      <GitForkIcon class="size-4" aria-hidden="true" />
     </button>
   {/if}
 </div>

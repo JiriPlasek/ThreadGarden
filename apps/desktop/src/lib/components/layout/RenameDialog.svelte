@@ -1,10 +1,10 @@
 <script lang="ts">
-  import type { ChatSummary } from '@pahub/protocol';
+  import type { ChatSummary } from '@threadgarden/protocol';
   import { Button } from '#lib/components/ui/button/index.js';
   import * as Dialog from '#lib/components/ui/dialog/index.js';
 
   /**
-   * Renames a chat in pahub only (spec §5.3: Claude Code's own data is never
+   * Renames a chat in Threadgarden only (spec §5.3: Claude Code's own data is never
    * changed). An empty title restores the original one.
    */
   let {
@@ -51,7 +51,7 @@
     <Dialog.Header>
       <Dialog.Title class="text-base">Rename chat</Dialog.Title>
       <Dialog.Description class="text-xs">
-        The new title is stored in pahub only. Leave it empty to use the original title.
+        The new title is stored in Threadgarden only. Leave it empty to use the original title.
       </Dialog.Description>
     </Dialog.Header>
     <form class="grid gap-3" onsubmit={submit}>

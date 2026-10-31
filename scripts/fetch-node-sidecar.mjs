@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Downloads the Node.js runtime that release builds ship as the `pahub-node`
+ * Downloads the Node.js runtime that release builds ship as the `threadgarden-node`
  * Tauri sidecar (spec §9):
  *
  *   node scripts/fetch-node-sidecar.mjs --target <rust-triple>
@@ -8,11 +8,12 @@
  * Fetches the pinned Node release's archive for the triple from nodejs.org,
  * checks its SHA-256 against both the hash pinned below and the release's
  * SHASUMS256.txt, extracts only the `node` binary to
- * `apps/desktop/src-tauri/binaries/pahub-node-<triple>[.exe]` (what Tauri's
- * `externalBin: ["binaries/pahub-node"]` looks for) and writes a
+ * `apps/desktop/src-tauri/binaries/threadgarden-node-<triple>[.exe]` (what Tauri's
+ * `externalBin: ["binaries/threadgarden-node"]` looks for) and writes a
  * `.sha256` stamp beside it. A binary whose stamp matches is left alone, so
  * re-runs (and CI cache hits) download nothing. `--target` defaults to the
- * host triple from `rustc -vV`.
+ * host triple from `rustc -vV`; `--out <file>` writes the binary elsewhere
+ * (the headless package build uses it).
  *
  * Only Node built-ins plus the system `tar` (bsdtar on Windows 10+ and macOS,
  * GNU tar with xz on Linux) are used.
@@ -124,7 +125,9 @@ const main = async () => {
 
   const archive = `node-${NODE_VERSION}-${t.platform}.${t.ext}`;
   const exe = triple.includes('windows') ? '.exe' : '';
-  const out = join(OUT_DIR, `pahub-node-${triple}${exe}`);
+  const out = argValue('out')
+    ? resolve(argValue('out'))
+    : join(OUT_DIR, `threadgarden-node-${triple}${exe}`);
   const stamp = `${out}.sha256`;
 
   // Idempotent: the stamp records the binary's hash and the archive it came from.
@@ -136,7 +139,7 @@ const main = async () => {
     }
   }
 
-  const work = await mkdtemp(join(tmpdir(), 'pahub-node-'));
+  const work = await mkdtemp(join(tmpdir(), 'threadgarden-node-'));
   try {
     const sums = await (await fetch(`${DIST}/SHASUMS256.txt`)).text();
     const listed = sums.match(
@@ -162,7 +165,7 @@ const main = async () => {
     });
     if (r.status !== 0) fail(`tar could not extract ${member} from ${archive}`);
 
-    await mkdir(OUT_DIR, { recursive: true });
+    await mkdir(dirname(out), { recursive: true });
     await copyFile(join(extracted, ...member.split('/')), out);
     if (!exe) await chmod(out, 0o755);
     await writeFile(stamp, `${await sha256File(out)}  ${archive}\n`);

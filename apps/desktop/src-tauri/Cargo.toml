@@ -1,13 +1,13 @@
 [package]
-name = "pahub"
-version = "0.1.0"
-description = "pahub desktop shell"
+name = "threadgarden"
+version = "0.2.0"
+description = "Threadgarden desktop shell"
 edition = "2024"
 rust-version = "1.90"
 publish = false
 
 [lib]
-name = "pahub_lib"
+name = "threadgarden_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

@@ -13,8 +13,8 @@ describe('native (browser stubs)', () => {
   });
 
   it('native stubs return mock connection in browser', async () => {
-    vi.stubEnv('VITE_PAHUB_MOCK_URL', 'ws://127.0.0.1:7357');
-    vi.stubEnv('VITE_PAHUB_MOCK_TOKEN', 'mock-token');
+    vi.stubEnv('VITE_THREADGARDEN_MOCK_URL', 'ws://127.0.0.1:7357');
+    vi.stubEnv('VITE_THREADGARDEN_MOCK_TOKEN', 'mock-token');
     const native = await load();
     expect(native.isTauri).toBe(false);
     // Mock mode has no app/service version pairing: both report the app's version.
@@ -27,10 +27,10 @@ describe('native (browser stubs)', () => {
   });
 
   it('rejects with a clear error when no mock service is configured', async () => {
-    vi.stubEnv('VITE_PAHUB_MOCK_URL', '');
-    vi.stubEnv('VITE_PAHUB_MOCK_TOKEN', '');
+    vi.stubEnv('VITE_THREADGARDEN_MOCK_URL', '');
+    vi.stubEnv('VITE_THREADGARDEN_MOCK_TOKEN', '');
     const native = await load();
-    await expect(native.serviceConnection()).rejects.toThrow(/VITE_PAHUB_MOCK_URL/);
+    await expect(native.serviceConnection()).rejects.toThrow(/VITE_THREADGARDEN_MOCK_URL/);
   });
 
   it('keeps the API key in memory only', async () => {
@@ -42,6 +42,18 @@ describe('native (browser stubs)', () => {
     await expect(native.apiKey.get()).resolves.toBeNull();
   });
 
+  it('keeps machine device tokens in memory only, per machine', async () => {
+    const native = await load();
+    await expect(native.machineTokens.get('m1')).resolves.toBeNull();
+    await native.machineTokens.set('m1', 'tok1');
+    await native.machineTokens.set('m2', 'tok2');
+    await expect(native.machineTokens.get('m1')).resolves.toBe('tok1');
+    await native.machineTokens.clear('m1');
+    await expect(native.machineTokens.get('m1')).resolves.toBeNull();
+    await expect(native.machineTokens.get('m2')).resolves.toBe('tok2');
+    await expect(native.apiKey.get()).resolves.toBeNull();
+  });
+
   it('makes native-only calls harmless no-ops', async () => {
     const native = await load();
     const unlisten = await native.onTray('stop-all', () => {});
@@ -49,7 +61,7 @@ describe('native (browser stubs)', () => {
     unlisten();
     await expect(native.pickFolder()).resolves.toBeNull();
     await expect(native.setTrayNeedsYou(3)).resolves.toBeUndefined();
-    await expect(native.notify('t', 'b', 's1')).resolves.toBeUndefined();
+    await expect(native.notify('t', 'b', 'machine-1/s1')).resolves.toBeUndefined();
     await expect(native.setAutostart(true)).resolves.toBeUndefined();
     await expect(native.quitApp()).resolves.toBeUndefined();
   });

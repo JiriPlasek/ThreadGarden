@@ -1,9 +1,9 @@
 /**
- * One pahub chat while its Claude Code process exists (§4.3): sends and
+ * One Threadgarden chat while its Claude Code process exists (§4.3): sends and
  * queues user input, runs the permission / question / plan flow through the
  * SDK's `canUseTool`, derives the chat status (§6.2) and header, and emits
- * sequenced `chat.items` / `chat.status` events through a per-session
- * `EventLog` so reconnecting clients can replay (§4.5).
+ * sequenced `chat.items` / `chat.status` / `chat.tasks` events through a
+ * per-session `EventLog` so reconnecting clients can replay (§4.5).
  *
  * Session id: `create` picks a UUID and passes it to the SDK (`sessionId`
  * start option), so the id is known synchronously, before `system/init`.
@@ -18,10 +18,21 @@
  * event, snapshot or replay, so event order is preserved. Each emitted batch
  * is exactly what the log stores, so `since(seq)` replays without gaps or
  * duplicates.
+ *
+ * Tasks (v1.1 §2): the SDK's task lifecycle messages are folded by a
+ * `TaskTracker` into the chat's task list, published as `chat.tasks` (the full
+ * list) with the same throttle as `chat.items` and only when it changed. The
+ * list belongs to the current process: it is emptied when the process ends.
  */
 import { randomUUID } from 'node:crypto';
 import { basename } from 'node:path';
-import type { ChatHeaderInfo, ChatItem, ChatStatus, EventMsg } from '@pahub/protocol';
+import type {
+  ChatHeaderInfo,
+  ChatItem,
+  ChatStatus,
+  ChatTask,
+  EventMsg,
+} from '@threadgarden/protocol';
 import type {
   AccountInfo,
   AgentAdapter,
@@ -41,8 +52,9 @@ import { startupFailureMessage, type StartupFailureMessage } from '../sdk/startu
 import { ServiceError } from '../server/router.js';
 import { EventLog, type ChatEvent, type ChatEventDraft } from './event-log.js';
 import { Normalizer, deriveStatus } from './normalize.js';
+import { TaskTracker, runningCount, taskEnded } from './tasks.js';
 
-/** pahub's record of which sessions have a live process (Task 6 backs it with the db). */
+/** Threadgarden's record of which sessions have a live process (Task 6 backs it with the db). */
 export interface LiveRegistry {
   markLive(sessionId: string, cwd: string): void;
   markEnded(sessionId: string): void;
@@ -102,10 +114,36 @@ export type LiveSessionDeps = {
    * Default: `console.error`. Must not throw; a throw is ignored.
    */
   onError?: (err: unknown, context: string) => void;
+  // ── v1.1 T2 ──
+  /**
+   * A turn ended (a `result` that is not a startup failure and leaves no
+   * queued user input, Ruling R28), at `at`; called
+   * after the status changed and before `chatFinished` is emitted. A throw is
+   * reported through `onError`.
+   */
+  onTurnEnded?: (sessionId: string, at: number) => void;
+  /**
+   * Ruling R29: the number of running background tasks changed (published
+   * with the `chat.tasks` event that changed it). A throw is reported and
+   * changes nothing.
+   */
+  onRunningTasks?: (sessionId: string, count: number) => void;
+  /**
+   * The chat did something (a message sent, an SDK message received); called
+   * very often while a reply streams, so it must be cheap. A throw is reported.
+   */
+  onActivity?: (sessionId: string) => void;
+  // ── v1.3 B: usage limits ──
+  /** A `rate_limit_event` arrived (its `rate_limit_info`, unparsed). A throw is reported. */
+  onRateLimit?: (sessionId: string, info: unknown) => void;
+  /** An assistant message carried the API error `rate_limit` (the turn was refused). */
+  onLimitError?: (sessionId: string) => void;
+  /** A `result` arrived (every turn end, before `onTurnEnded`). A throw is reported. */
+  onTurnResult?: (sessionId: string) => void;
 };
 
 export const defaultOnError = (err: unknown, context: string): void => {
-  console.error(`pahub: ${context}:`, err);
+  console.error(`Threadgarden: ${context}:`, err);
 };
 
 export type LiveSessionOptions = LiveSessionDeps &
@@ -123,13 +161,15 @@ export type LiveSnapshot = {
   status: ChatStatus;
   header: ChatHeaderInfo;
   waitingFor?: string;
+  /** Tasks of the running process (empty when there is none). */
+  tasks: ChatTask[];
 };
 
 /** Why Claude Code refused to start this session (§6.4); `setup` asks for the setup screen. */
 export type StartupFailure = StartupFailureMessage & { reason: string; detail?: string };
 
 export const ITEMS_COALESCE_MS = 33;
-export const DEFAULT_DENY_MESSAGE = 'Denied by user in pahub';
+export const DEFAULT_DENY_MESSAGE = 'Denied by user in Threadgarden';
 
 type PermissionItem = Extract<ChatItem, { kind: 'permissionRequest' }>;
 type Pending = {
@@ -141,14 +181,14 @@ type Pending = {
 type Rec = Record<string, unknown>;
 
 /**
- * Ruling R11: pahub v1 never runs a session in `bypassPermissions` (and never
+ * Ruling R11: Threadgarden v1 never runs a session in `bypassPermissions` (and never
  * sets the SDK's `allowDangerouslySkipPermissions`).
  */
 const rejectBypass = (mode: string | undefined): void => {
   if (mode === 'bypassPermissions') {
     throw new ServiceError(
       'INVALID_PARAMS',
-      'pahub does not support the bypassPermissions permission mode',
+      'Threadgarden does not support the bypassPermissions permission mode',
     );
   }
 };
@@ -217,6 +257,11 @@ export class LiveSession {
   private statusValue: ChatStatus = 'history';
   private headerValue: ChatHeaderInfo = {};
   private idleSinceValue: number | null = null;
+  private lastActivityValue: number | null = null;
+  /** User inputs sent with `priority: 'next'` since the last `result` (Ruling R28). */
+  private queuedInputs = 0;
+  /** The user stopped the turn in progress from Threadgarden (Stop, Esc): its result is not a finish. */
+  private interruptRequested = false;
   private published = '';
   private firstText: string | undefined;
   private contextUsed: number | undefined;
@@ -229,12 +274,22 @@ export class LiveSession {
   private bufferedReplace = false;
   private flushTimer: unknown = undefined;
   private lastFlushAt = Number.NEGATIVE_INFINITY;
+  // chat.tasks coalescing
+  private readonly tracker: TaskTracker;
+  private tasksDirty = false;
+  private tasksTimer: unknown = undefined;
+  private lastTasksFlushAt = Number.NEGATIVE_INFINITY;
+  /** The task list last published (JSON), so an unchanged list is not sent again. */
+  private publishedTasks = '[]';
+  /** How many of the published tasks are running (Ruling R29). */
+  private publishedRunning = 0;
 
   constructor(private readonly deps: LiveSessionOptions) {
     rejectBypass(deps.permissionMode);
     this.log = deps.log ?? new EventLog();
     this.timers = deps.timers ?? realTimers;
     this.normalizer = new Normalizer({ now: deps.now });
+    this.tracker = new TaskTracker({ now: deps.now });
     this.chosen = {
       ...(deps.model === undefined ? {} : { model: deps.model }),
       ...(deps.effort === undefined ? {} : { effort: deps.effort }),
@@ -298,6 +353,11 @@ export class LiveSession {
     return this.idleSinceValue;
   }
 
+  /** When this chat last sent or received anything (null: nothing yet in this instance). */
+  get lastActivity(): number | null {
+    return this.lastActivityValue;
+  }
+
   /** True while the Claude Code process exists. */
   get live(): boolean {
     return this.session !== null;
@@ -325,8 +385,34 @@ export class LiveSession {
     return { ...this.chosen };
   }
 
+  /** The current process's tasks (subagents, background shells, …). */
+  tasks(): ChatTask[] {
+    return this.tracker.list();
+  }
+
+  /** How many published tasks are running (Ruling R29: such a chat counts as Running). */
+  get runningTasks(): number {
+    return this.publishedRunning;
+  }
+
   pendingRequests(): ChatItem[] {
     return [...this.pending.values()].map((p) => p.item);
+  }
+
+  /**
+   * v1.2 C1: the text of the first assistant reply this session holds (its
+   * latest version, published or not), '' if none. Read-only: unlike
+   * `snapshot` it publishes nothing.
+   */
+  firstReplyText(): string {
+    for (const items of [this.items, this.buffered]) {
+      for (const item of items.values()) {
+        if (item.kind !== 'assistantText') continue;
+        const latest = this.buffered.get(item.id) ?? item;
+        return latest.kind === 'assistantText' ? latest.markdown : '';
+      }
+    }
+    return '';
   }
 
   /** Resolves when the message pump has stopped (process gone). */
@@ -336,6 +422,7 @@ export class LiveSession {
 
   snapshot(tail: number): LiveSnapshot {
     this.flush();
+    this.flushTasks();
     const all = [...this.items.values()];
     const n = Math.max(0, Math.floor(tail));
     const waitingFor = this.waitingFor();
@@ -346,11 +433,13 @@ export class LiveSession {
       status: this.statusValue,
       header: this.header,
       ...(waitingFor === undefined ? {} : { waitingFor }),
+      tasks: this.tracker.list(),
     };
   }
 
   since(seq: number): ChatEvent[] | 'gap' {
     this.flush();
+    this.flushTasks();
     return this.log.since(seq);
   }
 
@@ -362,6 +451,7 @@ export class LiveSession {
     const queued = BUSY.has(this.statusValue);
     const uuid = randomUUID();
     session.send(toUserMessage(input, uuid, queued));
+    if (queued) this.queuedInputs++;
     this.firstText ??= input.text;
     const images = (input.images ?? []).map((i) => ({
       mediaType: i.mediaType,
@@ -380,13 +470,46 @@ export class LiveSession {
       ],
       false,
     );
+    this.noteActivity();
     if (!queued) this.setStatus('working');
     return { queued };
   }
 
+  /**
+   * Stops the turn in progress (Stop / Esc). The `result` that follows is not
+   * a finished turn: the user stopped it from Threadgarden, so there is no
+   * `chatFinished` and the chat does not become unread. Pressed while nothing
+   * runs, or if the SDK refuses, the next turn end counts as usual.
+   */
   async interrupt(): Promise<void> {
     const session = this.session;
-    if (session) await session.interrupt();
+    if (!session) return;
+    const turn = BUSY.has(this.statusValue);
+    if (turn) this.interruptRequested = true;
+    try {
+      await session.interrupt();
+    } catch (err) {
+      if (turn) this.interruptRequested = false;
+      throw err;
+    }
+  }
+
+  /**
+   * Stops one task of the running process (SDK `stopTask`); the `stopped`
+   * notification that follows updates the list. A task that already ended is
+   * left alone. Errors: `NOT_LIVE`, `UNKNOWN_TASK`, `STOP_FAILED`.
+   */
+  async stopTask(taskId: string): Promise<void> {
+    const session = this.session;
+    if (!session) throw new ServiceError('NOT_LIVE', `Chat ${this.id} is not running`);
+    const task = this.tracker.get(taskId);
+    if (!task) throw new ServiceError('UNKNOWN_TASK', `No task ${taskId} in this chat`);
+    if (taskEnded(task)) return;
+    try {
+      await session.stopTask(taskId);
+    } catch (err) {
+      throw new ServiceError('STOP_FAILED', `Could not stop the task: ${errorText(err)}`);
+    }
   }
 
   /** Closes the process; the chat returns to history (§4.3 End session). */
@@ -412,7 +535,10 @@ export class LiveSession {
       }
       // Defence in depth: bypass suggestions are filtered out when the request arrives.
       if (isBypassSuggestion(chosen)) {
-        throw new ServiceError('INVALID_PARAMS', 'pahub does not apply bypassPermissions rules');
+        throw new ServiceError(
+          'INVALID_PARAMS',
+          'Threadgarden does not apply bypassPermissions rules',
+        );
       }
     }
     if (d.decision === 'deny') {
@@ -475,6 +601,21 @@ export class LiveSession {
   }
 
   /** Auth label for the header (from the session's account info, see `authLabel`). */
+  /**
+   * v1.3 B: the SDK's experimental usage reading of this chat's process;
+   * undefined when there is none or it does not offer the reading.
+   */
+  readUsage(): (() => Promise<unknown>) | undefined {
+    const session = this.session;
+    const usage = session?.usage;
+    return usage ? () => usage.call(session) : undefined;
+  }
+
+  /** Adds a line of Threadgarden's own to the chat (e.g. a scheduled message that went out late). */
+  note(level: 'info' | 'warning' | 'error', text: string): void {
+    this.pushItems([{ kind: 'system', id: `local:${randomUUID()}`, level, text }], false);
+  }
+
   setAuth(auth: ChatHeaderInfo['auth']): void {
     if (auth === undefined) delete this.headerValue.auth;
     else this.headerValue.auth = auth;
@@ -496,6 +637,8 @@ export class LiveSession {
     this.session = session;
     this.startupFailureValue = undefined;
     this.normalizer = new Normalizer({ now: this.deps.now });
+    // The SDK's task state is per process: a new process starts with none.
+    this.forgetTasks();
     this.guard('registry.markLive', () => this.deps.registry.markLive(this.id, this.dir));
     this.ended = this.pump(session).catch((err: unknown) => this.report(err, 'message pump'));
   }
@@ -515,6 +658,7 @@ export class LiveSession {
     if (this.session !== session) return; // closed on purpose (end / pause / stop all)
     this.session = null;
     this.cancelAllPending();
+    this.forgetTasks();
     this.guard('registry.markEnded', () => this.deps.registry.markEnded(this.id));
     if (this.startupFailureValue) {
       this.setStatus('failed'); // already explained by the startup-failure line
@@ -532,6 +676,7 @@ export class LiveSession {
     if (session) {
       this.session = null;
       this.cancelAllPending();
+      this.forgetTasks();
       try {
         session.close();
       } catch {
@@ -548,13 +693,24 @@ export class LiveSession {
   }
 
   private handle(m: SDKMessage): void {
+    // Task tracking does not depend on rendering: a message the normalizer
+    // cannot handle still updates the task list.
+    this.guard('task tracking', () => {
+      if (this.tracker.apply(m)) this.scheduleTasks();
+    });
+    this.guard('usage limits', () => this.noteLimits(m));
     try {
+      this.noteActivity();
       this.updateHeader(m);
       this.requestAuth(m);
       const r = this.normalizer.push(m);
       if (r.items.length > 0) this.pushItems(r.items, r.replace);
-      if (this.noteStartupFailure(m)) this.setStatus('failed');
-      else this.setStatus(this.nextStatus(m));
+      if (this.noteStartupFailure(m)) {
+        this.setStatus('failed');
+      } else {
+        this.setStatus(this.nextStatus(m));
+        if ((m as { type?: unknown }).type === 'result') this.resultArrived();
+      }
     } catch (err) {
       // Defensive: one odd message must not take the chat down.
       this.pushItems(
@@ -569,6 +725,14 @@ export class LiveSession {
         false,
       );
     }
+  }
+
+  /** v1.3 B: rate-limit events and refused turns, for the account's usage state. */
+  private noteLimits(m: SDKMessage): void {
+    const x: unknown = m;
+    if (!isRec(x)) return;
+    if (x.type === 'rate_limit_event') this.deps.onRateLimit?.(this.id, x.rate_limit_info);
+    else if (x.type === 'assistant' && x.error === 'rate_limit') this.deps.onLimitError?.(this.id);
   }
 
   /** Maps a startup-failure result to an explained error line; true when `m` was one. */
@@ -704,18 +868,58 @@ export class LiveSession {
       signal.addEventListener('abort', onAbort, { once: true });
       this.pushItems([item], false);
       this.setStatus('needsYou');
-      const d = this.guard('describe', () => this.deps.describe?.(this.id, this.dir)) ?? {};
-      this.out({
-        event: 'needsYou',
-        data: {
-          sessionId: this.id,
-          title: d.title ?? titleFrom(this.firstText),
-          projectName: d.projectName ?? (basename(this.dir) || this.dir),
-          what,
-        },
-      });
+      this.out({ event: 'needsYou', data: { ...this.describeChat(), what } });
     });
   };
+
+  /** Session id, title and project name for notifications (`describe`, else first message / cwd). */
+  private describeChat(): { sessionId: string; title: string; projectName: string } {
+    const d = this.guard('describe', () => this.deps.describe?.(this.id, this.dir)) ?? {};
+    return {
+      sessionId: this.id,
+      title: d.title ?? titleFrom(this.firstText),
+      projectName: d.projectName ?? (basename(this.dir) || this.dir),
+    };
+  }
+
+  // ── v1.1 T2: turn ends and activity ─────────────────────────────────────
+
+  /** Records the activity time and tells `onActivity`. */
+  private noteActivity(): void {
+    this.lastActivityValue = this.deps.now();
+    if (this.deps.onActivity) this.guard('onActivity', () => this.deps.onActivity?.(this.id));
+  }
+
+  /**
+   * Ruling R28: a `result` while queued user input is pending is not a
+   * finished turn: Claude goes straight on to that input, so the chat is not
+   * waiting for the user. The CLI takes up everything queued at that turn
+   * boundary, so the count restarts there and the next `result` decides.
+   *
+   * Every `result` also ends the turn's foreground tasks that got no end edge
+   * (`TaskTracker.endForeground`), so none shows as running forever.
+   */
+  private resultArrived(): void {
+    this.guard('onTurnResult', () => this.deps.onTurnResult?.(this.id));
+    this.guard('task tracking', () => {
+      if (this.tracker.endForeground()) this.scheduleTasks();
+    });
+    const interrupted = this.interruptRequested;
+    this.interruptRequested = false;
+    if (this.queuedInputs > 0) {
+      this.queuedInputs = 0;
+      return;
+    }
+    if (interrupted) return;
+    this.turnEnded();
+  }
+
+  /** A turn ended: `onTurnEnded` (Threadgarden's unread state), then `chatFinished` for the UI. */
+  private turnEnded(): void {
+    const at = this.deps.now();
+    this.guard('onTurnEnded', () => this.deps.onTurnEnded?.(this.id, at));
+    this.out({ event: 'chatFinished', data: this.describeChat() });
+  }
 
   private finish(requestId: string, state: PermissionItem['state'], r: PermissionResult): void {
     const p = this.pending.get(requestId);
@@ -762,6 +966,7 @@ export class LiveSession {
     if (key === this.published) return;
     this.published = key;
     this.flush(); // items emitted before this status stay before it
+    this.flushTasks();
     this.record({
       event: 'chat.status',
       data: {
@@ -806,6 +1011,47 @@ export class LiveSession {
       event: 'chat.items',
       data: { sessionId: this.id, items, ...(replace ? { replace: true } : {}) },
     });
+  }
+
+  /** Publishes the task list after a change, throttled like `pushItems`. */
+  private scheduleTasks(): void {
+    this.tasksDirty = true;
+    if (this.tasksTimer !== undefined) return;
+    const wait = this.lastTasksFlushAt + ITEMS_COALESCE_MS - this.deps.now();
+    if (wait <= 0) {
+      this.flushTasks();
+    } else {
+      this.tasksTimer = this.timers.setTimeout(() => {
+        this.tasksTimer = undefined;
+        this.flushTasks();
+      }, wait);
+    }
+  }
+
+  private flushTasks(): void {
+    if (this.tasksTimer !== undefined) {
+      this.timers.clearTimeout(this.tasksTimer);
+      this.tasksTimer = undefined;
+    }
+    if (!this.tasksDirty) return;
+    this.tasksDirty = false;
+    const tasks = this.tracker.list();
+    const key = JSON.stringify(tasks);
+    if (key === this.publishedTasks) return;
+    this.publishedTasks = key;
+    this.lastTasksFlushAt = this.deps.now();
+    this.record({ event: 'chat.tasks', data: { sessionId: this.id, tasks } });
+    const running = runningCount(tasks);
+    if (running !== this.publishedRunning) {
+      this.publishedRunning = running;
+      this.guard('onRunningTasks', () => this.deps.onRunningTasks?.(this.id, running));
+    }
+  }
+
+  /** Empties the task list (the process is gone or new) and publishes that at once. */
+  private forgetTasks(): void {
+    if (this.tracker.clear()) this.tasksDirty = true;
+    this.flushTasks();
   }
 
   private record(e: ChatEventDraft): void {

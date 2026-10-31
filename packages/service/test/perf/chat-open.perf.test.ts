@@ -1,12 +1,12 @@
 /**
  * §8 "history chat open ≤ 150 ms": opening a held (live) chat whose history
  * is big must not re-read and re-normalize the transcript on every open or
- * page; the history read happens once while pahub holds the session.
+ * page; the history read happens once while Threadgarden holds the session.
  */
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { ChatItem } from '@pahub/protocol';
+import type { ChatItem } from '@threadgarden/protocol';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { startService, type ServiceHandle } from '../../src/main.js';
 import { generateCorpus } from '../../src/testing/corpus.js';
@@ -17,13 +17,16 @@ let svc: ServiceHandle;
 const adapter = generateCorpus({ sessions: 20, projects: 2, bigSessionMessages: 2000 });
 
 const call = async <T>(method: string, params: unknown): Promise<T> => {
-  const r = await svc.router.dispatch({ id: 1, method, params }, { clientId: 'perf' });
+  const r = await svc.router.dispatch(
+    { id: 1, method, params },
+    { clientId: 'perf', origin: 'local' },
+  );
   if ('error' in r) throw new Error(`${method}: ${r.error.code} ${r.error.message}`);
   return r.result as T;
 };
 
 beforeAll(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'pahub-perf-open-'));
+  dir = await mkdtemp(join(tmpdir(), 'threadgarden-perf-open-'));
   svc = await startService({
     dataDir: join(dir, 'data'),
     claudeConfigDir: join(dir, 'claude'),

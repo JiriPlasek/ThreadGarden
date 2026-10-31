@@ -92,6 +92,15 @@ describe('FakeAdapter sessions', () => {
     expect(await it.next()).toEqual({ done: true, value: undefined });
   });
 
+  it('records stopTask calls and can be made to fail', async () => {
+    const session = new FakeAdapter().start(options());
+    await session.stopTask('b1');
+    expect(session.stoppedTasks).toEqual(['b1']);
+    session.stopTaskError = new Error('no such task');
+    await expect(session.stopTask('b2')).rejects.toThrow('no such task');
+    expect(session.stoppedTasks).toEqual(['b1', 'b2']);
+  });
+
   it('requestPermission invokes the canUseTool given at start', async () => {
     const canUseTool = vi.fn<CanUseTool>(async () => ({ behavior: 'deny', message: 'no' }));
     const session = new FakeAdapter().start(options(canUseTool));

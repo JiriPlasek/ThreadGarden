@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { ChatItem } from '@pahub/protocol';
+  import type { ChatItem } from '@threadgarden/protocol';
   import { duration, tokens, usd } from '../format';
 
   /** The end-of-turn line: duration, cost and tokens, or that the turn failed. */
@@ -29,7 +29,7 @@
 </script>
 
 <div
-  class="flex items-center gap-2 text-[11px] {item.isError
+  class="flex items-center gap-2 text-[0.6875rem] {item.isError
     ? 'text-destructive'
     : 'text-muted-foreground'}"
 >

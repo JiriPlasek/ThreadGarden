@@ -1,7 +1,8 @@
 /**
- * pahub never writes to Claude Code's data (spec §2 anti-goal 2, §5.1): a full
+ * Threadgarden never writes to Claude Code's data (spec §2 anti-goal 2, §5.1): a full
  * service lifecycle against a fixture `CLAUDE_CONFIG_DIR` leaves every path in
- * it byte-for-byte, size and mtime identical.
+ * it byte-for-byte, size and mtime identical — chat titles (v1.2 C1, provisional
+ * and generated) included: no file is created there.
  */
 import { createHash } from 'node:crypto';
 import { mkdir, mkdtemp, readFile, readdir, lstat, rm, writeFile } from 'node:fs/promises';
@@ -43,7 +44,7 @@ const snapshot = async (root: string): Promise<Record<string, Entry & { children
 let dir: string;
 let savedEnv: string | undefined;
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'pahub-ro-'));
+  dir = await mkdtemp(join(tmpdir(), 'threadgarden-ro-'));
   savedEnv = process.env.CLAUDE_CONFIG_DIR;
 });
 afterEach(async () => {
@@ -80,6 +81,8 @@ it('a full service lifecycle leaves the Claude config dir untouched', async () =
   const before = await snapshot(claude);
 
   const adapter = new FakeAdapter();
+  // v1.2 C1: the new chat below gets a generated title (the fake adapter's one-shot path).
+  adapter.oneShotReply = async () => 'Generated chat title';
   for (const id of sessions) {
     adapter.sessions.set(id, {
       info: { sessionId: id, summary: `Chat ${id}`, lastModified: 1, fileSize: 10, cwd: project },
@@ -117,13 +120,25 @@ it('a full service lifecycle leaves the Claude config dir untouched', async () =
     fake.emit(assistantText('a1', 'reply'));
     fake.emit(result('r1'));
     await c.waitFor(chatStatus(sessionId, 'idle'));
+    // v1.2 C1: provisional, then generated title — both in Threadgarden's own db only.
+    await eventually(async () => {
+      const { items } = await c.call<{ items: { title: string }[] }>('sessions.summaries', {
+        sessionIds: [sessionId],
+      });
+      return items[0]?.title === 'Generated chat title';
+    });
+    expect(adapter.oneShots).toHaveLength(1);
     // resume a history chat
     await c.call('chat.resumeCheck', { sessionId: 's2' });
     await c.call('chat.send', { sessionId: 's2', text: 'continue' });
     // fork
     await c.call('chat.fork', { sessionId: 's1', upToItemId: 's1-u0' });
-    // pahub-side metadata, drafts, settings
-    await c.call('meta.update', { sessionId: 's3', customTitle: 'Renamed in pahub', pinned: true });
+    // Threadgarden-side metadata, drafts, settings
+    await c.call('meta.update', {
+      sessionId: 's3',
+      customTitle: 'Renamed in Threadgarden',
+      pinned: true,
+    });
     await c.call('projects.list', {});
     await c.call('drafts.set', { key: 's1', text: 'draft' });
     await c.call('settings.set', { idleReclaimMinutes: 5 });

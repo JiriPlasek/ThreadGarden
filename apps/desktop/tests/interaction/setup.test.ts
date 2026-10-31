@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import NewChatDialog from '../../src/lib/components/NewChatDialog.svelte';
 import AppShell from '../../src/lib/components/layout/AppShell.svelte';
-import { project, setup } from '../layout/harness';
+import { here, project, setup } from '../layout/harness';
 import { renderChat } from './helpers';
 
 const missing = {
@@ -101,7 +101,7 @@ describe('new chat dialog (spec §5.4)', () => {
       model: 'opus',
       permissionMode: 'plan',
     });
-    await waitFor(() => expect(app.tabs.active).toBe('new-1'));
+    await waitFor(() => expect(app.tabs.active).toBe(here('new-1')));
     expect(app.interaction.newChat.open).toBe(false);
     expect(server.calls('drafts.set').at(-1)?.params).toEqual({
       key: 'new:/work/beta',

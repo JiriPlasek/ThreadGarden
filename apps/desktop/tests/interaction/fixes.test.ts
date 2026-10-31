@@ -34,12 +34,12 @@ describe('terminal-only slash commands (ruling R25)', () => {
     const list = await screen.findByRole('listbox', { name: /commands/i });
     const config = within(list).getByRole('option', { name: /\/config/ });
     expect(config.getAttribute('aria-disabled')).toBe('true');
-    expect(config.textContent).toMatch(/unavailable in pahub/i);
+    expect(config.textContent).toMatch(/unavailable in Threadgarden/i);
 
     // Picking it shows the notice instead of inserting it.
     await userEvent.keyboard('{Enter}');
     expect(screen.getByRole('status', { name: /command notice/i }).textContent).toMatch(
-      /\/config is unavailable in pahub/i,
+      /\/config is unavailable in Threadgarden/i,
     );
     expect(composer().value).toBe('/con');
 
@@ -48,7 +48,7 @@ describe('terminal-only slash commands (ruling R25)', () => {
     await new Promise((r) => setTimeout(r, 20));
     expect(server.calls('chat.send')).toHaveLength(0);
     expect(screen.getByRole('status', { name: /command notice/i }).textContent).toMatch(
-      /\/login is unavailable in pahub/i,
+      /\/login is unavailable in Threadgarden/i,
     );
     expect(composer().value).toBe('/login');
   });

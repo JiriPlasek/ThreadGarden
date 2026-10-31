@@ -2,20 +2,20 @@
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { ChatItem } from '@pahub/protocol';
+import type { ChatItem } from '@threadgarden/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Logger } from '../../src/logger.js';
 import { startService, type ServiceHandle, type StartOptions } from '../../src/main.js';
 import type { PermissionUpdate, SessionMessage } from '../../src/sdk/adapter.js';
 import { FakeAdapter } from '../../src/testing/fake-adapter.js';
-import { result, sdk, settle, streamEvent } from '../chat/live-helpers.js';
+import { notification, result, sdk, settle, started, streamEvent } from '../chat/live-helpers.js';
 import { eventually } from '../e2e/ws-client.js';
 
 let dir: string;
 let svc: ServiceHandle | undefined;
 
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'pahub-chat-'));
+  dir = await mkdtemp(join(tmpdir(), 'threadgarden-chat-'));
 });
 afterEach(async () => {
   await svc?.close();
@@ -82,7 +82,10 @@ const start = async (adapter: FakeAdapter, over: Partial<StartOptions> = {}) => 
 
 let nextId = 1;
 const call = (method: string, params: unknown) =>
-  svc!.router.dispatch({ id: nextId++, method, params }, { clientId: 't' }) as Promise<{
+  svc!.router.dispatch(
+    { id: nextId++, method, params },
+    { clientId: 't', origin: 'local' },
+  ) as Promise<{
     result?: unknown;
     error?: { code: string; message: string };
   }>;
@@ -437,6 +440,61 @@ describe('chat handlers', () => {
     expect(await ok('chat.models', {})).toEqual(models);
   });
 
+  it('chat.open lists the tasks of a chat Threadgarden runs; chat.stopTask stops one', async () => {
+    const adapter = new FakeAdapter();
+    addHistory(adapter, 'h1', 1);
+    await start(adapter);
+    // A history-only chat has no tasks and nothing to stop.
+    const history = await ok<Opened & { tasks: unknown[] }>('chat.open', {
+      sessionId: 'h1',
+      tail: 5,
+    });
+    expect(history.tasks).toEqual([]);
+    expect(await code('chat.stopTask', { sessionId: 'h1', taskId: 'b1' })).toBe('NOT_LIVE');
+    expect(await code('chat.stopTask', { sessionId: 'nope', taskId: 'b1' })).toBe('NOT_LIVE');
+
+    await ok('chat.send', { sessionId: 'h1', text: 'start the dev server' });
+    const fake = adapter.lastSession();
+    fake.emit(
+      started('b1', {
+        task_type: 'local_bash',
+        description: 'npm run dev',
+        tool_use_id: 'toolu_1',
+        is_backgrounded: true,
+      }),
+    );
+    await settle();
+    const opened = await ok<Opened & { tasks: { taskId: string; status: string }[] }>('chat.open', {
+      sessionId: 'h1',
+      tail: 5,
+    });
+    expect(opened.tasks).toEqual([
+      expect.objectContaining({
+        taskId: 'b1',
+        kind: 'shell',
+        description: 'npm run dev',
+        status: 'running',
+      }),
+    ]);
+
+    expect(await code('chat.stopTask', { sessionId: 'h1', taskId: 'ghost' })).toBe('UNKNOWN_TASK');
+    fake.stopTaskError = new Error('not running');
+    expect(await code('chat.stopTask', { sessionId: 'h1', taskId: 'b1' })).toBe('STOP_FAILED');
+    fake.stopTaskError = undefined;
+    expect(await ok('chat.stopTask', { sessionId: 'h1', taskId: 'b1' })).toEqual({});
+    expect(fake.stoppedTasks).toEqual(['b1', 'b1']);
+
+    fake.emit(notification('b1', 'stopped'));
+    await settle();
+    // The change replays through chat.since like items and status.
+    const since = await ok<{ events: { seq: number; tasks?: { status: string }[] }[] }>(
+      'chat.since',
+      { sessionId: 'h1', seq: opened.seq },
+    );
+    const taskEvents = since.events.filter((e) => e.tasks !== undefined);
+    expect(taskEvents.at(-1)?.tasks).toEqual([expect.objectContaining({ status: 'stopped' })]);
+  });
+
   it('chat.since for a seq this service never issued is a GAP', async () => {
     await start(new FakeAdapter());
     expect(await code('chat.since', { sessionId: 'whatever', seq: 3 })).toBe('GAP');
@@ -500,7 +558,7 @@ describe('chat handlers', () => {
     expect(errors).toEqual([]);
   });
 
-  it('reads a held chat’s history once for as long as pahub holds it', async () => {
+  it('reads a held chat’s history once for as long as Threadgarden holds it', async () => {
     const adapter = new FakeAdapter();
     addHistory(adapter, 'h1', 5);
     await start(adapter);

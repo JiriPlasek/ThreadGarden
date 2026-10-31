@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ChatItem } from '@pahub/protocol';
+import type { ChatItem } from '@threadgarden/protocol';
 import { Normalizer, deriveStatus, type PushResult } from '../../src/chat/normalize.js';
 import type { SDKMessage, SessionMessage } from '../../src/sdk/adapter.js';
 
@@ -571,7 +571,7 @@ describe('Normalizer', () => {
     const longText = (long as { text: string }).text;
     expect(longText.length).toBeLessThan(1_100);
     expect(longText).toMatch(/^Hook big failed: x+…$/);
-    // An outcome this pahub does not know stays visible as raw JSON.
+    // An outcome this Threadgarden does not know stays visible as raw JSON.
     expect(sys('hook_response', { hook_name: 'h', outcome: 'timed_out' }, 'hr6')).toEqual([
       expect.objectContaining({ kind: 'unknown', id: 'hr6', sdkType: 'system:hook_response' }),
     ]);

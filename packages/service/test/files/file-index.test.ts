@@ -7,7 +7,7 @@ import { FileIndex, cacheKey } from '../../src/files/file-index.js';
 
 const dirs: string[] = [];
 const tmp = (): string => {
-  const d = mkdtempSync(path.join(tmpdir(), 'pahub-files-'));
+  const d = mkdtempSync(path.join(tmpdir(), 'threadgarden-files-'));
   dirs.push(d);
   return d;
 };

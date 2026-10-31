@@ -9,11 +9,11 @@
 
 {#if status === 'running'}
   <LoaderCircleIcon
-    class="text-muted-foreground size-3.5 shrink-0 animate-spin"
+    class="text-muted-foreground size-4 shrink-0 animate-spin"
     aria-label="Running"
   />
 {:else if status === 'error'}
-  <XIcon class="text-destructive size-3.5 shrink-0" aria-label="Failed" />
+  <XIcon class="text-destructive size-4 shrink-0" aria-label="Failed" />
 {:else}
-  <CheckIcon class="size-3.5 shrink-0 text-emerald-600 dark:text-emerald-400" aria-label="Done" />
+  <CheckIcon class="size-4 shrink-0 text-emerald-600 dark:text-emerald-400" aria-label="Done" />
 {/if}

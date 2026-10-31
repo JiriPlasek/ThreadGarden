@@ -11,7 +11,7 @@ import {
 
 let dir: string;
 beforeEach(async () => {
-  dir = await mkdtemp(join(tmpdir(), 'pahub-disc-'));
+  dir = await mkdtemp(join(tmpdir(), 'threadgarden-disc-'));
 });
 afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
@@ -34,6 +34,11 @@ describe('discovery', () => {
     await writeDiscovery(dir, sample);
     expect(await readDiscovery(dir)).toEqual(sample);
     expect(await readdir(dir)).toEqual(['service.json']);
+  });
+  it('carries the remote listener when there is one', async () => {
+    const headless = { ...sample, remotePort: 47380, remoteAddresses: ['192.168.1.20'] };
+    await writeDiscovery(dir, headless);
+    expect(await readDiscovery(dir)).toEqual(headless);
   });
   it('returns null for corrupt json', async () => {
     await writeFile(join(dir, 'service.json'), '{nope');

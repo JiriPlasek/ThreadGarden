@@ -1,8 +1,9 @@
-//! pahub's data dir and the service's discovery file (`service.json`).
+//! Threadgarden's data dir and the service's discovery file (`service.json`).
 //!
-//! Mirrors `packages/service/src/config.ts` (`resolveDataDir`) and
-//! `packages/service/src/discovery.ts`. The app passes the resolved dir to the
-//! service it spawns as `PAHUB_DATA_DIR`, so the two can never disagree.
+//! Mirrors `packages/service/src/config.ts` (`resolveDataDirs`) and
+//! `packages/service/src/discovery.ts`. The app passes the resolved dirs to the
+//! service it spawns as `THREADGARDEN_DATA_DIR` and `THREADGARDEN_LEGACY_DATA_DIR`,
+//! so the two can never disagree.
 
 use std::path::{Path, PathBuf};
 
@@ -20,7 +21,7 @@ pub struct Discovery {
     pub started_at: u64,
 }
 
-/// The OS families pahub distinguishes for its data dir.
+/// The OS families Threadgarden distinguishes for its data dir.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Os {
     Windows,
@@ -40,25 +41,75 @@ impl Os {
     }
 }
 
-/// pahub's data dir: `PAHUB_DATA_DIR`, else `%APPDATA%\pahub` (Windows),
-/// `~/Library/Application Support/pahub` (macOS),
-/// `${XDG_DATA_HOME:-~/.local/share}/pahub` (Linux). Empty variables count as unset.
-pub fn resolve_data_dir(env: impl Fn(&str) -> Option<String>, os: Os, home: &Path) -> PathBuf {
-    let var = |name: &str| env(name).filter(|v| !v.is_empty()).map(PathBuf::from);
-    if let Some(dir) = var("PAHUB_DATA_DIR") {
-        return dir;
+/// Threadgarden's data dir, and pahub's (Threadgarden before v1.3), which the
+/// service migrates from once (spec v1.3 §9).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DataDirs {
+    pub dir: PathBuf,
+    /// pahub's data dir; `dir` itself for an override.
+    pub legacy: PathBuf,
+    /// The dir came from the deprecated `PAHUB_DATA_DIR`.
+    pub deprecated_env: bool,
+}
+
+impl DataDirs {
+    /// One dir that is its own legacy dir (an override).
+    pub fn single(dir: PathBuf) -> Self {
+        DataDirs {
+            legacy: dir.clone(),
+            dir,
+            deprecated_env: false,
+        }
     }
+
+    /// Where a running service records itself: the new dir first, then the
+    /// old one (a pahub service still running from before the update).
+    pub fn discovery_dirs(&self) -> Vec<&Path> {
+        if self.legacy == self.dir {
+            vec![self.dir.as_path()]
+        } else {
+            vec![self.dir.as_path(), self.legacy.as_path()]
+        }
+    }
+}
+
+fn platform_dir(
+    var: &impl Fn(&str) -> Option<PathBuf>,
+    os: Os,
+    home: &Path,
+    name: &str,
+) -> PathBuf {
     match os {
         Os::Windows => var("APPDATA")
             .unwrap_or_else(|| home.join("AppData").join("Roaming"))
-            .join("pahub"),
-        Os::MacOs => home
-            .join("Library")
-            .join("Application Support")
-            .join("pahub"),
+            .join(name),
+        Os::MacOs => home.join("Library").join("Application Support").join(name),
         Os::Linux => var("XDG_DATA_HOME")
             .unwrap_or_else(|| home.join(".local").join("share"))
-            .join("pahub"),
+            .join(name),
+    }
+}
+
+/// Threadgarden's data dir: `THREADGARDEN_DATA_DIR`, else (deprecated, for one
+/// release) `PAHUB_DATA_DIR`, else `%APPDATA%\threadgarden` (Windows),
+/// `~/Library/Application Support/threadgarden` (macOS),
+/// `${XDG_DATA_HOME:-~/.local/share}/threadgarden` (Linux), with `pahub` in
+/// place of `threadgarden` as the legacy dir. Empty variables count as unset.
+pub fn resolve_data_dirs(env: impl Fn(&str) -> Option<String>, os: Os, home: &Path) -> DataDirs {
+    let var = |name: &str| env(name).filter(|v| !v.is_empty()).map(PathBuf::from);
+    if let Some(dir) = var("THREADGARDEN_DATA_DIR") {
+        return DataDirs::single(dir);
+    }
+    if let Some(dir) = var("PAHUB_DATA_DIR") {
+        return DataDirs {
+            deprecated_env: true,
+            ..DataDirs::single(dir)
+        };
+    }
+    DataDirs {
+        dir: platform_dir(&var, os, home, "threadgarden"),
+        legacy: platform_dir(&var, os, home, "pahub"),
+        deprecated_env: false,
     }
 }
 
@@ -152,6 +203,16 @@ mod tests {
     }
 
     #[test]
+    fn ignores_the_fields_of_a_headless_service() {
+        let headless = SAMPLE.replace(
+            "}",
+            r#","remotePort":47380,"remoteAddresses":["192.168.1.20"]}"#,
+        );
+        assert_eq!(parse_discovery(&headless), parse_discovery(SAMPLE));
+        assert!(parse_discovery(&headless).is_some());
+    }
+
+    #[test]
     fn rejects_malformed_discovery() {
         assert_eq!(parse_discovery(""), None);
         assert_eq!(parse_discovery("{\"pid\":1}"), None);
@@ -183,39 +244,80 @@ mod tests {
     #[test]
     fn data_dir_honours_override() {
         let home = Path::new("/home/u");
-        let env = env_of(&[("PAHUB_DATA_DIR", "/tmp/pahub-test"), ("APPDATA", "C:/x")]);
+        let env = env_of(&[("THREADGARDEN_DATA_DIR", "/tmp/tg"), ("APPDATA", "C:/x")]);
         for os in [Os::Windows, Os::MacOs, Os::Linux] {
-            assert_eq!(
-                resolve_data_dir(&env, os, home),
-                PathBuf::from("/tmp/pahub-test")
-            );
+            let dirs = resolve_data_dirs(&env, os, home);
+            assert_eq!(dirs, DataDirs::single(PathBuf::from("/tmp/tg")));
+            assert_eq!(dirs.discovery_dirs(), [Path::new("/tmp/tg")]);
         }
+    }
+
+    #[test]
+    fn data_dir_honours_the_deprecated_override() {
+        let home = Path::new("/home/u");
+        let env = env_of(&[("PAHUB_DATA_DIR", "/tmp/old")]);
+        let dirs = resolve_data_dirs(&env, Os::Linux, home);
+        assert_eq!(dirs.dir, PathBuf::from("/tmp/old"));
+        assert_eq!(dirs.legacy, PathBuf::from("/tmp/old"));
+        assert!(dirs.deprecated_env);
+        let both = env_of(&[
+            ("THREADGARDEN_DATA_DIR", "/new"),
+            ("PAHUB_DATA_DIR", "/old"),
+        ]);
+        assert_eq!(
+            resolve_data_dirs(&both, Os::Linux, home),
+            DataDirs::single(PathBuf::from("/new"))
+        );
     }
 
     #[test]
     fn data_dir_per_os() {
         let home = Path::new("/home/u");
+        let dirs = |vars: &'static [(&'static str, &'static str)], os: Os| {
+            let d = resolve_data_dirs(env_of(vars), os, home);
+            assert!(!d.deprecated_env);
+            (d.dir, d.legacy)
+        };
+        let roaming = Path::new("/roaming");
         assert_eq!(
-            resolve_data_dir(env_of(&[("APPDATA", "/roaming")]), Os::Windows, home),
-            Path::new("/roaming").join("pahub")
+            dirs(&[("APPDATA", "/roaming")], Os::Windows),
+            (roaming.join("threadgarden"), roaming.join("pahub"))
+        );
+        let roaming = home.join("AppData").join("Roaming");
+        assert_eq!(
+            dirs(&[], Os::Windows),
+            (roaming.join("threadgarden"), roaming.join("pahub"))
+        );
+        let support = home.join("Library").join("Application Support");
+        assert_eq!(
+            dirs(&[], Os::MacOs),
+            (support.join("threadgarden"), support.join("pahub"))
+        );
+        let xdg = Path::new("/xdg");
+        assert_eq!(
+            dirs(&[("XDG_DATA_HOME", "/xdg")], Os::Linux),
+            (xdg.join("threadgarden"), xdg.join("pahub"))
+        );
+        let share = home.join(".local").join("share");
+        assert_eq!(
+            dirs(
+                &[("XDG_DATA_HOME", ""), ("THREADGARDEN_DATA_DIR", "")],
+                Os::Linux
+            ),
+            (share.join("threadgarden"), share.join("pahub"))
+        );
+    }
+
+    #[test]
+    fn discovery_looks_in_the_new_dir_first_then_the_old_one() {
+        let dirs = resolve_data_dirs(
+            env_of(&[("XDG_DATA_HOME", "/xdg")]),
+            Os::Linux,
+            Path::new("/h"),
         );
         assert_eq!(
-            resolve_data_dir(env_of(&[]), Os::Windows, home),
-            home.join("AppData").join("Roaming").join("pahub")
-        );
-        assert_eq!(
-            resolve_data_dir(env_of(&[]), Os::MacOs, home),
-            home.join("Library")
-                .join("Application Support")
-                .join("pahub")
-        );
-        assert_eq!(
-            resolve_data_dir(env_of(&[("XDG_DATA_HOME", "/xdg")]), Os::Linux, home),
-            Path::new("/xdg").join("pahub")
-        );
-        assert_eq!(
-            resolve_data_dir(env_of(&[("XDG_DATA_HOME", "")]), Os::Linux, home),
-            home.join(".local").join("share").join("pahub")
+            dirs.discovery_dirs(),
+            [Path::new("/xdg/threadgarden"), Path::new("/xdg/pahub")]
         );
     }
 }

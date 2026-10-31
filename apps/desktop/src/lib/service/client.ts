@@ -1,5 +1,5 @@
 /**
- * WebSocket client for the local pahub service: request/response by id,
+ * WebSocket client for the local Threadgarden service: request/response by id,
  * typed events, reconnect with backoff and a hook for resync after reconnect
  * (spec §4.5). Protocol version mismatch makes the client `incompatible`.
  */
@@ -11,9 +11,10 @@ import {
   type MethodName,
   type Params,
   type Result,
-} from '@pahub/protocol';
+} from '@threadgarden/protocol';
 
-export type ClientStatus = 'connecting' | 'open' | 'reconnecting' | 'incompatible';
+/** `closed`: ended by `close()` or by `onClose` returning 'stop'; `connect` revives it. */
+export type ClientStatus = 'connecting' | 'open' | 'reconnecting' | 'incompatible' | 'closed';
 
 /**
  * Rejection of a request; `code` is a protocol error code or DISCONNECTED /
@@ -34,6 +35,18 @@ export type ClientOptions = {
   requestTimeoutMs?: number;
   backoffMinMs?: number;
   backoffMaxMs?: number;
+  /** Which `hello` protocol versions to accept; default: exactly ours (a local service). */
+  acceptProtocol?: (v: number) => boolean;
+  /**
+   * Asked with the close code of every socket that closes (not after `close()`);
+   * `'stop'` ends the reconnecting until `connect` is called again. Default `'retry'`.
+   */
+  onClose?: (code: number) => 'retry' | 'stop';
+  /**
+   * Checked with every `hello` the protocol check accepted, before the client
+   * counts as open; false closes it as `close()` does (no retry, no `onClose`).
+   */
+  acceptHello?: (hello: Result<'hello'>) => boolean;
 };
 
 type Pending = {
@@ -44,11 +57,16 @@ type Pending = {
 
 export class ServiceClient {
   status: ClientStatus = 'connecting';
+  /** The last successful `hello` answer (null before the first). */
+  hello: Result<'hello'> | null = null;
 
   private readonly Impl: typeof WebSocket;
   private readonly timeoutMs: number;
   private readonly minMs: number;
   private readonly maxMs: number;
+  private readonly acceptProtocol: (v: number) => boolean;
+  private readonly onCloseCode: (code: number) => 'retry' | 'stop';
+  private readonly acceptHello: (hello: Result<'hello'>) => boolean;
   private ws: WebSocket | null = null;
   private url = '';
   private token = '';
@@ -69,6 +87,9 @@ export class ServiceClient {
     this.timeoutMs = opts.requestTimeoutMs ?? 30_000;
     this.minMs = opts.backoffMinMs ?? 250;
     this.maxMs = opts.backoffMaxMs ?? 5_000;
+    this.acceptProtocol = opts.acceptProtocol ?? ((v) => v === PROTOCOL_VERSION);
+    this.onCloseCode = opts.onClose ?? (() => 'retry');
+    this.acceptHello = opts.acceptHello ?? (() => true);
   }
 
   /**
@@ -116,6 +137,7 @@ export class ServiceClient {
     this.ws = null;
     ws?.close();
     this.rejectAll('DISCONNECTED', 'Client closed');
+    this.setStatus('closed');
   };
 
   /** Rejects with `DISCONNECTED` while the socket is down (callers retry) and `TIMEOUT` after the request timeout. */
@@ -204,19 +226,30 @@ export class ServiceClient {
     if (this.closed) return;
     let ws: WebSocket;
     try {
-      ws = new this.Impl(this.url, [`pahub.${this.token}`]);
+      // A pahub service (before v1.3) knows only the old prefix; its `hello`
+      // then reports its older protocol, and the UI offers to restart it.
+      ws = new this.Impl(this.url, [`threadgarden.${this.token}`, `pahub.${this.token}`]);
     } catch {
       this.scheduleRetry();
       return;
     }
     this.ws = ws;
     ws.onopen = () => {
-      this.send('hello', { protocolVersion: PROTOCOL_VERSION, client: 'pahub-desktop' }).then(
+      this.send('hello', {
+        protocolVersion: PROTOCOL_VERSION,
+        client: 'threadgarden-desktop',
+      }).then(
         (r) => {
           if (this.ws !== ws) return;
-          if ((r as { protocolVersion?: number }).protocolVersion !== PROTOCOL_VERSION) {
+          if (!this.acceptProtocol((r as { protocolVersion?: number }).protocolVersion ?? -1)) {
             return this.fail(ws);
           }
+          if (!this.acceptHello(r as Result<'hello'>)) {
+            this.firstConnect?.reject(new RequestError('DISCONNECTED', 'Refused the service'));
+            this.firstConnect = null;
+            return this.close();
+          }
+          this.hello = r as Result<'hello'>;
           this.attempt = 0;
           const reconnect = this.hasBeenOpen;
           this.hasBeenOpen = true;
@@ -238,11 +271,18 @@ export class ServiceClient {
       );
     };
     ws.onmessage = (e: MessageEvent) => this.onMessage(String(e.data));
-    ws.onclose = () => {
+    ws.onclose = (e?: { code?: number }) => {
       if (this.ws !== ws) return;
       this.ws = null;
       this.rejectAll('DISCONNECTED', 'Connection to the service dropped');
       if (this.closed) return;
+      if (this.onCloseCode(e?.code ?? 1006) === 'stop') {
+        this.closed = true;
+        this.firstConnect?.reject(new RequestError('DISCONNECTED', 'Connection closed'));
+        this.firstConnect = null;
+        this.setStatus('closed');
+        return;
+      }
       this.setStatus(this.hasBeenOpen ? 'reconnecting' : 'connecting');
       this.scheduleRetry();
     };

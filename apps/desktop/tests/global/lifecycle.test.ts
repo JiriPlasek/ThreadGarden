@@ -35,7 +35,7 @@ vi.mock('../../src/lib/native', async (importOriginal) => ({
 
 type ListParams = { place: { kind: string } };
 
-/** Two pahub chats running and one terminal session. */
+/** Two Threadgarden chats running and one terminal session. */
 const withAgents = (server: FakeServer) => {
   server.handlers['sessions.list'] = (p) =>
     (p as ListParams).place.kind === 'running'
@@ -73,8 +73,8 @@ describe('tray actions', () => {
 
     native.tray.get('quit-all')!();
     const dialog = await screen.findByRole('alertdialog');
-    expect(within(dialog).getByText(/quit pahub completely/i)).toBeTruthy();
-    // The confirmation lists the running pahub agents (not terminal sessions).
+    expect(within(dialog).getByText(/quit Threadgarden completely/i)).toBeTruthy();
+    // The confirmation lists the running Threadgarden agents (not terminal sessions).
     const list = within(dialog).getByRole('list', { name: /agents to stop/i });
     expect(
       within(list)
@@ -110,6 +110,8 @@ describe('tray actions', () => {
     native.tray.get('stop-all')!();
     const dialog = await screen.findByRole('alertdialog');
     expect(within(dialog).getByText('Fix the build')).toBeTruthy();
+    // Closing a chat also ends its background agents and processes: the dialog says so.
+    expect(dialog.textContent).toContain('with its background agents and processes');
     await userEvent.click(within(dialog).getByRole('button', { name: /stop all work/i }));
     await waitFor(() => expect(server.calls('work.stopAll')).toHaveLength(1));
     expect(native.quitApp).not.toHaveBeenCalled();
@@ -129,7 +131,7 @@ describe('service restart', () => {
     render(ServiceDialogs, { context });
 
     const banner = screen.getByRole('alert');
-    expect(within(banner).getByText('The pahub service is an older version')).toBeTruthy();
+    expect(within(banner).getByText('The Threadgarden service is an older version')).toBeTruthy();
     await userEvent.click(within(banner).getByRole('button', { name: /restart service/i }));
 
     const dialog = await screen.findByRole('alertdialog');
@@ -150,7 +152,7 @@ describe('service restart', () => {
     render(ServiceDialogs, { context });
 
     const banner = screen.getByRole('status');
-    expect(within(banner).getByText(/the pahub service is an older version/i)).toBeTruthy();
+    expect(within(banner).getByText(/the Threadgarden service is an older version/i)).toBeTruthy();
     await userEvent.click(within(banner).getByRole('button', { name: /restart service/i }));
 
     const dialog = await screen.findByRole('alertdialog');
@@ -186,6 +188,6 @@ describe('client', () => {
     expect(server.live?.url).toBe('ws://new:2');
     expect(server.sockets.filter((s) => s.open)).toHaveLength(1);
     expect(reconnected).toHaveBeenCalledTimes(1);
-    expect(server.protocols.at(-1)).toEqual(['pahub.b']);
+    expect(server.protocols.at(-1)).toEqual(['threadgarden.b', 'pahub.b']);
   });
 });

@@ -4,7 +4,7 @@
  * Cheap enough to run on every keystroke (no layout, no allocation beyond
  * the small result).
  */
-import type { ImageRef } from '@pahub/protocol';
+import type { ImageRef } from '@threadgarden/protocol';
 
 export type Token = { start: number; end: number; query: string };
 

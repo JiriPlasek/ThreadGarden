@@ -1,10 +1,11 @@
 /**
  * Spec §8 UI budgets, measured in the page (see `helpers.ts`): from the real
  * click or key event to the DOM showing the result, plus a style and layout
- * pass. Budgets are multiplied by `PAHUB_PERF_SLACK` (CI: 3, ruling R3).
+ * pass. Budgets are multiplied by `THREADGARDEN_PERF_SLACK` (CI: 3, ruling R3).
  */
 import { expect, test, type Page } from '@playwright/test';
 import {
+  chatRow,
   fmt,
   median,
   openApp,
@@ -20,18 +21,16 @@ test.beforeEach(resetTabs);
 // Trace snapshots run inside the page around every action and would be measured.
 test.use({ trace: 'off' });
 
-const row = (page: Page, sessionId: string) =>
-  page
-    .getByRole('region', { name: 'Chat list' })
-    .locator(`[role="option"][data-session-id="${sessionId}"]`);
-
 /** The chat pane shows `sessionId`'s messages. */
 const showing = (sessionId: string): DoneWhen => ({
-  selector: `#chat-panel[aria-labelledby="tab-${sessionId}"] [data-row^="${sessionId}-m"]`,
+  selector: `#chat-panel[aria-labelledby$="/${sessionId}"] [data-row^="${sessionId}-m"]`,
 });
 
-const openFromList = async (page: Page, sessionId: string): Promise<number> =>
-  timeClick(page, () => row(page, sessionId).click(), showing(sessionId));
+/** Scrolls the row into the DOM first (not measured), then times the click. */
+const openFromList = async (page: Page, sessionId: string): Promise<number> => {
+  const row = await chatRow(page, sessionId);
+  return timeClick(page, () => row.click(), showing(sessionId));
+};
 
 test('tab switch ≤ 50 ms', async ({ page }) => {
   await openApp(page);

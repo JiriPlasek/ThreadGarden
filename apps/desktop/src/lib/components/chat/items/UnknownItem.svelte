@@ -3,7 +3,7 @@
   import { prettyJson } from '../tools';
 
   /**
-   * Data pahub does not recognise (spec §6.4, anti-goal 3): never dropped, shown
+   * Data Threadgarden does not recognise (spec §6.4, anti-goal 3): never dropped, shown
    * collapsed with its raw JSON. A run of them is one row (R12); expanding it
    * shows every item's raw JSON.
    */
@@ -26,7 +26,7 @@
     onclick={() => (open = !open)}
   >
     <ChevronRightIcon
-      class="size-3.5 shrink-0 transition-transform {open ? 'rotate-90' : ''}"
+      class="size-4 shrink-0 transition-transform {open ? 'rotate-90' : ''}"
       aria-hidden="true"
     />
     <span class="truncate">{label}</span>
@@ -35,14 +35,14 @@
     {/if}
   </button>
   {#if open}
-    <div class="mt-1 flex flex-col gap-1.5 pl-5">
+    <div class="mt-1 flex flex-col gap-1.5 pl-5.5">
       {#each items as it (it.id)}
         <div>
           {#if items.length > 1}
             <div class="mb-0.5 font-mono">{it.sdkType}</div>
           {/if}
           <pre
-            class="bg-muted text-foreground max-h-80 overflow-auto rounded p-2 font-mono text-[11px] leading-snug">{prettyJson(
+            class="bg-muted text-foreground max-h-80 overflow-auto rounded p-2 font-mono text-[0.6875rem] leading-snug">{prettyJson(
               it.raw,
             )}</pre>
         </div>

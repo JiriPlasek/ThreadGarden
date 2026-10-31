@@ -1,18 +1,29 @@
-import type { ChatSummary } from '@pahub/protocol';
 import { quitApp, serviceConnection, stopService, type ServiceConnection } from '../native';
 import type { AgentsState } from './agents.svelte';
 import type { Api } from './api';
 import type { ConnectionState } from './connection.svelte';
+import type { MachineChat } from './merged-list.svelte';
 
-/** The confirmations of spec §4.2: Stop all work, Quit pahub completely, Restart service. */
+/** The confirmations of spec §4.2: Stop all work, Quit Threadgarden completely, Restart service. */
 export type ServiceAction = 'stopAll' | 'quitAll' | 'restart';
+
+/** "A and B", "A, B and C". */
+const andList = (names: readonly string[]): string =>
+  names.length < 2 ? (names[0] ?? '') : `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
+
+/**
+ * The "Stop all work" confirmation's text: it stops every connected machine's
+ * work, named when there is more than one (`machines`: the names of those on).
+ */
+export const stopAllDescription = (machines: readonly string[]): string =>
+  `Every chat running in Threadgarden${machines.length > 1 ? ` on ${andList(machines)}` : ''} is interrupted and closed, with its background agents and processes. Sessions running in a terminal are not affected, and any chat can be resumed later.`;
 
 /** Points the client at a freshly found service and loads what the UI needs. */
 export type Reconnect = (conn: ServiceConnection) => Promise<void>;
 
 /**
  * The app and service lifecycle (spec §4.2) behind confirmations: stopping
- * all work, quitting pahub completely (service included), and restarting an
+ * all work, quitting Threadgarden completely (service included), and restarting an
  * older or incompatible service (ruling R18). `dialog` is the open confirmation.
  */
 export class LifecycleState {
@@ -35,8 +46,16 @@ export class LifecycleState {
     this.reconnect = reconnect;
   };
 
-  /** pahub's own live chats: what the actions stop (terminal sessions are not affected). */
-  get running(): ChatSummary[] {
+  /**
+   * This PC's own live chats: what quitting completely and restarting the
+   * service stop (terminal sessions and other machines are not affected).
+   */
+  get running(): MachineChat[] {
+    return this.agents?.local.filter((a) => a.live && !a.external) ?? [];
+  }
+
+  /** Every connected machine's own live chats: what "Stop all work" stops. */
+  get runningEverywhere(): MachineChat[] {
     return this.agents?.items.filter((a) => a.live && !a.external) ?? [];
   }
 

@@ -3,9 +3,35 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>pahub</title>
+    <title>Threadgarden</title>
     <!-- No favicon request (the desktop window has its own icon). -->
     <link rel="icon" href="data:," />
+    <script>
+      // The theme and appearance before the first paint, from the copy src/lib/appearance.ts
+      // keeps (the service's settings take over once connected). Values are checked, not trusted.
+      (function () {
+        var r = document.documentElement;
+        var a = {};
+        try {
+          a = JSON.parse(localStorage.getItem('threadgarden.appearance') || '{}') || {};
+        } catch (e) {}
+        var dark =
+          a.theme === 'dark' ||
+          (a.theme !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches);
+        r.setAttribute('data-theme', dark ? 'dark' : 'light');
+        r.style.colorScheme = dark ? 'dark' : 'light';
+        var attrs = {
+          accent: 'accent',
+          darkStyle: 'dark-style',
+          lightStyle: 'light-style',
+          uiFont: 'ui-font',
+        };
+        for (var k in attrs) {
+          if (typeof a[k] === 'string' && /^[a-z]{1,16}$/.test(a[k]))
+            r.setAttribute('data-' + attrs[k], a[k]);
+        }
+      })();
+    </script>
     %sveltekit.head%
   </head>
   <body data-sveltekit-preload-data="hover">

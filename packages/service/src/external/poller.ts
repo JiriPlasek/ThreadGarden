@@ -1,11 +1,11 @@
 /**
- * External sessions (§6.3): Claude Code sessions running outside pahub
+ * External sessions (§6.3): Claude Code sessions running outside Threadgarden
  * (terminal, editor, `claude --bg`), read from the documented
  * `claude agents --json --all`. Output is parsed leniently (§2 anti-goal 3):
  * unknown fields are kept in `raw`, unknown values are passed through as text.
  */
 import { execFile } from 'node:child_process';
-import type { EventMsg } from '@pahub/protocol';
+import type { EventMsg } from '@threadgarden/protocol';
 
 export type ExternalSession = {
   /** The short id of a background session (`id`); `claude attach` takes it. */
@@ -22,7 +22,7 @@ export type ExternalSession = {
   /** Present while the process is alive. */
   pid?: number;
   name?: string;
-  /** The entry as `claude agents` printed it, including fields pahub does not know. */
+  /** The entry as `claude agents` printed it, including fields Threadgarden does not know. */
   raw: Record<string, unknown>;
 };
 
@@ -139,7 +139,7 @@ export class ExternalPoller {
     this.schedule(v ? 0 : POLL_HIDDEN_MS);
   }
 
-  /** The sessions running outside pahub (pahub-owned ids excluded). */
+  /** The sessions running outside Threadgarden (Threadgarden-owned ids excluded). */
   snapshot(): ExternalSession[] {
     return this.list.slice();
   }
@@ -200,12 +200,15 @@ export class ExternalPoller {
     }
   }
 
-  /** Runs `claude agents`; pahub-owned sessions are left out. Rejects when unusable. */
+  /**
+   * Runs `claude agents`; Threadgarden-owned sessions are left out. Rejects when
+   * unusable. Threadgarden's own ids are read once the answer is in, so a session
+   * Threadgarden started while the command ran (a chat, a title query) is left out too.
+   */
   private async fetch(): Promise<ExternalSession[]> {
+    const output = await this.run(AGENTS_ARGS);
     const own = this.ownIds();
-    return parseAgents(await this.run(AGENTS_ARGS)).filter(
-      (e) => e.sessionId === undefined || !own.has(e.sessionId),
-    );
+    return parseAgents(output).filter((e) => e.sessionId === undefined || !own.has(e.sessionId));
   }
 
   private async poll(): Promise<void> {

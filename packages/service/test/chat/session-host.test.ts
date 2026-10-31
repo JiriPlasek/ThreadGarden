@@ -1,9 +1,22 @@
 import { describe, expect, it } from 'vitest';
-import { settingsDefaults, type ChatItem, type EventMsg, type Settings } from '@pahub/protocol';
+import {
+  settingsDefaults,
+  type ChatItem,
+  type EventMsg,
+  type Settings,
+} from '@threadgarden/protocol';
 import { MAX_SEQ_EPOCH, nextSeqEpoch, seqBaseForEpoch } from '../../src/chat/event-log.js';
 import { SessionHost, type SessionHostDeps } from '../../src/chat/session-host.js';
 import { FakeAdapter } from '../../src/testing/fake-adapter.js';
-import { ManualTimers, MemoryRegistry, result, settle, statuses } from './live-helpers.js';
+import {
+  ManualTimers,
+  MemoryRegistry,
+  notification,
+  result,
+  settle,
+  started,
+  statuses,
+} from './live-helpers.js';
 
 class ThrowingRegistry extends MemoryRegistry {
   override markEnded(sessionId: string): void {
@@ -132,6 +145,7 @@ describe('SessionHost', () => {
       cwd: '/a',
       status: 'idle',
       live: true,
+      lastActivity: ctx.timers.now(),
     });
     expect(byId.get(waiting.sessionId)).toMatchObject({
       cwd: '/b',
@@ -140,6 +154,30 @@ describe('SessionHost', () => {
     });
     expect(byId.get(waiting.sessionId)?.waitingFor).toBeTruthy();
     expect(host.list()).toHaveLength(2);
+  });
+
+  it('reclaimIdle never closes a chat whose background tasks are running (R29)', async () => {
+    const ctx = setup();
+    const { host, timers } = ctx;
+    const { s, fake } = await idleChat(ctx);
+    fake.emit(started('b1', { task_type: 'local_bash', is_backgrounded: true }));
+    await settle();
+    timers.advance(33);
+    expect(s.runningTasks).toBe(1);
+    expect(s.status).toBe('idle');
+
+    expect(host.reclaimIdle(timers.now() + 60 * MIN)).toBe(0);
+    expect(s.live).toBe(true);
+    expect(fake.closed).toBe(false);
+
+    // Once the last task has ended, the idle chat is reclaimed as usual.
+    fake.emit(notification('b1', 'completed'));
+    await settle();
+    timers.advance(33);
+    expect(s.runningTasks).toBe(0);
+    expect(host.reclaimIdle(timers.now() + 60 * MIN)).toBe(1);
+    expect(fake.closed).toBe(true);
+    expect(host.get(s.sessionId)?.status).toBe('paused');
   });
 
   it('reclaimIdle never closes needsYou or pinned', async () => {
@@ -266,7 +304,7 @@ describe('SessionHost', () => {
         expect.objectContaining({
           kind: 'system',
           level: 'error',
-          text: 'Interrupted when the pahub service stopped — send a message to resume',
+          text: 'Interrupted when the Threadgarden service stopped — send a message to resume',
         }),
       ]);
       expect(statuses(events, id)).toEqual(['failed']);
@@ -426,5 +464,53 @@ describe('SessionHost', () => {
     expect(nextSeqEpoch(1)).toBe(2);
     expect(nextSeqEpoch(MAX_SEQ_EPOCH)).toBe(1);
     expect(Number.isSafeInteger(seqBaseForEpoch(MAX_SEQ_EPOCH) + 2 ** 32)).toBe(true);
+  });
+
+  // ── v1.1 T2 ─────────────────────────────────────────────────────────────────
+
+  it('hands turn ends and activity to its deps and lists each chat with its last activity', async () => {
+    const turns: string[] = [];
+    const activity: string[] = [];
+    const ctx = setup({
+      onTurnEnded: (id) => turns.push(id),
+      onActivity: (id) => activity.push(id),
+    });
+    const { s } = await idleChat(ctx);
+    expect(turns).toEqual([s.sessionId]);
+    expect(activity.length).toBeGreaterThan(0);
+    expect(new Set(activity)).toEqual(new Set([s.sessionId]));
+    expect(ctx.host.list()).toEqual([
+      expect.objectContaining({ sessionId: s.sessionId, lastActivity: ctx.timers.now() }),
+    ]);
+    // A resumed chat still reports its turns.
+    s.pause();
+    const again = ctx.host.ensureLive(s.sessionId, '/proj');
+    again.send({ text: 'more' });
+    ctx.adapter.lastSession().emit(result('r-again'));
+    await settle();
+    expect(turns).toEqual([s.sessionId, s.sessionId]);
+  });
+
+  it('lists the running tasks of a live chat and reports changes of the count (R29)', async () => {
+    const counts: [string, number][] = [];
+    const ctx = setup({ onRunningTasks: (id, n) => counts.push([id, n]) });
+    const { s, fake } = await idleChat(ctx);
+    expect(ctx.host.list()[0]).not.toHaveProperty('runningTasks');
+    fake.emit(started('b1', { task_type: 'local_bash', is_backgrounded: true }));
+    await settle();
+    ctx.timers.advance(33);
+    expect(s.status).toBe('idle');
+    expect(ctx.host.list()).toEqual([
+      expect.objectContaining({ sessionId: s.sessionId, status: 'idle', runningTasks: 1 }),
+    ]);
+    expect(counts).toEqual([[s.sessionId, 1]]);
+    fake.emit(notification('b1', 'completed'));
+    await settle();
+    ctx.timers.advance(33);
+    expect(ctx.host.list()[0]).not.toHaveProperty('runningTasks');
+    expect(counts).toEqual([
+      [s.sessionId, 1],
+      [s.sessionId, 0],
+    ]);
   });
 });

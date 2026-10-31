@@ -13,7 +13,7 @@ import { generateCorpus } from '../../../src/testing/corpus.js';
 const SESSIONS = 1000;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-const dir = await mkdtemp(join(tmpdir(), 'pahub-perf-rss-'));
+const dir = await mkdtemp(join(tmpdir(), 'threadgarden-perf-rss-'));
 const svc = await startService({
   dataDir: join(dir, 'data'),
   claudeConfigDir: join(dir, 'claude'),
@@ -23,7 +23,10 @@ const svc = await startService({
   installSignalHandlers: false,
 });
 const call = async (method: string): Promise<Record<string, number>> => {
-  const r = await svc.router.dispatch({ id: 1, method, params: {} } as never, { clientId: 'rss' });
+  const r = await svc.router.dispatch({ id: 1, method, params: {} } as never, {
+    clientId: 'rss',
+    origin: 'local',
+  });
   if ('error' in r) throw new Error(`${method}: ${r.error.message}`);
   return r.result as Record<string, number>;
 };

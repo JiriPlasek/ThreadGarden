@@ -28,7 +28,7 @@ const start = async (
   servers.push(s);
   return s;
 };
-const open = (port: number, protocol?: string) =>
+const open = (port: number, protocol?: string | string[]) =>
   new Promise<WebSocket>((resolve, reject) => {
     const url = `ws://127.0.0.1:${port}`;
     const ws = protocol ? new WebSocket(url, protocol) : new WebSocket(url);
@@ -47,13 +47,56 @@ describe('ws server', () => {
   });
   it('rejects wrong token (4401)', async () => {
     const s = await start();
+    const ws = await open(s.port, 'threadgarden.wrong');
+    expect(await closeCode(ws)).toBe(4401);
+  });
+  it('survives a refused client that sends a broken frame', async () => {
+    const s = await start();
+    const ws = await open(s.port, 'threadgarden.wrong');
+    ws.on('error', () => {});
+    const closed = closeCode(ws);
+    // A masked frame with the reserved opcode 3: the server's parser rejects it.
+    (ws as unknown as { _socket: { write(b: Buffer): void } })._socket.write(
+      Buffer.from([0x83, 0x80, 0, 0, 0, 0]),
+    );
+    await closed;
+    const ok = await open(s.port, 'threadgarden.tok');
+    const reply = nextMessage(ok);
+    ok.send(
+      JSON.stringify({ id: 1, method: 'hello', params: { protocolVersion: 1, client: 'c' } }),
+    );
+    expect(await reply).toMatchObject({ id: 1, result: { serviceVersion: 't' } });
+    ok.close();
+  });
+  it('accepts the legacy pahub.<token> subprotocol (spec v1.3 §9)', async () => {
+    const s = await start();
+    const ws = await open(s.port, 'pahub.tok');
+    expect(ws.protocol).toBe('pahub.tok');
+    const reply = nextMessage(ws);
+    ws.send(
+      JSON.stringify({ id: 1, method: 'hello', params: { protocolVersion: 1, client: 'c' } }),
+    );
+    expect(await reply).toMatchObject({ id: 1, result: { serviceVersion: 't' } });
+    ws.close();
+  });
+  it('picks the first of both offered subprotocols', async () => {
+    const s = await start();
+    const ws = await open(s.port, ['threadgarden.tok', 'pahub.tok']);
+    expect(ws.protocol).toBe('threadgarden.tok');
+    ws.close();
+    const legacyFirst = await open(s.port, ['other', 'pahub.tok', 'threadgarden.tok']);
+    expect(legacyFirst.protocol).toBe('pahub.tok');
+    legacyFirst.close();
+  });
+  it('rejects a wrong token under the legacy prefix too (4401)', async () => {
+    const s = await start();
     const ws = await open(s.port, 'pahub.wrong');
     expect(await closeCode(ws)).toBe(4401);
   });
   it('routes hello and returns protocolVersion 1', async () => {
     const s = await start();
-    const ws = await open(s.port, 'pahub.tok');
-    expect(ws.protocol).toBe('pahub.tok');
+    const ws = await open(s.port, 'threadgarden.tok');
+    expect(ws.protocol).toBe('threadgarden.tok');
     const reply = nextMessage(ws);
     ws.send(
       JSON.stringify({ id: 1, method: 'hello', params: { protocolVersion: 1, client: 'test' } }),
@@ -61,10 +104,29 @@ describe('ws server', () => {
     expect(await reply).toEqual({ id: 1, result: { serviceVersion: 't', protocolVersion: 1 } });
     ws.close();
   });
+  it('serves local-only methods: its callers are local', async () => {
+    const router = makeRouter();
+    const origins: string[] = [];
+    router.register(
+      'work.stopAll',
+      async (_p, ctx) => {
+        origins.push(ctx.origin);
+        return { stopped: 0 };
+      },
+      { localOnly: true },
+    );
+    const s = await start(router);
+    const ws = await open(s.port, 'threadgarden.tok');
+    const reply = nextMessage(ws);
+    ws.send(JSON.stringify({ id: 1, method: 'work.stopAll', params: {} }));
+    expect(await reply).toEqual({ id: 1, result: { stopped: 0 } });
+    expect(origins).toEqual(['local']);
+    ws.close();
+  });
   it('broadcasts events and tracks client count', async () => {
     const counts: number[] = [];
     const s = await start(makeRouter(), counts);
-    const ws = await open(s.port, 'pahub.tok');
+    const ws = await open(s.port, 'threadgarden.tok');
     const evt = nextMessage(ws);
     s.broadcast({ event: 'x', data: 1 });
     expect(await evt).toEqual({ event: 'x', data: 1 });
@@ -76,7 +138,7 @@ describe('ws server', () => {
   });
   it('answers malformed frames with an error and keeps the connection', async () => {
     const s = await start();
-    const ws = await open(s.port, 'pahub.tok');
+    const ws = await open(s.port, 'threadgarden.tok');
     const reply = nextMessage(ws);
     ws.send('not json');
     expect(await reply).toMatchObject({ error: { code: 'INVALID_PARAMS' } });
@@ -87,7 +149,7 @@ describe('ws server', () => {
     const router = makeRouter();
     vi.spyOn(router, 'dispatch').mockRejectedValue(new Error('router exploded'));
     const s = await start(router, [], (e) => errors.push(e));
-    const ws = await open(s.port, 'pahub.tok');
+    const ws = await open(s.port, 'threadgarden.tok');
     const reply = nextMessage(ws);
     ws.send(JSON.stringify({ id: 7, method: 'hello', params: {} }));
     expect(await reply).toEqual({
@@ -112,14 +174,14 @@ describe('ws server', () => {
     expect(() => servers[0]!.emit('error', new Error('late failure'))).not.toThrow();
     expect(String(errors[0])).toContain('late failure');
     // Still serving.
-    const ws = await open(s.port, 'pahub.tok');
+    const ws = await open(s.port, 'threadgarden.tok');
     ws.close();
   });
   it('accepts a message as large as the documented image limits allow', async () => {
     const router = makeRouter();
     router.register('ui.visibility', async () => ({}));
     const s = await start(router);
-    const ws = await open(s.port, 'pahub.tok');
+    const ws = await open(s.port, 'threadgarden.tok');
     const reply = nextMessage(ws);
     // 20 MiB of images (the composer's per-message cap) as base64, plus the envelope.
     const data = 'A'.repeat(Math.ceil((20 * 1024 * 1024 * 4) / 3));
@@ -134,7 +196,7 @@ describe('ws server', () => {
 });
 
 describe('router', () => {
-  const ctx = { clientId: 'c' };
+  const ctx = { clientId: 'c', origin: 'local' as const };
   it('returns INVALID_PARAMS for bad params', async () => {
     const res = await makeRouter().dispatch({ id: 2, method: 'hello', params: { nope: 1 } }, ctx);
     expect(res).toMatchObject({ id: 2, error: { code: 'INVALID_PARAMS' } });
@@ -158,5 +220,35 @@ describe('router', () => {
     });
     const vis = { id: 2, method: 'ui.visibility', params: { visible: true } };
     expect(await router.dispatch(vis, ctx)).toMatchObject({ error: { code: 'INTERNAL' } });
+  });
+  it('answers FORBIDDEN to a remote caller of a local-only method, before reading params', async () => {
+    const router = new Router();
+    const seen: unknown[] = [];
+    router.register(
+      'work.stopAll',
+      async (_p, c) => {
+        seen.push(c);
+        return { stopped: 0 };
+      },
+      { localOnly: true },
+    );
+    router.register('ui.visibility', async (_p, c) => {
+      seen.push(c);
+      return {};
+    });
+    const remote = { clientId: 'r', origin: 'remote' as const, deviceId: 'd' };
+    const stop = { id: 4, method: 'work.stopAll', params: {} };
+    expect(await router.dispatch(stop, remote)).toMatchObject({
+      id: 4,
+      error: { code: 'FORBIDDEN' },
+    });
+    expect(
+      await router.dispatch({ id: 5, method: 'work.stopAll', params: { bad: 1 } }, remote),
+    ).toMatchObject({ error: { code: 'FORBIDDEN' } });
+    expect(seen).toEqual([]);
+    expect(await router.dispatch(stop, ctx)).toEqual({ id: 4, result: { stopped: 0 } });
+    const vis = { id: 6, method: 'ui.visibility', params: { visible: true } };
+    expect(await router.dispatch(vis, remote)).toEqual({ id: 6, result: {} });
+    expect(seen).toEqual([ctx, remote]);
   });
 });

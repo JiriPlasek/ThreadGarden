@@ -4,7 +4,7 @@
  * Inputs come from the CLI and are parsed leniently: anything unexpected
  * degrades to raw JSON in the card instead of failing.
  */
-import type { ChatItem } from '@pahub/protocol';
+import type { ChatItem } from '@threadgarden/protocol';
 import type { ToolCallItem } from '../rows';
 import { summarize } from '../tools';
 

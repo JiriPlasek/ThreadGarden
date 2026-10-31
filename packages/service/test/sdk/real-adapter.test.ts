@@ -1,6 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { Options, SDKMessage, SDKUserMessage, StartOptions } from '../../src/sdk/adapter.js';
-import { RealAdapter, type SdkApi } from '../../src/sdk/real-adapter.js';
+import type {
+  OneShotOptions,
+  Options,
+  SDKMessage,
+  SDKUserMessage,
+  StartOptions,
+} from '../../src/sdk/adapter.js';
+import { RealAdapter, USAGE_METHOD, usageReader, type SdkApi } from '../../src/sdk/real-adapter.js';
 
 /** A stand-in for the SDK's `Query`: an async generator plus the control methods. */
 const fakeQuery = (messages: SDKMessage[]) => {
@@ -14,6 +20,7 @@ const fakeQuery = (messages: SDKMessage[]) => {
     supportedCommands: vi.fn(async () => [{ name: 'review', description: '', argumentHint: '' }]),
     supportedModels: vi.fn(async () => []),
     accountInfo: vi.fn(async () => ({ apiProvider: 'firstParty' as const })),
+    stopTask: vi.fn<(taskId: string) => Promise<void>>(async () => {}),
     close: vi.fn(),
   });
 };
@@ -58,6 +65,7 @@ describe('RealAdapter.start', () => {
       sessionId: startOptions.sessionId,
       pathToClaudeCodeExecutable: '/bin/claude',
       systemPrompt: { type: 'preset', preset: 'claude_code' },
+      perTaskStopAffordance: true,
     });
 
     s.send(userMessage('one'));
@@ -84,9 +92,11 @@ describe('RealAdapter.start', () => {
     await s.interrupt();
     await s.setModel('sonnet');
     await s.setPermissionMode('plan');
+    await s.stopTask('b1');
     expect(q.interrupt).toHaveBeenCalledOnce();
     expect(q.setModel).toHaveBeenCalledWith('sonnet');
     expect(q.setPermissionMode).toHaveBeenCalledWith('plan');
+    expect(q.stopTask).toHaveBeenCalledWith('b1');
     await expect(s.supportedCommands()).resolves.toEqual([
       { name: 'review', description: '', argumentHint: '' },
     ]);
@@ -132,5 +142,134 @@ describe('RealAdapter session functions', () => {
     await adapter.forkSession('s1', {});
     expect(sdk.forkSession).toHaveBeenNthCalledWith(1, 's1', { upToMessageId: 'u1' });
     expect(sdk.forkSession).toHaveBeenNthCalledWith(2, 's1', {});
+  });
+});
+
+// ── v1.2 C1: chat titles ──
+
+describe('RealAdapter.oneShot', () => {
+  const oneShot = (signal = new AbortController().signal): OneShotOptions => ({
+    prompt: 'Title this',
+    systemPrompt: 'Reply with only a title',
+    model: 'haiku',
+    cwd: '/p',
+    env: { PATH: '/usr/bin' },
+    claudePath: '/bin/claude',
+    signal,
+    sessionId: '0b0e8f6a-1111-4222-8333-944455556666',
+  });
+  const ok = { type: 'result', subtype: 'success', is_error: false, result: 'Login fix' };
+
+  it('runs one string-prompt query with the one-shot options and returns the result text', async () => {
+    const { q, calls, adapter } = setup([
+      { type: 'system', subtype: 'init' } as unknown as SDKMessage,
+      ok as unknown as SDKMessage,
+    ]);
+    await expect(adapter.oneShot(oneShot())).resolves.toBe('Login fix');
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.prompt).toBe('Title this');
+    expect(calls[0]!.options).toMatchObject({
+      persistSession: false,
+      settingSources: [],
+      tools: [],
+      maxTurns: 1,
+      model: 'haiku',
+    });
+    expect(q.close).toHaveBeenCalled();
+  });
+
+  it('rejects on an error result or a stream without a result', async () => {
+    const failed = { type: 'result', subtype: 'error_max_turns', is_error: true };
+    await expect(
+      setup([failed as unknown as SDKMessage]).adapter.oneShot(oneShot()),
+    ).rejects.toThrow(/error_max_turns/);
+    const errorSuccess = { ...ok, is_error: true };
+    await expect(
+      setup([errorSuccess as unknown as SDKMessage]).adapter.oneShot(oneShot()),
+    ).rejects.toThrow();
+    await expect(setup([]).adapter.oneShot(oneShot())).rejects.toThrow(/no result/);
+  });
+
+  it("aborting the caller's signal aborts the query", async () => {
+    const { calls, adapter } = setup([ok as unknown as SDKMessage]);
+    const ac = new AbortController();
+    const done = adapter.oneShot(oneShot(ac.signal));
+    const sdkAbort = calls[0]!.options.abortController!;
+    expect(sdkAbort.signal.aborted).toBe(false);
+    ac.abort();
+    expect(sdkAbort.signal.aborted).toBe(true);
+    await done.catch(() => {});
+  });
+
+  it('an already aborted signal never starts a query', async () => {
+    const { calls, adapter } = setup([ok as unknown as SDKMessage]);
+    const ac = new AbortController();
+    ac.abort();
+    await expect(adapter.oneShot(oneShot(ac.signal))).rejects.toThrow(/aborted/);
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe('RealAdapter.oneShot (fix round 1)', () => {
+  const opts = (signal: AbortSignal): OneShotOptions => ({
+    prompt: 'Title this',
+    systemPrompt: 'Reply with only a title',
+    model: 'haiku',
+    cwd: '/p',
+    env: { PATH: '/usr/bin' },
+    claudePath: '/bin/claude',
+    signal,
+    sessionId: '0b0e8f6a-1111-4222-8333-944455556666',
+  });
+
+  it('rejects when an assistant message carried an API error, even if the result says success', async () => {
+    const apiError = {
+      type: 'assistant',
+      error: 'authentication_failed',
+      message: { content: [{ type: 'text', text: 'Invalid API key · Please run /login' }] },
+    };
+    const success = {
+      type: 'result',
+      subtype: 'success',
+      is_error: false,
+      result: 'Invalid API key · Please run /login',
+    };
+    const { adapter } = setup([apiError, success] as unknown as SDKMessage[]);
+    await expect(adapter.oneShot(opts(new AbortController().signal))).rejects.toThrow(
+      /authentication_failed/,
+    );
+  });
+
+  it('a query that throws at once leaves no abort listener behind', async () => {
+    const { sdk, adapter } = setup();
+    sdk.query = (() => {
+      throw new Error('spawn failed');
+    }) as unknown as SdkApi['query'];
+    const signal = new AbortController().signal;
+    const add = vi.spyOn(signal, 'addEventListener');
+    const remove = vi.spyOn(signal, 'removeEventListener');
+    await expect(adapter.oneShot(opts(signal))).rejects.toThrow(/spawn failed/);
+    expect(add.mock.calls.length).toBe(remove.mock.calls.length);
+  });
+});
+
+// ── v1.3 B: usage reading ────────────────────────────────────────────────────
+
+describe('RealAdapter usage reading', () => {
+  it('feature-detects the experimental usage call and skips the behaviours scan', async () => {
+    const { q, adapter } = setup();
+    const answer = { rate_limits_available: true, rate_limits: {} };
+    const read = vi.fn(async () => answer);
+    Object.assign(q, { [USAGE_METHOD]: read });
+    const session = adapter.start(startOptions);
+    expect(session.usage).toBeTypeOf('function');
+    await expect(session.usage!()).resolves.toBe(answer);
+    expect(read).toHaveBeenCalledWith({ skipBehaviors: true });
+  });
+
+  it('offers no reading when the SDK has none', () => {
+    const { adapter } = setup();
+    expect(adapter.start(startOptions).usage).toBeUndefined();
+    expect(usageReader({})).toBeUndefined();
   });
 });

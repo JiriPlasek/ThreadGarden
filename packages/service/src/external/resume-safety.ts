@@ -1,9 +1,9 @@
 /**
  * Resume safety (§4.4): resuming one session from two processes interleaves
- * both into one transcript, so pahub refuses to resume a session that might be
+ * both into one transcript, so Threadgarden refuses to resume a session that might be
  * running elsewhere. The policy is biased toward blocking when in doubt.
  */
-import type { ChatStatus } from '@pahub/protocol';
+import type { ChatStatus } from '@threadgarden/protocol';
 import type { ExternalSession } from './poller.js';
 
 export const RECENT_MODIFIED_MS = 120_000;
@@ -44,7 +44,7 @@ export const checkResume = (o: {
     return {
       status: 'unverified',
       reason:
-        "pahub cannot check whether this chat is open in another Claude Code process (the 'claude agents' command is unavailable).",
+        "Threadgarden cannot check whether this chat is open in another Claude Code process (the 'claude agents' command is unavailable).",
       recentlyModified,
     };
   }

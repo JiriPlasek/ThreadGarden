@@ -1,17 +1,30 @@
 import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { WebSocketServer, type WebSocket } from 'ws';
-import {
-  MAX_REQUEST_BYTES,
-  RequestSchema,
-  type EventMsg,
-  type Request,
-  type Response,
-} from '@pahub/protocol';
+import { MAX_REQUEST_BYTES, RELAY_CLOSE, type EventMsg } from '@threadgarden/protocol';
+import { dropOnError, sendFrame, serveFrames } from './frames.js';
+import type { Relay } from './relay.js';
 import type { Router } from './router.js';
 
 const HOST = '127.0.0.1';
 const UNAUTHORIZED = 4401;
-const PROTOCOL_PREFIX = 'pahub.';
+/**
+ * Clients send the token as the WebSocket subprotocol `threadgarden.<token>`;
+ * `pahub.<token>` (clients before v1.3) is accepted too, for one release
+ * (spec v1.3 §9).
+ */
+const PROTOCOL_PREFIXES = ['threadgarden.', 'pahub.'] as const;
+
+/** The token a subprotocol carries, or null for one that is not ours. */
+const tokenOf = (protocol: string): string | null => {
+  const prefix = PROTOCOL_PREFIXES.find((p) => protocol.startsWith(p));
+  return prefix === undefined ? null : protocol.slice(prefix.length);
+};
+
+/** `/relay?machine=<id>`: the paired machine to relay to (null: none named); otherwise not a relay. */
+const relayTarget = (url: string | undefined): { machineId: string | null } | null => {
+  const parsed = new URL(url ?? '/', 'http://127.0.0.1');
+  return parsed.pathname === '/relay' ? { machineId: parsed.searchParams.get('machine') } : null;
+};
 
 const tokenMatches = (offered: string, token: string): boolean => {
   const a = Buffer.from(offered);
@@ -24,6 +37,9 @@ export const startWsServer = async (opts: {
   router: Router;
   /** Fixed port (mock service); default 0 = a random free port. */
   port?: number;
+  /** Paired machines (`/relay`); without it a relay is closed 4404. */
+  relay?: Pick<Relay, 'attach'>;
+  /** Connected clients, relays included (they keep the service from its idle exit). */
   onClientCountChange(n: number): void;
   /** A server or dispatch failure after startup; the server keeps serving. */
   onError?: (err: unknown) => void;
@@ -38,9 +54,9 @@ export const startWsServer = async (opts: {
     host: HOST,
     port: opts.port ?? 0,
     maxPayload: MAX_REQUEST_BYTES,
-    // Echo the offered subprotocol so browsers complete the handshake; the token is verified on connection.
-    handleProtocols: (protocols) =>
-      [...protocols].find((p) => p.startsWith(PROTOCOL_PREFIX)) ?? false,
+    // Echo the first offered subprotocol of ours so browsers complete the
+    // handshake; the token is verified on connection.
+    handleProtocols: (protocols) => [...protocols].find((p) => tokenOf(p) !== null) ?? false,
   });
   await new Promise<void>((resolve, reject) => {
     const failed = (err: unknown): void => reject(err);
@@ -60,44 +76,54 @@ export const startWsServer = async (opts: {
   // An 'error' event without a listener throws; after listening, errors are reported.
   wss.on('error', report);
 
-  const send = (ws: WebSocket, msg: Response | EventMsg) => {
-    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg));
-  };
+  /** UI sockets relayed to paired machines: counted as clients, never sent local events. */
+  const relays = new Set<WebSocket>();
+  const counted = (): void => opts.onClientCountChange(clients.size + relays.size);
 
-  wss.on('connection', (ws) => {
-    const offered = ws.protocol.startsWith(PROTOCOL_PREFIX)
-      ? ws.protocol.slice(PROTOCOL_PREFIX.length)
-      : null;
+  wss.on('connection', (ws, req) => {
+    dropOnError(ws, report);
+    const offered = tokenOf(ws.protocol);
     if (offered === null || !tokenMatches(offered, opts.token)) {
       ws.close(UNAUTHORIZED, 'unauthorized');
       return;
     }
-    const clientId = randomUUID();
-    clients.add(ws);
-    opts.onClientCountChange(clients.size);
-    ws.on('message', (data) => {
-      let req: Request;
-      try {
-        req = RequestSchema.parse(JSON.parse(String(data)));
-      } catch {
-        send(ws, { id: 0, error: { code: 'INVALID_PARAMS', message: 'Malformed request' } });
+    let relay: { machineId: string | null } | null;
+    try {
+      relay = relayTarget(req.url);
+    } catch {
+      // A path no URL parser takes is not `/relay`: served as before.
+      relay = null;
+    }
+    if (relay) {
+      if (!opts.relay) {
+        ws.close(RELAY_CLOSE.locked, 'no paired machines here');
         return;
       }
-      const { id } = req;
-      void opts.router
-        .dispatch(req, { clientId })
-        .catch((err: unknown): Response => {
-          report(err);
-          return { id, error: { code: 'INTERNAL', message: 'Internal error' } };
-        })
-        .then((res) => send(ws, res))
-        .catch(report);
+      relays.add(ws);
+      counted();
+      ws.on('close', () => {
+        relays.delete(ws);
+        counted();
+      });
+      try {
+        opts.relay.attach(ws, relay.machineId);
+      } catch (err) {
+        report(err);
+        ws.close(1011, 'internal error');
+      }
+      return;
+    }
+    clients.add(ws);
+    counted();
+    serveFrames(ws, {
+      router: opts.router,
+      ctx: { clientId: randomUUID(), origin: 'local' },
+      report,
     });
     ws.on('close', () => {
       clients.delete(ws);
-      opts.onClientCountChange(clients.size);
+      counted();
     });
-    ws.on('error', () => ws.terminate());
   });
 
   const addr = wss.address();
@@ -107,7 +133,7 @@ export const startWsServer = async (opts: {
     port: addr.port,
     address: addr.address,
     broadcast: (e) => {
-      for (const ws of clients) send(ws, e);
+      for (const ws of clients) sendFrame(ws, e);
     },
     close: () =>
       new Promise<void>((resolve) => {

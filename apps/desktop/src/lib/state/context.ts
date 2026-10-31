@@ -4,14 +4,20 @@
  */
 import { getContext } from 'svelte';
 import { agents, type AgentsState } from './agents.svelte';
+import { analytics, type AnalyticsState } from './analytics.svelte';
+import { buckets, type BucketsState } from './buckets.svelte';
 import { chats, type ChatsState } from './chats.svelte';
 import { connection, type ConnectionState } from './connection.svelte';
 import { interaction, type InteractionState } from './interaction.svelte';
 import { lifecycle, type LifecycleState } from './lifecycle.svelte';
+import { machines, type MachinesState } from './machines.svelte';
 import { places, type PlacesState } from './places.svelte';
+import { scheduled, type ScheduledState } from './scheduled.svelte';
+import { scopes, type MachineScope, type Scopes } from './scope';
 import { sessions, type SessionsState } from './sessions.svelte';
 import { settings, type SettingsState } from './settings.svelte';
 import { tabs, type TabsState } from './tabs.svelte';
+import { usage, type UsageStore } from './usage.svelte';
 
 export type AppState = {
   connection: ConnectionState;
@@ -23,9 +29,22 @@ export type AppState = {
   agents: AgentsState;
   interaction: InteractionState;
   lifecycle: LifecycleState;
+  buckets: BucketsState;
+  /** v1.3 B: plan usage and scheduled sends. */
+  usage: UsageStore;
+  scheduled: ScheduledState;
+  /** v1.3: the Analytics view. */
+  analytics: AnalyticsState;
+  /** Remote machines: This PC plus the paired ones. */
+  machines: MachinesState;
+  /**
+   * One scope of per-machine stores per machine. The keys above (`places`,
+   * `sessions`, `chats`, …) are This PC's scope.
+   */
+  scopes: Pick<Scopes, 'get' | 'all' | 'local' | 'observe'>;
 };
 
-export const APP_CONTEXT = Symbol('pahub.app');
+export const APP_CONTEXT = Symbol('threadgarden.app');
 
 const singletons: AppState = {
   connection,
@@ -37,7 +56,27 @@ const singletons: AppState = {
   agents,
   interaction,
   lifecycle,
+  buckets,
+  usage,
+  scheduled,
+  analytics,
+  machines,
+  scopes,
 };
 
 /** Must be called during component initialisation. */
 export const useApp = (): AppState => getContext<AppState | undefined>(APP_CONTEXT) ?? singletons;
+
+/**
+ * The machine scope of what is around a component: a chat, and the new-chat
+ * dialog's composer, are shown inside their machine's scope.
+ */
+export const SCOPE_CONTEXT = Symbol('threadgarden.scope');
+
+/**
+ * The per-machine stores (`chats`, `buckets`, `scheduled`, `interaction`,
+ * `places`, …) of the machine the component is shown for; This PC's outside
+ * any machine scope. Must be called during component initialisation.
+ */
+export const useScope = (): MachineScope =>
+  getContext<MachineScope | undefined>(SCOPE_CONTEXT) ?? useApp().scopes.local();

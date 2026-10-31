@@ -1,5 +1,5 @@
 /**
- * Finds the user's installed `claude` (§6.4): the path from pahub settings,
+ * Finds the user's installed `claude` (§6.4): the path from Threadgarden settings,
  * then `PATH`, then the standard install locations. There is deliberately no
  * fallback to the SDK's bundled binary. Every candidate must answer
  * `claude --version` to count as found.
@@ -16,7 +16,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 export type FindClaudeOptions = {
-  /** `claudePath` from pahub settings, or null when unset. */
+  /** `claudePath` from Threadgarden settings, or null when unset. */
   settingPath: string | null;
   env: NodeJS.ProcessEnv;
   platform: NodeJS.Platform;
@@ -95,7 +95,7 @@ export const launcherTarget = (launcher: string, text: string): string | undefin
 const launcherProblem = (launcher: string, why: string): string =>
   `${launcher} is a .cmd launcher, which the Claude Agent SDK cannot start (it runs the ` +
   `executable directly, without a shell), and ${why}. Install the native Claude Code build ` +
-  `(claude.exe), or set pahub's Claude path to claude.exe or to Claude Code's cli.js.`;
+  `(claude.exe), or set Threadgarden's Claude path to claude.exe or to Claude Code's cli.js.`;
 
 /** The path to hand the SDK for `candidate`, or why it cannot be launched. */
 const launchTarget = (candidate: string, o: FindClaudeOptions): string | { problem: string } => {

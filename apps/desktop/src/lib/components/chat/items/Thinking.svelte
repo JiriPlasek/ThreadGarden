@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { ChatItem } from '@pahub/protocol';
+  import type { ChatItem } from '@threadgarden/protocol';
   import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
 
   /** A thinking block, collapsed by default (spec §6.4). */
@@ -19,7 +19,7 @@
     onclick={() => (open = !open)}
   >
     <ChevronRightIcon
-      class="size-3.5 shrink-0 transition-transform {open ? 'rotate-90' : ''}"
+      class="size-4 shrink-0 transition-transform {open ? 'rotate-90' : ''}"
       aria-hidden="true"
     />
     <span class="font-medium">Thinking</span>

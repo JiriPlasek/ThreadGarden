@@ -7,8 +7,10 @@ import type {
   ChatStatus,
   ChatStatusEvent,
   ChatSummary,
+  ChatTask,
+  ChatTasksEvent,
   Result,
-} from '@pahub/protocol';
+} from '@threadgarden/protocol';
 import { SvelteMap } from 'svelte/reactivity';
 import { RequestError } from '../service/client';
 import { quietly, type Api } from './api';
@@ -16,7 +18,7 @@ import { quietly, type Api } from './api';
 export const OPEN_TAIL = 200;
 export const OLDER_PAGE = 200;
 
-type ChatEvent = ChatItemsEvent | ChatStatusEvent;
+type ChatEvent = ChatItemsEvent | ChatStatusEvent | ChatTasksEvent;
 export type ModelInfo = Result<'chat.models'>[number];
 export type ResumeCheck = Result<'chat.resumeCheck'>;
 export type RespondParams = Omit<Params<'chat.respond'>, 'sessionId'>;
@@ -40,6 +42,24 @@ export type ListMemory = {
   anchor: { key: string; delta: number } | null;
 };
 type Schedule = (cb: () => void) => void;
+export type ChatsOptions = { schedule?: Schedule };
+
+/** A task that has finished: it keeps its final status and stops counting time. */
+export const taskEnded = (t: ChatTask): boolean =>
+  t.endedAt !== undefined ||
+  t.status === 'completed' ||
+  t.status === 'failed' ||
+  t.status === 'stopped';
+
+/** A task that is doing work now (the "N running" badge): running, pending, or an unknown status that has not ended. */
+export const taskRunning = (t: ChatTask): boolean =>
+  t.status === 'running' ||
+  t.status === 'pending' ||
+  (t.status === 'unknown' && t.endedAt === undefined);
+
+/** How many of `tasks` are running. */
+export const runningTasks = (tasks: readonly ChatTask[]): number =>
+  tasks.reduce((n, t) => (taskRunning(t) ? n + 1 : n), 0);
 
 /** Upserts `incoming` into `items` by id: known ids are replaced in place, new ids are appended. */
 export const upsertItems = (items: ChatItem[], incoming: ChatItem[]): ChatItem[] => {
@@ -74,8 +94,18 @@ export class ChatState {
   error = $state<string | null>(null);
   /** `chat.models` for this chat; null until loaded. */
   models = $state.raw<ModelInfo[] | null>(null);
+  /**
+   * The chat's SDK tasks (subagents, background shells, monitors) as the
+   * service last sent them (`chat.open`, then every `chat.tasks` event replaces
+   * the list). Empty for chats Threadgarden does not run.
+   */
+  tasks = $state.raw<ChatTask[]>([]);
+  /** Running tasks, for the "N running" badges. */
+  running = $derived(runningTasks(this.tasks));
   /** Message list geometry, kept while the chat is resident. */
   view: ListMemory = { heights: new Map(), stick: true, anchor: null };
+  /** Bumped by `stickToBottom`: a shown message list jumps to the bottom (v1.1 §5). */
+  stickRequests = $state(0);
 
   /** True while a Claude process runs this chat (header pickers apply live). */
   get live(): boolean {
@@ -83,7 +113,7 @@ export class ChatState {
   }
 
   /**
-   * True while pahub's own process runs this chat: messages go straight to it.
+   * True while Threadgarden's own process runs this chat: messages go straight to it.
    * Otherwise (history, paused, failed, external) sending resumes the session
    * and needs the resume-safety check first (spec §4.4).
    */
@@ -109,6 +139,20 @@ export class ChatState {
   constructor(readonly sessionId: string) {}
 }
 
+/**
+ * Summary fields that differ only in what the open chat and its tab do not
+ * show (last activity, preview): a re-indexed chat is not re-rendered for them.
+ */
+const NOT_SHOWN = new Set(['lastActivity', 'preview']);
+const sameShown = (a: ChatSummary, b: ChatSummary): boolean => {
+  const x = a as Record<string, unknown>;
+  const y = b as Record<string, unknown>;
+  for (const k of new Set([...Object.keys(x), ...Object.keys(y)])) {
+    if (!NOT_SHOWN.has(k) && JSON.stringify(x[k]) !== JSON.stringify(y[k])) return false;
+  }
+  return true;
+};
+
 const defaultSchedule: Schedule = (cb) => {
   if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => cb());
   else setTimeout(cb, 16);
@@ -123,17 +167,68 @@ export class ChatsState {
    */
   private readonly peeks = new SvelteMap<string, ChatSummary>();
   private readonly peeking = new Set<string>();
+  /** Chats whose `chat.open` is in flight. */
+  private readonly opening = new Set<string>();
+  /**
+   * Chats whose open failed because the client was not connected: opened again
+   * by the next `sync` (a scope syncs on every open of its client). A relay
+   * client's first open is no reconnect, so `resync` would not catch them.
+   */
+  private readonly offline = new Set<string>();
 
   private api: Api | null = null;
   private schedule: Schedule = defaultSchedule;
   private flushScheduled = false;
 
-  init = (api: Api, opts: { schedule?: Schedule } = {}): void => {
+  init = (api: Api, opts: ChatsOptions = {}): void => {
     this.api = api;
     if (opts.schedule) this.schedule = opts.schedule;
     api.on('chat.items', (e) => this.onItems(e));
     api.on('chat.status', (e) => this.onStatus(e));
+    api.on('chat.tasks', (e) => this.onTasks(e));
+    // v1.2: the bucket (and hold) of an open chat shows in its header.
+    api.on('sessions.changed', (e) => this.refreshSummaries(e.sessionIds));
     api.onReconnect(() => this.resync());
+  };
+
+  private readonly staleSummaries = new Set<string>();
+  private refreshing = false;
+
+  /**
+   * Re-reads the summaries of the open chats among `sessionIds` (title,
+   * bucket, hold, unread). Overlapping calls coalesce into one trailing read.
+   */
+  private refreshSummaries = (sessionIds: readonly string[]): void => {
+    for (const id of sessionIds) {
+      if (this.byId.get(id)?.summary || this.peeks.has(id)) this.staleSummaries.add(id);
+    }
+    if (this.refreshing || this.staleSummaries.size === 0) return;
+    const api = this.api;
+    if (!api) return;
+    this.refreshing = true;
+    void (async () => {
+      try {
+        while (this.staleSummaries.size > 0) {
+          const ids = [...this.staleSummaries];
+          this.staleSummaries.clear();
+          const { items } = await api.request('sessions.summaries', { sessionIds: ids });
+          for (const s of items) {
+            const chat = this.byId.get(s.sessionId);
+            if (chat?.summary) {
+              if (!sameShown(chat.summary, s)) chat.summary = s;
+            } else {
+              const peek = this.peeks.get(s.sessionId);
+              if (peek && !sameShown(peek, s)) this.peeks.set(s.sessionId, s);
+            }
+          }
+        }
+      } catch {
+        // The next change (or reopening the chat) reads them again.
+        this.staleSummaries.clear();
+      } finally {
+        this.refreshing = false;
+      }
+    })();
   };
 
   get = (sessionId: string): ChatState | undefined => this.byId.get(sessionId);
@@ -148,7 +243,12 @@ export class ChatsState {
     const wanted = new Set(sessionIds);
     for (const id of [...this.byId.keys()]) if (!wanted.has(id)) this.drop(id);
     for (const id of [...this.peeks.keys()]) if (!wanted.has(id)) this.peeks.delete(id);
-    if (active !== null && wanted.has(active) && !this.byId.has(active)) {
+    for (const id of [...this.offline]) if (!wanted.has(id)) this.offline.delete(id);
+    if (
+      active !== null &&
+      wanted.has(active) &&
+      (!this.byId.has(active) || (this.offline.has(active) && !this.opening.has(active)))
+    ) {
       quietly(this.open(active));
     }
     const unseen = [...wanted].filter(
@@ -163,6 +263,8 @@ export class ChatsState {
   drop = (sessionId: string): void => {
     this.byId.delete(sessionId);
     this.peeks.delete(sessionId);
+    this.offline.delete(sessionId);
+    this.opening.delete(sessionId);
   };
 
   private peek = async (sessionIds: string[]): Promise<void> => {
@@ -192,6 +294,8 @@ export class ChatsState {
       this.byId.set(sessionId, chat);
     }
     chat.error = null;
+    this.offline.delete(sessionId);
+    this.opening.add(sessionId);
     try {
       const r = await api.request('chat.open', { sessionId, tail: OPEN_TAIL });
       if (this.byId.get(sessionId) !== chat) return; // dropped meanwhile
@@ -201,6 +305,8 @@ export class ChatsState {
       chat.status = r.summary.status;
       chat.waitingFor = r.summary.waitingFor;
       chat.hasMore = r.hasMore;
+      // An older service has no task tracking: no tasks.
+      chat.tasks = Array.isArray(r.tasks) ? r.tasks : [];
       chat.seq = r.seq;
       chat.loaded = true;
       // Queued items at or below the snapshot are already part of it; applying a stale
@@ -212,7 +318,10 @@ export class ChatsState {
     } catch (err) {
       if (this.byId.get(sessionId) === chat) {
         chat.error = err instanceof Error ? err.message : String(err);
+        if (err instanceof RequestError && err.code === 'DISCONNECTED') this.offline.add(sessionId);
       }
+    } finally {
+      if (this.byId.get(sessionId) === chat) this.opening.delete(sessionId);
     }
   };
 
@@ -245,6 +354,12 @@ export class ChatsState {
     if (this.byId.get(sessionId) === chat) chat.models = models;
   };
 
+  /** Stops one background task (Activity panel); its `stopped` status arrives as `chat.tasks`. */
+  stopTask = async (sessionId: string, taskId: string): Promise<void> => {
+    if (!this.api) throw new Error('Not connected to the Threadgarden service');
+    await this.api.request('chat.stopTask', { sessionId, taskId });
+  };
+
   /** Changes a header setting of a live chat; the header shows the new value once applied. */
   private setHeader = async (
     method: 'chat.setModel' | 'chat.setEffort' | 'chat.setPermissionMode',
@@ -252,7 +367,7 @@ export class ChatsState {
     sessionId: string,
     value: string,
   ): Promise<void> => {
-    if (!this.api) throw new Error('Not connected to the pahub service');
+    if (!this.api) throw new Error('Not connected to the Threadgarden service');
     await this.api.request(method, { sessionId, value });
     const chat = this.byId.get(sessionId);
     if (chat) chat.header = { ...chat.header, [field]: value };
@@ -267,9 +382,23 @@ export class ChatsState {
   setPermissionMode = (sessionId: string, value: string): Promise<void> =>
     this.setHeader('chat.setPermissionMode', 'permissionMode', sessionId, value);
 
+  /**
+   * Scrolls the chat's messages to the bottom and follows new output again, even
+   * if the user had scrolled up (v1.1 §5: sending, or answering a request that
+   * resumes work). Scrolling up afterwards pauses following as usual.
+   */
+  stickToBottom = (sessionId: string): void => {
+    const chat = this.byId.get(sessionId);
+    if (!chat) return;
+    chat.view.stick = true;
+    chat.view.anchor = null;
+    chat.stickRequests += 1;
+  };
+
   /** Sends a message; resolves to whether the service queued it behind the running turn. */
   send = async (sessionId: string, text: string, images?: ImageRef[]): Promise<boolean> => {
-    if (!this.api) throw new Error('Not connected to the pahub service');
+    if (!this.api) throw new Error('Not connected to the Threadgarden service');
+    this.stickToBottom(sessionId);
     const r = await this.api.request('chat.send', {
       sessionId,
       text,
@@ -282,18 +411,21 @@ export class ChatsState {
 
   /** Starts a chat in `cwd` with its first message; resolves to the new chat's id. */
   create = async (p: Params<'chat.create'>): Promise<string> => {
-    if (!this.api) throw new Error('Not connected to the pahub service');
+    if (!this.api) throw new Error('Not connected to the Threadgarden service');
     if (p.permissionMode === 'bypassPermissions') {
-      throw new Error('pahub does not offer the bypassPermissions mode'); // Ruling R11
+      throw new Error('Threadgarden does not offer the bypassPermissions mode'); // Ruling R11
     }
     const params = { ...p };
     if (!params.images?.length) delete params.images;
-    return (await this.api.request('chat.create', params)).sessionId;
+    const { sessionId } = await this.api.request('chat.create', params);
+    // A new chat's list starts at the bottom anyway; this covers one already resident.
+    this.stickToBottom(sessionId);
+    return sessionId;
   };
 
   /** Stops the current turn (Stop button / Esc). */
   interrupt = async (sessionId: string): Promise<void> => {
-    if (!this.api) throw new Error('Not connected to the pahub service');
+    if (!this.api) throw new Error('Not connected to the Threadgarden service');
     await this.api.request('chat.interrupt', { sessionId });
   };
 
@@ -303,7 +435,8 @@ export class ChatsState {
     p: RespondParams,
     answers?: Record<string, string>,
   ): Promise<void> => {
-    if (!this.api) throw new Error('Not connected to the pahub service');
+    if (!this.api) throw new Error('Not connected to the Threadgarden service');
+    this.stickToBottom(sessionId);
     await this.api.request('chat.respond', { sessionId, ...p });
     this.byId
       .get(sessionId)
@@ -312,26 +445,32 @@ export class ChatsState {
 
   /** Whether this chat may be resumed here (spec §4.4). */
   resumeCheck = async (sessionId: string): Promise<ResumeCheck> => {
-    if (!this.api) throw new Error('Not connected to the pahub service');
+    if (!this.api) throw new Error('Not connected to the Threadgarden service');
     return this.api.request('chat.resumeCheck', { sessionId });
   };
 
   /** Ends the chat's Claude process (the chat stays open as history). */
   end = async (sessionId: string): Promise<void> => {
-    if (!this.api) throw new Error('Not connected to the pahub service');
+    if (!this.api) throw new Error('Not connected to the Threadgarden service');
     await this.api.request('chat.end', { sessionId });
+  };
+
+  /** Stops a background session that Claude Code's own background service runs (`claude stop <id>`). */
+  stopExternal = async (sessionId: string): Promise<void> => {
+    if (!this.api) throw new Error('Not connected to the Threadgarden service');
+    await this.api.request('external.stop', { sessionId });
   };
 
   /** Forks the chat up to (and including) a user message; resolves to the new chat's id. */
   fork = async (sessionId: string, upToItemId: string): Promise<string> => {
-    if (!this.api) throw new Error('Not connected to the pahub service');
+    if (!this.api) throw new Error('Not connected to the Threadgarden service');
     const r = await this.api.request('chat.fork', { sessionId, upToItemId });
     return r.sessionId;
   };
 
   /** The terminal command that continues this chat (`claude --resume <id>` or `claude attach`). */
   resumeCommand = async (sessionId: string): Promise<string> => {
-    if (!this.api) throw new Error('Not connected to the pahub service');
+    if (!this.api) throw new Error('Not connected to the Threadgarden service');
     return (await this.api.request('chat.resumeCommand', { sessionId })).command;
   };
 
@@ -341,7 +480,10 @@ export class ChatsState {
     if (!api) return;
     await Promise.all(
       [...this.byId.values()].map(async (chat) => {
-        if (!chat.loaded) return this.open(chat.sessionId);
+        // An open already under way (e.g. started by a sync on this open) brings it in.
+        if (!chat.loaded) {
+          return this.opening.has(chat.sessionId) ? undefined : this.open(chat.sessionId);
+        }
         chat.resyncing = true;
         try {
           const r = await api.request('chat.since', { sessionId: chat.sessionId, seq: chat.seq });
@@ -377,6 +519,11 @@ export class ChatsState {
     if (chat) this.dispatch(chat, e);
   };
 
+  private onTasks = (e: ChatTasksEvent): void => {
+    const chat = this.byId.get(e.sessionId);
+    if (chat) this.dispatch(chat, e);
+  };
+
   private onStatus = (e: ChatStatusEvent): void => {
     const chat = this.byId.get(e.sessionId);
     if (chat) {
@@ -407,6 +554,8 @@ export class ChatsState {
     if ('items' in e) {
       chat.queued.push(e);
       this.scheduleFlush();
+    } else if ('tasks' in e) {
+      chat.tasks = e.tasks;
     } else {
       chat.status = e.status;
       chat.waitingFor = e.waitingFor;

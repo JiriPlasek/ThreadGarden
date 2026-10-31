@@ -1,4 +1,4 @@
-import { settingsDefaults, type Settings } from '@pahub/protocol';
+import { settingsDefaults, type Settings } from '@threadgarden/protocol';
 import { render, screen, waitFor, within } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -116,6 +116,40 @@ describe('settings dialog', () => {
     expect(env.app.settings.value.theme).toBe('dark');
     // A new Claude Code path is looked up again by the service.
     await waitFor(() => expect(env.server.calls('system.status').length).toBeGreaterThan(1));
+  });
+
+  it('"Notify when a chat finishes" is on by default and can be turned off', async () => {
+    const env = await withSettings();
+    const dialog = await openDialog(env);
+    const toggle = within(dialog).getByLabelText(
+      /notify when a chat finishes/i,
+    ) as HTMLInputElement;
+    expect(toggle.checked).toBe(true);
+    await userEvent.click(toggle);
+    await userEvent.click(within(dialog).getByRole('button', { name: /^save$/i }));
+    await waitFor(() => expect(env.server.calls('settings.set')).toHaveLength(1));
+    expect(env.server.calls('settings.set')[0]!.params).toEqual({ notifyOnFinish: false });
+    expect(env.app.settings.value.notifyOnFinish).toBe(false);
+  });
+
+  it('v1.2: "Name new chats automatically" is on by default and can be turned off', async () => {
+    const env = await withSettings();
+    const dialog = await openDialog(env);
+    const toggle = within(dialog).getByLabelText(
+      /name new chats automatically \(uses a small model\)/i,
+    ) as HTMLInputElement;
+    expect(toggle.checked).toBe(true);
+    // Ruling R33: the toggle says when titles are skipped.
+    const hint = within(dialog).getByText(
+      'Skipped when your Claude settings route requests elsewhere (env, apiKeyHelper, cloud credentials).',
+    );
+    expect(toggle.getAttribute('aria-describedby')).toBe(hint.id);
+    expect(hint.id).not.toBe('');
+    await userEvent.click(toggle);
+    await userEvent.click(within(dialog).getByRole('button', { name: /^save$/i }));
+    await waitFor(() => expect(env.server.calls('settings.set')).toHaveLength(1));
+    expect(env.server.calls('settings.set')[0]!.params).toEqual({ autoTitles: false });
+    expect(env.app.settings.value.autoTitles).toBe(false);
   });
 
   it('shows system info: Claude Code, external sessions and indexing', async () => {

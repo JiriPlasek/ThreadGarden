@@ -131,7 +131,7 @@
           <legend class="flex items-baseline gap-2">
             {#if q.header}
               <span
-                class="rounded bg-amber-500/15 px-1.5 text-[11px] font-medium text-amber-900 dark:text-amber-200"
+                class="rounded bg-amber-500/15 px-1.5 text-[0.6875rem] font-medium text-amber-900 dark:text-amber-200"
                 >{q.header}</span
               >
             {/if}

@@ -1,12 +1,20 @@
 <script lang="ts">
-  import type { ImageRef } from '@pahub/protocol';
+  import type { ImageRef } from '@threadgarden/protocol';
   import ArrowUpIcon from '@lucide/svelte/icons/arrow-up';
+  import CalendarClockIcon from '@lucide/svelte/icons/calendar-clock';
+  import ChevronUpIcon from '@lucide/svelte/icons/chevron-up';
+  import ClockIcon from '@lucide/svelte/icons/clock';
   import ImagePlusIcon from '@lucide/svelte/icons/image-plus';
   import SquareIcon from '@lucide/svelte/icons/square';
   import { onDestroy, onMount, tick, untrack } from 'svelte';
+  import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
+  import { clockTime } from '#lib/format/usage.js';
   import { readDroppedImage } from '#lib/native.js';
-  import { useApp } from '#lib/state/context.js';
+  import { ariaKeyShortcuts, formatCombos, shortcut } from '#lib/shortcuts.js';
+  import { useApp, useScope } from '#lib/state/context.js';
+  import { machineNameOf } from '#lib/state/machines.svelte.js';
   import type { FileSuggestion, SlashCommand } from '#lib/state/interaction.svelte.js';
+  import type { SendWhen } from '#lib/state/scheduled.svelte.js';
   import Attachments from './Attachments.svelte';
   import { caretLineTop } from './caret';
   import {
@@ -31,6 +39,7 @@
     type Token,
   } from './input';
   import MentionPicker from './MentionPicker.svelte';
+  import ScheduleDialog from './ScheduleDialog.svelte';
   import SlashMenu from './SlashMenu.svelte';
 
   /**
@@ -53,6 +62,12 @@
    * R24) become `@` mentions, images among them are attached; a pasted
    * absolute path inside `cwd` becomes a mention. File drops are always
    * cancelled so the webview never navigates to a dropped file.
+   *
+   * v1.3 B: with `onSchedule`, the send button has a menu with "Schedule
+   * send…"; while a usage limit refuses this chat (`limited`), "Send when the
+   * limit resets" sits next to Send. `editing` turns the box into the editor
+   * of a scheduled message (Save instead of Send); `load` puts a message back
+   * into it.
    */
   let {
     draftKey,
@@ -66,6 +81,10 @@
     onSubmit,
     onInterrupt,
     onControl,
+    onSchedule,
+    resetAt,
+    limited = false,
+    editing,
     textarea = $bindable(null),
   }: {
     draftKey: string;
@@ -83,12 +102,34 @@
     /** Sends; resolves true when the message went out (the box clears) or false to keep it. */
     onSubmit: (text: string, images: ImageRef[]) => Promise<boolean>;
     onInterrupt?: () => void;
-    /** Opens a pahub control for `/model`, `/effort`, `/permissions`; returns a notice when it cannot. */
+    /** Opens a Threadgarden control for `/model`, `/effort`, `/permissions`; returns a notice when it cannot. */
     onControl?: (control: Control) => string | null;
+    /** v1.3 B: schedules the message instead; resolves true when it was scheduled (the box clears). */
+    onSchedule?: (text: string, images: ImageRef[], when: SendWhen) => Promise<boolean>;
+    /** When the usage limit resets, if one refuses now and its reset is known. */
+    resetAt?: number | undefined;
+    /** A usage limit refused this chat's last turn: offer "Send when the limit resets". */
+    limited?: boolean;
+    /** Editing a scheduled message: what it is, how to save it and how to stop. */
+    editing?: {
+      label: string;
+      onSave: (text: string, images: ImageRef[]) => Promise<boolean>;
+      onStop: () => void;
+    };
     textarea?: HTMLTextAreaElement | null;
   } = $props();
 
-  const { settings, interaction } = useApp();
+  const { settings, scopes, machines } = useApp();
+  /** The machine the message goes to: its drafts, `@` files and slash commands. */
+  const scope = useScope();
+  const { interaction } = scope;
+  /**
+   * Another machine's chat: files dropped from This PC are not there, so they
+   * are not mentioned (images still go, as bytes).
+   */
+  const elsewhere = scope !== scopes.local();
+  const filesElsewhere = (): string =>
+    `Files from This PC can't be attached to chats on ${machineNameOf(machines, scope.machineId)}.`;
   const uid = $props.id();
   const listId = `${uid}-list`;
 
@@ -260,7 +301,35 @@
     updatePicker();
   };
 
-  const submit = async (): Promise<void> => {
+  /** What the box holds now (kept while a scheduled message is edited in it). */
+  export const current = (): { text: string; images: ImageRef[] } => ({ text, images });
+
+  /** Puts a message back into the box (Edit of a scheduled message), replacing what is there. */
+  export const load = async (value: string, imgs: ImageRef[]): Promise<void> => {
+    text = value;
+    images = imgs;
+    imageError = null;
+    notice = null;
+    interaction.saveDraft(draftKey, text);
+    await tick();
+    resize();
+    textarea?.focus();
+    textarea?.setSelectionRange(text.length, text.length);
+  };
+
+  let scheduleOpen = $state(false);
+
+  /** Schedules what is in the box (`when`, or the limit's reset). */
+  const schedule = (when: SendWhen): Promise<void> =>
+    submit(async (value, imgs) => {
+      if (!onSchedule) return false;
+      return onSchedule(value, imgs, when);
+    }, true);
+
+  const submit = async (
+    send: (text: string, images: ImageRef[]) => Promise<boolean> = editing?.onSave ?? onSubmit,
+    rethrow = false,
+  ): Promise<void> => {
     const value = text.trim();
     if ((!value && images.length === 0) || sending) return;
     sending = true;
@@ -282,7 +351,14 @@
       }
       const sentText = text;
       const sentImages = images;
-      const sent = await onSubmit(value, sentImages);
+      let sent: boolean;
+      try {
+        sent = await send(value, sentImages);
+      } catch (err) {
+        if (rethrow) throw err;
+        notice = err instanceof Error ? err.message : String(err);
+        return;
+      }
       if (sent) {
         // Text typed while the message was on its way stays in the box.
         if (text === sentText) {
@@ -363,7 +439,10 @@
     }
     const pasted = e.clipboardData?.getData?.('text/plain') ?? '';
     const mention = pastedPathMention(pasted, cwd);
-    if (mention) {
+    if (mention && elsewhere) {
+      // A path of This PC's: pasted as plain text, never mentioned on another machine.
+      notice = filesElsewhere();
+    } else if (mention) {
       e.preventDefault();
       void insertText(mention);
     }
@@ -392,10 +471,17 @@
     'unsupported-type': 'is not a PNG, JPEG, GIF or WebP image',
   };
 
-  /** Native drop (desktop app): images attached through the shell, other files mentioned. */
+  /**
+   * Native drop (desktop app): images attached through the shell, other files
+   * mentioned (in This PC's chats; another machine's cannot reach them).
+   */
   const dropPaths = async (paths: string[]): Promise<void> => {
     const others = paths.filter((p) => !imageTypeOfPath(p));
-    if (others.length > 0) await insertText(others.map((p) => mentionForPath(p, cwd)).join(''));
+    if (others.length > 0 && elsewhere) {
+      notice = filesElsewhere();
+    } else if (others.length > 0) {
+      await insertText(others.map((p) => mentionForPath(p, cwd)).join(''));
+    }
     const problems: string[] = [];
     const read: ImageRef[] = [];
     for (const p of paths.filter((x) => imageTypeOfPath(x))) {
@@ -448,10 +534,19 @@
     interaction.flushDraft(draftKey);
   });
 
+  const stopKeys = shortcut('composer-stop').combos;
+  const sendKeys = $derived(
+    shortcut(settings.value.enterToSend ? 'composer-send' : 'composer-send-mod').combos,
+  );
+
   const hint = $derived(
-    working && text.trim()
+    working && text.trim() && !editing
       ? 'Claude is working: this message will be queued and sent when the current turn ends.'
       : null,
+  );
+  const empty = $derived(!text.trim() && images.length === 0);
+  const sendLabel = $derived(
+    editing ? 'Save scheduled message' : working ? 'Queue message' : 'Send',
   );
 </script>
 
@@ -466,6 +561,20 @@
   ondragleave={() => (dragging = false)}
   {ondrop}
 >
+  {#if editing}
+    <div
+      class="flex items-center gap-2 border-b bg-sky-500/10 px-3 py-1 text-xs text-sky-900 dark:text-sky-200"
+      role="status"
+    >
+      <CalendarClockIcon class="size-3.5 shrink-0" aria-hidden="true" />
+      <span class="min-w-0 flex-1 truncate">{editing.label}</span>
+      <button
+        type="button"
+        class="font-medium underline-offset-2 hover:underline"
+        onclick={() => editing?.onStop()}>Stop editing</button
+      >
+    </div>
+  {/if}
   <Attachments {images} onRemove={(i) => (images = images.filter((_, j) => j !== i))} />
 
   <div class="relative">
@@ -545,7 +654,7 @@
       aria-hidden="true"
       onchange={onPickFiles}
     />
-    <div class="text-muted-foreground min-w-0 flex-1 truncate px-1 text-[11px]" role="status">
+    <div class="text-muted-foreground min-w-0 flex-1 truncate px-1 text-[0.6875rem]" role="status">
       {#if queued > 0}
         <span class="rounded bg-amber-500/15 px-1.5 py-px text-amber-900 dark:text-amber-200"
           >{queued} message{queued === 1 ? '' : 's'} queued</span
@@ -558,21 +667,71 @@
       <button
         type="button"
         class="hover:bg-muted flex h-7 items-center gap-1 rounded-md border px-2 text-xs"
-        title="Stop (Esc)"
+        title="Stop Claude · {formatCombos(stopKeys).join(' or ')}"
+        aria-keyshortcuts={ariaKeyShortcuts(stopKeys)}
         onclick={onInterrupt}
       >
-        <SquareIcon class="size-3 fill-current" aria-hidden="true" /> Stop
+        <SquareIcon class="size-3.5 fill-current" aria-hidden="true" /> Stop
       </button>
     {/if}
-    <button
-      type="button"
-      class="bg-primary text-primary-foreground flex size-7 items-center justify-center rounded-md disabled:opacity-40"
-      aria-label={working ? 'Queue message' : 'Send'}
-      title={settings.value.enterToSend ? 'Send (Enter)' : 'Send (Ctrl+Enter)'}
-      disabled={sending || (!text.trim() && images.length === 0)}
-      onclick={() => void submit()}
-    >
-      <ArrowUpIcon class="size-4" aria-hidden="true" />
-    </button>
+    {#if limited && onSchedule && resetAt !== undefined && !editing}
+      <button
+        type="button"
+        class="hover:bg-muted flex h-7 items-center gap-1 rounded-md border px-2 text-xs disabled:opacity-40"
+        title="Send this message once the usage limit resets ({clockTime(resetAt)})"
+        disabled={sending || empty}
+        onclick={() =>
+          void submit(
+            async (v, imgs) => (await onSchedule?.(v, imgs, { whenLimitResets: true })) ?? false,
+          )}
+      >
+        <ClockIcon class="size-3.5" aria-hidden="true" /> Send when the limit resets
+      </button>
+    {/if}
+    <div class="flex items-center">
+      <button
+        type="button"
+        class="bg-primary text-primary-foreground flex size-7 items-center justify-center disabled:opacity-40 {onSchedule &&
+        !editing
+          ? 'rounded-l-md'
+          : 'rounded-md'}"
+        aria-label={sendLabel}
+        title="{sendLabel} · {formatCombos(sendKeys).join(' or ')}"
+        aria-keyshortcuts={ariaKeyShortcuts(sendKeys)}
+        disabled={sending || empty}
+        onclick={() => void submit()}
+      >
+        <ArrowUpIcon class="size-4" aria-hidden="true" />
+      </button>
+      {#if onSchedule && !editing}
+        <DropdownMenu.Root>
+          <DropdownMenu.Trigger>
+            {#snippet child({ props })}
+              <button
+                {...props}
+                type="button"
+                class="bg-primary text-primary-foreground border-primary-foreground/20 flex h-7 w-4 items-center justify-center rounded-r-md border-l"
+                aria-label="More send options"
+              >
+                <ChevronUpIcon class="size-3" aria-hidden="true" />
+              </button>
+            {/snippet}
+          </DropdownMenu.Trigger>
+          <DropdownMenu.Content align="end" side="top" class="min-w-44">
+            <DropdownMenu.Item
+              class="py-1 text-xs"
+              disabled={empty}
+              onSelect={() => (scheduleOpen = true)}
+            >
+              <CalendarClockIcon /> Schedule send…
+            </DropdownMenu.Item>
+          </DropdownMenu.Content>
+        </DropdownMenu.Root>
+      {/if}
+    </div>
   </div>
 </div>
+
+{#if onSchedule}
+  <ScheduleDialog bind:open={scheduleOpen} {resetAt} onPick={schedule} />
+{/if}

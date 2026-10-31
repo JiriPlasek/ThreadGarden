@@ -16,7 +16,7 @@ export type ChatActions = {
   requests?: RequestActions;
 };
 
-const KEY = Symbol('pahub.chat-actions');
+const KEY = Symbol('threadgarden.chat-actions');
 
 export const setChatActions = (actions: ChatActions): void => {
   setContext(KEY, actions);

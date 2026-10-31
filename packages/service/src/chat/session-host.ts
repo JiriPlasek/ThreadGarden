@@ -1,5 +1,5 @@
 /**
- * Owns every pahub chat that has (or recently had) a live process (§4.2, §4.3):
+ * Owns every Threadgarden chat that has (or recently had) a live process (§4.2, §4.3):
  * creation, resume on demand, End session, Stop all work, idle reclaim and
  * recovery of sessions that were live when the service last stopped.
  *
@@ -14,7 +14,7 @@
  * failing session never escape the reclaim timer or `stopAll`; they are
  * reported through `onError` and the remaining sessions carry on.
  */
-import type { ChatStatus, EventMsg, Settings } from '@pahub/protocol';
+import type { ChatStatus, EventMsg, Settings } from '@threadgarden/protocol';
 import type { AgentAdapter } from '../sdk/adapter.js';
 import { EventLog, type ChatEvent } from './event-log.js';
 import {
@@ -33,7 +33,7 @@ export type { LiveRegistry } from './live-session.js';
 
 export const RECLAIM_INTERVAL_MS = 60_000;
 export const INTERRUPTED_TEXT =
-  'Interrupted when the pahub service stopped — send a message to resume';
+  'Interrupted when the Threadgarden service stopped — send a message to resume';
 
 export type SessionHostDeps = {
   adapter: AgentAdapter;
@@ -56,6 +56,20 @@ export type SessionHostDeps = {
    * default 0. A seq from another run is then never valid here (§4.5).
    */
   seqBase?: number;
+  // ── v1.1 T2 ──
+  /** Handed to every session (see `LiveSessionDeps.onTurnEnded`). */
+  onTurnEnded?: LiveSessionDeps['onTurnEnded'];
+  /** Handed to every session (see `LiveSessionDeps.onActivity`). */
+  onActivity?: LiveSessionDeps['onActivity'];
+  /** Handed to every session (see `LiveSessionDeps.onRunningTasks`, Ruling R29). */
+  onRunningTasks?: LiveSessionDeps['onRunningTasks'];
+  // ── v1.3 B: usage limits ──
+  /** Handed to every session (see `LiveSessionDeps.onRateLimit`). */
+  onRateLimit?: LiveSessionDeps['onRateLimit'];
+  /** Handed to every session (see `LiveSessionDeps.onLimitError`). */
+  onLimitError?: LiveSessionDeps['onLimitError'];
+  /** Handed to every session (see `LiveSessionDeps.onTurnResult`). */
+  onTurnResult?: LiveSessionDeps['onTurnResult'];
 };
 
 export class SessionHost {
@@ -153,8 +167,9 @@ export class SessionHost {
 
   /**
    * Closes live chats idle for at least `idleReclaimMinutes` (never pinned,
-   * never waiting on the user); they become `paused`. Returns how many. A
-   * failure for one session is reported and the pass continues.
+   * never waiting on the user, never with running background tasks: closing
+   * the process would kill them, Ruling R29); they become `paused`. Returns
+   * how many. A failure for one session is reported and the pass continues.
    */
   reclaimIdle(now: number): number {
     const minutes = this.deps.getSettings().idleReclaimMinutes;
@@ -166,6 +181,7 @@ export class SessionHost {
         if (!s.live || s.status !== 'idle' || s.idleSince === null) continue;
         if (now - s.idleSince < limit) continue;
         if (s.pendingRequests().length > 0 || this.deps.isPinned(id)) continue;
+        if (s.runningTasks > 0) continue;
         s.pause();
         count++;
       } catch (err) {
@@ -212,15 +228,21 @@ export class SessionHost {
     status: ChatStatus;
     live: boolean;
     waitingFor?: string;
+    lastActivity?: number;
+    runningTasks?: number;
   }[] {
     return [...this.sessions.values()].map((s) => {
       const waitingFor = s.waitingFor();
+      const lastActivity = s.lastActivity;
+      const runningTasks = s.live ? s.runningTasks : 0;
       return {
         sessionId: s.sessionId,
         cwd: s.cwd,
         status: s.status,
         live: s.live,
         ...(waitingFor === undefined ? {} : { waitingFor }),
+        ...(lastActivity === null ? {} : { lastActivity }),
+        ...(runningTasks > 0 ? { runningTasks } : {}),
       };
     });
   }
@@ -243,6 +265,18 @@ export class SessionHost {
     return seq === this.seqOf(sessionId) ? [] : 'gap';
   }
 
+  /**
+   * v1.3 B: the usage reading of some live chat that offers one (the account
+   * is the same for all); undefined when none runs. Never starts a process.
+   */
+  usageReader(): (() => Promise<unknown>) | undefined {
+    for (const s of this.sessions.values()) {
+      const read = s.live ? s.readUsage() : undefined;
+      if (read) return read;
+    }
+    return undefined;
+  }
+
   liveCount(): number {
     let n = 0;
     for (const s of this.sessions.values()) if (s.live) n++;
@@ -263,7 +297,20 @@ export class SessionHost {
   }
 
   private options(extra: Partial<LiveSessionOptions>): LiveSessionOptions {
-    const { adapter, registry, emit, now, describe, onError } = this.deps;
+    const {
+      adapter,
+      registry,
+      emit,
+      now,
+      describe,
+      onError,
+      onTurnEnded,
+      onActivity,
+      onRunningTasks,
+      onRateLimit,
+      onLimitError,
+      onTurnResult,
+    } = this.deps;
     return {
       adapter,
       registry,
@@ -274,6 +321,12 @@ export class SessionHost {
       timers: this.timers,
       ...(describe ? { describe } : {}),
       ...(onError ? { onError } : {}),
+      ...(onTurnEnded ? { onTurnEnded } : {}),
+      ...(onActivity ? { onActivity } : {}),
+      ...(onRunningTasks ? { onRunningTasks } : {}),
+      ...(onRateLimit ? { onRateLimit } : {}),
+      ...(onLimitError ? { onLimitError } : {}),
+      ...(onTurnResult ? { onTurnResult } : {}),
       ...extra,
       log: extra.log ?? new EventLog(undefined, this.seqBase),
     };

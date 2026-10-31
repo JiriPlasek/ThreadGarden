@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { ChatItem } from '@pahub/protocol';
+  import type { ChatItem } from '@threadgarden/protocol';
   import CircleIcon from '@lucide/svelte/icons/circle';
   import CircleCheckIcon from '@lucide/svelte/icons/circle-check';
   import CircleDotIcon from '@lucide/svelte/icons/circle-dot';
@@ -19,19 +19,19 @@
       <li class="flex items-start gap-2">
         {#if todo.status === 'completed'}
           <CircleCheckIcon
-            class="mt-0.5 size-3.5 shrink-0 text-emerald-600 dark:text-emerald-400"
+            class="mt-0.5 size-4 shrink-0 text-emerald-600 dark:text-emerald-400"
             aria-label="Done"
           />
           <span class="text-muted-foreground line-through">{todo.content}</span>
         {:else if todo.status === 'in_progress'}
           <CircleDotIcon
-            class="mt-0.5 size-3.5 shrink-0 text-amber-600 dark:text-amber-400"
+            class="mt-0.5 size-4 shrink-0 text-amber-600 dark:text-amber-400"
             aria-label="In progress"
           />
           <span class="font-medium">{todo.content}</span>
         {:else}
           <CircleIcon
-            class="text-muted-foreground mt-0.5 size-3.5 shrink-0"
+            class="text-muted-foreground mt-0.5 size-4 shrink-0"
             aria-label={todo.status === 'pending' ? 'Pending' : todo.status}
           />
           <span

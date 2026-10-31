@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { ImageRef } from '@pahub/protocol';
+  import type { ImageRef } from '@threadgarden/protocol';
   import XIcon from '@lucide/svelte/icons/x';
 
   /** Thumbnails of the images about to be sent, each with a remove button. */
@@ -18,11 +18,11 @@
         />
         <button
           type="button"
-          class="bg-background absolute -top-1.5 -right-1.5 flex size-4 items-center justify-center rounded-full border shadow-xs"
+          class="bg-background absolute -top-1.5 -right-1.5 flex size-5 items-center justify-center rounded-full border shadow-xs"
           aria-label="Remove image {i + 1}"
           onclick={() => onRemove(i)}
         >
-          <XIcon class="size-3" aria-hidden="true" />
+          <XIcon class="size-3.5" aria-hidden="true" />
         </button>
       </li>
     {/each}

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { ChatItem } from '@pahub/protocol';
+  import type { ChatItem } from '@threadgarden/protocol';
   import AssistantText from './AssistantText.svelte';
   import ItemBoundary from './ItemBoundary.svelte';
   import PermissionCard from './PermissionCard.svelte';
@@ -49,7 +49,7 @@
     {:else if item.kind === 'system'}
       <SystemNotice {item} />
     {:else if item.kind === 'compactBoundary'}
-      <div class="text-muted-foreground flex items-center gap-2 text-[11px]" role="separator">
+      <div class="text-muted-foreground flex items-center gap-2 text-[0.6875rem]" role="separator">
         <span class="bg-border h-px flex-1" aria-hidden="true"></span>
         <span>Conversation compacted</span>
         <span class="bg-border h-px flex-1" aria-hidden="true"></span>

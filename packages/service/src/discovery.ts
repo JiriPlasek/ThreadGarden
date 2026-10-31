@@ -10,6 +10,9 @@ const DiscoverySchema = z.object({
   version: z.string(),
   protocolVersion: z.number(),
   startedAt: z.number(),
+  /** v1.4, headless only: where the remote listener for paired devices listens. */
+  remotePort: z.number().optional(),
+  remoteAddresses: z.array(z.string()).optional(),
 });
 export type Discovery = z.infer<typeof DiscoverySchema>;
 

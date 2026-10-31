@@ -5,9 +5,9 @@
   import { copyText, openExternal } from '#lib/native.js';
 
   /**
-   * Shown when pahub cannot run Claude Code (spec §6.4): it is not installed
-   * (or not where pahub looks), or a session refused to start because the
-   * installed version is too old. pahub never falls back to a bundled copy;
+   * Shown when Threadgarden cannot run Claude Code (spec §6.4): it is not installed
+   * (or not where Threadgarden looks), or a session refused to start because the
+   * installed version is too old. Threadgarden never falls back to a bundled copy;
    * this screen explains how to install or update it.
    */
   let {
@@ -66,13 +66,13 @@
   <div class="flex items-center gap-2">
     <TerminalIcon class="size-5 shrink-0 text-amber-600" aria-hidden="true" />
     <h2 class={compact ? 'font-semibold' : 'text-lg font-semibold'}>
-      {kind === 'update' ? 'Claude Code needs an update' : 'pahub works with Claude Code'}
+      {kind === 'update' ? 'Claude Code needs an update' : 'Threadgarden works with Claude Code'}
     </h2>
   </div>
   <p class="text-muted-foreground mt-2">
     {kind === 'update'
       ? 'This chat could not start because the installed Claude Code is older than the minimum version. Update it, then send your message again.'
-      : 'pahub runs your chats with the Claude Code you have installed, and could not find it. Install it, then check again.'}
+      : 'Threadgarden runs your chats with the Claude Code you have installed, and could not find it. Install it, then check again.'}
   </p>
   {#if problem}
     <p class="bg-muted mt-2 rounded px-2 py-1 font-mono text-xs break-words whitespace-pre-wrap">
@@ -92,8 +92,8 @@
             aria-label="Copy {s.command}"
             onclick={() => copy(s.command)}
           >
-            {#if copied === s.command}<CheckIcon class="size-3.5" />{:else}<CopyIcon
-                class="size-3.5"
+            {#if copied === s.command}<CheckIcon class="size-4" />{:else}<CopyIcon
+                class="size-4"
               />{/if}
           </button>
         </div>
@@ -102,7 +102,7 @@
   </ul>
 
   <p class="text-muted-foreground mt-3 text-xs">
-    Installed somewhere else? Set the Claude executable path in pahub's settings. More help:
+    Installed somewhere else? Set the Claude executable path in Threadgarden's settings. More help:
     <a
       href={DOCS}
       class="underline underline-offset-2"

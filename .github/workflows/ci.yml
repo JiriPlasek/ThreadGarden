@@ -13,7 +13,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       # Perf budgets are measured on the owner's machine; CI runners get 3x slack (Ruling R3).
-      PAHUB_PERF_SLACK: 3
+      THREADGARDEN_PERF_SLACK: 3
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -25,6 +25,22 @@ jobs:
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
+      # The headless package (tarball + systemd user unit); its install test runs in `pnpm test` on Linux.
+      - name: Build the headless Linux package
+        if: runner.os == 'Linux'
+        run: pnpm build:headless
+      - name: Check the headless package
+        if: runner.os == 'Linux'
+        run: |
+          test "$(tar -tvzf dist-headless/*.tar.gz | grep -cE '^-rwx.*(bin/node|bin/threadgarden|install.sh)$')" = 3
+          (cd dist-headless && sha256sum -c *.sha256)
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Linux'
+        with:
+          name: threadgarden-headless
+          retention-days: 7
+          if-no-files-found: error
+          path: dist-headless/*.tar.gz*
 
   rust:
     strategy:
@@ -76,7 +92,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     env:
-      PAHUB_PERF_SLACK: 3
+      THREADGARDEN_PERF_SLACK: 3
     steps:
       - uses: actions/checkout@v4
       - name: Install Tauri system dependencies
@@ -101,12 +117,12 @@ jobs:
           path: apps/desktop/src-tauri/binaries
           key: node-sidecar-${{ matrix.target }}-${{ hashFiles('scripts/fetch-node-sidecar.mjs') }}
       - run: node scripts/fetch-node-sidecar.mjs --target ${{ matrix.target }}
-      - run: pnpm --filter @pahub/service build
+      - run: pnpm --filter @threadgarden/service build
       - name: Build the release bundles (unsigned)
         run: pnpm --filter desktop tauri build --config src-tauri/tauri.bundle.conf.json
       - uses: actions/upload-artifact@v4
         with:
-          name: pahub-${{ matrix.target }}
+          name: threadgarden-${{ matrix.target }}
           retention-days: 7
           if-no-files-found: error
           path: |

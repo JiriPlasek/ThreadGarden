@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { afterAll, describe, expect, it } from 'vitest';
+import { protocolAlias } from '../../protocol-alias.mjs';
 import { slack } from './perf-helpers.js';
 
 const MB = 1024 * 1024;
@@ -21,7 +22,7 @@ afterAll(async () => {
 
 describe('service memory', () => {
   it('idle RSS ≤ 150 MB after indexing 1,000 sessions', async () => {
-    dir = await mkdtemp(join(tmpdir(), 'pahub-perf-bundle-'));
+    dir = await mkdtemp(join(tmpdir(), 'threadgarden-perf-bundle-'));
     const outfile = join(dir, 'idle-service.mjs');
     // The same esbuild options as scripts/build.mjs.
     await build({
@@ -31,6 +32,7 @@ describe('service memory', () => {
       platform: 'node',
       format: 'esm',
       target: 'node22',
+      alias: protocolAlias,
       banner: {
         js: "import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);",
       },

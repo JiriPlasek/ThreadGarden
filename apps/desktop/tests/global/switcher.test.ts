@@ -2,7 +2,7 @@ import { render, screen, waitFor, within } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
 import QuickSwitcher from '../../src/lib/components/QuickSwitcher.svelte';
-import { setup } from '../layout/harness';
+import { here, setup } from '../layout/harness';
 
 type Hit = { sessionId: string; title: string; projectName: string; snippet?: string };
 type QuickParams = { query: string; limit: number };
@@ -29,7 +29,7 @@ describe('quick switcher', () => {
     });
     app.tabs.openTab('a');
     app.tabs.openTab('b');
-    expect(app.tabs.active).toBe('b');
+    expect(app.tabs.active).toBe(here('b'));
     render(QuickSwitcher, { context });
     expect(screen.queryByRole('combobox')).toBeNull();
 
@@ -42,8 +42,8 @@ describe('quick switcher', () => {
     await waitFor(() => expect(option.getAttribute('aria-selected')).toBe('true'));
 
     await userEvent.keyboard('{Enter}');
-    expect(app.tabs.active).toBe('a');
-    expect(app.tabs.open).toEqual(['a', 'b']);
+    expect(app.tabs.active).toBe(here('a'));
+    expect(app.tabs.open).toEqual([here('a'), here('b')]);
     await waitFor(() => expect(screen.queryByRole('combobox')).toBeNull());
 
     // Ctrl+K toggles: open, then close again.
@@ -60,8 +60,8 @@ describe('quick switcher', () => {
     await userEvent.type(await openSwitcher(), 'z');
     await screen.findByRole('option', { name: /chat z/i });
     await userEvent.keyboard('{Enter}');
-    expect(app.tabs.open).toEqual(['z']);
-    expect(app.tabs.active).toBe('z');
+    expect(app.tabs.open).toEqual([here('z')]);
+    expect(app.tabs.active).toBe(here('z'));
   });
 
   it('quick search request per keystroke', async () => {
@@ -104,7 +104,7 @@ describe('quick switcher', () => {
     expect(screen.getByRole('option', { name: /result for ab/i })).toBeTruthy();
   });
 
-  it('hosts commands: New chat in…, Stop all work, Settings', async () => {
+  it('hosts commands: New chat in…, Stop all work, Analytics, Settings, Keyboard shortcuts', async () => {
     const { app, context } = await setup();
     render(QuickSwitcher, { context });
 
@@ -113,15 +113,26 @@ describe('quick switcher', () => {
     expect(
       within(list)
         .getAllByRole('option')
-        .map((o) => o.textContent?.trim()),
-    ).toEqual(['New chat in…', 'Stop all work', 'Settings']);
+        .map((o) => o.querySelector('[data-label]')?.textContent?.trim()),
+    ).toEqual([
+      'New chat in…',
+      'Stop all work',
+      // v1.3 B
+      'Usage',
+      // v1.3 §4
+      'Analytics',
+      'Settings',
+      'Keyboard shortcuts',
+      // v1.2 §3, in Active and in a project.
+      'Archive chats older than 30 days…',
+    ]);
 
     await userEvent.keyboard('sett');
     await waitFor(() =>
       expect(
         within(list)
           .getAllByRole('option')
-          .map((o) => o.textContent?.trim()),
+          .map((o) => o.querySelector('[data-label]')?.textContent?.trim()),
       ).toEqual(['Settings']),
     );
     await userEvent.keyboard('{Enter}');

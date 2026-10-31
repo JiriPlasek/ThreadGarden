@@ -16,3 +16,12 @@ export const duration = (ms: number): string => {
   const s = Math.round((ms % 60_000) / 1000);
   return `${m}m ${String(s).padStart(2, '0')}s`;
 };
+
+/** A running clock in whole seconds: 42s, 3m 05s, 1h 02m. */
+export const elapsed = (ms: number): string => {
+  const s = Math.max(0, Math.floor(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${String(s % 60).padStart(2, '0')}s`;
+  return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`;
+};

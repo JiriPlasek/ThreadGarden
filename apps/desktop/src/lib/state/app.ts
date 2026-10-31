@@ -4,18 +4,24 @@
  */
 import { serviceConnection, type ServiceConnection } from '../native';
 import { startAttention } from '../notifications';
-import { ServiceClient } from '../service/client';
 import { agents } from './agents.svelte';
-import { chats } from './chats.svelte';
+import { analytics } from './analytics.svelte';
 import { connection } from './connection.svelte';
-import { interaction } from './interaction.svelte';
 import { lifecycle } from './lifecycle.svelte';
+import { machines, relayUrl } from './machines.svelte';
 import { places } from './places.svelte';
-import { sessions } from './sessions.svelte';
+import { client, createScope, scopes, wireScope } from './scope';
 import { settings } from './settings.svelte';
 import { tabs } from './tabs.svelte';
+import { usage } from './usage.svelte';
 
-export const client = new ServiceClient();
+export { client, scopes };
+
+/** This PC's scope: the app's singletons, so a single-machine user runs what always ran. */
+const localScope = scopes.local();
+
+/** The local service now (its port and token change when it restarts). */
+let current: ServiceConnection | null = null;
 
 let started: Promise<void> | null = null;
 let wired = false;
@@ -36,16 +42,25 @@ const wire = (): void => {
   if (wired) return;
   wired = true;
   connection.init(client);
-  places.init(client);
-  sessions.init(client, places);
-  chats.init(client);
-  tabs.init(client);
+  // This PC's places, sessions, chats, buckets, scheduled sends and "Your turn".
+  wireScope(localScope, { tabs, agents, scopes });
+  tabs.init(client, { localMachineId: () => localScope.machineId });
   settings.init(client);
-  agents.init(client);
-  interaction.init(client);
+  agents.init(client, { machineId: () => localScope.machineId });
   lifecycle.init(client, agents, connection, connectTo);
-  tabs.subscribe(() => chats.sync(tabs.open, tabs.active));
-  startAttention({ api: client, settings, tabs, places });
+  usage.init(client);
+  analytics.init(client);
+  // Notifications: a watcher per machine (the scopes below), one tray badge (the sum).
+  startAttention({ scopes, machines, settings, tabs, places });
+  // Paired machines: a scope each, on its relay client through the local service.
+  // Needs you, Running, the bucket counts and the agents strip add up every machine's.
+  places.follow(scopes);
+  agents.follow(scopes);
+  scopes.follow(machines, tabs, (m) => createScope(m.id, m.client, { tabs, agents }));
+  machines.init(client, client, {
+    relayUrl: (id) => relayUrl(current?.port ?? 0, id),
+    localToken: () => current?.token ?? '',
+  });
 };
 
 /**
@@ -55,9 +70,19 @@ const wire = (): void => {
  */
 const connectTo = async (conn: ServiceConnection): Promise<void> => {
   connection.setVersions(conn);
+  current = conn;
   await client.connect(`ws://127.0.0.1:${conn.port}`, conn.token);
   if (loaded) return;
-  await Promise.all([settings.load(), settings.restoreColumns(), tabs.restore()]);
+  await Promise.all([
+    settings.load(),
+    settings.restoreColumns(),
+    settings.restoreScale(),
+    settings.restoreActivity(),
+    places.restoreMissingOpen(),
+    machines.restoreCollapsed(),
+    machines.restoreMissingOpen(),
+    tabs.restore(),
+  ]);
   loaded = true;
 };
 

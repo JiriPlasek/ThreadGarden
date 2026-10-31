@@ -1,7 +1,11 @@
 import { expect, test } from '@playwright/test';
-import { openApp, resetTabs } from './helpers';
+import { markAllSeen, openApp, resetTabs } from './helpers';
 
-test.beforeEach(resetTabs);
+test.beforeEach(async () => {
+  await resetTabs();
+  // The badge must start at 0 whatever earlier specs left unread.
+  await markAllSeen();
+});
 
 test('open app, needs-you badge shows, open chat, answer permission', async ({ page }) => {
   await openApp(page);
@@ -21,6 +25,14 @@ test('open app, needs-you badge shows, open chat, answer permission', async ({ p
 
   // The badge counts it; then look at another chat meanwhile.
   await expect(needsYou).toHaveText('1');
+  // v1.2 §2: the waiting chat leads the list, in "Now"; the rest of the mock's history (dated up
+  // to now since v1.3) follows by recency.
+  await expect(list.locator('[role="option"]').first()).toHaveAttribute(
+    'data-session-id',
+    'session-998',
+  );
+  await expect(list.locator('[data-section-header="now"]').first()).toContainText('Now');
+  await expect(list.locator('[data-section-header="day"]').first()).toContainText('Last 24 hours');
   await list.locator('[role="option"][data-session-id="session-997"]').click();
   await expect(page.getByRole('tab', { selected: true })).toHaveAttribute(
     'data-tab',
