@@ -25,6 +25,17 @@ jobs:
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm test
+      # The headless package (tarball + systemd user unit); its install test runs in `pnpm test` on Linux.
+      - name: Build the headless Linux package
+        if: runner.os == 'Linux'
+        run: pnpm build:headless
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Linux'
+        with:
+          name: threadgarden-headless
+          retention-days: 7
+          if-no-files-found: error
+          path: dist-headless/*.tar.gz*
 
   rust:
     strategy:

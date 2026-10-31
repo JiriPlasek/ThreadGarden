@@ -12,7 +12,8 @@
  * `externalBin: ["binaries/threadgarden-node"]` looks for) and writes a
  * `.sha256` stamp beside it. A binary whose stamp matches is left alone, so
  * re-runs (and CI cache hits) download nothing. `--target` defaults to the
- * host triple from `rustc -vV`.
+ * host triple from `rustc -vV`; `--out <file>` writes the binary elsewhere
+ * (the headless package build uses it).
  *
  * Only Node built-ins plus the system `tar` (bsdtar on Windows 10+ and macOS,
  * GNU tar with xz on Linux) are used.
@@ -124,7 +125,9 @@ const main = async () => {
 
   const archive = `node-${NODE_VERSION}-${t.platform}.${t.ext}`;
   const exe = triple.includes('windows') ? '.exe' : '';
-  const out = join(OUT_DIR, `threadgarden-node-${triple}${exe}`);
+  const out = argValue('out')
+    ? resolve(argValue('out'))
+    : join(OUT_DIR, `threadgarden-node-${triple}${exe}`);
   const stamp = `${out}.sha256`;
 
   // Idempotent: the stamp records the binary's hash and the archive it came from.
@@ -162,7 +165,7 @@ const main = async () => {
     });
     if (r.status !== 0) fail(`tar could not extract ${member} from ${archive}`);
 
-    await mkdir(OUT_DIR, { recursive: true });
+    await mkdir(dirname(out), { recursive: true });
     await copyFile(join(extracted, ...member.split('/')), out);
     if (!exe) await chmod(out, 0o755);
     await writeFile(stamp, `${await sha256File(out)}  ${archive}\n`);

@@ -10,6 +10,7 @@
   "scripts": {
     "lint": "pnpm -r lint && eslint scripts",
     "format": "prettier --write . && pnpm -r format",
+    "build:headless": "node scripts/build-headless.mjs",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test && pnpm test:perf",
     "test:perf": "pnpm -r --workspace-concurrency=1 test:perf",
