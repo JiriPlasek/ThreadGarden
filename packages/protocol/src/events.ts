@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { ChatHeaderInfoSchema, ChatStatusSchema } from './chat.js';
 import { ChatItemSchema } from './items.js';
 import { ChatTaskSchema } from './tasks.js';
+import { ScheduledSendSchema, UsageStateSchema } from './usage.js';
 
 export const ChatItemsEventSchema = z.object({
   sessionId: z.string(),
@@ -63,6 +64,19 @@ export const events = {
     sessionId: z.string(),
     title: z.string(),
     projectName: z.string(),
+  }),
+  // ── v1.3 B: usage limits and scheduled sends ───────────────────────────────
+  /** The account's usage state changed (a rate-limit event, a reading, a refused chat). */
+  'usage.changed': UsageStateSchema,
+  /** Every scheduled send (as `scheduled.list` without a chat), after any change. */
+  'scheduled.changed': z.object({ items: z.array(ScheduledSendSchema) }),
+  /** A scheduled message went out; `late` when it was due while the service was not running. */
+  scheduledSent: z.object({
+    sessionId: z.string(),
+    title: z.string(),
+    projectName: z.string(),
+    late: z.boolean(),
+    dueAt: z.number(),
   }),
 } as const;
 
