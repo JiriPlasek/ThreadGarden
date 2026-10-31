@@ -137,7 +137,7 @@ export type LiveSessionDeps = {
 };
 
 export const defaultOnError = (err: unknown, context: string): void => {
-  console.error(`pahub: ${context}:`, err);
+  console.error(`Threadgarden: ${context}:`, err);
 };
 
 export type LiveSessionOptions = LiveSessionDeps &
