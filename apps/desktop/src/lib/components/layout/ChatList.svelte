@@ -196,9 +196,21 @@
     open(chat);
   };
 
-  /** Ctrl/Cmd+A: every chat of the cursor's section (the first section without a cursor). */
+  /**
+   * Ctrl/Cmd+A: every chat of the cursor's section when the cursor is on
+   * screen, else of the first section on screen (the first section of the
+   * list without a cursor).
+   */
   const selectSection = (): void => {
-    const row = grouped.rows[grouped.rowOf[Math.max(0, cursorIndex)] ?? -1];
+    const [top, bottom] = list?.visibleRows() ?? [0, grouped.rows.length - 1];
+    const at = grouped.rowOf[cursorIndex];
+    let index: number;
+    if (at !== undefined && at >= top && at <= bottom) index = at;
+    else {
+      index = top;
+      while (index < grouped.rows.length && grouped.rows[index]!.kind !== 'chat') index++;
+    }
+    const row = grouped.rows[index];
     if (!row || row.kind !== 'chat') return;
     selection.clear();
     for (const r of grouped.rows) {
@@ -244,6 +256,15 @@
     list?.scrollToIndex(grouped.rowOf[i]!);
   };
 
+  /** Shift+Space: adds the chat under the cursor to the selection, or removes it. */
+  const toggleCursor = (): void => {
+    const chat = grouped.chats[cursorIndex];
+    if (!chat) return;
+    anchor = chat.sessionId;
+    if (selection.has(chat.sessionId)) selection.delete(chat.sessionId);
+    else selection.add(chat.sessionId);
+  };
+
   const onListKey = (e: KeyboardEvent): void => {
     const i = cursorIndex;
     const key = e.key.toLowerCase();
@@ -254,10 +275,17 @@
     }
     const bucket = Object.hasOwn(BUCKET_KEYS, key) ? BUCKET_KEYS[key] : undefined;
     if (bucket) {
-      // E, H and A alone: modified, they are someone else's shortcuts.
-      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      // E, H and A alone: modified, they are someone else's shortcuts. A held
+      // key repeats: only its first press counts (the selection it moved is
+      // gone, the repeats would move the chat under the cursor).
+      if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
       e.preventDefault();
-      moveFromKeys(bucket);
+      if (!e.repeat) moveFromKeys(bucket);
+      return;
+    }
+    if (e.key === ' ' && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault();
+      toggleCursor();
       return;
     }
     if (e.key === 'Escape') {
@@ -415,6 +443,7 @@
           class="hover:text-foreground ml-auto shrink-0 rounded px-1 font-normal tracking-normal normal-case hover:underline"
           aria-label="Archive all older than {ARCHIVE_OLDER_DAYS} days"
           title="Archive all older than {ARCHIVE_OLDER_DAYS} days"
+          onmousedown={(e) => e.preventDefault()}
           onclick={archiveOlder}>Archive all…</button
         >
       {/if}
@@ -458,6 +487,7 @@
           describedBy={sectionId(r.section)}
           selected={selection.size > 0 ? selection.has(chat.sessionId) : chat.sessionId === cursor}
           checked={selection.has(chat.sessionId)}
+          cursor={chat.sessionId === cursor}
           active={chat.sessionId === tabs.active}
           projectName={spansProjects
             ? (names.get(chat.projectId) ?? baseName(chat.cwd))

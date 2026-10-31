@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import QuickSwitcher from '../../src/lib/components/QuickSwitcher.svelte';
 import PlacesColumn from '../../src/lib/components/layout/PlacesColumn.svelte';
 import { DAY_MS } from '../../src/lib/components/layout/sections';
-import type { FakeServer } from '../service/fake-ws';
+import { RpcFail, type FakeServer } from '../service/fake-ws';
 import BucketsHarness from './BucketsHarness.svelte';
 import { project, setup, summary } from './harness';
 
@@ -525,6 +525,8 @@ describe('"Archive all older than 30 days"', () => {
     await waitFor(() =>
       expect(server.calls('chat.archiveOlder').at(-1)!.params).toEqual({ olderThanDays: 30 }),
     );
+    // What it did is said (the count can differ from the dry run's).
+    expect((await screen.findByText('Archived 12 chats.')).closest('[role="status"]')).toBeTruthy();
   });
 
   it('is not offered in On hold or Archived', async () => {
@@ -645,5 +647,187 @@ describe('Ctrl+K: archived matches', () => {
       olderThanDays: 30,
       dryRun: true,
     });
+  });
+});
+
+describe('review fixes (v1.2 B2 round 1)', () => {
+  const live = (over: Partial<ChatSummary> = {}) =>
+    summary('a', { live: true, status: 'idle', title: 'busy chat', ...over });
+
+  const archiveFromMenu = async () => {
+    await fireEvent.contextMenu(await screen.findByRole('option'));
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Archive' }));
+    return screen.findByRole('alertdialog');
+  };
+
+  it('"End this chat and archive it?" says a running turn is stopped (as End session does)', async () => {
+    const { context } = await withList([live({ status: 'working' })], { skip: { a: 'LIVE' } });
+    render(BucketsHarness, { context });
+    const dialog = await archiveFromMenu();
+    expect(dialog.textContent).toContain('Claude is still working in this chat');
+    expect(dialog.textContent).toContain('Ending stops the current turn');
+  });
+
+  it('and says its background tasks are stopped', async () => {
+    const { context } = await withList([live({ runningTasks: 2 })], { skip: { a: 'LIVE' } });
+    render(BucketsHarness, { context });
+    const dialog = await archiveFromMenu();
+    expect(dialog.textContent).toContain('This chat still runs 2 background tasks');
+  });
+
+  it('a failed chat.end keeps the confirmation open with the error, and archives nothing', async () => {
+    const { server, context } = await withList([live()], {
+      skip: { a: 'LIVE' },
+      configure: (server) => {
+        server.handlers['chat.end'] = () => {
+          throw new RpcFail('INTERNAL', 'cannot end');
+        };
+      },
+    });
+    render(BucketsHarness, { context });
+    const dialog = await archiveFromMenu();
+    await userEvent.click(within(dialog).getByRole('button', { name: 'End and archive' }));
+    expect(await within(dialog).findByText(/cannot end/)).toBeTruthy();
+    expect(screen.getByRole('alertdialog')).toBe(dialog);
+    expect(setCalls(server)).toHaveLength(1);
+  });
+
+  it('E, H and A typed in the search field move nothing', async () => {
+    const { server, context } = await withList(four());
+    render(BucketsHarness, { context });
+    await waitFor(() => expect(screen.getAllByRole('option')).toHaveLength(4));
+    await userEvent.type(screen.getByRole('searchbox'), 'heat');
+    await new Promise((r) => setTimeout(r, 30));
+    expect(setCalls(server)).toEqual([]);
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('a held-down E (key repeat) and Shift+E do nothing more', async () => {
+    const { server, context } = await withList(four());
+    render(BucketsHarness, { context });
+    const list = screen.getByRole('listbox');
+    await waitFor(() => expect(within(list).getAllByRole('option')).toHaveLength(4));
+    list.focus();
+    await userEvent.keyboard('{ArrowDown}');
+    await fireEvent.keyDown(list, { key: 'e' });
+    await fireEvent.keyDown(list, { key: 'e', repeat: true });
+    await fireEvent.keyDown(list, { key: 'E', shiftKey: true });
+    await waitFor(() => expect(setCalls(server)).toHaveLength(1));
+    await new Promise((r) => setTimeout(r, 30));
+    expect(setCalls(server)).toHaveLength(1);
+  });
+
+  it('Shift+click ranges across sections and across a loaded page', async () => {
+    const old = (id: string) => summary(id, { lastActivity: Date.now() - 90 * DAY_MS });
+    const { context } = await withList([], {
+      configure: (server) => {
+        server.handlers['sessions.list'] = (p) =>
+          (p as { cursor?: string }).cursor
+            ? { items: [old('p2a'), old('p2b')] }
+            : {
+                items: [summary('n1', { status: 'working', live: true }), summary('d1'), old('o1')],
+                nextCursor: 'next',
+              };
+      },
+    });
+    render(BucketsHarness, { context });
+    await waitFor(() => expect(screen.getAllByRole('option')).toHaveLength(5));
+    await fireEvent.click(row('n1'), { ctrlKey: true });
+    await fireEvent.click(row('p2b'), { shiftKey: true });
+    expect(selectedIds()).toEqual(['n1', 'd1', 'o1', 'p2a', 'p2b']);
+  });
+
+  it('a selected chat that leaves the list leaves the selection', async () => {
+    let items = four();
+    const { server, context } = await withList([], {
+      configure: (server) => {
+        server.handlers['sessions.list'] = () => ({ items });
+      },
+    });
+    render(BucketsHarness, { context });
+    await waitFor(() => expect(screen.getAllByRole('option')).toHaveLength(4));
+    await fireEvent.click(row('b'), { ctrlKey: true });
+    await fireEvent.click(row('c'), { ctrlKey: true });
+    items = items.filter((c) => c.sessionId !== 'b');
+    server.push('sessions.changed', { sessionIds: ['b'] });
+    await waitFor(() => expect(screen.getAllByRole('option')).toHaveLength(3));
+    expect(selectedIds()).toEqual(['c']);
+    expect(screen.getByRole('toolbar', { name: 'Selected chats' }).textContent).toContain(
+      '1 selected',
+    );
+  });
+
+  it('Ctrl+A without a cursor selects the first section', async () => {
+    const { context } = await withList([
+      ...four(),
+      summary('old', { lastActivity: Date.now() - 90 * DAY_MS }),
+    ]);
+    render(BucketsHarness, { context });
+    const list = screen.getByRole('listbox');
+    await waitFor(() => expect(within(list).getAllByRole('option')).toHaveLength(5));
+    list.focus();
+    await userEvent.keyboard('{Control>}a{/Control}');
+    expect(selectedIds()).toEqual(['a', 'b', 'c', 'd']);
+  });
+
+  it('the keyboard cursor stays marked while chats are selected; Shift+Space toggles it', async () => {
+    const { context } = await withList(four());
+    render(BucketsHarness, { context });
+    const list = screen.getByRole('listbox');
+    await waitFor(() => expect(within(list).getAllByRole('option')).toHaveLength(4));
+    await fireEvent.click(row('a'), { ctrlKey: true });
+    list.focus();
+    await userEvent.keyboard('{ArrowDown}{ArrowDown}');
+    expect(list.getAttribute('aria-activedescendant')).toBe('chat-row-c');
+    expect(row('c').hasAttribute('data-cursor')).toBe(true);
+    expect(row('a').hasAttribute('data-cursor')).toBe(false);
+    await userEvent.keyboard('{Shift>} {/Shift}');
+    expect(selectedIds()).toEqual(['a', 'c']);
+    await userEvent.keyboard('{Shift>} {/Shift}');
+    expect(selectedIds()).toEqual(['a']);
+  });
+
+  it('"Archive all…" does not take focus from the list (its header is hidden)', async () => {
+    const { context } = await withList([
+      summary('old', { lastActivity: Date.now() - 90 * DAY_MS }),
+    ]);
+    render(BucketsHarness, { context });
+    await waitFor(() => expect(screen.getAllByRole('option')).toHaveLength(1));
+    const button = screen.getByRole('button', {
+      name: 'Archive all older than 30 days',
+      hidden: true,
+    });
+    const down = new MouseEvent('mousedown', { bubbles: true, cancelable: true });
+    button.dispatchEvent(down);
+    expect(down.defaultPrevented).toBe(true);
+  });
+
+  it('a chat back from hold keeps its recency section in Active (Ruling R34)', async () => {
+    const { context } = await withList([
+      summary('new'),
+      summary('back', { backFromHold: true, lastActivity: Date.now() - 90 * DAY_MS }),
+    ]);
+    render(BucketsHarness, { context });
+    await waitFor(() => expect(screen.getAllByRole('option')).toHaveLength(2));
+    const ref = row('back').getAttribute('aria-describedby')!;
+    expect(document.getElementById(ref)!.textContent!.trim()).toBe('Older');
+    expect(within(row('back')).getByText('Back from hold')).toBeTruthy();
+  });
+
+  it('Save recomputes the presets: a dialog left open past midnight holds until the new tomorrow', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(local(2026, 10, 31, 23, 59));
+    const { server, context } = await withList([summary('a')]);
+    render(BucketsHarness, { context });
+    await fireEvent.contextMenu(await screen.findByRole('option'));
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Put on hold…' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Put on hold' });
+    vi.setSystemTime(local(2026, 11, 1, 0, 1));
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
+    await waitFor(() =>
+      expect(setCalls(server)).toEqual([
+        { sessionIds: ['a'], bucket: 'onHold', holdUntil: local(2026, 11, 2, 9) },
+      ]),
+    );
   });
 });

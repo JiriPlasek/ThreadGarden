@@ -24,6 +24,7 @@
     describedBy,
     selected,
     checked = false,
+    cursor = false,
     active,
     projectName,
     now,
@@ -44,6 +45,8 @@
     selected: boolean;
     /** In the multi-selection (v1.2 §3). */
     checked?: boolean;
+    /** The keyboard cursor (`aria-activedescendant`); marked apart from the selection. */
+    cursor?: boolean;
     /** Open in the active tab. */
     active: boolean;
     /** Shown when the place spans projects; omitted inside a project. */
@@ -79,12 +82,15 @@
         aria-describedby={describedBy}
         data-session-id={chat.sessionId}
         data-active={active || undefined}
+        data-cursor={cursor || undefined}
         tabindex="-1"
         class={cn(
           'relative mx-1 flex h-full cursor-pointer flex-col justify-center gap-0.5 rounded-md px-2.5 select-none',
           'hover:bg-accent/60',
           selected && 'bg-accent text-accent-foreground hover:bg-accent',
           checked && 'bg-primary/10 ring-primary/40 hover:bg-primary/15 ring-1 ring-inset',
+          checked && cursor && 'ring-primary ring-2',
+          cursor && !selected && 'ring-ring ring-1 ring-inset',
           active &&
             'before:bg-primary before:absolute before:inset-y-2 before:left-0 before:w-0.5 before:rounded-full',
         )}

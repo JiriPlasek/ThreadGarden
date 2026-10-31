@@ -35,6 +35,19 @@ export const serviceCall = async <T>(method: string, params: unknown): Promise<T
   }
 };
 
+/**
+ * Nothing unread: a spec that ends right after a chat's turn finished leaves
+ * it unread ("Your turn", counted under Needs you) in the shared mock, as the
+ * window closed before the chat counted as seen.
+ */
+export const markAllSeen = async (): Promise<void> => {
+  const { items } = await serviceCall<{ items: { sessionId: string }[] }>('sessions.list', {
+    place: { kind: 'needsYou' },
+    limit: 200,
+  });
+  for (const s of items) await serviceCall('chat.markSeen', { sessionId: s.sessionId });
+};
+
 /** No open tabs: the mock service keeps the tab layout between tests (`uiState`). */
 export const resetTabs = async (): Promise<void> => {
   await serviceCall('uiState.set', { key: 'tabs', value: { open: [], active: null } });

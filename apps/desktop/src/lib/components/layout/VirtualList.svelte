@@ -116,6 +116,10 @@
     }
   });
 
+  /** The first and last row (partly) in view. */
+  export const visibleRows = (): [number, number] =>
+    items.length === 0 ? [0, -1] : [rowAt(scrollTop), rowAt(scrollTop + height - 1)];
+
   /** Jumps to the top (e.g. when the list's contents are replaced). */
   export const scrollToTop = (): void => {
     if (viewport) viewport.scrollTop = 0;

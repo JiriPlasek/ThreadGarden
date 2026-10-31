@@ -238,8 +238,11 @@ reports the chats it skipped. Archiving marks chats seen (Ruling R32). A hold
 whose time runs out (checked at startup and every 60 s) returns the chat to
 Active as `backFromHold`: listed under Needs you, announced with
 `chatBackFromHold`, and cleared by `chat.markSeen` (which the UI sends when the
-chat is viewed, as for unread chats) or a message. The UI announces, once per
-hold, the ones that ended while no window was connected (it keeps the
+chat is viewed, as for unread chats) or a message. Bucket and project lists
+keep it at its recency position, like an unread history chat (Ruling R34), so
+the UI's Now section does not claim it. The UI announces holds that end
+together in one notification, and, once per hold, the ones that ended while
+no window was connected (it keeps the
 announced ids in `uiState`). An archived chat returns to Active when it is sent
 a message or runs as an external session. `chat.archiveOlder` archives a
 place's idle, seen chats older than N days (with `dryRun` for the

@@ -1,7 +1,11 @@
 import { expect, test } from '@playwright/test';
-import { openApp, resetTabs } from './helpers';
+import { markAllSeen, openApp, resetTabs } from './helpers';
 
-test.beforeEach(resetTabs);
+test.beforeEach(async () => {
+  await resetTabs();
+  // The badge must start at 0 whatever earlier specs left unread.
+  await markAllSeen();
+});
 
 test('open app, needs-you badge shows, open chat, answer permission', async ({ page }) => {
   await openApp(page);

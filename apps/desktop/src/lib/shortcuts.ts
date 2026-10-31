@@ -169,10 +169,16 @@ export const SHORTCUTS: readonly Shortcut[] = [
     description: 'Select a range of chats',
   },
   {
+    id: 'list-select-cursor',
+    group: 'Chat list',
+    combos: [['Shift', 'Space']],
+    description: 'Add the chat under the cursor to the selection, or remove it',
+  },
+  {
     id: 'list-select-section',
     group: 'Chat list',
     combos: [['Mod', 'A']],
-    description: "Select every chat of the cursor's section",
+    description: "Select every chat of the cursor's section (else of the first one in view)",
   },
   {
     id: 'list-select-clear',

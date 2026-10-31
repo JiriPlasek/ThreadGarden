@@ -142,6 +142,20 @@ export class ChatState {
   constructor(readonly sessionId: string) {}
 }
 
+/**
+ * Summary fields that differ only in what the open chat and its tab do not
+ * show (last activity, preview): a re-indexed chat is not re-rendered for them.
+ */
+const NOT_SHOWN = new Set(['lastActivity', 'preview']);
+const sameShown = (a: ChatSummary, b: ChatSummary): boolean => {
+  const x = a as Record<string, unknown>;
+  const y = b as Record<string, unknown>;
+  for (const k of new Set([...Object.keys(x), ...Object.keys(y)])) {
+    if (!NOT_SHOWN.has(k) && JSON.stringify(x[k]) !== JSON.stringify(y[k])) return false;
+  }
+  return true;
+};
+
 const defaultSchedule: Schedule = (cb) => {
   if (typeof requestAnimationFrame === 'function') requestAnimationFrame(() => cb());
   else setTimeout(cb, 16);
@@ -195,8 +209,12 @@ export class ChatsState {
           const { items } = await api.request('sessions.summaries', { sessionIds: ids });
           for (const s of items) {
             const chat = this.byId.get(s.sessionId);
-            if (chat?.summary) chat.summary = s;
-            else if (this.peeks.has(s.sessionId)) this.peeks.set(s.sessionId, s);
+            if (chat?.summary) {
+              if (!sameShown(chat.summary, s)) chat.summary = s;
+            } else {
+              const peek = this.peeks.get(s.sessionId);
+              if (peek && !sameShown(peek, s)) this.peeks.set(s.sessionId, s);
+            }
           }
         }
       } catch {

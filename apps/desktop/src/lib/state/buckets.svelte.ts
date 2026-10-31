@@ -17,7 +17,7 @@ export const ARCHIVE_OLDER_DAYS = 30;
 
 /** A chat to move: what the dialogs and messages need of its summary. */
 export type BucketTarget = Pick<ChatSummary, 'sessionId' | 'title'> &
-  Partial<Pick<ChatSummary, 'bucket' | 'holdUntil' | 'holdNote'>>;
+  Partial<Pick<ChatSummary, 'bucket' | 'holdUntil' | 'holdNote' | 'status' | 'runningTasks'>>;
 
 type Skipped = Result<'chat.setBucket'>['skipped'];
 
@@ -40,6 +40,8 @@ const target = (t: BucketTarget): BucketTarget => ({
   ...(t.bucket !== undefined ? { bucket: t.bucket } : {}),
   ...(t.holdUntil !== undefined ? { holdUntil: t.holdUntil } : {}),
   ...(t.holdNote !== undefined ? { holdNote: t.holdNote } : {}),
+  ...(t.status !== undefined ? { status: t.status } : {}),
+  ...(t.runningTasks !== undefined ? { runningTasks: t.runningTasks } : {}),
 });
 
 export class BucketsState {
@@ -137,11 +139,13 @@ export class BucketsState {
   archiveOlder = async (): Promise<void> => {
     const o = this.archivingOlder;
     if (!o || !this.api) return;
-    await this.api.request('chat.archiveOlder', {
+    const { archived } = await this.api.request('chat.archiveOlder', {
       ...(o.projectId !== undefined ? { projectId: o.projectId } : {}),
       olderThanDays: ARCHIVE_OLDER_DAYS,
     });
     this.archivingOlder = null;
+    // Time passed since the count (chats were read, or started running): say what happened.
+    this.notice = `Archived ${chatsWord(archived)}.`;
   };
 
   cancelArchiveOlder = (): void => {

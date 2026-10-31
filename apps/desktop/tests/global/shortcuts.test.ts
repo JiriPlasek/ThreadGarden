@@ -103,6 +103,7 @@ describe('shortcut list', () => {
     expect(keys('list-select-toggle')).toEqual(['Ctrl+Click']);
     expect(keys('list-select-range')).toEqual(['Shift+Click']);
     expect(keys('list-select-section')).toEqual(['Ctrl+A']);
+    expect(keys('list-select-cursor')).toEqual(['Shift+Space']);
     expect(keys('list-select-clear')).toEqual(['Esc']);
     expect(formatShortcut(['Mod', 'Click'], 'mac')).toBe('⌘Click');
     // Clicks are not keys.

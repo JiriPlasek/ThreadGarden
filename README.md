@@ -52,21 +52,22 @@ Press **Ctrl+/** (**⌘/** on macOS), or **?** outside a text field, to see this
 
 **Chat list**
 
-| Keys                 | Action                                                   |
-| -------------------- | -------------------------------------------------------- |
-| ↑ or ↓               | Move through the chats                                   |
-| Page Up or Page Down | Move a page of chats at a time                           |
-| Home or End          | First or last chat                                       |
-| Enter or Space       | Open the selected chat                                   |
-| ↓                    | From the search field, go to the list                    |
-| Esc                  | Clear the search                                         |
-| E                    | Archive the selected chats (or the one under the cursor) |
-| H                    | Put on hold: choose until when and add a note            |
-| A                    | Make active (back from On hold or Archived)              |
-| Ctrl+Click           | Add a chat to the selection, or remove it                |
-| Shift+Click          | Select a range of chats                                  |
-| Ctrl+A               | Select every chat of the cursor's section                |
-| Esc                  | Clear the selection                                      |
+| Keys                 | Action                                                                    |
+| -------------------- | ------------------------------------------------------------------------- |
+| ↑ or ↓               | Move through the chats                                                    |
+| Page Up or Page Down | Move a page of chats at a time                                            |
+| Home or End          | First or last chat                                                        |
+| Enter or Space       | Open the selected chat                                                    |
+| ↓                    | From the search field, go to the list                                     |
+| Esc                  | Clear the search                                                          |
+| E                    | Archive the selected chats (or the one under the cursor)                  |
+| H                    | Put on hold: choose until when and add a note                             |
+| A                    | Make active (back from On hold or Archived)                               |
+| Ctrl+Click           | Add a chat to the selection, or remove it                                 |
+| Shift+Click          | Select a range of chats                                                   |
+| Shift+Space          | Add the chat under the cursor to the selection, or remove it              |
+| Ctrl+A               | Select every chat of the cursor's section (else of the first one in view) |
+| Esc                  | Clear the selection                                                       |
 
 **Composer**
 

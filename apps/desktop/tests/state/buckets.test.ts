@@ -1,4 +1,6 @@
+import { render, screen, waitFor } from '@testing-library/svelte';
 import { describe, expect, it } from 'vitest';
+import TabsBar from '../../src/lib/components/layout/TabsBar.svelte';
 import { AgentsState } from '../../src/lib/state/agents.svelte';
 import { setup, summary } from '../layout/harness';
 import { RpcFail } from '../service/fake-ws';
@@ -187,5 +189,73 @@ describe('buckets: open chats follow bucket changes', () => {
     ]);
     expect(app.chats.get('a')?.summary?.bucket).toBe('onHold');
     expect(app.chats.get('a')?.summary?.holdNote).toBe('later');
+  });
+});
+
+describe('open chats outside the selected place (C1 I3: generated titles)', () => {
+  it('a new title reaches the open chat and its tab, and a background tab, though neither is listed', async () => {
+    const titles: Record<string, string> = { a: 'Chat a', b: 'Chat b' };
+    const { server, app, context } = await setup((server) => {
+      server.handlers['sessions.list'] = () => ({ items: [summary('x')] });
+      // Restored tabs: 'a' is shown (loaded), 'b' was never shown (only summarised).
+      server.handlers['uiState.get'] = (p) => ({
+        value: (p as { key: string }).key === 'tabs' ? { open: ['a', 'b'], active: 'a' } : null,
+      });
+      server.handlers['sessions.summaries'] = (p) => ({
+        items: (p as { sessionIds: string[] }).sessionIds.map((id) =>
+          summary(id, { title: titles[id] ?? id }),
+        ),
+      });
+      server.handlers['chat.open'] = (p) => {
+        const id = (p as { sessionId: string }).sessionId;
+        return {
+          summary: summary(id, { title: titles[id] ?? id }),
+          header: {},
+          items: [],
+          hasMore: false,
+          seq: 1,
+        };
+      };
+    });
+    await app.tabs.restore();
+    render(TabsBar, { context });
+    await waitFor(() => expect(screen.getAllByRole('tab')).toHaveLength(2));
+    await waitFor(() => expect(app.chats.get('a')?.loaded).toBe(true));
+    await waitFor(() => expect(app.chats.summaryOf('b')?.title).toBe('Chat b'));
+    expect(app.chats.get('b')).toBeUndefined();
+
+    titles.a = 'Fix the login redirect';
+    titles.b = 'Plan the release';
+    server.push('sessions.changed', { sessionIds: ['a'] });
+    server.push('sessions.changed', { sessionIds: ['b'] });
+    await waitFor(() => {
+      const names = screen.getAllByRole('tab').map((t) => t.textContent ?? '');
+      expect(names.some((n) => n.includes('Fix the login redirect'))).toBe(true);
+      expect(names.some((n) => n.includes('Plan the release'))).toBe(true);
+    });
+    expect(app.chats.get('a')?.summary?.title).toBe('Fix the login redirect');
+  });
+
+  it('an unchanged summary is not replaced (no re-render for every re-index)', async () => {
+    const fixed = summary('a', { lastActivity: 1_000 });
+    const { server, app } = await setup((server) => {
+      server.handlers['chat.open'] = () => ({
+        summary: fixed,
+        header: {},
+        items: [],
+        hasMore: false,
+        seq: 1,
+      });
+      server.handlers['sessions.summaries'] = () => ({
+        items: [{ ...fixed, lastActivity: 2_000, preview: 'newer preview' }],
+      });
+    });
+    app.tabs.openTab('a');
+    await flush();
+    const before = app.chats.get('a')!.summary;
+    server.push('sessions.changed', { sessionIds: ['a'] });
+    await flush();
+    expect(server.calls('sessions.summaries')).toHaveLength(1);
+    expect(app.chats.get('a')!.summary).toBe(before);
   });
 });

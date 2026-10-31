@@ -7,6 +7,9 @@ import type { FakeServer } from '../service/fake-ws';
 type ListParams = { place: { kind: string } };
 
 const flush = () => new Promise((r) => setTimeout(r, 20));
+/** Live announcements are batched for `BATCH_MS` (shortened here); this waits past that. */
+const BATCH_MS = 10;
+const settle = () => new Promise((r) => setTimeout(r, BATCH_MS + 50));
 const focus = () => window.dispatchEvent(new Event('focus'));
 const blur = () => window.dispatchEvent(new Event('blur'));
 
@@ -78,6 +81,7 @@ const start = async (
     places: env.app.places,
     notify,
     setTrayNeedsYou: vi.fn(async () => {}),
+    backFromHoldBatchMs: BATCH_MS,
   });
   stops.push(stop);
   return { ...env, notify, store, backIds };
@@ -100,13 +104,54 @@ describe('"Back from hold" notifications (v1.2 §3)', () => {
     env.app.tabs.openTab('h2');
     focus();
     env.server.push('chatBackFromHold', back('h2'));
-    await flush();
+    await settle();
     expect(env.notify).toHaveBeenCalledTimes(1);
 
     // Notifications turned off in settings: nothing.
     env.app.settings.value = { ...env.app.settings.value, notifications: false };
     env.server.push('chatBackFromHold', back('h3'));
+    await settle();
+    expect(env.notify).toHaveBeenCalledTimes(1);
+  });
+
+  it('holds that end together are one notification and one save (a bulk hold)', async () => {
+    const store = new Map<string, unknown>();
+    const env = await start({ store });
     await flush();
+    blur();
+    const saves = () =>
+      env.server
+        .calls('uiState.set')
+        .filter((c) => (c.params as { key: string }).key === HOLDS_ANNOUNCED_KEY).length;
+    const before = saves();
+    for (const id of ['h1', 'h2', 'h3', 'h4', 'h5']) env.server.push('chatBackFromHold', back(id));
+    await vi.waitFor(() => expect(env.notify).toHaveBeenCalledTimes(1));
+    await settle();
+    expect(env.notify).toHaveBeenCalledTimes(1);
+    expect(env.notify.mock.calls[0]).toEqual(['Chat h1 and 4 more are back from hold', '', 'h1']);
+    expect(saves()).toBe(before + 1);
+    expect(store.get(HOLDS_ANNOUNCED_KEY)).toEqual(['h1', 'h2', 'h3', 'h4', 'h5']);
+  });
+
+  it('a live announcement during the connect-time catch-up is not repeated by it', async () => {
+    let releaseList: () => void = () => {};
+    const backIds = new Set(['h1']);
+    const env = await start({
+      backIds,
+      configure: (server) => {
+        const list = server.handlers['sessions.list']!;
+        server.handlers['sessions.list'] = (p) =>
+          (p as ListParams).place.kind === 'needsYou'
+            ? new Promise((r) => (releaseList = () => r(list(p))))
+            : list(p);
+      },
+    });
+    blur();
+    await flush();
+    env.server.push('chatBackFromHold', back('h1'));
+    await vi.waitFor(() => expect(env.notify).toHaveBeenCalledTimes(1));
+    releaseList();
+    await settle();
     expect(env.notify).toHaveBeenCalledTimes(1);
   });
 
@@ -116,7 +161,8 @@ describe('"Back from hold" notifications (v1.2 §3)', () => {
     const first = await start({ store, backIds });
     blur();
     await vi.waitFor(() => expect(first.notify).toHaveBeenCalledTimes(1));
-    expect(first.notify.mock.calls[0]).toEqual(['Chat h1 is back from hold', '', 'h1']);
+    // The project's name comes from the chat's folder while projects are not loaded.
+    expect(first.notify.mock.calls[0]).toEqual(['Chat h1 is back from hold', 'alpha', 'h1']);
     await vi.waitFor(() => expect(store.get(HOLDS_ANNOUNCED_KEY)).toEqual(['h1']));
 
     // Reconnect: nothing new.
@@ -149,6 +195,15 @@ describe('"Back from hold" notifications (v1.2 §3)', () => {
     expect(env.notify.mock.calls[0]![0]).toBe('Chat h1 and 2 more are back from hold');
   });
 
+  it('on connect, an announced chat missing from the list (busy, or beyond its end) is kept', async () => {
+    const store = new Map<string, unknown>([[HOLDS_ANNOUNCED_KEY, ['gone-busy']]]);
+    const env = await start({ store, backIds: new Set(['h1']) });
+    await vi.waitFor(() => expect(env.notify).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() =>
+      expect([...(store.get(HOLDS_ANNOUNCED_KEY) as string[])].sort()).toEqual(['gone-busy', 'h1']),
+    );
+  });
+
   it('with notifications off, nothing is posted but the chats count as announced', async () => {
     const store = new Map<string, unknown>();
     const env = await start({ store, backIds: new Set(['h1']), notifications: false });
@@ -165,6 +220,19 @@ describe('"Back from hold" notifications (v1.2 §3)', () => {
     backIds.delete('h1');
     env.server.push('sessions.changed', { sessionIds: ['h1'] });
     await vi.waitFor(() => expect(store.get(HOLDS_ANNOUNCED_KEY)).toEqual([]));
+    // A chat that works (or waits on the user) reads as not back from hold for
+    // the moment: it stays announced, so it is not announced again later.
+    backIds.add('h2');
+    env.server.push('chatBackFromHold', back('h2'));
+    await vi.waitFor(() => expect(store.get(HOLDS_ANNOUNCED_KEY)).toEqual(['h2']));
+    env.server.handlers['sessions.summaries'] = (p) => ({
+      items: (p as { sessionIds: string[] }).sessionIds.map((id) =>
+        summary(id, { status: 'working', live: true, backFromHold: false }),
+      ),
+    });
+    env.server.push('sessions.changed', { sessionIds: ['h2'] });
+    await settle();
+    expect(store.get(HOLDS_ANNOUNCED_KEY)).toEqual(['h2']);
     // Unrelated changes ask nothing.
     const asked = env.server.calls('sessions.summaries').length;
     env.server.push('sessions.changed', { sessionIds: ['zz'] });

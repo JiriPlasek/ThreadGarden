@@ -20,14 +20,16 @@ const ORDER: readonly SectionId[] = ['now', 'day', 'week', 'month', 'older'];
 export const DAY_MS = 86_400_000;
 
 /**
- * Needs you, "Your turn", back from hold (v1.2 §3), working, or (Ruling R29)
- * running background tasks. Statuses this build does not know go by their recency.
+ * Needs you, "Your turn", working, or (Ruling R29) running background tasks.
+ * Statuses this build does not know go by their recency. A chat back from
+ * hold keeps its recency section (Ruling R34: the service lists it at its
+ * recency position, so "Now" stays complete on the first page); Needs you
+ * lists every one of them first.
  */
 export const isNow = (chat: ChatSummary): boolean =>
   chat.status === 'needsYou' ||
   chat.status === 'working' ||
   (chat.runningTasks ?? 0) > 0 ||
-  chat.backFromHold === true ||
   isYourTurn(chat.status, chat.unread);
 
 /**

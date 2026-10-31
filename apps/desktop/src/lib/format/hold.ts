@@ -64,3 +64,24 @@ export const fromDateTimeLocal = (value: string): number | null => {
   if (date.getMinutes() !== mi) return null;
   return date.getTime();
 };
+
+/**
+ * What is wrong with a picked `datetime-local` value, or null when it is a
+ * valid time ahead of `now` (or nothing is picked yet). A time skipped by a
+ * clock change (02:30 on a spring-forward day) does not exist.
+ */
+export const pickProblem = (value: string, now: number): string | null => {
+  if (value === '') return null;
+  const t = fromDateTimeLocal(value);
+  if (t !== null) return t > now ? null : 'Pick a time ahead of now.';
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(value);
+  if (m) {
+    const [y, mo, d, h, mi] = m.slice(1).map(Number) as [number, number, number, number, number];
+    const day = new Date(y, mo - 1, d);
+    const sameDay = day.getMonth() === mo - 1 && day.getDate() === d;
+    if (sameDay && h < 24 && mi < 60) {
+      return 'This time does not exist on that day (clock change).';
+    }
+  }
+  return 'That is not a valid date and time.';
+};

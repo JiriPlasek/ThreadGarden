@@ -77,8 +77,7 @@ describe('the "Pick date & time" field', () => {
 });
 
 describe('back from hold in the recency sections', () => {
-  it('a chat back from hold belongs to "Now"', () => {
-    expect(isNow(summary('a', { backFromHold: true }))).toBe(true);
-    expect(isNow(summary('a'))).toBe(false);
+  it('a chat back from hold keeps its recency section (Ruling R34: the service does not lift it)', () => {
+    expect(isNow(summary('a', { backFromHold: true }))).toBe(false);
   });
 });

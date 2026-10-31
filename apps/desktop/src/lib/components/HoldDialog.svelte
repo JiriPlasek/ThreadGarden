@@ -6,6 +6,7 @@
     formatHoldUntil,
     fromDateTimeLocal,
     holdPresets,
+    pickProblem,
     toDateTimeLocal,
   } from '#lib/format/hold.js';
   import { useApp } from '#lib/state/context.js';
@@ -61,15 +62,15 @@
     const t = fromDateTimeLocal(picked);
     return t !== null && t > now ? t : null;
   });
-  const pickProblem = $derived(
-    choice === 'pick' && picked !== '' && until === null ? 'Pick a time ahead of now.' : null,
-  );
+  const problem = $derived(choice === 'pick' ? pickProblem(picked, now) : null);
 
   const day = (t: number): string =>
     new Date(t).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
 
   const save = async (e: SubmitEvent): Promise<void> => {
     e.preventDefault();
+    // The dialog may have stayed open a while (past midnight: "Tomorrow" moved on).
+    now = Date.now();
     if (until === null || busy) return;
     busy = true;
     error = null;
@@ -121,13 +122,13 @@
           <input
             type="datetime-local"
             aria-label="Date and time"
-            aria-invalid={pickProblem ? 'true' : undefined}
+            aria-invalid={problem ? 'true' : undefined}
             min={toDateTimeLocal(now)}
             class="border-input focus-visible:border-ring focus-visible:ring-ring/50 ml-7 h-8 rounded-md border bg-transparent px-2 text-sm outline-none focus-visible:ring-2"
             bind:value={picked}
           />
-          {#if pickProblem}
-            <p class="text-destructive ml-7 text-xs" role="alert">{pickProblem}</p>
+          {#if problem}
+            <p class="text-destructive ml-7 text-xs" role="alert">{problem}</p>
           {/if}
         {/if}
         <label class={optionClass}>

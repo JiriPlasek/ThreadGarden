@@ -20,7 +20,9 @@
   import { shortcut } from '#lib/shortcuts.js';
   import { taskRunning, type ChatState } from '#lib/state/chats.svelte.js';
   import { useApp } from '#lib/state/context.js';
+  import { endSessionWarning } from './end-session';
   import { tokens, usd } from './format';
+  import RunningTaskList from './RunningTaskList.svelte';
 
   /**
    * Title row plus the chat's controls (spec §6.4): model, effort and permission
@@ -136,22 +138,12 @@
   };
 
   let confirmEnd = $state(false);
-  /** Shown in the End session dialog at most; the rest is counted. */
-  const MAX_LISTED = 6;
   /** Background agents and processes that ending the session stops with the process. */
   const runningTasks = $derived(chat.tasks.filter(taskRunning));
   const busy = $derived(chat.status === 'working' || chat.status === 'needsYou');
-  const endDescription = $derived.by(() => {
-    const n = runningTasks.length;
-    const tasks = `${n} background ${n === 1 ? 'task' : 'tasks'}`;
-    const after = 'the chat stays in your history and can be resumed.';
-    if (n === 0)
-      return `Claude is still working in this chat. Ending stops the current turn; ${after}`;
-    if (busy) {
-      return `Claude is still working in this chat. Ending stops the current turn and the ${tasks} below; ${after}`;
-    }
-    return `This chat still runs the ${tasks} below. Ending the session stops them; ${after}`;
-  });
+  const endDescription = $derived(
+    endSessionWarning({ busy, tasks: runningTasks.length, listed: true }) ?? undefined,
+  );
   const endNow = async (): Promise<void> => {
     await chats.end(sessionId);
   };
@@ -400,16 +392,7 @@
   destructive
   onConfirm={endNow}
 >
-  {#if runningTasks.length > 0}
-    <ul class="text-muted-foreground max-h-40 list-disc overflow-auto pl-5 text-sm">
-      {#each runningTasks.slice(0, MAX_LISTED) as t (t.taskId)}
-        <li class="truncate" title={t.description}>{t.description}</li>
-      {/each}
-    </ul>
-    {#if runningTasks.length > MAX_LISTED}
-      <p class="text-muted-foreground text-sm">and {runningTasks.length - MAX_LISTED} more</p>
-    {/if}
-  {/if}
+  <RunningTaskList tasks={runningTasks} />
 </ConfirmDialog>
 
 <ConfirmDialog
