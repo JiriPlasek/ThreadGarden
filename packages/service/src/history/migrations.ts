@@ -202,6 +202,16 @@ const steps: string[] = [
   ) WITHOUT ROWID;
   CREATE INDEX IF NOT EXISTS stats_agents_session ON stats_agents (session_id);
   `,
+  // remote machines: paired devices
+  `
+  CREATE TABLE IF NOT EXISTS devices (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    token_hash TEXT NOT NULL UNIQUE,
+    created_at INTEGER NOT NULL,
+    last_seen INTEGER
+  );
+  `,
 ];
 
 /** Runs the steps not run yet; `upTo` stops early (tests build older schemas with it). */

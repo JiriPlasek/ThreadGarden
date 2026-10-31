@@ -21,3 +21,12 @@ export const MachineInfoSchema = z.object({
   capabilities: z.array(z.string()),
 });
 export type MachineInfo = z.infer<typeof MachineInfoSchema>;
+
+/** A desktop paired with this (headless) service. The token is never part of it. */
+export const DeviceSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  createdAt: z.number(),
+  lastSeen: z.number().nullable(),
+});
+export type Device = z.infer<typeof DeviceSchema>;
