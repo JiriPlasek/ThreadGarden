@@ -5,7 +5,7 @@ use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, Manager, Runtime};
 
-const TRAY_ID: &str = "pahub";
+const TRAY_ID: &str = "threadgarden";
 /// Emitted to the webview; the UI confirms, then calls the service.
 pub const EVENT_STOP_ALL: &str = "tray://stop-all";
 pub const EVENT_QUIT_ALL: &str = "tray://quit-all";

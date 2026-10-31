@@ -83,14 +83,19 @@ pub fn dev_target(repo_root: &Path) -> Result<LaunchTarget, String> {
     Ok(LaunchTarget::node(PathBuf::from("node"), &script))
 }
 
-/// Release: the bundled Node sidecar (`pahub-node`, next to the app executable)
+/// The bundled Node sidecar's file name (`externalBin` in `tauri.bundle.conf.json`).
+pub fn sidecar_file_name() -> String {
+    format!("threadgarden-node{}", std::env::consts::EXE_SUFFIX)
+}
+
+/// Release: the bundled Node sidecar (`threadgarden-node`, next to the app executable)
 /// running the bundled `service/service.mjs` resource. Tauri canonicalizes the
 /// resource dir, which on Windows gives a verbatim `\\?\C:\…` path that Node
 /// cannot load a main script from (`EISDIR: lstat 'C:'`), so both paths are
 /// simplified to their plain form (a no-op elsewhere).
 pub fn release_target(exe_dir: &Path, resource_dir: &Path) -> Result<LaunchTarget, String> {
     let (exe_dir, resource_dir) = (dunce::simplified(exe_dir), dunce::simplified(resource_dir));
-    let node = exe_dir.join(format!("pahub-node{}", std::env::consts::EXE_SUFFIX));
+    let node = exe_dir.join(sidecar_file_name());
     let script = resource_dir.join("service").join("service.mjs");
     for required in [&node, &script] {
         if !required.is_file() {
@@ -564,9 +569,7 @@ mod tests {
         let res_dir = tempfile::tempdir().unwrap();
         let err = release_target(exe_dir.path(), res_dir.path()).unwrap_err();
         assert!(err.starts_with("service-runtime-missing"), "{err}");
-        let node = exe_dir
-            .path()
-            .join(format!("pahub-node{}", std::env::consts::EXE_SUFFIX));
+        let node = exe_dir.path().join(sidecar_file_name());
         std::fs::write(&node, "").unwrap();
         let err = release_target(exe_dir.path(), res_dir.path()).unwrap_err();
         assert!(err.starts_with("service-runtime-missing"), "{err}");
@@ -581,16 +584,13 @@ mod tests {
     fn release_target_passes_plain_paths_to_node() {
         let dir = tempfile::tempdir().unwrap();
         let canonical = dir.path().canonicalize().unwrap();
-        let node = canonical.join(format!("pahub-node{}", std::env::consts::EXE_SUFFIX));
+        let node = canonical.join(sidecar_file_name());
         std::fs::write(&node, "").unwrap();
         std::fs::create_dir_all(canonical.join("service")).unwrap();
         std::fs::write(canonical.join("service").join("service.mjs"), "").unwrap();
         let target = release_target(&canonical, &canonical).unwrap();
         let plain = dunce::simplified(&canonical).to_path_buf();
-        assert_eq!(
-            target.program,
-            plain.join(format!("pahub-node{}", std::env::consts::EXE_SUFFIX))
-        );
+        assert_eq!(target.program, plain.join(sidecar_file_name()));
         assert_eq!(
             target.args[1],
             plain.join("service").join("service.mjs").into_os_string()

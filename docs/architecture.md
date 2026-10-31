@@ -42,7 +42,7 @@ flowchart TB
   because the Agent SDK, the only official programmatic interface to Claude
   Code, exists for TypeScript and Python only. Release builds run it as one
   esbuild bundle (`service.mjs`) on a Node.js runtime shipped as the Tauri
-  sidecar `pahub-node`.
+  sidecar `threadgarden-node`.
 - **Claude Code processes**: each live chat is one Agent SDK `query()` in
   streaming-input mode, which spawns the user's installed `claude`
   (`pathToClaudeCodeExecutable`; no fallback to the SDK's bundled binary) with

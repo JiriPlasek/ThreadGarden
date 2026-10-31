@@ -55,7 +55,7 @@ check in the pull request or release notes.
 - [ ] Close the window while a chat is working: the chat keeps running; open
       Threadgarden from the tray and it shows the finished turn.
 - [ ] **Windows:** end Threadgarden with Task Manager → "End task" while a chat is
-      working. The agent keeps running (the `pahub-node` service process
+      working. The agent keeps running (the `threadgarden-node` service process
       survives); launching Threadgarden again reconnects to it. On macOS and Linux,
       kill the app process (`kill <pid>`) and check the same.
 - [ ] **Notifications:** with the window unfocused or another chat active,

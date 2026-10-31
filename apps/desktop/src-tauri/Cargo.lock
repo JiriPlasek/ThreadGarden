@@ -2876,31 +2876,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pahub"
-version = "0.2.0"
-dependencies = [
- "base64 0.22.1",
- "dunce",
- "futures-util",
- "keyring",
- "libc",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-autostart",
- "tauri-plugin-clipboard-manager",
- "tauri-plugin-dialog",
- "tauri-plugin-notification",
- "tauri-plugin-opener",
- "tauri-plugin-single-instance",
- "tempfile",
- "tokio",
- "tokio-tungstenite",
- "windows-sys 0.61.2",
-]
-
-[[package]]
 name = "pango"
 version = "0.18.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4465,6 +4440,31 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.9",
+]
+
+[[package]]
+name = "threadgarden"
+version = "0.2.0"
+dependencies = [
+ "base64 0.22.1",
+ "dunce",
+ "futures-util",
+ "keyring",
+ "libc",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-autostart",
+ "tauri-plugin-clipboard-manager",
+ "tauri-plugin-dialog",
+ "tauri-plugin-notification",
+ "tauri-plugin-opener",
+ "tauri-plugin-single-instance",
+ "tempfile",
+ "tokio",
+ "tokio-tungstenite",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]

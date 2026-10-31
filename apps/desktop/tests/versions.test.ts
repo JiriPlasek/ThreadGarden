@@ -15,7 +15,9 @@ describe('release versions', () => {
     const cargo = /^\[package\][^[]*?^version\s*=\s*"([^"]+)"/m.exec(
       read('../src-tauri/Cargo.toml'),
     );
-    const lock = /name = "pahub"\r?\nversion = "([^"]+)"/.exec(read('../src-tauri/Cargo.lock'));
+    const lock = /name = "threadgarden"\r?\nversion = "([^"]+)"/.exec(
+      read('../src-tauri/Cargo.lock'),
+    );
     const versions = {
       root: json('../../../package.json').version,
       desktop: json('../package.json').version,

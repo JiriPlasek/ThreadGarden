@@ -2,7 +2,7 @@
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Threadgarden",
   "version": "0.2.0",
-  "identifier": "dev.pahub.desktop",
+  "identifier": "dev.threadgarden.desktop",
   "build": {
     "frontendDist": "../build",
     "devUrl": "http://127.0.0.1:1420",

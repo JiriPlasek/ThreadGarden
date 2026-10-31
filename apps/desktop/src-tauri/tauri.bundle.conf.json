@@ -4,7 +4,7 @@
     "beforeBuildCommand": "pnpm --filter @threadgarden/service build && pnpm build"
   },
   "bundle": {
-    "externalBin": ["binaries/pahub-node"],
+    "externalBin": ["binaries/threadgarden-node"],
     "resources": {
       "../../../packages/service/dist/service.mjs": "service/service.mjs"
     }

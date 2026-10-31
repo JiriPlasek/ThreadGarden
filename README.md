@@ -124,7 +124,7 @@ The interface size (80 % to 150 % in 10 % steps) is also in Settings, and Thread
 
 There are no published releases yet.
 
-**From CI artifacts.** Every push builds unsigned installers on all three platforms; open a successful run of the CI workflow on GitHub and download the `pahub-<target triple>` artifact for your platform (kept for 7 days): MSI or NSIS `setup.exe` on Windows, DMG on macOS, deb, rpm or AppImage on Linux. The builds are not code-signed, so Windows SmartScreen and macOS Gatekeeper warn before the first launch. On macOS an unsigned app downloaded from the internet may be reported as damaged; remove the quarantine attribute after copying it to Applications (`xattr -dr com.apple.quarantine /Applications/pahub.app`) only if you trust the build.
+**From CI artifacts.** Every push builds unsigned installers on all three platforms; open a successful run of the CI workflow on GitHub and download the `threadgarden-<target triple>` artifact for your platform (kept for 7 days): MSI or NSIS `setup.exe` on Windows, DMG on macOS, deb, rpm or AppImage on Linux. The builds are not code-signed, so Windows SmartScreen and macOS Gatekeeper warn before the first launch. On macOS an unsigned app downloaded from the internet may be reported as damaged; remove the quarantine attribute after copying it to Applications (`xattr -dr com.apple.quarantine /Applications/Threadgarden.app`) only if you trust the build.
 
 **From source.** You need Node.js 22, pnpm 11, Rust (rustup installs the version pinned in `rust-toolchain.toml`) and the [Tauri 2 prerequisites](https://v2.tauri.app/start/prerequisites/) for your OS; on Debian or Ubuntu that is `libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev`.
 
@@ -138,7 +138,7 @@ node scripts/fetch-node-sidecar.mjs
 pnpm --filter desktop tauri build --config src-tauri/tauri.bundle.conf.json
 ```
 
-The installers land in `apps/desktop/src-tauri/target/release/bundle/`. Release builds ship the service as one bundled file (`packages/service/dist/service.mjs`) run by a Node.js 22 LTS runtime packaged as the Tauri sidecar `pahub-node`, so users need no Node.js installation. The sidecar binary is downloaded from nodejs.org at build time, verified against `SHASUMS256.txt` and the hashes pinned in `scripts/fetch-node-sidecar.mjs`, and never committed.
+The installers land in `apps/desktop/src-tauri/target/release/bundle/`. Release builds ship the service as one bundled file (`packages/service/dist/service.mjs`) run by a Node.js 22 LTS runtime packaged as the Tauri sidecar `threadgarden-node`, so users need no Node.js installation. The sidecar binary is downloaded from nodejs.org at build time, verified against `SHASUMS256.txt` and the hashes pinned in `scripts/fetch-node-sidecar.mjs`, and never committed.
 
 ## Development
 
