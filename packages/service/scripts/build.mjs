@@ -17,8 +17,8 @@ import { build } from 'esbuild';
 
 const legacyApiKeyOnly = process.env.PAHUB_API_KEY_ONLY;
 if (legacyApiKeyOnly) {
-  console.warn(
-    'PAHUB_API_KEY_ONLY is deprecated and will be ignored in a later release: set THREADGARDEN_API_KEY_ONLY instead',
+  process.stderr.write(
+    'PAHUB_API_KEY_ONLY is deprecated and will be ignored in a later release: set THREADGARDEN_API_KEY_ONLY instead\n',
   );
 }
 const apiKeyOnly = process.env.THREADGARDEN_API_KEY_ONLY === '1' || legacyApiKeyOnly === '1';
