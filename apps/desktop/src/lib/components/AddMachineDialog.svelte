@@ -22,7 +22,9 @@
   let code = $state('');
   let deviceName = $state('');
   let busy = $state(false);
-  let error = $state<string | null>(null);
+  /** An error, or one with a command in it: `[before, command, after]`, the command shown as code. */
+  type Failure = string | [before: string, command: string, after: string];
+  let error = $state<Failure | null>(null);
 
   /** The name this PC goes by on the other machine: its hostname. */
   const defaultName = (): string => machines.local?.info?.name || THIS_PC;
@@ -60,16 +62,20 @@
 
   const ALREADY = 'Already paired as ';
 
-  const pairingText = (c: PairingCode, at: string, message: string): string => {
+  const pairingText = (c: PairingCode, at: string, message: string): Failure => {
     switch (c) {
       case 'PAIRING_UNREACHABLE':
         return `Can't reach ${at}. Is the machine on and Threadgarden running there?`;
       case 'PAIRING_PROOF_FAILED':
         return `The machine at ${at} couldn't prove it knows this code. Nothing was sent. Check the code and the address.`;
       case 'PAIRING_INVALID':
-        return "That code isn't valid. Run `threadgarden pair` on the machine for a new one.";
+        return [
+          "That code isn't valid. Run ",
+          'threadgarden pair',
+          ' on the machine for a new one.',
+        ];
       case 'PAIRING_EXPIRED':
-        return 'That code has expired. Run `threadgarden pair` again.';
+        return ['That code has expired. Run ', 'threadgarden pair', ' again.'];
       case 'PAIRING_SELF':
         return "That's this machine.";
       case 'PAIRING_DUPLICATE':
@@ -82,17 +88,37 @@
     }
   };
 
-  const failure = (err: unknown, at: string): string => {
+  const failure = (err: unknown, at: string): Failure => {
     if (err instanceof RequestError && isPairingCode(err.code)) {
       return pairingText(err.code, at, err.message);
     }
     return err instanceof Error ? err.message : String(err);
   };
 
+  /**
+   * `host:port` (or `[ipv6]:port`) typed or pasted into Address: the host and
+   * the port, both as the protocol accepts them; null for anything else (a bare
+   * IPv6 address has colons of its own and stays whole).
+   */
+  const splitHostPort = (text: string): { host: string; port: string } | null => {
+    const t = text.trim();
+    const m = /^\[([^\]]+)\]:(\d+)$/.exec(t) ?? /^([^:]+):(\d+)$/.exec(t);
+    if (!m || !MachineAddressSchema.safeParse(m[1]).success) return null;
+    return { host: m[1]!, port: m[2]! };
+  };
+  /** Moves a port typed into Address to the Port field. */
+  const takePort = (): void => {
+    const split = splitHostPort(address);
+    if (!split) return;
+    address = split.host;
+    port = split.port;
+  };
+
   const submit = async (e: SubmitEvent): Promise<void> => {
     e.preventDefault();
     if (busy) return;
     error = null;
+    takePort();
     const a = MachineAddressSchema.safeParse(address);
     if (!a.success) {
       error = 'Enter the machine’s IP address or host name, such as ubuntu-pc.local.';
@@ -155,6 +181,7 @@
           spellcheck="false"
           autocomplete="off"
           bind:value={address}
+          onchange={takePort}
         />
       </div>
       <div class="grid gap-1">
@@ -198,7 +225,11 @@
       </p>
       <div aria-live="polite">
         {#if error}
-          <p class="text-destructive text-xs" role="alert">{error}</p>
+          <p class="text-destructive text-xs" role="alert">
+            {#if typeof error === 'string'}{error}{:else}{error[0]}<code class="font-mono"
+                >{error[1]}</code
+              >{error[2]}{/if}
+          </p>
         {/if}
       </div>
 

@@ -96,14 +96,16 @@
 
   let removing = $state<MachineEntry | null>(null);
   let removeOpen = $state(false);
-  let notice = $state<string | null>(null);
+  /**
+   * A machine removed here that did not confirm it forgot this PC (unreachable,
+   * locked, or it had already revoked it: the cause is not known).
+   */
+  let unconfirmed = $state<string | null>(null);
 
   const remove = async (m: MachineEntry): Promise<void> => {
     const revoked = await machines.remove(m.id);
     delete drafts[m.id];
-    notice = revoked
-      ? null
-      : `${m.name} was removed here. It couldn't be reached, so it still lists this PC. Run \`threadgarden devices\` and \`threadgarden revoke\` there to remove it.`;
+    unconfirmed = revoked ? null : m.name;
   };
 
   const fieldClass = 'bg-background h-8 w-full min-w-0 rounded-md border px-2 text-sm';
@@ -189,8 +191,12 @@
     </div>
   {/each}
 
-  {#if notice}
-    <p class="text-muted-foreground text-xs" role="status">{notice}</p>
+  {#if unconfirmed}
+    <p class="text-muted-foreground text-xs" role="status">
+      {unconfirmed} was removed here. It may still list this PC: on {unconfirmed}, run
+      <code class="font-mono">threadgarden devices</code> and
+      <code class="font-mono">threadgarden revoke &lt;id&gt;</code>.
+    </p>
   {/if}
 
   <div>

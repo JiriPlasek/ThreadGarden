@@ -99,9 +99,9 @@ describe('Settings → Machines', () => {
     ],
     [
       'PAIRING_INVALID',
-      "That code isn't valid. Run `threadgarden pair` on the machine for a new one.",
+      "That code isn't valid. Run threadgarden pair on the machine for a new one.",
     ],
-    ['PAIRING_EXPIRED', 'That code has expired. Run `threadgarden pair` again.'],
+    ['PAIRING_EXPIRED', 'That code has expired. Run threadgarden pair again.'],
     ['PAIRING_SELF', "That's this machine."],
   ])('shows %s inline and keeps the dialog open', async (code, text) => {
     const env = await setupTwoMachines();
@@ -109,8 +109,68 @@ describe('Settings → Machines', () => {
     const dialog = await openAdd(env);
     await fill(dialog, 'fedora.local', 'ABCD-EFGH-JKLM');
     await userEvent.click(within(dialog).getByRole('button', { name: 'Pair' }));
-    expect((await within(dialog).findByRole('alert')).textContent).toBe(text);
+    const alert = await within(dialog).findByRole('alert');
+    expect(alert.textContent).toBe(text);
+    // Commands are code, never literal backticks.
+    expect(alert.textContent).not.toContain('`');
+    expect([...alert.querySelectorAll('code')].map((c) => c.textContent)).toEqual(
+      text.includes('threadgarden pair') ? ['threadgarden pair'] : [],
+    );
     expect(env.app.interaction.addMachineOpen).toBe(true);
+  });
+
+  it('splits a pasted address:port into the address and the port', async () => {
+    const env = await setupTwoMachines();
+    pairing(env as Env);
+    const dialog = await openAdd(env);
+    const address = within(dialog).getByLabelText('Address') as HTMLInputElement;
+    await userEvent.click(address);
+    await userEvent.paste('192.168.1.50:47390');
+    await userEvent.tab();
+    expect(address.value).toBe('192.168.1.50');
+    expect((within(dialog).getByLabelText('Port') as HTMLInputElement).value).toBe('47390');
+    await userEvent.type(within(dialog).getByLabelText('Pairing code'), 'ABCD-EFGH-JKLM');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Pair' }));
+    await waitFor(() =>
+      expect(env.server.calls('machines.pair').map((c) => c.params)).toEqual([
+        { address: '192.168.1.50', port: 47390, code: 'ABCD-EFGH-JKLM', deviceName: 'my-host' },
+      ]),
+    );
+  });
+
+  it('splits host:port on Pair too, and checks the port', async () => {
+    const env = await setupTwoMachines();
+    pairing(env as Env);
+    const dialog = await openAdd(env);
+    await fill(dialog, 'ubuntu-pc.local:99999', 'ABCD-EFGH-JKLM');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Pair' }));
+    expect((await within(dialog).findByRole('alert')).textContent).toBe(
+      'The port is a number from 1 to 65535.',
+    );
+    expect(env.server.calls('machines.pair')).toEqual([]);
+
+    const address = within(dialog).getByLabelText('Address') as HTMLInputElement;
+    await userEvent.clear(address);
+    await userEvent.type(address, 'ubuntu-pc.local:47381');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Pair' }));
+    await waitFor(() =>
+      expect(env.server.calls('machines.pair').map((c) => c.params)).toEqual([
+        { address: 'ubuntu-pc.local', port: 47381, code: 'ABCD-EFGH-JKLM', deviceName: 'my-host' },
+      ]),
+    );
+  });
+
+  it('leaves an IPv6 address whole', async () => {
+    const env = await setupTwoMachines();
+    pairing(env as Env);
+    const dialog = await openAdd(env);
+    await fill(dialog, 'fe80::1', 'ABCD-EFGH-JKLM');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Pair' }));
+    await waitFor(() =>
+      expect(env.server.calls('machines.pair').map((c) => c.params)).toEqual([
+        { address: 'fe80::1', port: 47380, code: 'ABCD-EFGH-JKLM', deviceName: 'my-host' },
+      ]),
+    );
   });
 
   it('names the machine already paired, whatever address was typed', async () => {
@@ -289,7 +349,8 @@ describe('Settings → Machines', () => {
     await waitFor(() => expect(document.activeElement).toBe(heading));
   });
 
-  it('says what to run on the machine when it could not be reached to revoke', async () => {
+  it('says what to run on the machine when it did not confirm the revoke', async () => {
+    // Not confirmed: unreachable, locked, or it had already revoked this PC; the cause is unknown.
     const env = await setupTwoMachines({
       configure: (s) => (s.handlers['machines.remove'] = () => ({ revoked: false })),
     });
@@ -298,9 +359,14 @@ describe('Settings → Machines', () => {
     const confirm = await screen.findByRole('alertdialog');
     await userEvent.click(within(confirm).getByRole('button', { name: 'Remove' }));
     const notice = await screen.findByRole('status');
-    expect(notice.textContent).toContain('Ubuntu PC was removed here');
-    expect(notice.textContent).toContain('threadgarden devices');
-    expect(notice.textContent).toContain('threadgarden revoke');
+    expect(notice.textContent).toBe(
+      'Ubuntu PC was removed here. It may still list this PC: on Ubuntu PC, run ' +
+        'threadgarden devices and threadgarden revoke <id>.',
+    );
+    expect([...notice.querySelectorAll('code')].map((c) => c.textContent)).toEqual([
+      'threadgarden devices',
+      'threadgarden revoke <id>',
+    ]);
   });
 
   it('"Open settings" on a machine needing attention opens Settings at Machines', async () => {
