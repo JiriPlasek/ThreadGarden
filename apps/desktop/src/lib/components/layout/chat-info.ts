@@ -19,3 +19,6 @@ export const externalLabel = (s: Pick<ChatSummary, 'external'>): string =>
 
 /** DOM id of a chat's tab (the chat panel is labelled by it). */
 export const tabId = (sessionId: string): string => `tab-${sessionId}`;
+
+/** DOM id of the Analytics tab (v1.3); no session id has this form. */
+export const ANALYTICS_TAB_ID = 'tab-pahub-analytics';

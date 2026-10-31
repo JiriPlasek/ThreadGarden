@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { AnalyticsRangeSchema, AnalyticsSchema } from './analytics.js';
 import {
   BucketSchema,
   ChatHeaderInfoSchema,
@@ -320,6 +321,15 @@ export const methods = {
   'scheduled.cancel': def(scheduledId, empty),
   /** Sends it now through `chat.send` (its errors, e.g. `RESUME_BLOCKED`, are this call's). */
   'scheduled.sendNow': def(scheduledId, empty),
+  // ── v1.3 C: analytics ─────────────────────────────────────────────────────
+  /**
+   * Usage statistics of the range, for one project or all, aggregated in SQL
+   * from Threadgarden's own per-session statistics (design §4).
+   */
+  'analytics.get': def(
+    z.object({ range: AnalyticsRangeSchema, projectId: z.string().optional() }),
+    AnalyticsSchema,
+  ),
 } as const;
 
 export type MethodName = keyof typeof methods;

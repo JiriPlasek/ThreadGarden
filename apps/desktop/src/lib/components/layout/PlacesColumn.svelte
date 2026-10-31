@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { Place, Project } from '@pahub/protocol';
   import ArchiveIcon from '@lucide/svelte/icons/archive';
-  import logo from '#lib/assets/logo.png';
+  import ChartColumnIcon from '@lucide/svelte/icons/chart-column';
   import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
   import EyeIcon from '@lucide/svelte/icons/eye';
   import EyeOffIcon from '@lucide/svelte/icons/eye-off';
@@ -12,6 +12,7 @@
   import PinIcon from '@lucide/svelte/icons/pin';
   import PinOffIcon from '@lucide/svelte/icons/pin-off';
   import SettingsIcon from '@lucide/svelte/icons/settings';
+  import logo from '#lib/assets/logo.png';
   import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
   import * as ContextMenu from '#lib/components/ui/context-menu/index.js';
   import * as Tooltip from '#lib/components/ui/tooltip/index.js';
@@ -28,10 +29,11 @@
    * the service's order (pinned, then recent activity). Projects whose folder
    * is gone sit in a collapsed "Missing folders" group below them (v1.1 §4).
    * Each project shows its icon or a letter tile (v1.3 §5), a pinned one a pin.
+   * Analytics (v1.3 §4), below Running, opens its view in the main pane.
    */
   let { onCollapse }: { onCollapse?: () => void } = $props();
 
-  const { places, interaction } = useApp();
+  const { places, interaction, tabs } = useApp();
 
   let showHidden = $state(false);
   /** The "Hide all missing" confirmation is open (v1.2 §4). */
@@ -189,6 +191,18 @@
           <StatusIcon status="working" decorative class="mx-px" />
           <span class="truncate">Running</span>
           {@render badge(places.counts.running, 'green', 'Working agents')}
+        </button>
+      </li>
+      <li>
+        <!-- v1.3: opens the Analytics view in the main pane (not a list place). -->
+        <button
+          type="button"
+          class={itemClass(tabs.analyticsShown)}
+          aria-current={tabs.analyticsShown ? 'page' : undefined}
+          onclick={tabs.showAnalytics}
+        >
+          <ChartColumnIcon class="text-muted-foreground size-4 shrink-0" aria-hidden="true" />
+          <span class="truncate">Analytics</span>
         </button>
       </li>
       {#each BUCKETS as b (b.kind)}

@@ -146,6 +146,8 @@ service and the UI; the service validates every request.
   `chat.fork`, `chat.end`, model/mode/effort controls, `chat.resumeCheck`),
   Threadgarden-side metadata, drafts, UI state, settings, `files.suggest`,
   `work.stopAll`, `service.shutdown` and `system.status`. `chat.markSeen`
+  Threadgarden-side metadata, drafts, UI state, settings, `files.suggest`,
+  `work.stopAll`, `service.shutdown`, `system.status` and (v1.3) `analytics.get`. `chat.markSeen`
   records that the user has seen a chat's latest turn ("Your turn", below).
   v1.3 (protocol 3) adds `usage.get` (the account's plan usage; `refresh`
   asks a running chat for a fresh reading) and `scheduled.create`, `.list`,
@@ -343,6 +345,50 @@ later (a rename in the terminal). While the query's process runs it is listed
 by `claude agents`: the poller counts its session id as Threadgarden's own while it
 runs and for 15 s after it ends, so it never shows as an external chat.
 
+**Analytics** (v1.3). Statistics come from the same `getSessionMessages`
+walk that indexes a session's text (`src/history/stats.ts`), so they cost
+no extra read and no transcript parsing: per local calendar day and model,
+user and assistant messages of the main conversation and the input, output,
+cache-read and cache-creation tokens of assistant `message.usage` (Claude
+Code writes one entry per content block, each repeating the API message's
+id and usage, so a message id counts once, with its last usage); tool calls
+by name and Agent/Task calls by `input.subagent_type` (tool-use ids count
+once); messages per day and hour; and the first and last message time.
+Subagent replies add tokens and tool calls but are not counted as
+messages; tool results, `isMeta`/compaction entries, subagent prompts and
+CLI envelopes other than typed commands are not user messages; replies of
+the `<synthetic>` model are skipped. Unknown shapes count as absent. A
+message without a timestamp takes the previous one's, else the session's
+creation time. The rows live in Threadgarden's `stats_sessions` (per-session
+totals and a `version`), `stats_days`, `stats_hours`, `stats_tools` and
+`stats_agents`, keyed by day first, and are replaced in one transaction
+whenever the session is indexed again and deleted with it. The same
+transaction adds and subtracts them in `stats_all_*`, the sums over every
+session, so the all-projects view never scans per session.
+
+Sessions indexed before statistics existed (`version` missing or older
+than `STATS_VERSION`) are *backfilled*: after a full sync the indexer
+reads them again through the SDK, four per turn of its serial queue
+(refreshes of changed chats run between turns) with the usual event-loop
+yields between slices of 100 messages, and writes only statistics; the
+full-text index is left alone. Chats mid-turn wait for their next index; a
+session that cannot be read is skipped until the next start.
+`analytics.get {range, projectId?}` aggregates in SQL: ranges end today
+(the service's local day); "all time" starts at the first chat with
+statistics and is bucketed by week (Mondays) past 120 days. Chats wholly
+inside the range count with their stored totals, so only the ones crossing
+its start are summed per day. The topic words come from the titles the app
+shows (the catalog's cached corpus): English function words, chat filler,
+numbers, words under three letters and a word every one of five or more
+titles shares are left out. `pending` counts the chats still waiting for
+the backfill; the UI refreshes while it is not zero.
+
+The UI shows Analytics in the main pane as a pseudo-tab next to the chat
+tabs (`TabsState.analyticsOpen`/`analyticsShown`): it is not in the list
+of open chats, so loading, "Your turn" and notifications never see it, and
+while it shows no chat is active (the covered chat returns when it closes,
+and is what the saved layout remembers).
+
 **Chat view.** `chat.open` returns the last N items of the SDK history merged
 with the live session's items (the live version wins for anything both have),
 plus the current seq. The normalized history of a chat is cached (bounded at
@@ -510,7 +556,11 @@ CI runs them with `PAHUB_PERF_SLACK=3`. Measured on the development machine
 | Event-loop delay while building a 200k-file index | 50 ms | max 15.0 ms |
 | Event-loop delay while indexing a 20 MB session | 50 ms | max 9.2 ms (221 ms total) |
 | Event-loop delay while finding the icons of 50 worst-case projects at once | 50 ms | max 17.3 ms (577 ms total) |
-| Service idle memory after indexing 1,000 sessions | 150 MB | 101.6 MB RSS |
+| Service idle memory after indexing 1,000 sessions | 150 MB | 101.6 MB RSS (112.0 MB with v1.3 statistics) |
+| `analytics.get` over 5,000 sessions in a year, any range, all or one project | 50 ms | max 22.3 ms ("all time"; 30 days 5.8 ms) |
+| Gathering statistics of the 2,000-message (20 MB) session | 20 ms | 3.6 ms collect, 0.8 ms write |
+| Event-loop delay while backfilling statistics (the 20 MB session and 200 others) | 50 ms | max 5.8 ms (144 ms total) |
+| Search / `analytics.get` while 1,000 sessions are backfilled | 150 / 50 ms | max 25.0 / 4.9 ms |
 | Switching to an open tab | 50 ms | median 9.5 ms |
 | Opening a history chat | 150 ms | median 22.0 ms |
 | Ctrl+K, per keystroke (UI, end to end) | 50 ms | max 22.5 ms |

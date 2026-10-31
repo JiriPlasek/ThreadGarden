@@ -113,6 +113,8 @@ describe('places column: Active, On hold, Archived (v1.2 §3)', () => {
       expect(smartFolders()).toEqual([
         'Needs you 1',
         'Running',
+        // v1.3 §4: opens the Analytics view, not a list
+        'Analytics',
         'Active 7',
         'On hold 2',
         'Archived 30',

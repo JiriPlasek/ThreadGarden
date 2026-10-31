@@ -118,6 +118,90 @@ const steps: string[] = [
   CREATE INDEX IF NOT EXISTS scheduled_sends_due ON scheduled_sends (state, send_at);
   CREATE INDEX IF NOT EXISTS scheduled_sends_session ON scheduled_sends (session_id);
   `,
+  // v1.3 C analytics: per-session statistics the indexer extracts from the
+  // SDK's messages (`history/stats.ts`), replaced whenever the session is
+  // indexed again. `stats_sessions` marks a session done at `version` and
+  // holds its totals; days are local calendar days (`YYYY-MM-DD`). The
+  // `stats_all_*` tables are the same figures summed over every session,
+  // kept up to date with them, so the all-projects view never scans per
+  // session.
+  `
+  CREATE TABLE IF NOT EXISTS stats_sessions (
+    session_id TEXT PRIMARY KEY,
+    version INTEGER NOT NULL,
+    first_at INTEGER,
+    last_at INTEGER,
+    first_day TEXT,
+    last_day TEXT,
+    messages INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE INDEX IF NOT EXISTS stats_sessions_first_day ON stats_sessions (first_day);
+  CREATE TABLE IF NOT EXISTS stats_all_days (
+    day TEXT NOT NULL,
+    model TEXT NOT NULL,
+    messages INTEGER NOT NULL DEFAULT 0,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (day, model)
+  ) WITHOUT ROWID;
+  CREATE TABLE IF NOT EXISTS stats_all_hours (
+    day TEXT NOT NULL,
+    hour INTEGER NOT NULL,
+    messages INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (day, hour)
+  ) WITHOUT ROWID;
+  CREATE TABLE IF NOT EXISTS stats_all_tools (
+    day TEXT NOT NULL,
+    tool TEXT NOT NULL,
+    calls INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (day, tool)
+  ) WITHOUT ROWID;
+  CREATE TABLE IF NOT EXISTS stats_all_agents (
+    day TEXT NOT NULL,
+    agent_type TEXT NOT NULL,
+    calls INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (day, agent_type)
+  ) WITHOUT ROWID;
+  CREATE TABLE IF NOT EXISTS stats_days (
+    session_id TEXT NOT NULL,
+    day TEXT NOT NULL,
+    model TEXT NOT NULL,
+    user_messages INTEGER NOT NULL DEFAULT 0,
+    assistant_messages INTEGER NOT NULL DEFAULT 0,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (day, model, session_id)
+  ) WITHOUT ROWID;
+  CREATE INDEX IF NOT EXISTS stats_days_session ON stats_days (session_id);
+  CREATE TABLE IF NOT EXISTS stats_hours (
+    session_id TEXT NOT NULL,
+    day TEXT NOT NULL,
+    hour INTEGER NOT NULL,
+    messages INTEGER NOT NULL,
+    PRIMARY KEY (day, hour, session_id)
+  ) WITHOUT ROWID;
+  CREATE INDEX IF NOT EXISTS stats_hours_session ON stats_hours (session_id);
+  CREATE TABLE IF NOT EXISTS stats_tools (
+    session_id TEXT NOT NULL,
+    day TEXT NOT NULL,
+    tool TEXT NOT NULL,
+    calls INTEGER NOT NULL,
+    PRIMARY KEY (day, tool, session_id)
+  ) WITHOUT ROWID;
+  CREATE INDEX IF NOT EXISTS stats_tools_session ON stats_tools (session_id);
+  CREATE TABLE IF NOT EXISTS stats_agents (
+    session_id TEXT NOT NULL,
+    day TEXT NOT NULL,
+    agent_type TEXT NOT NULL,
+    calls INTEGER NOT NULL,
+    PRIMARY KEY (day, agent_type, session_id)
+  ) WITHOUT ROWID;
+  CREATE INDEX IF NOT EXISTS stats_agents_session ON stats_agents (session_id);
+  `,
 ];
 
 /** Runs the steps not run yet; `upTo` stops early (tests build older schemas with it). */

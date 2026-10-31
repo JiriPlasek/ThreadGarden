@@ -104,7 +104,7 @@ describe('quick switcher', () => {
     expect(screen.getByRole('option', { name: /result for ab/i })).toBeTruthy();
   });
 
-  it('hosts commands: New chat in…, Stop all work, Settings, Keyboard shortcuts', async () => {
+  it('hosts commands: New chat in…, Stop all work, Analytics, Settings, Keyboard shortcuts', async () => {
     const { app, context } = await setup();
     render(QuickSwitcher, { context });
 
@@ -119,6 +119,8 @@ describe('quick switcher', () => {
       'Stop all work',
       // v1.3 B
       'Usage',
+      // v1.3 §4
+      'Analytics',
       'Settings',
       'Keyboard shortcuts',
       // v1.2 §3, in Active and in a project.

@@ -1,6 +1,7 @@
 import type { ChatStatus, ChatSummary, Project } from '@pahub/protocol';
 import { ServiceClient } from '../../src/lib/service/client';
 import { AgentsState } from '../../src/lib/state/agents.svelte';
+import { AnalyticsState } from '../../src/lib/state/analytics.svelte';
 import { BucketsState } from '../../src/lib/state/buckets.svelte';
 import { ChatsState } from '../../src/lib/state/chats.svelte';
 import { ConnectionState } from '../../src/lib/state/connection.svelte';
@@ -94,6 +95,7 @@ export const setup = async (configure?: (server: FakeServer) => void) => {
     buckets: new BucketsState(),
     usage: new UsageStore(),
     scheduled: new ScheduledState(),
+    analytics: new AnalyticsState(),
   };
   app.connection.init(client);
   app.places.init(client);
@@ -111,6 +113,7 @@ export const setup = async (configure?: (server: FakeServer) => void) => {
   app.buckets.init(client, app.chats);
   app.usage.init(client);
   app.scheduled.init(client);
+  app.analytics.init(client);
   app.tabs.subscribe(() => app.chats.sync(app.tabs.open, app.tabs.active));
 
   const context = new Map<unknown, unknown>([[APP_CONTEXT, app]]);

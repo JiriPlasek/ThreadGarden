@@ -1,4 +1,4 @@
-//! pahub's data dir and the service's discovery file (`service.json`).
+//! Threadgarden's data dir and the service's discovery file (`service.json`).
 //!
 //! Mirrors `packages/service/src/config.ts` (`resolveDataDir`) and
 //! `packages/service/src/discovery.ts`. The app passes the resolved dir to the
@@ -40,7 +40,7 @@ impl Os {
     }
 }
 
-/// pahub's data dir: `PAHUB_DATA_DIR`, else `%APPDATA%\pahub` (Windows),
+/// Threadgarden's data dir: `PAHUB_DATA_DIR`, else `%APPDATA%\pahub` (Windows),
 /// `~/Library/Application Support/pahub` (macOS),
 /// `${XDG_DATA_HOME:-~/.local/share}/pahub` (Linux). Empty variables count as unset.
 pub fn resolve_data_dir(env: impl Fn(&str) -> Option<String>, os: Os, home: &Path) -> PathBuf {

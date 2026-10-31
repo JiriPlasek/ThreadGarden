@@ -1,10 +1,11 @@
 <script lang="ts">
+  import ChartColumnIcon from '@lucide/svelte/icons/chart-column';
   import PlusIcon from '@lucide/svelte/icons/plus';
   import XIcon from '@lucide/svelte/icons/x';
   import { useApp } from '#lib/state/context.js';
   import { cn } from '#lib/utils.js';
   import { shortcut } from '#lib/shortcuts.js';
-  import { rawStatus, tabId } from './chat-info';
+  import { ANALYTICS_TAB_ID, rawStatus, tabId } from './chat-info';
   import IconButton from './IconButton.svelte';
   import RunningBadge from './RunningBadge.svelte';
   import ScheduledBadge from './ScheduledBadge.svelte';
@@ -82,6 +83,9 @@
     if (e.key.toLowerCase() === 'n' && !e.shiftKey) {
       e.preventDefault();
       newChat();
+    } else if (e.key.toLowerCase() === 'w' && !e.shiftKey && tabs.analyticsShown) {
+      e.preventDefault();
+      tabs.closeAnalytics();
     } else if (e.key.toLowerCase() === 'w' && !e.shiftKey && tabs.active) {
       e.preventDefault();
       tabs.close(tabs.active);
@@ -111,6 +115,46 @@
     class="flex min-w-0 items-stretch overflow-x-auto [scrollbar-width:none]"
     onkeydown={onTabsKey}
   >
+    {#if tabs.analyticsOpen}
+      <!-- v1.3: the Analytics view's own tab, first; it is not a chat. -->
+      <div
+        role="presentation"
+        class={cn(
+          'group relative flex max-w-56 min-w-28 shrink-0 items-center border-r',
+          tabs.analyticsShown
+            ? 'bg-background text-foreground after:bg-primary after:absolute after:inset-x-0 after:top-0 after:h-0.5'
+            : 'text-muted-foreground hover:bg-background/60 hover:text-foreground',
+        )}
+      >
+        <button
+          type="button"
+          role="tab"
+          id={ANALYTICS_TAB_ID}
+          aria-selected={tabs.analyticsShown}
+          aria-controls="chat-panel"
+          tabindex={tabs.analyticsShown ? 0 : -1}
+          class="focus-visible:ring-ring/50 flex h-full min-w-0 flex-1 items-center gap-1.5 pr-1 pl-3 text-xs outline-none focus-visible:ring-2 focus-visible:ring-inset"
+          onclick={tabs.showAnalytics}
+          onmousedown={(e) => e.button === 1 && e.preventDefault()}
+          onauxclick={(e) => e.button === 1 && tabs.closeAnalytics()}
+        >
+          <ChartColumnIcon class="size-3.5 shrink-0" aria-hidden="true" />
+          <span class="truncate">Analytics</span>
+        </button>
+        <IconButton
+          label="Close Analytics"
+          shortcut={tabs.analyticsShown ? shortcut('tab-close').combos[0] : undefined}
+          tabindex={-1}
+          class={cn(
+            'mr-1 size-5 opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
+            tabs.analyticsShown && 'opacity-60',
+          )}
+          onclick={tabs.closeAnalytics}
+        >
+          <XIcon class="size-3.5" aria-hidden="true" />
+        </IconButton>
+      </div>
+    {/if}
     {#each tabs.open as sessionId (sessionId)}
       {@const t = info(sessionId)}
       {@const active = sessionId === tabs.active}
