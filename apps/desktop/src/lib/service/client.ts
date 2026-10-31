@@ -1,5 +1,5 @@
 /**
- * WebSocket client for the local pahub service: request/response by id,
+ * WebSocket client for the local Threadgarden service: request/response by id,
  * typed events, reconnect with backoff and a hook for resync after reconnect
  * (spec §4.5). Protocol version mismatch makes the client `incompatible`.
  */

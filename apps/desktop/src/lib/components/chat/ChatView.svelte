@@ -23,7 +23,7 @@
 
   /**
    * One open chat: header with controls, the virtualised messages, and the
-   * composer. Sending to a chat pahub is not running resumes it, behind the
+   * composer. Sending to a chat Threadgarden is not running resumes it, behind the
    * resume-safety check (spec §4.4): blocked → the reason and the terminal
    * command, cannot verify / recently modified → a confirmation, ok → send.
    *

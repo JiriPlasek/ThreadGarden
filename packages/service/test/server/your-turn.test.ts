@@ -164,7 +164,7 @@ describe('your turn (service)', () => {
     expect(count(c.events, finishedFor(sessionId))).toBe(1);
   });
 
-  it('a turn the user stopped from pahub (Stop, End, Stop all) is neither announced nor unread', async () => {
+  it('a turn the user stopped from Threadgarden (Stop, End, Stop all) is neither announced nor unread', async () => {
     const adapter = new FakeAdapter();
     const c = await start(adapter);
     const summary = async (id: string) =>

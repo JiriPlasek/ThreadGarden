@@ -111,7 +111,7 @@ describe('buildSessionEnv', () => {
     expect(base).not.toHaveProperty('ANTHROPIC_API_KEY');
   });
 
-  it('keeps an inherited ANTHROPIC_API_KEY when pahub has no key of its own', () => {
+  it('keeps an inherited ANTHROPIC_API_KEY when Threadgarden has no key of its own', () => {
     expect(buildSessionEnv({ ANTHROPIC_API_KEY: 'from-shell' }, null)).toEqual({
       ANTHROPIC_API_KEY: 'from-shell',
     });
@@ -154,7 +154,7 @@ describe('buildOneShotOptions (title generation)', () => {
     expect(o.abortController).toBe(ac);
   });
 
-  it('runs under the known session id pahub gave it (so the external poller can leave it out)', () => {
+  it('runs under the known session id Threadgarden gave it (so the external poller can leave it out)', () => {
     const o = buildOneShotOptions(oneShot, new AbortController());
     expect(o.sessionId).toBe('0b0e8f6a-1111-4222-8333-944455556666');
     expect(o).not.toHaveProperty('resume');

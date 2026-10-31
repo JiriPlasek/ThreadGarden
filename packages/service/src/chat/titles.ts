@@ -1,7 +1,7 @@
 /**
- * v1.2 C1: names for the chats pahub starts. Claude Code titles only its
+ * v1.2 C1: names for the chats Threadgarden starts. Claude Code titles only its
  * terminal sessions, and a brand-new chat is not indexed yet, so a chat
- * pahub created would read "Untitled chat":
+ * Threadgarden created would read "Untitled chat":
  *
  * - a provisional title at once, from the first message (first sentence of
  *   its first line, as typed — slash commands and @mentions included);
@@ -11,9 +11,9 @@
  *   not sent when settings could route sessions elsewhere, Ruling R33). Any
  *   failure keeps the provisional title, logged at debug level only.
  *
- * Both are pahub's own metadata (`chat_titles`), below the user's custom title
+ * Both are Threadgarden's own metadata (`chat_titles`), below the user's custom title
  * (`titleFor`). At most one generation per chat, at most
- * `TITLE_CONCURRENCY` at a time; only chats pahub started (or continued
+ * `TITLE_CONCURRENCY` at a time; only chats Threadgarden started (or continued
  * while they had no title at all) are named, never history-only or external ones.
  */
 import { randomUUID } from 'node:crypto';
@@ -32,7 +32,7 @@ export const TITLE_INPUT_MAX = 2_000;
 export const TITLE_TIMEOUT_MS = 20_000;
 export const TITLE_CONCURRENCY = 2;
 /**
- * How long a finished title query still counts as pahub's own session: its
+ * How long a finished title query still counts as Threadgarden's own session: its
  * `claude` process may take seconds to exit and stay in `claude agents` meanwhile.
  */
 export const TITLE_GHOST_GRACE_MS = 15_000;
@@ -151,7 +151,7 @@ export type ChatTitlesDeps = {
   run: () => TitleRun | undefined;
   /** The start of the chat's first assistant reply (empty if none). */
   firstReply: (sessionId: string) => string;
-  /** pahub's title of a chat changed (updates cached lists). */
+  /** Threadgarden's title of a chat changed (updates cached lists). */
   titleChanged: (sessionId: string) => void;
   /** `sessions.changed` when a generated title arrives. */
   emit: (e: EventMsg) => void;
@@ -180,7 +180,7 @@ const errorText = (err: unknown): string => (err instanceof Error ? err.message 
 type Pending = { cwd: string; text: string };
 
 export class ChatTitles {
-  /** Chats pahub started whose first turn has not ended yet. */
+  /** Chats Threadgarden started whose first turn has not ended yet. */
   private readonly pending = new Map<string, Pending>();
   /** Chats a generation was due for in this service run (at most one each). */
   private readonly tried = new Set<string>();
@@ -199,7 +199,7 @@ export class ChatTitles {
   }
 
   /**
-   * pahub started `sessionId` with `text` (or continued it while it had no
+   * Threadgarden started `sessionId` with `text` (or continued it while it had no
    * title): the provisional title is set now, a generation follows its first
    * turn. True when a provisional title was set (the caller sends `sessions.changed`).
    */
@@ -243,7 +243,7 @@ export class ChatTitles {
   /**
    * Session ids of the title queries running now, or finished less than
    * `TITLE_GHOST_GRACE_MS` ago (their process may still be exiting). Claude
-   * Code lists those processes among its sessions; they are pahub's own,
+   * Code lists those processes among its sessions; they are Threadgarden's own,
    * never external chats.
    */
   runningIds(): string[] {

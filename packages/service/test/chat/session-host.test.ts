@@ -299,7 +299,7 @@ describe('SessionHost', () => {
         expect.objectContaining({
           kind: 'system',
           level: 'error',
-          text: 'Interrupted when the pahub service stopped — send a message to resume',
+          text: 'Interrupted when the Threadgarden service stopped — send a message to resume',
         }),
       ]);
       expect(statuses(events, id)).toEqual(['failed']);

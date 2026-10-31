@@ -1,4 +1,4 @@
-//! pahub's native shell: window, tray, notifications, keychain, and finding
+//! Threadgarden's native shell: window, tray, notifications, keychain, and finding
 //! or starting the detached service. The UI talks to the service directly.
 
 pub mod discovery;
@@ -168,7 +168,7 @@ pub fn run() {
             }
         })
         .build(tauri::generate_context!())
-        .expect("error while building pahub")
+        .expect("error while building Threadgarden")
         .run(on_run_event);
 }
 

@@ -8,7 +8,7 @@ import { z } from 'zod';
 export const ChatTaskKindSchema = z.enum(['agent', 'shell', 'other']);
 export type ChatTaskKind = z.infer<typeof ChatTaskKindSchema>;
 
-/** Task status; a value the SDK sends that pahub does not know is `unknown` with `rawStatus`. */
+/** Task status; a value the SDK sends that Threadgarden does not know is `unknown` with `rawStatus`. */
 export const ChatTaskStatusSchema = z.enum([
   'pending',
   'running',
@@ -21,7 +21,7 @@ export const ChatTaskStatusSchema = z.enum([
 export type ChatTaskStatus = z.infer<typeof ChatTaskStatusSchema>;
 
 /**
- * One SDK task (subagent, background shell, monitor, …) of a chat pahub runs,
+ * One SDK task (subagent, background shell, monitor, …) of a chat Threadgarden runs,
  * folded from the SDK's `system/task_*` and `background_tasks_changed`
  * messages. Times are epoch milliseconds on the service clock; the UI derives
  * the live elapsed time from `startedAt` (and `endedAt` once it ended).

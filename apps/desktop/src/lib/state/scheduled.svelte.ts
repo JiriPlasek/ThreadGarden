@@ -75,7 +75,7 @@ export class ScheduledState {
   };
 
   private req = (): Api => {
-    if (!this.api) throw new Error('Not connected to the pahub service');
+    if (!this.api) throw new Error('Not connected to the Threadgarden service');
     return this.api;
   };
 }

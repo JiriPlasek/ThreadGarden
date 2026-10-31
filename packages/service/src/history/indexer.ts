@@ -52,7 +52,7 @@ export type IndexerOptions = {
   /** Called when one session fails to sync; the sync carries on with the rest. */
   onError?: (error: unknown, context: { sessionId: string; step: 'refresh' | 'sync' }) => void;
   /**
-   * Sessions not to re-index right now (a pahub chat mid-turn: its transcript
+   * Sessions not to re-index right now (a Threadgarden chat mid-turn: its transcript
    * grows with every streamed message). Their refreshes wait for
    * `resumeDeferred()`; the chat view never depends on the index.
    */
@@ -213,7 +213,7 @@ export class Indexer {
     }
     const after = this.db.getSession(info.sessionId);
     // v1.2 C1: a new Claude Code title (e.g. a /rename in the terminal) is the
-    // user's newer choice; pahub's generated title would otherwise outrank it.
+    // user's newer choice; Threadgarden's generated title would otherwise outrank it.
     if (before && after?.sdkTitle && before.sdkTitle !== after.sdkTitle && after.generatedTitle) {
       this.db.setGeneratedTitle(info.sessionId, null);
     }

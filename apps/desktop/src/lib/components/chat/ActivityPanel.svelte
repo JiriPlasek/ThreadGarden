@@ -14,7 +14,7 @@
   import TaskStatusIcon from './TaskStatusIcon.svelte';
 
   /**
-   * The Activity panel beside a chat pahub runs (spec v1.1 §2, v1.3 §2): its
+   * The Activity panel beside a chat Threadgarden runs (spec v1.1 §2, v1.3 §2): its
    * subagents (Agents) and background shells, monitors and other tasks
    * (Processes), from the service's task list. Each section lists what has
    * not ended first, then the ended tasks, latest first; a task launched by
@@ -48,7 +48,7 @@
 
   const tasks = $derived(chat.tasks);
   const agents = $derived(taskRows(tasks.filter((t) => t.kind === 'agent')));
-  /** Shells, monitors and task types pahub does not know (shown with their raw type). */
+  /** Shells, monitors and task types Threadgarden does not know (shown with their raw type). */
   const processes = $derived(taskRows(tasks.filter((t) => t.kind !== 'agent')));
   /** Paused tasks keep the time they had when first seen paused, so they do not tick. */
   const ticking = $derived(tasks.some((t) => !taskEnded(t) && t.status !== 'paused'));
@@ -323,7 +323,7 @@
           No agents or background processes yet. Subagents and commands Claude runs in the
           background (a dev server, a watcher) show up here.
         {:else}
-          Activity is available for chats running in pahub.
+          Activity is available for chats running in Threadgarden.
         {/if}
       </p>
     {:else}

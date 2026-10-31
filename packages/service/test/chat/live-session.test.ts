@@ -282,7 +282,7 @@ describe('LiveSession', () => {
     await settle();
     const id = s.pendingRequests()[0]!.id;
     s.respond('d1', { decision: 'deny' });
-    await expect(plain).resolves.toEqual({ behavior: 'deny', message: 'Denied by user in pahub' });
+    await expect(plain).resolves.toEqual({ behavior: 'deny', message: 'Denied by user in Threadgarden' });
     expect(latest(events, id)).toMatchObject({ state: 'denied' });
 
     const reasoned = fake.requestPermission('Write', { file_path: 'y' }, { requestId: 'd2' });
@@ -455,7 +455,7 @@ describe('LiveSession', () => {
     expect(errors[0]).toMatchObject({ text: expect.stringContaining('background session') });
   });
 
-  it('shows the raw reason for a startup failure this pahub does not know', async () => {
+  it('shows the raw reason for a startup failure this Threadgarden does not know', async () => {
     const { adapter, events, opts } = setup();
     const s = LiveSession.create('/p', { text: 'go' }, opts);
     const fake = adapter.lastSession();
@@ -1276,7 +1276,7 @@ describe('LiveSession turn ends and activity (v1.1)', () => {
     expect(finished(ctx.events)).toHaveLength(2);
   });
 
-  it('a turn the user stopped from pahub is not a finished turn; the next one is', async () => {
+  it('a turn the user stopped from Threadgarden is not a finished turn; the next one is', async () => {
     const turns: string[] = [];
     const ctx = setup({ onTurnEnded: (id) => turns.push(id) });
     const s = LiveSession.create('/p', { text: 'long job' }, ctx.opts);
@@ -1358,14 +1358,14 @@ describe('LiveSession turn ends and activity (v1.1)', () => {
   });
 
   it('names the chat with describe when it can', async () => {
-    const ctx = setup({ describe: () => ({ title: 'Indexed title', projectName: 'pahub' }) });
+    const ctx = setup({ describe: () => ({ title: 'Indexed title', projectName: 'Threadgarden' }) });
     const s = LiveSession.create('/work/proj', { text: 'hi' }, ctx.opts);
     ctx.adapter.lastSession().emit(result('r1'));
     await settle();
     expect(finished(ctx.events)[0]?.data).toEqual({
       sessionId: s.sessionId,
       title: 'Indexed title',
-      projectName: 'pahub',
+      projectName: 'Threadgarden',
     });
   });
 

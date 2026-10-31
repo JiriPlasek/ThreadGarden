@@ -25,7 +25,7 @@ export type ExternalInfo = z.infer<typeof ExternalInfoSchema>;
 // ── v1.2 B1: buckets ──────────────────────────────────────────────────────────
 
 /**
- * v1.2: every chat is in exactly one bucket — pahub's own metadata, never
+ * v1.2: every chat is in exactly one bucket — Threadgarden's own metadata, never
  * written into Claude Code's data. `active` is the default.
  */
 export const BucketSchema = z.enum(['active', 'onHold', 'archived']);
@@ -50,11 +50,11 @@ export const ChatSummarySchema = z.object({
   waitingFor: z.string().optional(),
   /**
    * v1.1 "Your turn": a turn ended since the chat was last seen, and it is
-   * neither waiting on the user nor working (pahub-side state, never Claude Code's).
+   * neither waiting on the user nor working (Threadgarden-side state, never Claude Code's).
    */
   unread: z.boolean().default(false),
   /**
-   * Ruling R29: background tasks (agents, processes) running in a live pahub
+   * Ruling R29: background tasks (agents, processes) running in a live Threadgarden
    * chat; absent when none. Such a chat counts as Running even while its turn
    * is idle (its status stays idle).
    */
@@ -128,7 +128,7 @@ export const ChatHeaderInfoSchema = z.object({
 export type ChatHeaderInfo = z.infer<typeof ChatHeaderInfoSchema>;
 
 // ── v1.3 E: appearance ──
-/** Accent colours; `graphite` is the neutral look pahub had before v1.3 and stays the default. */
+/** Accent colours; `graphite` is the neutral look Threadgarden had before v1.3 and stays the default. */
 export const ACCENTS = ['graphite', 'blue', 'teal', 'green', 'violet', 'rose', 'amber'] as const;
 export const DARK_STYLES = ['default', 'dim', 'midnight'] as const;
 export const LIGHT_STYLES = ['default', 'warm'] as const;

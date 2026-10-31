@@ -1,8 +1,8 @@
 /**
- * pahub's own SQLite store (`node:sqlite`, WAL). It holds the history index,
- * pahub-side titles/pins, drafts, settings, UI state, the live-session
+ * Threadgarden's own SQLite store (`node:sqlite`, WAL). It holds the history index,
+ * Threadgarden-side titles/pins, drafts, settings, UI state, the live-session
  * registry, the seen/turn-ended times behind "Your turn", the chats'
- * buckets (v1.2) and pahub's own chat titles (v1.2 C1). It never touches
+ * buckets (v1.2) and Threadgarden's own chat titles (v1.2 C1). It never touches
  * Claude Code's data.
  */
 import './sqlite-warning.js';
@@ -29,7 +29,7 @@ export type SessionRow = {
 } & BucketState &
   PahubTitles;
 
-/** v1.2 C1: pahub's own titles of a chat it started (see `chat/titles.ts`). */
+/** v1.2 C1: Threadgarden's own titles of a chat it started (see `chat/titles.ts`). */
 export type PahubTitles = {
   /** Provisional title from the first message. */
   autoTitle: string | null;
@@ -37,7 +37,7 @@ export type PahubTitles = {
   generatedTitle: string | null;
 };
 
-/** v1.2: a chat's bucket (pahub's own metadata). */
+/** v1.2: a chat's bucket (Threadgarden's own metadata). */
 export type BucketState = {
   bucket: Bucket;
   /** On hold until (epoch ms); null when not on hold or on hold indefinitely. */
@@ -422,7 +422,7 @@ export class Db implements LiveRegistry {
 
   /**
    * Removes a session's row, index text and "Your turn" state. `meta` and
-   * `drafts` are kept on purpose (cheap, and a pahub title survives a
+   * `drafts` are kept on purpose (cheap, and a Threadgarden title survives a
    * transcript that reappears).
    */
   deleteSession(sessionId: string): void {
@@ -489,7 +489,7 @@ export class Db implements LiveRegistry {
 
   // --- meta -------------------------------------------------------------------
 
-  /** pahub-side title (spec §5.3); `null` or empty clears it. */
+  /** Threadgarden-side title (spec §5.3); `null` or empty clears it. */
   setCustomTitle(sessionId: string, title: string | null): void {
     const t = title?.trim() ? title.trim() : null;
     this.raw
@@ -517,7 +517,7 @@ export class Db implements LiveRegistry {
 
   // --- titles (v1.2 C1) ----------------------------------------------------------
   //
-  // pahub's own names for chats it starts, kept apart from the user's custom
+  // Threadgarden's own names for chats it starts, kept apart from the user's custom
   // title; never written to Claude Code's data.
 
   /** The provisional title (from the first message); `null` clears it. */
@@ -545,7 +545,7 @@ export class Db implements LiveRegistry {
   // A chat's bucket lives in `chat_buckets` (kept when a transcript
   // disappears, like titles); a chat without a row there is active.
 
-  /** A chat's pin, bucket and (v1.2 C1) pahub-side titles, whether or not it is indexed. */
+  /** A chat's pin, bucket and (v1.2 C1) Threadgarden-side titles, whether or not it is indexed. */
   metaOf(
     sessionId: string,
   ): { pinned: boolean; customTitle: string | null } & BucketState & PahubTitles {
@@ -804,7 +804,7 @@ export class Db implements LiveRegistry {
 
   // --- "Your turn" (v1.1) -----------------------------------------------------------
   //
-  // A chat is unread while its last turn ended after pahub last saw it. The
+  // A chat is unread while its last turn ended after Threadgarden last saw it. The
   // two times are ordered by operation, not only by the clock: a turn end is
   // stored after the last seen time and a seen time after the last turn end,
   // so two events in the same millisecond (or a clock that went back) still

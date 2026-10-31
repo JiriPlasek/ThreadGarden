@@ -54,21 +54,21 @@ const steps: string[] = [
   `,
   // Current FTS generation per session (see Db full-text section).
   `CREATE TABLE IF NOT EXISTS fts_gen (session_id TEXT PRIMARY KEY, gen INTEGER NOT NULL);`,
-  // v1.1 "Your turn": when pahub last saw each chat and when its last turn ended.
+  // v1.1 "Your turn": when Threadgarden last saw each chat and when its last turn ended.
   `CREATE TABLE IF NOT EXISTS turn_state (
     session_id TEXT PRIMARY KEY,
     last_seen_at INTEGER,
     last_turn_ended_at INTEGER
   );`,
   // v1.1: "Notify when a chat finishes" starts as the user's existing
-  // notifications choice (someone who silenced pahub stays silenced). Once, on
+  // notifications choice (someone who silenced Threadgarden stays silenced). Once, on
   // upgrade: from then on the two settings are independent. Only a boolean is
   // copied, since an invalid stored value would void every setting.
   `INSERT OR IGNORE INTO settings (key, json)
      SELECT 'notifyOnFinish', json FROM settings
      WHERE key = 'notifications' AND json IN ('true', 'false');`,
   // v1.2 buckets: a chat is 'active' (no row, or the default), 'onHold' or
-  // 'archived'; pahub's own metadata. `back_at` is set (to the hold's end)
+  // 'archived'; Threadgarden's own metadata. `back_at` is set (to the hold's end)
   // when a hold ran out, until the user has seen the chat.
   `
   CREATE TABLE IF NOT EXISTS chat_buckets (
@@ -82,7 +82,7 @@ const steps: string[] = [
   CREATE INDEX IF NOT EXISTS chat_buckets_hold ON chat_buckets (hold_until) WHERE bucket = 'onHold';
   CREATE INDEX IF NOT EXISTS chat_buckets_back ON chat_buckets (back_at) WHERE back_at IS NOT NULL;
   `,
-  // v1.2 C1 chat titles: pahub's own names for chats it runs, apart from the
+  // v1.2 C1 chat titles: Threadgarden's own names for chats it runs, apart from the
   // user's custom title (`meta.custom_title`). `auto_title` is the provisional
   // title from the first message, `generated_title` the small model's.
   `
@@ -94,7 +94,7 @@ const steps: string[] = [
   `,
   // v1.3 B usage and scheduled sends. `usage_limits`: the account's latest
   // plan usage per window (and the account row), as JSON, so it survives
-  // restarts. `scheduled_sends`: messages pahub sends to a chat later
+  // restarts. `scheduled_sends`: messages Threadgarden sends to a chat later
   // (`state` pending / sending / failed; sent and cancelled ones are deleted).
   `
   CREATE TABLE IF NOT EXISTS usage_limits (

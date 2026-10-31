@@ -437,7 +437,7 @@ describe('chat handlers', () => {
     expect(await ok('chat.models', {})).toEqual(models);
   });
 
-  it('chat.open lists the tasks of a chat pahub runs; chat.stopTask stops one', async () => {
+  it('chat.open lists the tasks of a chat Threadgarden runs; chat.stopTask stops one', async () => {
     const adapter = new FakeAdapter();
     addHistory(adapter, 'h1', 1);
     await start(adapter);
@@ -555,7 +555,7 @@ describe('chat handlers', () => {
     expect(errors).toEqual([]);
   });
 
-  it('reads a held chat’s history once for as long as pahub holds it', async () => {
+  it('reads a held chat’s history once for as long as Threadgarden holds it', async () => {
     const adapter = new FakeAdapter();
     addHistory(adapter, 'h1', 5);
     await start(adapter);

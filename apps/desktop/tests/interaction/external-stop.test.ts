@@ -7,7 +7,7 @@ import { renderChat, SID } from './helpers';
 const background = { kind: 'background', shortId: 'abc12345', state: 'blocked' };
 const terminal = { kind: 'interactive', pid: 4242, status: 'busy' };
 
-describe('chats running outside pahub', () => {
+describe('chats running outside Threadgarden', () => {
   it('a background session gets Stop, which runs external.stop after confirming', async () => {
     const { server } = await renderChat({
       status: 'needsYou',
@@ -57,7 +57,7 @@ describe('chats running outside pahub', () => {
     expect(server.calls('chat.end')).toHaveLength(0);
   });
 
-  it("pahub's own live chat still has End session and live pickers", async () => {
+  it("Threadgarden's own live chat still has End session and live pickers", async () => {
     await renderChat({ status: 'idle' });
     expect(
       (screen.getByRole('button', { name: /end session/i }) as HTMLButtonElement).disabled,

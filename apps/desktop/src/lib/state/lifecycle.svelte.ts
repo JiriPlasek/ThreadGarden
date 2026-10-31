@@ -4,7 +4,7 @@ import type { AgentsState } from './agents.svelte';
 import type { Api } from './api';
 import type { ConnectionState } from './connection.svelte';
 
-/** The confirmations of spec §4.2: Stop all work, Quit pahub completely, Restart service. */
+/** The confirmations of spec §4.2: Stop all work, Quit Threadgarden completely, Restart service. */
 export type ServiceAction = 'stopAll' | 'quitAll' | 'restart';
 
 /** Points the client at a freshly found service and loads what the UI needs. */
@@ -12,7 +12,7 @@ export type Reconnect = (conn: ServiceConnection) => Promise<void>;
 
 /**
  * The app and service lifecycle (spec §4.2) behind confirmations: stopping
- * all work, quitting pahub completely (service included), and restarting an
+ * all work, quitting Threadgarden completely (service included), and restarting an
  * older or incompatible service (ruling R18). `dialog` is the open confirmation.
  */
 export class LifecycleState {
@@ -35,7 +35,7 @@ export class LifecycleState {
     this.reconnect = reconnect;
   };
 
-  /** pahub's own live chats: what the actions stop (terminal sessions are not affected). */
+  /** Threadgarden's own live chats: what the actions stop (terminal sessions are not affected). */
   get running(): ChatSummary[] {
     return this.agents?.items.filter((a) => a.live && !a.external) ?? [];
   }

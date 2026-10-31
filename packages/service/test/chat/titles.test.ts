@@ -1,4 +1,4 @@
-/** v1.2 C1: provisional and generated chat titles (pahub's own metadata). */
+/** v1.2 C1: provisional and generated chat titles (Threadgarden's own metadata). */
 import type { EventMsg } from '@pahub/protocol';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
@@ -204,7 +204,7 @@ afterEach(() => {
 const titleOf = (id: string) => titleFor({ ...db.metaOf(id), ...db.getSession(id) });
 
 describe('ChatTitles', () => {
-  it('sets the provisional title at once when pahub starts a chat', () => {
+  it('sets the provisional title at once when Threadgarden starts a chat', () => {
     expect(titles.started('c1', '/w', 'Fix the login bug. It fails on Safari.')).toBe(true);
     expect(db.metaOf('c1').autoTitle).toBe('Fix the login bug.');
     expect(titleOf('c1')).toBe('Fix the login bug.');
@@ -224,7 +224,7 @@ describe('ChatTitles', () => {
     );
     expect(titles.startedIfUntitled('named', '/w', 'A new message')).toBe(false);
     expect(db.metaOf('named').autoTitle).toBeNull();
-    // No row and no pahub title: untitled.
+    // No row and no Threadgarden title: untitled.
     expect(titles.startedIfUntitled('bare', '/w', 'Continue the migration work')).toBe(true);
     expect(db.metaOf('bare').autoTitle).toBe('Continue the migration work');
     // Now it has one: a later message changes nothing.
@@ -313,7 +313,7 @@ describe('ChatTitles', () => {
     expect(model.calls).toHaveLength(1);
   });
 
-  it('only chats pahub started are titled', async () => {
+  it('only chats Threadgarden started are titled', async () => {
     titles.turnEnded('history-chat');
     await flush();
     expect(model.calls).toHaveLength(0);

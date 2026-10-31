@@ -4,7 +4,7 @@ import { SettingsSchema, sanitizeFontFamily, type Settings } from '@pahub/protoc
  * The appearance settings (spec v1.3 §6) as attributes and one custom
  * property, next to `data-theme` (src/lib/theme.ts). The stylesheet
  * (src/routes/themes.css) keys the token overrides on them; the defaults
- * have no rules, so they look exactly as pahub did before v1.3.
+ * have no rules, so they look exactly as Threadgarden did before v1.3.
  */
 export type Appearance = Pick<
   Settings,

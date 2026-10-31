@@ -109,7 +109,7 @@ const changedFor = (id: string) => (e: EventMsg) =>
   e.event === 'sessions.changed' && (e.data as { sessionIds: string[] }).sessionIds.includes(id);
 
 describe('buckets (service)', () => {
-  it('archiving a chat pahub runs is refused until it ends; sending to an archived chat brings it back', async () => {
+  it('archiving a chat Threadgarden runs is refused until it ends; sending to an archived chat brings it back', async () => {
     const adapter = new FakeAdapter();
     addHistory(adapter, 'h1', dir, NOW - 1000);
     const c = await start(adapter);
@@ -258,7 +258,7 @@ describe('buckets (service)', () => {
     expect(await summary(c, 'h1')).toMatchObject({ live: true, bucket: 'active' });
   });
 
-  it('an archived chat that starts running outside pahub returns to Active', async () => {
+  it('an archived chat that starts running outside Threadgarden returns to Active', async () => {
     const adapter = new FakeAdapter();
     addHistory(adapter, 'h1', dir, NOW - 1000);
     let agents = '[]';

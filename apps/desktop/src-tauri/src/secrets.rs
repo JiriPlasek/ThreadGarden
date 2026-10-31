@@ -1,6 +1,6 @@
-//! pahub's optional Anthropic API key in the OS credential store (spec §5.5):
+//! Threadgarden's optional Anthropic API key in the OS credential store (spec §5.5):
 //! Windows Credential Manager, macOS Keychain, Secret Service on Linux.
-//! The key never touches pahub's database, `service.json` or logs.
+//! The key never touches Threadgarden's database, `service.json` or logs.
 
 const SERVICE: &str = "pahub";
 const USER: &str = "anthropic-api-key";

@@ -1,6 +1,6 @@
-# pahub architecture
+# Threadgarden architecture
 
-How pahub v1 is built, as it stands. The original design is in
+How Threadgarden v1 is built, as it stands. The original design is in
 [`docs/superpowers/specs/2026-10-30-pahub-v1-design.md`](superpowers/specs/2026-10-30-pahub-v1-design.md)
 (section numbers like §4.2 below refer to it); where the build differs from
 it, [Deviations from the v1 design](#deviations-from-the-v1-design) says how
@@ -8,18 +8,18 @@ and why. Package-level detail is in each package's README.
 
 ## Processes
 
-pahub is three kinds of process:
+Threadgarden is three kinds of process:
 
 ```mermaid
 flowchart TB
-  subgraph app["pahub desktop app (Tauri 2)"]
+  subgraph app["Threadgarden desktop app (Tauri 2)"]
     shell["Rust shell<br/>window, tray, notifications, keychain,<br/>single instance, autostart, service launch"]
     ui["SvelteKit UI (static SPA in the OS webview)"]
   end
-  service["pahub service (Node.js 22, detached)<br/>session host · history index (SQLite + FTS5)<br/>watcher · external poller · file index"]
+  service["Threadgarden service (Node.js 22, detached)<br/>session host · history index (SQLite + FTS5)<br/>watcher · external poller · file index"]
   claude["claude processes<br/>(the user's installed Claude Code, one per live chat)"]
-  config[("Claude config dir<br/>~/.claude — read-only to pahub")]
-  data[("pahub data dir<br/>pahub.db · service.json · logs")]
+  config[("Claude config dir<br/>~/.claude — read-only to Threadgarden")]
+  data[("Threadgarden data dir<br/>pahub.db · service.json · logs")]
 
   ui -- "WebSocket on 127.0.0.1<br/>(random port, bearer token)" --> service
   shell -- "starts detached,<br/>reads service.json" --> service
@@ -36,7 +36,7 @@ flowchart TB
   and finding or launching the service. The UI talks to the service directly
   over a WebSocket, so streamed output takes one hop.
 - **The service** (`packages/service`) is a long-lived TypeScript process on
-  Node.js 22. It owns every Claude Code session pahub runs, the history
+  Node.js 22. It owns every Claude Code session Threadgarden runs, the history
   index, external-session polling and the `@` file index, and stores its own
   state in `pahub.db` (`node:sqlite`, no native addons). It is TypeScript
   because the Agent SDK, the only official programmatic interface to Claude
@@ -82,15 +82,15 @@ Shutdown runs every step even if one fails, and always releases the lock.
 A different protocol version is incompatible: the UI shows a blocking screen
 that offers to restart the service. The same protocol with a different
 service version (an app update while the old service still runs) shows a thin
-"older version" bar instead; pahub never restarts the service on its own,
+"older version" bar instead; Threadgarden never restarts the service on its own,
 because that would end running agents. **Restart service** confirms (listing
 the running agents), sends `service.shutdown {stopAll: true}`, waits for the
 old process to exit and starts the app's version.
 
 **Window and tray.** Closing the window hides it; the app stays in the tray
 to post notifications. A second launch focuses the existing window. The tray
-offers "Open pahub", "Stop all work…", "Quit pahub (keep agents running)" and
-"Quit pahub completely…" (confirms, stops all work, shuts the service down,
+offers "Open Threadgarden", "Stop all work…", "Quit Threadgarden (keep agents running)" and
+"Quit Threadgarden completely…" (confirms, stops all work, shuts the service down,
 exits). Quitting the app alone leaves the service and its agents running; the
 next launch reconnects to them.
 
@@ -109,12 +109,12 @@ paused, and the next message resumes it transparently. Pinned chats, chats
 waiting on the user and chats with a running background task (Ruling R29:
 closing the process would kill it) are never reclaimed. Closing a tab never
 ends a session.
-**Stop** (or Esc) interrupts only the current turn: pahub declares the SDK's
+**Stop** (or Esc) interrupts only the current turn: Threadgarden declares the SDK's
 `perTaskStopAffordance` (it renders a Stop per task, wired to `stop_task`), so
 the CLI spares running background agents and processes, which are stopped one
 at a time from the Activity panel. Without the declaration the CLI would kill
 them on every interrupt. End session ends them with the process.
-**Stop all work** interrupts and closes every live pahub session; the service
+**Stop all work** interrupts and closes every live Threadgarden session; the service
 keeps running.
 
 **Activity panel** (v1.1 §2, v1.3 §2). Each live session folds the SDK's
@@ -144,7 +144,7 @@ service and the UI; the service validates every request.
   `sessions.list`, `projects.*`, `search.quick`), chats (`chat.open`,
   `chat.older`, `chat.since`, `chat.create`, `chat.send`, `chat.respond`,
   `chat.fork`, `chat.end`, model/mode/effort controls, `chat.resumeCheck`),
-  pahub-side metadata, drafts, UI state, settings, `files.suggest`,
+  Threadgarden-side metadata, drafts, UI state, settings, `files.suggest`,
   `work.stopAll`, `service.shutdown` and `system.status`. `chat.markSeen`
   records that the user has seen a chat's latest turn ("Your turn", below).
   v1.3 (protocol 3) adds `usage.get` (the account's plan usage; `refresh`
@@ -153,7 +153,7 @@ service and the UI; the service validates every request.
 - **Events** `{event, data}` are pushed to every client: `chat.items` and
   `chat.status` per chat, plus list-level events (`sessions.changed`,
   `projects.changed`, `external.changed`, `index.progress`). `needsYou` and
-  `chatFinished` (a pahub chat ended a turn) tell the UI when to notify.
+  `chatFinished` (a Threadgarden chat ended a turn) tell the UI when to notify.
   v1.3: `usage.changed` (the usage state), `scheduled.changed` (every
   scheduled send, without image data) and `scheduledSent` (one went out;
   `late` when it was due while the service was not running).
@@ -172,7 +172,7 @@ service and the UI; the service validates every request.
 
 ## Data flows
 
-**History comes only from the Agent SDK.** pahub never opens a transcript
+**History comes only from the Agent SDK.** Threadgarden never opens a transcript
 file. The indexer calls `listSessions()` for metadata (title, summary, first
 prompt, cwd, branch, `lastModified`, `fileSize`) and, for sessions that are
 new or whose `lastModified`/`fileSize` changed since they were indexed,
@@ -204,7 +204,7 @@ progress in Settings and works meanwhile.
 real path; git worktrees are grouped under their repository (from `git`
 metadata, read-only). Display names are directory basenames, disambiguated by
 their parent when two collide. The list is ordered pinned first, then by most
-recent activity, where activity includes what pahub's live chats are doing
+recent activity, where activity includes what Threadgarden's live chats are doing
 right now: a project rises as soon as a chat in it is active, and
 `projects.changed` (at most once a second) tells clients when live activity
 changed the order. Each project says whether its folder still `exists`
@@ -253,7 +253,7 @@ name (the base of a disambiguated `parent/base` name) in white, drawn as CSS
 content so the row's text stays the name, on one of eight colours picked by a
 hash of the project id, each with at least 4.5:1 contrast to white.
 
-**Catalog and paging.** Lists combine three sources: index rows, pahub's own
+**Catalog and paging.** Lists combine three sources: index rows, Threadgarden's own
 live chats (status, what they wait for) and external sessions. The live and
 external rows (the *overlay*) are small and change constantly, so they are
 returned in full on the first page of any place; later pages are index rows
@@ -261,23 +261,23 @@ only, keyset-paged and excluding overlay ids, so the cursor never drifts when
 a chat changes status. Hidden projects stay visible in Needs you and Running
 (an agent waiting for you is never hidden) but are left out of Active (v1.2;
 formerly All chats) and the other bucket places.
-Running lists the working chats and (Ruling R29) every live pahub chat with a
+Running lists the working chats and (Ruling R29) every live Threadgarden chat with a
 running background task (an agent or process, not paused or finished), even
 while its turn is idle: an idle chat whose dev server still runs is listed
 there with its status still idle and its `runningTasks` count, and it counts
 in `places.counts.running` and its project's running count. The session host
 reports each change of that count, and the service sends `sessions.changed`
 for the chat so lists refresh.
-Titles follow pahub custom title → generated title (v1.2) → Claude Code's own
+Titles follow Threadgarden custom title → generated title (v1.2) → Claude Code's own
 title → summary → provisional title (v1.2) → first prompt. The summary is
 skipped when it equals the first prompt or the chat has a provisional title
 (without a title of its own, the SDK's summary is just the latest prompt). All
 but a custom title are cut to 80 characters.
 
-**Your turn.** When a pahub chat's turn ends (a `result` that leaves it
+**Your turn.** When a Threadgarden chat's turn ends (a `result` that leaves it
 waiting for the user, not one followed by queued input, and not one of a turn
-the user stopped from pahub with Stop or Esc), the service stores
-the time in `pahub.db` (`turn_state`, pahub's own table) and emits
+the user stopped from Threadgarden with Stop or Esc), the service stores
+the time in `pahub.db` (`turn_state`, Threadgarden's own table) and emits
 `chatFinished`. A chat is `unread` while its last turn ended after it was last
 seen (`chat.markSeen`, also implied by `chat.send` and `chat.create`) and it is
 neither waiting on the user nor working. Needs you lists the waiting chats
@@ -290,11 +290,11 @@ has been shown for a moment, so tabs only passed through stay unread), and it
 posts the "finished — your turn" notification only for chats not on screen.
 
 **Buckets** (v1.2). Every chat is Active, On hold or Archived, stored in
-pahub's own `chat_buckets` table. `sessions.list` takes the places `active`,
+Threadgarden's own `chat_buckets` table. `sessions.list` takes the places `active`,
 `onHold` and `archived` (`all` is an alias of `active`), and a project place
 lists its active chats unless `include` adds the others; Needs you and Running
 span every bucket. `chat.setBucket` moves chats in bulk and refuses, per chat,
-to archive one pahub runs (`LIVE`: the UI asks "End this chat and archive
+to archive one Threadgarden runs (`LIVE`: the UI asks "End this chat and archive
 it?", ends it and retries) or one running elsewhere (`RUNNING`); the UI
 reports the chats it skipped. Archiving marks chats seen (Ruling R32). A hold
 whose time runs out (checked at startup and every 60 s) returns the chat to
@@ -310,7 +310,7 @@ together in one notification, and, once per hold, the ones that ended while no
 window was connected (it keeps the announced ids in `uiState`, and forgets an
 id when its chat is put on hold again). An archived chat returns to Active
 when it is sent a message, or when it runs as an external session, which
-pahub notices only while external-session polling is on (and `claude agents`
+Threadgarden notices only while external-session polling is on (and `claude agents`
 is available). Sending a message to a chat on hold ends the hold too (Ruling
 R36). `chat.archiveOlder` archives a place's idle, seen, unpinned chats older
 than N days (with `dryRun` for the confirmation's count; Ruling R35). Quick
@@ -319,8 +319,8 @@ search ranks archived matches after all others and flags them, keeping up to
 own group.
 
 **Chat titles** (v1.2). Claude Code titles only its terminal sessions, so a
-chat pahub starts gets a provisional title at once: the first sentence of the
-first line of its first message (also set when pahub continues a chat that
+chat Threadgarden starts gets a provisional title at once: the first sentence of the
+first line of its first message (also set when Threadgarden continues a chat that
 has no title of any kind). After the chat's first turn, if "Name new chats
 automatically" (`autoTitles`, on by default) is on, the service asks a small
 model for a 3–6 word title, at most once per chat, at most two at a time and
@@ -336,25 +336,25 @@ the user, project or local settings set `env`, `apiKeyHelper`,
 `otelHeadersHelper`, or cannot be parsed, so it never goes around the
 provider the user chose. The answer is cleaned (its first line, without
 quotes, labels or end punctuation; more than 10 words is no title) and stored
-in pahub's own `chat_titles` table, next to the provisional title; any failure
+in Threadgarden's own `chat_titles` table, next to the provisional title; any failure
 keeps the provisional title and is logged at debug level, without content. A
 generated title is cleared when Claude Code's own title of the chat changes
 later (a rename in the terminal). While the query's process runs it is listed
-by `claude agents`: the poller counts its session id as pahub's own while it
+by `claude agents`: the poller counts its session id as Threadgarden's own while it
 runs and for 15 s after it ends, so it never shows as an external chat.
 
 **Chat view.** `chat.open` returns the last N items of the SDK history merged
 with the live session's items (the live version wins for anything both have),
 plus the current seq. The normalized history of a chat is cached (bounded at
 about 32 Mi characters across chats) while the chat's indexed size and mtime
-are unchanged, or for the life of the session object while pahub holds the
+are unchanged, or for the life of the session object while Threadgarden holds the
 chat. Older items page in with `chat.older`.
 
 **External sessions and resume safety** (§4.4, §6.3). The poller runs
 `claude agents --json --all` every 2 s while the window is visible and every
-10 s while it is hidden, parses it leniently, and drops pahub's own sessions
+10 s while it is hidden, parses it leniently, and drops Threadgarden's own sessions
 (by session id). If the command is missing or fails, the feature hides itself
-and says why in settings. Before pahub continues any chat it does not hold
+and says why in settings. Before Threadgarden continues any chat it does not hold
 live, `chat.send` runs the command again (fresh, not the last poll):
 
 - **blocked** when the session is listed with a live pid or as working or
@@ -400,7 +400,7 @@ chat is the same account), in `pahub.db` (`usage_limits`, with the time it
 was observed), and broadcasts `usage.changed` when what the UI shows changes.
 Claude Code 2.1.314 sends `resetsAt` in epoch seconds and `utilization` as a
 fraction (read from its bundle: the reset is `Math.floor(Date.now()/1000)+…`
-and its own usage answer multiplies by 100); pahub stores epoch ms and
+and its own usage answer multiplies by 100); Threadgarden stores epoch ms and
 percentages, and also accepts milliseconds and ISO times. A turn is refused
 by a limit when its assistant message carries the API error `rate_limit`, or
 a rate-limit event is `rejected` without overage carrying it; the chat stays
@@ -411,7 +411,7 @@ session for the SDK's experimental
 true})`: looked up at run time (an SDK without it offers no reading), at most
 once a minute, 10 s timeout, parsed leniently (`rate_limits` windows,
 `model_scoped`, `extra_usage`, `subscription_type`, `rate_limits_available`);
-any failure or other shape is logged and the event data stands. pahub never
+any failure or other shape is logged and the event data stands. Threadgarden never
 starts a Claude process to read usage.
 
 **Scheduled sends** (v1.3, `src/usage/scheduled.ts`). Stored in
@@ -419,7 +419,7 @@ starts a Claude process to read usage.
 `pending` / `sending` / `failed`; sent and cancelled ones are deleted). One
 timer waits for the earliest due send (re-checking at least hourly, and on
 the service's minute tick). A due send goes out through the `chat.send`
-handler itself, so it resumes a chat pahub is not running, behind the same
+handler itself, so it resumes a chat Threadgarden is not running, behind the same
 resume-safety check. A chat's sends go out in order, one per turn: the next
 waits while the chat works or waits on the user and until the turn the
 previous one started has ended (its `result`). While a window is known to be
@@ -461,18 +461,18 @@ fork is indexed at once so it can be opened.
 - **Dropped files.** The webview receives dropped files only as paths. Image
   bytes are read by one Rust command that accepts only paths from the most
   recent drop, only PNG, JPEG, GIF and WebP, and only up to 5 MB, checked
-  before reading. Other dropped files become `@` mentions, never read by pahub.
+  before reading. Other dropped files become `@` mentions, never read by Threadgarden.
 - **API key.** Kept in the OS credential store through the `keyring` crate
   (Windows Credential Manager, macOS Keychain, Secret Service), sent to the
   service after each `hello`, and held there in memory only, never stored or
   logged.
 - **Title requests** (v1.2). With "Name new chats automatically" on, the
-  first message of each chat pahub starts and the start of its first reply
+  first message of each chat Threadgarden starts and the start of its first reply
   (2,000 characters at most) are sent once more, to Claude Code's `haiku`,
   through the user's own `claude` and authentication, with no tools, no
   settings and no transcript; never when settings route requests elsewhere
   (Ruling R33).
-- **Permissions.** pahub offers the default, acceptEdits, plan and auto
+- **Permissions.** Threadgarden offers the default, acceptEdits, plan and auto
   permission modes, never `bypassPermissions`, and it filters out "always
   allow" suggestions that would switch a session to bypass.
 - **Capabilities.** The window gets only the Tauri permissions it uses: core
@@ -527,18 +527,18 @@ temporary data dir, `~/.claude` only read): 77 s with one read per session
 (512 SDK reads), against 108 s for the paged version (718 SDK reads). The
 peak memory stayed about the same (558 MB vs 552 MB): it is set by the SDK
 holding the largest transcript fully parsed, which one read per session
-cannot avoid. pahub's own chats are not re-indexed while a turn streams; they
+cannot avoid. Threadgarden's own chats are not re-indexed while a turn streams; they
 are indexed once the turn ends. App launch times (§8: 800 ms warm, 2 s cold) are not
 measured automatically; the release checklist covers them by hand.
 
 ## Authentication
 
-By default pahub never handles credentials: each session's `claude` process
-inherits the environment of the pahub service, so it authenticates exactly as
+By default Threadgarden never handles credentials: each session's `claude` process
+inherits the environment of the Threadgarden service, so it authenticates exactly as
 the user's installed Claude Code does (subscription login or an API key in
-the environment). If the user sets an API key in pahub's settings,
+the environment). If the user sets an API key in Threadgarden's settings,
 `buildSessionEnv` (`packages/service/src/sdk/real-adapter.ts`) copies the
-service environment and adds `ANTHROPIC_API_KEY` for every session pahub
+service environment and adds `ANTHROPIC_API_KEY` for every session Threadgarden
 starts. The SDK's `env` option replaces the child environment, so the copy
 keeps `PATH`, `HOME`, proxies and everything else.
 
@@ -576,7 +576,7 @@ So the status bar's authentication label can come from `accountInfo()`:
 
 ### Other facts from the same run
 
-- The `sessionId` pahub passes to the SDK for a new chat is the
+- The `sessionId` Threadgarden passes to the SDK for a new chat is the
   `session_id` in `system/init`, so the chat id is known before the CLI
   answers.
 - A user text message sent through streaming input is **not** echoed back as
@@ -584,7 +584,7 @@ So the status bar's authentication label can come from `accountInfo()`:
   appears exactly once.
 - A startup failure arrives as a `result` (`error_during_execution`) with
   `startup_failure_reason` and the CLI's message in `errors`. After it, the
-  SDK's message iterator throws. pahub sets
+  SDK's message iterator throws. Threadgarden sets
   `CLAUDE_CODE_STARTUP_FAILURE_RESULTS=1` so the CLI writes that result for
   every known cause. Checked with `proxy_invalid` (an unparsable
   `HTTPS_PROXY`), which fails before any API call.
@@ -613,7 +613,7 @@ user's login and their real history, in a throwaway git repo with a temp data
 dir. Last run on 2026-10-30 with Claude Code 2.1.314 and SDK 0.3.314 on
 Windows 11, signed in with a subscription. What it established:
 
-- **User message ids survive.** The uuid pahub gives a user message it sends
+- **User message ids survive.** The uuid Threadgarden gives a user message it sends
   through streaming input is the uuid of that message in the transcript, so
   `chat.open` merges history and live items without duplicates, and a fork
   from a message sent in the current process targets the right message.
@@ -634,7 +634,7 @@ Windows 11, signed in with a subscription. What it established:
   absent, the summary is a user message flagged `isCompactSummary`, and
   **only the compacted conversation is returned**: messages from before the
   compaction (except those Claude Code preserves) no longer appear when the
-  chat is reopened. This is the SDK's view of the transcript; pahub cannot
+  chat is reopened. This is the SDK's view of the transcript; Threadgarden cannot
   show more without parsing transcript files, which it never does.
 - **CLI-written user messages.** History stores slash commands as
   `<command-name>/x</command-name>…<command-args>…</command-args>` and their
@@ -682,15 +682,15 @@ startup failures, which credential a session picks).
 
 Decisions made during the build that change behaviour described in the design:
 
-- **Stopping background sessions.** The design kept sessions run by other processes hand-off only. pahub now also stops a background session that Claude Code's background service runs, via the documented `claude stop <id>` (`external.stop`), after a confirmation; only ids shaped like `claude agents` short ids are passed. Sessions open in a terminal are still never stopped from pahub, and the chat header's End session and pickers apply only to chats pahub itself runs.
+- **Stopping background sessions.** The design kept sessions run by other processes hand-off only. Threadgarden now also stops a background session that Claude Code's background service runs, via the documented `claude stop <id>` (`external.stop`), after a confirmation; only ids shaped like `claude agents` short ids are passed. Sessions open in a terminal are still never stopped from Threadgarden, and the chat header's End session and pickers apply only to chats Threadgarden itself runs.
 - **No bypass mode** (§6.4 listed it). The SDK requires an explicit
-  dangerous opt-in for `bypassPermissions`; pahub offers default,
+  dangerous opt-in for `bypassPermissions`; Threadgarden offers default,
   acceptEdits, plan and auto only, and drops "always allow" suggestions that
   would switch to bypass.
 - **Notification clicks** (§6.2 "clicking it opens the chat"). Tauri's
   notification plugin reports no clicks on desktop. Clicking a notification
-  focuses pahub; if the window gains focus within 30 s of a needs-you
-  notification, pahub selects Needs you and opens the chat when it is the only
+  focuses Threadgarden; if the window gains focus within 30 s of a needs-you
+  notification, Threadgarden selects Needs you and opens the chat when it is the only
   one waiting.
 - **Images in markdown** (§6.4 "images"). Remote images are not loaded (the
   CSP allows only local, `data:` and `blob:` images); they render as links.
@@ -708,7 +708,7 @@ Decisions made during the build that change behaviour described in the design:
   `/terminal-setup`, `/ide`, `/resume`, `/exit`, `/theme`, `/status-line`, …)
   is shown greyed out with a reason and never sent as text. The list needs
   upkeep as Claude Code changes.
-- **Effort** has no SDK control call; pahub sends `/effort <level>` as the CLI
+- **Effort** has no SDK control call; Threadgarden sends `/effort <level>` as the CLI
   does.
 - **`@` file index freshness.** The project file list is cached for 30 s and
   not watched, so a new file can take up to 30 s to appear in suggestions.
@@ -717,14 +717,14 @@ Decisions made during the build that change behaviour described in the design:
   sessions is not searchable (the chat view still shows everything).
 - **Titles.** Every title but a custom one (generated, Claude Code's own,
   summary, provisional, first prompt) is cut to 80 characters, since the SDK
-  summary may itself be the first prompt. Chats pahub starts get pahub's own
+  summary may itself be the first prompt. Chats Threadgarden starts get Threadgarden's own
   provisional and generated titles (v1.2, see Chat titles under Data flows),
   because Claude Code titles only its terminal sessions.
 - **Lists.** Live and external chats are returned in full on the first page of
   a list, so a first page can exceed the page size by that many rows. Hidden
   projects are left out of Active (formerly All chats), but their chats
   still appear in Needs you and Running.
-- **Running agents strip** lists every live pahub chat (needs-you, working and
+- **Running agents strip** lists every live Threadgarden chat (needs-you, working and
   idle, since an idle live chat still holds a process; idle ones that are
   archived are left out) plus external sessions that need you or are working.
 - **Messages that produce no item.** SDK messages that carry no content for
@@ -737,7 +737,7 @@ Decisions made during the build that change behaviour described in the design:
 - **Streamed text ids.** A streamed assistant text keeps the id it got when
   streaming started; the service maps the final message's uuid to it, so
   history and live views match up. Forking works from user messages, which
-  keep the uuid pahub sent (verified above).
+  keep the uuid Threadgarden sent (verified above).
 - **Resume checks** run `claude agents` on demand even when background polling
   is turned off in settings; the setting only controls polling and display.
 - **Service version mismatch** (§4.2). Only a different protocol version is
@@ -752,11 +752,11 @@ Decisions made during the build that change behaviour described in the design:
 - **Restored tabs** are not all loaded at launch: the active tab's chat is
   opened, the others show a title and status from `sessions.summaries` and
   load their history when first shown (a full transcript read each).
-- **Indexing defers pahub's own streaming chats.** A transcript that grows
+- **Indexing defers Threadgarden's own streaming chats.** A transcript that grows
   with every streamed message is re-indexed once its turn ends, not on every
   watcher event.
-- **Paused chats and external sessions.** Only a *live* pahub chat (one with
-  a process) counts as pahub's own: when a paused or failed chat is running in
+- **Paused chats and external sessions.** Only a *live* Threadgarden chat (one with
+  a process) counts as Threadgarden's own: when a paused or failed chat is running in
   a terminal, it is listed as that external session and resume is blocked.
 - **Release configuration.** Bundling the sidecar and the service is in a
   separate `tauri.bundle.conf.json` passed with `--config`, because Tauri

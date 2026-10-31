@@ -13,7 +13,7 @@ vi.mock('../../src/lib/native', async (original) => ({
 const item = { id: 'a1', markdown: 'see [docs](https://example.com/docs)', streaming: false };
 
 describe('links in assistant text', () => {
-  it('a click opens the link outside pahub and never navigates the webview', async () => {
+  it('a click opens the link outside Threadgarden and never navigates the webview', async () => {
     openExternal.mockClear();
     const { container } = render(AssistantText, { item });
     const allowed = await fireEvent.click(container.querySelector('a')!);

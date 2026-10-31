@@ -124,7 +124,7 @@ describe('ExternalPoller', () => {
     );
     const polled = poller.refresh();
     await Promise.resolve();
-    // pahub starts a session (e.g. a title query) while `claude agents` runs.
+    // Threadgarden starts a session (e.g. a title query) while `claude agents` runs.
     own.push('525ce1a7');
     answer(JSON.stringify(SAMPLE));
     await polled;

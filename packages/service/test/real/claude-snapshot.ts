@@ -85,7 +85,7 @@ export const snapshotFile = async (file: string): Promise<FileEntry | undefined>
 const topDir = (rel: string): string => rel.split(path.sep)[0] ?? rel;
 
 export type Comparison = {
-  /** Changes nothing but pahub could explain; must be empty. */
+  /** Changes nothing but Threadgarden could explain; must be empty. */
   violations: string[];
   /** Files of already-active sessions that only grew. */
   appended: string[];

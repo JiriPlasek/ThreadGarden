@@ -1,4 +1,4 @@
-//! Finding or starting the pahub service.
+//! Finding or starting the Threadgarden service.
 //!
 //! The service runs **detached** from the app (its own process group/session,
 //! no inherited stdio), so agents survive the window closing, the app quitting
@@ -279,7 +279,7 @@ pub async fn stop(
     while is_alive(d.pid) {
         if tokio::time::Instant::now() >= deadline {
             return Err(format!(
-                "service-stop-timeout: the pahub service (pid {}) did not exit within {} s",
+                "service-stop-timeout: the Threadgarden service (pid {}) did not exit within {} s",
                 d.pid,
                 timeout.as_secs_f32()
             ));

@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Place, Project } from '@pahub/protocol';
   import ArchiveIcon from '@lucide/svelte/icons/archive';
+  import logo from '#lib/assets/logo.png';
   import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
   import EyeIcon from '@lucide/svelte/icons/eye';
   import EyeOffIcon from '@lucide/svelte/icons/eye-off';
@@ -154,7 +155,8 @@
 
 <nav class="flex h-full min-w-0 flex-col" aria-label="Places">
   <header class="flex h-9 shrink-0 items-center gap-1 pr-1.5 pl-3">
-    <span class="flex-1 text-sm font-semibold tracking-tight">pahub</span>
+    <img src={logo} alt="" class="size-4 shrink-0" />
+    <span class="flex-1 text-sm font-semibold tracking-tight">Threadgarden</span>
     <IconButton label="Settings" onclick={() => (interaction.settingsOpen = true)}>
       <SettingsIcon />
     </IconButton>

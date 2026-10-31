@@ -6,7 +6,7 @@ export const AGENTS_LIMIT = 200;
 
 /**
  * Every running agent across all projects (spec §6.1 bottom strip, Ruling R21):
- * every live pahub chat (needs you, working, idle) plus external sessions that
+ * every live Threadgarden chat (needs you, working, idle) plus external sessions that
  * need the user or are working, ordered needs-you → working → idle.
  */
 export class AgentsState {
@@ -82,7 +82,7 @@ export class AgentsState {
 
 const GROUP: Partial<Record<ChatStatus, number>> = { needsYou: 0, working: 1, idle: 2 };
 
-/** Belongs in the strip: live pahub chats that are not paused or failed, external ones that need you or work. */
+/** Belongs in the strip: live Threadgarden chats that are not paused or failed, external ones that need you or work. */
 const isAgent = (s: ChatSummary): boolean =>
   s.external ? s.status === 'needsYou' || s.status === 'working' : s.live && s.status in GROUP;
 

@@ -2,7 +2,7 @@ import { settingsDefaults } from '@pahub/protocol';
 import { applyAppearance, readCachedAppearance } from '#lib/appearance.js';
 import { applyScale, readCachedScale } from '#lib/interface-scale.js';
 
-// pahub's UI is a static single-page app inside the Tauri webview: no server rendering.
+// Threadgarden's UI is a static single-page app inside the Tauri webview: no server rendering.
 export const ssr = false;
 export const prerender = false;
 

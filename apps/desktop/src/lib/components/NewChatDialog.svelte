@@ -18,7 +18,7 @@
    */
   const { interaction, places, chats, tabs, settings } = useApp();
 
-  /** Ruling R11: pahub never offers bypassPermissions. */
+  /** Ruling R11: Threadgarden never offers bypassPermissions. */
   const PERMISSION_MODES = [
     { value: 'default', label: 'Default (ask before acting)' },
     { value: 'acceptEdits', label: 'Accept edits' },
@@ -191,7 +191,7 @@
 
     {#if buildFlags.apiKeyOnly && !settings.hasApiKey}
       <p role="note" class="rounded-md bg-amber-500/15 px-2 py-1.5 text-xs">
-        This build of pahub runs chats only on an Anthropic API key. Add your key first.
+        This build of Threadgarden runs chats only on an Anthropic API key. Add your key first.
         <button
           type="button"
           class="underline underline-offset-2"

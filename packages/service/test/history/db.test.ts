@@ -55,7 +55,7 @@ describe('migrations', () => {
       migrate(raw);
       return new Db(raw);
     };
-    // A user who silenced pahub stays silenced…
+    // A user who silenced Threadgarden stays silenced…
     const silenced = before('false');
     expect(silenced.getSettings()).toMatchObject({ notifications: false, notifyOnFinish: false });
     // …and from then on the two settings are independent.
@@ -88,7 +88,7 @@ describe('Db settings', () => {
     store(db, 'enterToSend', 'not json');
     store(db, 'darkStyle', '"oled-ultra"');
     store(db, 'codeFont', '{"family":1}');
-    store(db, 'retired', '"setting from an older pahub"');
+    store(db, 'retired', '"setting from an older Threadgarden"');
     const s = db.getSettings();
     expect(s).toMatchObject({
       notifications: false,
@@ -278,7 +278,7 @@ describe('v1.2 chat titles', () => {
     db.close();
   });
 
-  it('session rows carry the pahub titles (indexed or not yet)', () => {
+  it('session rows carry the Threadgarden titles (indexed or not yet)', () => {
     const db = openDb(':memory:');
     db.setAutoTitle('s1', 'Provisional');
     db.upsertSession(info('s1', { summary: 'first', firstPrompt: 'first' }), 'p');

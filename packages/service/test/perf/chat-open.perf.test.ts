@@ -1,7 +1,7 @@
 /**
  * §8 "history chat open ≤ 150 ms": opening a held (live) chat whose history
  * is big must not re-read and re-normalize the transcript on every open or
- * page; the history read happens once while pahub holds the session.
+ * page; the history read happens once while Threadgarden holds the session.
  */
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';

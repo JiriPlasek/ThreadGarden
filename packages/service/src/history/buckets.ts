@@ -1,7 +1,7 @@
 /**
  * v1.2 buckets (design §3): moving chats between Active, On hold and
  * Archived, tidying old chats away, bringing archived chats back when they
- * run again, and ending holds whose time ran out. Buckets are pahub's own
+ * run again, and ending holds whose time ran out. Buckets are Threadgarden's own
  * metadata (`pahub.db`), never written into Claude Code's data.
  */
 import type { Bucket, ChatStatus, EventMsg } from '@pahub/protocol';
@@ -42,7 +42,7 @@ export class Buckets {
 
   /**
    * `chat.setBucket`: moves the known chats (one transaction). Archiving is
-   * refused for a chat pahub runs (`LIVE`: the UI asks to end it first) or
+   * refused for a chat Threadgarden runs (`LIVE`: the UI asks to end it first) or
    * one working or waiting elsewhere (`RUNNING`: it would come right back).
    * A hold whose time has already passed ends at once. Archiving also marks
    * the chats seen (Ruling R32), so they leave Needs you unless they wait on

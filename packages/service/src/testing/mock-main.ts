@@ -1,5 +1,5 @@
 /**
- * Mock pahub service for UI development and Playwright
+ * Mock Threadgarden service for UI development and Playwright
  * (`pnpm --filter @pahub/service mock`): the real service (`startService`)
  * over a synthetic history (`generateCorpus`) and a scripted fake Claude Code.
  *
@@ -29,7 +29,7 @@
  * answers about half a second later with "Mock: " and the first words of the
  * first message.
  *
- * Everything lives in temporary directories (pahub data dir and a fixture
+ * Everything lives in temporary directories (Threadgarden data dir and a fixture
  * `CLAUDE_CONFIG_DIR`), removed on exit. The mock's fake Claude Code writes a
  * placeholder transcript per chat into that fixture, like the real CLI, so the
  * watcher and indexer pick new chats up. On start it prints the discovery
@@ -77,7 +77,7 @@ const MOCK_USAGE_START = 0.42;
 const MOCK_USAGE_STEP = 0.03;
 
 const SENTENCES = [
-  'This is the pahub mock service answering.',
+  'This is the Threadgarden mock service answering.',
   'Replies stream word by word so the UI can show partial output.',
   'Mention "perm", "ask" or "plan" to see a permission request, a question or a plan approval.',
   'Nothing here talks to a real model.',

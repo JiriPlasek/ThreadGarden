@@ -3,7 +3,7 @@
   import { prettyJson } from '../tools';
 
   /**
-   * Data pahub does not recognise (spec §6.4, anti-goal 3): never dropped, shown
+   * Data Threadgarden does not recognise (spec §6.4, anti-goal 3): never dropped, shown
    * collapsed with its raw JSON. A run of them is one row (R12); expanding it
    * shows every item's raw JSON.
    */

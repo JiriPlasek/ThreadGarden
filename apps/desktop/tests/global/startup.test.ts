@@ -17,7 +17,7 @@ describe('start page', () => {
       .mockRejectedValueOnce(new Error('service-start-timeout: no service answered'))
       .mockReturnValueOnce(new Promise<void>(() => {}));
     render(Page);
-    expect(await screen.findByText(/could not reach the pahub service/i)).toBeTruthy();
+    expect(await screen.findByText(/could not reach the Threadgarden service/i)).toBeTruthy();
     await userEvent.click(screen.getByRole('button', { name: /retry/i }));
     expect(app.startApp).toHaveBeenCalledTimes(2);
     expect(await screen.findByText(/connecting/i)).toBeTruthy();

@@ -20,8 +20,8 @@
  * Marking a finished chat seen is `YourTurnState`'s job.
  *
  * The notification plugin cannot report clicks (ruling R26). Clicking a
- * notification focuses pahub, so when the window gains focus within
- * `FOCUS_OPENS_WITHIN_MS` of a notification, pahub selects "Needs you" and
+ * notification focuses Threadgarden, so when the window gains focus within
+ * `FOCUS_OPENS_WITHIN_MS` of a notification, Threadgarden selects "Needs you" and
  * opens the waiting chat if it is the only one.
  */
 import type { ChatStatus, ChatSummary } from '@pahub/protocol';
@@ -230,7 +230,7 @@ export const startAttention = (deps: AttentionDeps): (() => void) => {
       if (focused && tabs.active === e.sessionId) return;
       notified = { sessionId: e.sessionId, at: now() };
       const body = e.late
-        ? `${e.projectName ? `${e.projectName} · ` : ''}sent late: pahub was not running when it was due`
+        ? `${e.projectName ? `${e.projectName} · ` : ''}sent late: Threadgarden was not running when it was due`
         : e.projectName;
       quietly(notify(`Scheduled message sent to ${e.title}`, body, e.sessionId));
     }),

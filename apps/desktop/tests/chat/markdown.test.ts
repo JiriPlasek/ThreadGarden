@@ -25,7 +25,7 @@ describe('markdown', () => {
     expect(html).toContain('<code>two</code>');
   });
 
-  it('keeps http(s) links (opened by pahub, never by the webview) and drops other targets', () => {
+  it('keeps http(s) links (opened by Threadgarden, never by the webview) and drops other targets', () => {
     const html = renderMarkdown(
       '[site](https://example.com) [mail](mailto:a@b.example) [rel](/etc/passwd) [js](javascript:alert(1))',
     );

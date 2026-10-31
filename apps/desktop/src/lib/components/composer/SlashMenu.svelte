@@ -3,7 +3,7 @@
 
   /**
    * The `/` command menu (spec §6.4): commands from `supportedCommands()` plus
-   * pahub's table of terminal-only ones (ruling R25) as a listbox, driven from
+   * Threadgarden's table of terminal-only ones (ruling R25) as a listbox, driven from
    * the composer's keyboard like the mention picker. Unavailable commands are
    * greyed out with the reason; picking one shows that reason instead.
    */
@@ -36,7 +36,7 @@
       role="option"
       aria-selected={i === active}
       aria-disabled={c.unavailable ? 'true' : undefined}
-      title={c.unavailable ? `Unavailable in pahub: ${c.unavailable}` : undefined}
+      title={c.unavailable ? `Unavailable in Threadgarden: ${c.unavailable}` : undefined}
       class="flex cursor-pointer items-baseline gap-2 px-2 py-1 {i === active
         ? 'bg-accent text-accent-foreground'
         : ''} {c.unavailable ? 'opacity-55' : ''}"
@@ -50,7 +50,7 @@
       {/if}
       {#if c.unavailable}
         <span class="text-muted-foreground min-w-0 truncate"
-          ><span class="font-medium">Unavailable in pahub</span> · {c.unavailable}</span
+          ><span class="font-medium">Unavailable in Threadgarden</span> · {c.unavailable}</span
         >
       {:else}
         <span class="text-muted-foreground min-w-0 truncate">{c.description}</span>

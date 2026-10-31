@@ -19,7 +19,7 @@
     startApp().catch((err: unknown) => {
       const text = err instanceof Error ? err.message : String(err);
       if (isMismatch(text)) connection.markIncompatible();
-      else failure = `Could not reach the pahub service: ${text}`;
+      else failure = `Could not reach the Threadgarden service: ${text}`;
     });
   };
 

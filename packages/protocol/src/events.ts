@@ -22,7 +22,7 @@ export const ChatStatusEventSchema = z.object({
 export type ChatStatusEvent = z.infer<typeof ChatStatusEventSchema>;
 
 /**
- * The full task list of a chat pahub runs (replaces the previous one). It is
+ * The full task list of a chat Threadgarden runs (replaces the previous one). It is
  * sequenced in the same per-session log as `chat.items` / `chat.status`, so
  * `chat.since` replays it.
  */
@@ -48,7 +48,7 @@ export const events = {
     what: z.string(),
   }),
   // ── v1.1 T2: "Your turn" ──────────────────────────────────────────────────
-  /** A pahub chat ended a turn (once per turn); the UI decides whether to notify. */
+  /** A Threadgarden chat ended a turn (once per turn); the UI decides whether to notify. */
   chatFinished: z.object({
     sessionId: z.string(),
     title: z.string(),

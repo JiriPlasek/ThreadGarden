@@ -238,7 +238,7 @@ describe('catalog and places API', () => {
     expect(projects.find((p) => p.projectId === '/work/proj-0')?.counts.needsYou).toBe(1);
   });
 
-  it('an external session wins over a non-live (paused/failed) pahub chat with the same id', async () => {
+  it('an external session wins over a non-live (paused/failed) Threadgarden chat with the same id', async () => {
     const t = await setup(3, 1);
     t.setLive([
       lc('session-0', '/work/proj-0', 'paused'),
@@ -260,7 +260,7 @@ describe('catalog and places API', () => {
     expect(byId.get('session-0')).toMatchObject({ status: 'working', live: false });
     expect(byId.get('session-0')?.external).toMatchObject({ pid: 4 });
     expect(byId.get('session-1')?.external).toMatchObject({ pid: 5 });
-    // A live pahub chat stays pahub's own.
+    // A live Threadgarden chat stays Threadgarden's own.
     expect(byId.get('session-2')).toMatchObject({ live: true, external: null });
   });
 
@@ -345,7 +345,7 @@ describe('quickSearch', () => {
 // ── v1.2 C1: chat titles ──
 
 describe('v1.2 chat titles in the catalog', () => {
-  it('v1.2: an unindexed live chat shows its pahub titles everywhere at once', async () => {
+  it('v1.2: an unindexed live chat shows its Threadgarden titles everywhere at once', async () => {
     const t = await setup();
     t.setLive([lc('new-chat', '/work/proj-0', 'working')]);
     const fresh = () => t.catalog.summary('new-chat')!.title;

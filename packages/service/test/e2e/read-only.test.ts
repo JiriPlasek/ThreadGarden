@@ -1,5 +1,5 @@
 /**
- * pahub never writes to Claude Code's data (spec §2 anti-goal 2, §5.1): a full
+ * Threadgarden never writes to Claude Code's data (spec §2 anti-goal 2, §5.1): a full
  * service lifecycle against a fixture `CLAUDE_CONFIG_DIR` leaves every path in
  * it byte-for-byte, size and mtime identical — chat titles (v1.2 C1, provisional
  * and generated) included: no file is created there.
@@ -120,7 +120,7 @@ it('a full service lifecycle leaves the Claude config dir untouched', async () =
     fake.emit(assistantText('a1', 'reply'));
     fake.emit(result('r1'));
     await c.waitFor(chatStatus(sessionId, 'idle'));
-    // v1.2 C1: provisional, then generated title — both in pahub's own db only.
+    // v1.2 C1: provisional, then generated title — both in Threadgarden's own db only.
     await eventually(async () => {
       const { items } = await c.call<{ items: { title: string }[] }>('sessions.summaries', {
         sessionIds: [sessionId],
@@ -133,8 +133,8 @@ it('a full service lifecycle leaves the Claude config dir untouched', async () =
     await c.call('chat.send', { sessionId: 's2', text: 'continue' });
     // fork
     await c.call('chat.fork', { sessionId: 's1', upToItemId: 's1-u0' });
-    // pahub-side metadata, drafts, settings
-    await c.call('meta.update', { sessionId: 's3', customTitle: 'Renamed in pahub', pinned: true });
+    // Threadgarden-side metadata, drafts, settings
+    await c.call('meta.update', { sessionId: 's3', customTitle: 'Renamed in Threadgarden', pinned: true });
     await c.call('projects.list', {});
     await c.call('drafts.set', { key: 's1', text: 'draft' });
     await c.call('settings.set', { idleReclaimMinutes: 5 });

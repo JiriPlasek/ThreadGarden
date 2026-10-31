@@ -110,7 +110,7 @@ export const methods = {
       items: z.array(ChatItemSchema),
       hasMore: z.boolean(),
       seq: z.number(),
-      /** Tasks of the chat's running process (empty unless pahub runs it). */
+      /** Tasks of the chat's running process (empty unless Threadgarden runs it). */
       tasks: z.array(ChatTaskSchema),
     }),
   ),
@@ -189,8 +189,8 @@ export const methods = {
   ),
   'chat.resumeCommand': def(sessionIdOnly, z.object({ command: z.string() })),
   /**
-   * Stops one task of a chat pahub runs (SDK `stopTask`); its `stopped`
-   * status arrives as `chat.tasks`. Errors: `NOT_LIVE` (pahub does not run the
+   * Stops one task of a chat Threadgarden runs (SDK `stopTask`); its `stopped`
+   * status arrives as `chat.tasks`. Errors: `NOT_LIVE` (Threadgarden does not run the
    * chat), `UNKNOWN_TASK`, `STOP_FAILED`.
    */
   'chat.stopTask': def(z.object({ sessionId: z.string(), taskId: z.string() }), empty),
@@ -240,9 +240,9 @@ export const methods = {
    * them, and every move clears `backFromHold`. Archiving also marks the
    * chats seen (Ruling R32: they leave Needs you unless they wait on the
    * user); a hold keeps them unread. Refused per chat, listed in
-   * `skipped`: `NOT_FOUND` (unknown chat), `LIVE` (archiving a chat pahub is
+   * `skipped`: `NOT_FOUND` (unknown chat), `LIVE` (archiving a chat Threadgarden is
    * running — the UI asks to end it first, then retries), `RUNNING`
-   * (archiving a chat that runs outside pahub; it would come right back).
+   * (archiving a chat that runs outside Threadgarden; it would come right back).
    */
   'chat.setBucket': def(
     z.object({

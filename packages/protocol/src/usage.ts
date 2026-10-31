@@ -3,7 +3,7 @@ import { z } from 'zod';
 // ── v1.3 B: usage limits and scheduled sends ─────────────────────────────────
 
 /**
- * One plan usage window as pahub last saw it, account-wide. `key` is the SDK's
+ * One plan usage window as Threadgarden last saw it, account-wide. `key` is the SDK's
  * window name (`five_hour`, `seven_day`, `seven_day_opus`, `seven_day_sonnet`,
  * `seven_day_oauth_apps`, `seven_day_overage_included`, `overage`,
  * `extra_usage`, or `model:<label>` for a per-model weekly window); keys this
@@ -19,7 +19,7 @@ export const UsageWindowSchema = z.object({
   utilization: z.number().optional(),
   /** When the window resets (epoch ms). */
   resetsAt: z.number().optional(),
-  /** When pahub observed this (epoch ms). */
+  /** When Threadgarden observed this (epoch ms). */
   observedAt: z.number(),
   /** Where it came from: a session's `rate_limit_event`, or the SDK's usage reading. */
   source: z.enum(['event', 'usage']).catch('event'),

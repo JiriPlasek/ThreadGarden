@@ -21,7 +21,7 @@
   type Accent = Settings['accent'];
 
   /**
-   * pahub's own settings (spec §6.5), stored by the service (the API key
+   * Threadgarden's own settings (spec §6.5), stored by the service (the API key
    * excepted: it lives in the OS credential store, spec §5.5), plus read-only
    * facts: where Claude Code was found, whether external sessions are
    * available (spec §6.3) and the history indexing progress.
@@ -153,7 +153,7 @@
     <Dialog.Header>
       <Dialog.Title class="text-base">Settings</Dialog.Title>
       <Dialog.Description class="text-xs"
-        >pahub's own settings. Works with Claude Code.</Dialog.Description
+        >Threadgarden's own settings. Works with Claude Code.</Dialog.Description
       >
     </Dialog.Header>
 
@@ -229,7 +229,7 @@
         for a new line)
       </label>
       <label class={checkClass}>
-        <input type="checkbox" bind:checked={form.externalPolling} /> Show sessions running outside pahub
+        <input type="checkbox" bind:checked={form.externalPolling} /> Show sessions running outside Threadgarden
       </label>
       <label class={checkClass}>
         <input type="checkbox" bind:checked={form.startOnLogin} /> Start on login
@@ -373,9 +373,9 @@
       </div>
       <p class="text-muted-foreground text-xs">
         {#if settings.hasApiKey}
-          A key is stored in the OS credential store; chats pahub starts use API billing.
+          A key is stored in the OS credential store; chats Threadgarden starts use API billing.
         {:else if buildFlags.apiKeyOnly}
-          This build of pahub runs chats only on an Anthropic API key (API billing). Add your key to
+          This build of Threadgarden runs chats only on an Anthropic API key (API billing). Add your key to
           start or continue chats; history stays browsable without one.
         {:else}
           No key: chats use the sign-in of your Claude Code installation.

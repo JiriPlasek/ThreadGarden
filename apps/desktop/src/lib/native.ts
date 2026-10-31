@@ -12,7 +12,7 @@ import pkg from '../../package.json';
 /**
  * How to reach the service. `serviceVersion` differing from `appVersion` (with a
  * compatible protocol) means an older or newer service is still running: the UI
- * offers "Restart the pahub service to update" (spec §4.2). An incompatible
+ * offers "Restart the Threadgarden service to update" (spec §4.2). An incompatible
  * protocol rejects `serviceConnection()` with `service-version-mismatch` instead.
  */
 export type ServiceConnection = {
@@ -30,7 +30,7 @@ const mockConnection = (): ServiceConnection => {
   const token = import.meta.env.VITE_PAHUB_MOCK_TOKEN as string | undefined;
   if (!url || !token) {
     throw new Error(
-      'No pahub service outside the desktop app: set VITE_PAHUB_MOCK_URL and VITE_PAHUB_MOCK_TOKEN (see `pnpm --filter @pahub/service mock`)',
+      'No Threadgarden service outside the desktop app: set VITE_PAHUB_MOCK_URL and VITE_PAHUB_MOCK_TOKEN (see `pnpm --filter @pahub/service mock`)',
     );
   }
   const port = Number(new URL(url).port);
@@ -56,7 +56,7 @@ export const stopService = async (): Promise<void> => {
 
 let browserApiKey: string | null = null;
 
-/** pahub's optional Anthropic API key, kept in the OS credential store (in memory in a browser). */
+/** Threadgarden's optional Anthropic API key, kept in the OS credential store (in memory in a browser). */
 export const apiKey = {
   get: async (): Promise<string | null> =>
     isTauri ? invoke<string | null>('api_key_get') : browserApiKey,
@@ -183,7 +183,7 @@ export const setTrayNeedsYou = async (n: number): Promise<void> => {
 
 /**
  * Tray menu items that need a confirmation in the UI ("Stop all work…",
- * "Quit pahub completely…"). Resolves to an unsubscribe function.
+ * "Quit Threadgarden completely…"). Resolves to an unsubscribe function.
  */
 export const onTray = async (event: TrayEvent, cb: () => void): Promise<() => void> =>
   isTauri ? listen(`tray://${event}`, () => cb()) : () => {};

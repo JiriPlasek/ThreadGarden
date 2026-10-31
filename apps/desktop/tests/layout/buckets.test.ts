@@ -231,7 +231,7 @@ describe('chat row context menu', () => {
     );
   });
 
-  it('archiving a chat pahub runs asks "End this chat and archive it?", then ends and archives', async () => {
+  it('archiving a chat Threadgarden runs asks "End this chat and archive it?", then ends and archives', async () => {
     const { server, context } = await withList(
       [summary('a', { live: true, status: 'idle', title: 'busy chat' })],
       { skip: { a: 'LIVE' } },
@@ -433,7 +433,7 @@ describe('multi-select and the bulk action bar', () => {
       expect(setCalls(server).at(-1)).toEqual({ sessionIds: ['b', 'c'], bucket: 'archived' }),
     );
     // No "end it?" question in bulk: the skipped chat is reported.
-    const status = await screen.findByText(/not archived because pahub is running/i);
+    const status = await screen.findByText(/not archived because Threadgarden is running/i);
     expect(status.closest('[role="status"]')).toBeTruthy();
     expect(screen.queryByRole('alertdialog')).toBeNull();
 

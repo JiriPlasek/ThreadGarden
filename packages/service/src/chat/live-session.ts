@@ -1,5 +1,5 @@
 /**
- * One pahub chat while its Claude Code process exists (§4.3): sends and
+ * One Threadgarden chat while its Claude Code process exists (§4.3): sends and
  * queues user input, runs the permission / question / plan flow through the
  * SDK's `canUseTool`, derives the chat status (§6.2) and header, and emits
  * sequenced `chat.items` / `chat.status` / `chat.tasks` events through a
@@ -48,7 +48,7 @@ import { EventLog, type ChatEvent, type ChatEventDraft } from './event-log.js';
 import { Normalizer, deriveStatus } from './normalize.js';
 import { TaskTracker, runningCount, taskEnded } from './tasks.js';
 
-/** pahub's record of which sessions have a live process (Task 6 backs it with the db). */
+/** Threadgarden's record of which sessions have a live process (Task 6 backs it with the db). */
 export interface LiveRegistry {
   markLive(sessionId: string, cwd: string): void;
   markEnded(sessionId: string): void;
@@ -163,7 +163,7 @@ export type LiveSnapshot = {
 export type StartupFailure = StartupFailureMessage & { reason: string; detail?: string };
 
 export const ITEMS_COALESCE_MS = 33;
-export const DEFAULT_DENY_MESSAGE = 'Denied by user in pahub';
+export const DEFAULT_DENY_MESSAGE = 'Denied by user in Threadgarden';
 
 type PermissionItem = Extract<ChatItem, { kind: 'permissionRequest' }>;
 type Pending = {
@@ -175,14 +175,14 @@ type Pending = {
 type Rec = Record<string, unknown>;
 
 /**
- * Ruling R11: pahub v1 never runs a session in `bypassPermissions` (and never
+ * Ruling R11: Threadgarden v1 never runs a session in `bypassPermissions` (and never
  * sets the SDK's `allowDangerouslySkipPermissions`).
  */
 const rejectBypass = (mode: string | undefined): void => {
   if (mode === 'bypassPermissions') {
     throw new ServiceError(
       'INVALID_PARAMS',
-      'pahub does not support the bypassPermissions permission mode',
+      'Threadgarden does not support the bypassPermissions permission mode',
     );
   }
 };
@@ -254,7 +254,7 @@ export class LiveSession {
   private lastActivityValue: number | null = null;
   /** User inputs sent with `priority: 'next'` since the last `result` (Ruling R28). */
   private queuedInputs = 0;
-  /** The user stopped the turn in progress from pahub (Stop, Esc): its result is not a finish. */
+  /** The user stopped the turn in progress from Threadgarden (Stop, Esc): its result is not a finish. */
   private interruptRequested = false;
   private published = '';
   private firstText: string | undefined;
@@ -471,7 +471,7 @@ export class LiveSession {
 
   /**
    * Stops the turn in progress (Stop / Esc). The `result` that follows is not
-   * a finished turn: the user stopped it from pahub, so there is no
+   * a finished turn: the user stopped it from Threadgarden, so there is no
    * `chatFinished` and the chat does not become unread. Pressed while nothing
    * runs, or if the SDK refuses, the next turn end counts as usual.
    */
@@ -529,7 +529,7 @@ export class LiveSession {
       }
       // Defence in depth: bypass suggestions are filtered out when the request arrives.
       if (isBypassSuggestion(chosen)) {
-        throw new ServiceError('INVALID_PARAMS', 'pahub does not apply bypassPermissions rules');
+        throw new ServiceError('INVALID_PARAMS', 'Threadgarden does not apply bypassPermissions rules');
       }
     }
     if (d.decision === 'deny') {
@@ -602,7 +602,7 @@ export class LiveSession {
     return usage ? () => usage.call(session) : undefined;
   }
 
-  /** Adds a line of pahub's own to the chat (e.g. a scheduled message that went out late). */
+  /** Adds a line of Threadgarden's own to the chat (e.g. a scheduled message that went out late). */
   note(level: 'info' | 'warning' | 'error', text: string): void {
     this.pushItems([{ kind: 'system', id: `local:${randomUUID()}`, level, text }], false);
   }
@@ -905,7 +905,7 @@ export class LiveSession {
     this.turnEnded();
   }
 
-  /** A turn ended: `onTurnEnded` (pahub's unread state), then `chatFinished` for the UI. */
+  /** A turn ended: `onTurnEnded` (Threadgarden's unread state), then `chatFinished` for the UI. */
   private turnEnded(): void {
     const at = this.deps.now();
     this.guard('onTurnEnded', () => this.deps.onTurnEnded?.(this.id, at));

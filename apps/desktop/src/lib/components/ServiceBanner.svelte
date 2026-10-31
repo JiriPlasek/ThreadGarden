@@ -4,10 +4,10 @@
   import { useApp } from '#lib/state/context.js';
 
   /**
-   * "Restart the pahub service to update" (spec §4.2, ruling R18). Blocking:
+   * "Restart the Threadgarden service to update" (spec §4.2, ruling R18). Blocking:
    * the service speaks another protocol, so nothing works until it restarts.
    * Otherwise a thin bar, shown while an older (or newer) service of the same
-   * protocol is running. Either way pahub never restarts it on its own while
+   * protocol is running. Either way Threadgarden never restarts it on its own while
    * agents may run: **Restart service** asks first (`ServiceDialogs`).
    */
   let { blocking = false }: { blocking?: boolean } = $props();
@@ -22,9 +22,9 @@
 {#if blocking}
   <main class="flex min-h-screen items-center justify-center p-8">
     <div role="alert" class="flex max-w-md flex-col items-start gap-3">
-      <h1 class="text-base font-semibold">The pahub service is an older version</h1>
+      <h1 class="text-base font-semibold">The Threadgarden service is an older version</h1>
       <p class="text-muted-foreground text-sm" data-testid="status">
-        It speaks a different protocol than this app, so pahub cannot use it. Restart the pahub
+        It speaks a different protocol than this app, so Threadgarden cannot use it. Restart the Threadgarden
         service to update; chats it runs can be resumed afterwards.
       </p>
       <Button size="sm" onclick={restart}>
@@ -39,11 +39,11 @@
   >
     <span class="text-foreground font-medium"
       >{connection.serviceNewer
-        ? 'The pahub service is a newer version'
-        : 'The pahub service is an older version'}</span
+        ? 'The Threadgarden service is a newer version'
+        : 'The Threadgarden service is an older version'}</span
     >
     <span class="min-w-0 truncate"
-      >({connection.serviceVersion}; this app is {connection.appVersion}). Restart the pahub service
+      >({connection.serviceVersion}; this app is {connection.appVersion}). Restart the Threadgarden service
       to update.</span
     >
     <Button variant="outline" size="xs" class="ml-auto shrink-0" onclick={restart}>

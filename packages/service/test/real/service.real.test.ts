@@ -1,5 +1,5 @@
 /**
- * Opt-in end-to-end suite: the whole pahub service (`startService` with the
+ * Opt-in end-to-end suite: the whole Threadgarden service (`startService` with the
  * real Agent SDK adapter) against the installed `claude`, the user's own
  * login and their real Claude config dir, driven over the WebSocket like the
  * UI drives it. Run with `pnpm --filter @pahub/service test:real`
@@ -7,7 +7,7 @@
  *
  * Every chat runs in a fresh temp git repo with tiny prompts; the only tool
  * the model may use is one harmless `echo` into that repo, and no bypass mode
- * is ever used. pahub's data dir is a temp dir too.
+ * is ever used. Threadgarden's data dir is a temp dir too.
  *
  * Read-only check: the real config dir cannot be swapped for a temp one
  * (the real `claude` needs the real login), so the suite snapshots every file
@@ -70,7 +70,7 @@ const texts = (items: ChatItem[], kind: 'user' | 'assistantText'): string[] =>
       : [],
   );
 
-describe.skipIf(!REAL)('pahub service against real Claude Code (PAHUB_REAL=1)', () => {
+describe.skipIf(!REAL)('Threadgarden service against real Claude Code (PAHUB_REAL=1)', () => {
   let claude: ClaudeFound;
   let repo = '';
   let data = '';
@@ -82,7 +82,7 @@ describe.skipIf(!REAL)('pahub service against real Claude Code (PAHUB_REAL=1)', 
   let c: TestClient;
   let closed: Promise<void> = Promise.resolve();
   let chatId = '';
-  /** The user item pahub showed for the first prompt while the chat was live. */
+  /** The user item Threadgarden showed for the first prompt while the chat was live. */
   let firstUser: ChatItem | undefined;
 
   const open = (sessionId: string, tail = 500): Promise<Opened> =>
@@ -143,7 +143,7 @@ describe.skipIf(!REAL)('pahub service against real Claude Code (PAHUB_REAL=1)', 
 
     repo = realpathSync.native(mkdtempSync(path.join(os.tmpdir(), 'pahub-real-svc-')));
     execFileSync('git', ['init', '-q'], { cwd: repo });
-    writeFileSync(path.join(repo, 'notes.txt'), `The pahub magic word is ${MAGIC}.\n`);
+    writeFileSync(path.join(repo, 'notes.txt'), `The Threadgarden magic word is ${MAGIC}.\n`);
     data = mkdtempSync(path.join(os.tmpdir(), 'pahub-real-data-'));
 
     claudeDir = resolveClaudeConfigDir(process.env, os.homedir());
@@ -235,7 +235,7 @@ describe.skipIf(!REAL)('pahub service against real Claude Code (PAHUB_REAL=1)', 
     expect(firstUser).toBeDefined();
   });
 
-  it('keeps the uuid pahub assigns to a sent user message in the transcript', async () => {
+  it('keeps the uuid Threadgarden assigns to a sent user message in the transcript', async () => {
     await c.call('chat.end', { sessionId: chatId });
     const o = await open(chatId);
     expect(o.summary.status).toBe('history');
@@ -350,13 +350,13 @@ describe.skipIf(!REAL)('pahub service against real Claude Code (PAHUB_REAL=1)', 
     }
     await c.call('meta.update', {
       sessionId: old!.sessionId,
-      customTitle: 'pahub real test',
+      customTitle: 'Threadgarden real test',
       pinned: true,
     });
-    await c.call('meta.update', { sessionId: chatId, customTitle: 'pahub real chat' });
+    await c.call('meta.update', { sessionId: chatId, customTitle: 'Threadgarden real chat' });
     const renamed = await c.call<{ items: ChatSummary[] }>('sessions.list', {
       place: { kind: 'all' },
-      query: 'pahub real test',
+      query: 'Threadgarden real test',
       limit: 10,
     });
     expect(renamed.items.some((s) => s.sessionId === old!.sessionId)).toBe(true);

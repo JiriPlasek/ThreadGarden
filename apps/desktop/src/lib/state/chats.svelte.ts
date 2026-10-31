@@ -96,7 +96,7 @@ export class ChatState {
   /**
    * The chat's SDK tasks (subagents, background shells, monitors) as the
    * service last sent them (`chat.open`, then every `chat.tasks` event replaces
-   * the list). Empty for chats pahub does not run.
+   * the list). Empty for chats Threadgarden does not run.
    */
   tasks = $state.raw<ChatTask[]>([]);
   /** Running tasks, for the "N running" badges. */
@@ -112,7 +112,7 @@ export class ChatState {
   }
 
   /**
-   * True while pahub's own process runs this chat: messages go straight to it.
+   * True while Threadgarden's own process runs this chat: messages go straight to it.
    * Otherwise (history, paused, failed, external) sending resumes the session
    * and needs the resume-safety check first (spec §4.4).
    */
@@ -335,7 +335,7 @@ export class ChatsState {
 
   /** Stops one background task (Activity panel); its `stopped` status arrives as `chat.tasks`. */
   stopTask = async (sessionId: string, taskId: string): Promise<void> => {
-    if (!this.api) throw new Error('Not connected to the pahub service');
+    if (!this.api) throw new Error('Not connected to the Threadgarden service');
     await this.api.request('chat.stopTask', { sessionId, taskId });
   };
 
@@ -346,7 +346,7 @@ export class ChatsState {
     sessionId: string,
     value: string,
   ): Promise<void> => {
-    if (!this.api) throw new Error('Not connected to the pahub service');
+    if (!this.api) throw new Error('Not connected to the Threadgarden service');
     await this.api.request(method, { sessionId, value });
     const chat = this.byId.get(sessionId);
     if (chat) chat.header = { ...chat.header, [field]: value };
@@ -376,7 +376,7 @@ export class ChatsState {
 
   /** Sends a message; resolves to whether the service queued it behind the running turn. */
   send = async (sessionId: string, text: string, images?: ImageRef[]): Promise<boolean> => {
-    if (!this.api) throw new Error('Not connected to the pahub service');
+    if (!this.api) throw new Error('Not connected to the Threadgarden service');
     this.stickToBottom(sessionId);
     const r = await this.api.request('chat.send', {
       sessionId,
@@ -390,9 +390,9 @@ export class ChatsState {
 
   /** Starts a chat in `cwd` with its first message; resolves to the new chat's id. */
   create = async (p: Params<'chat.create'>): Promise<string> => {
-    if (!this.api) throw new Error('Not connected to the pahub service');
+    if (!this.api) throw new Error('Not connected to the Threadgarden service');
     if (p.permissionMode === 'bypassPermissions') {
-      throw new Error('pahub does not offer the bypassPermissions mode'); // Ruling R11
+      throw new Error('Threadgarden does not offer the bypassPermissions mode'); // Ruling R11
     }
     const params = { ...p };
     if (!params.images?.length) delete params.images;
@@ -404,7 +404,7 @@ export class ChatsState {
 
   /** Stops the current turn (Stop button / Esc). */
   interrupt = async (sessionId: string): Promise<void> => {
-    if (!this.api) throw new Error('Not connected to the pahub service');
+    if (!this.api) throw new Error('Not connected to the Threadgarden service');
     await this.api.request('chat.interrupt', { sessionId });
   };
 
@@ -414,7 +414,7 @@ export class ChatsState {
     p: RespondParams,
     answers?: Record<string, string>,
   ): Promise<void> => {
-    if (!this.api) throw new Error('Not connected to the pahub service');
+    if (!this.api) throw new Error('Not connected to the Threadgarden service');
     this.stickToBottom(sessionId);
     await this.api.request('chat.respond', { sessionId, ...p });
     this.byId
@@ -424,32 +424,32 @@ export class ChatsState {
 
   /** Whether this chat may be resumed here (spec §4.4). */
   resumeCheck = async (sessionId: string): Promise<ResumeCheck> => {
-    if (!this.api) throw new Error('Not connected to the pahub service');
+    if (!this.api) throw new Error('Not connected to the Threadgarden service');
     return this.api.request('chat.resumeCheck', { sessionId });
   };
 
   /** Ends the chat's Claude process (the chat stays open as history). */
   end = async (sessionId: string): Promise<void> => {
-    if (!this.api) throw new Error('Not connected to the pahub service');
+    if (!this.api) throw new Error('Not connected to the Threadgarden service');
     await this.api.request('chat.end', { sessionId });
   };
 
   /** Stops a background session that Claude Code's own background service runs (`claude stop <id>`). */
   stopExternal = async (sessionId: string): Promise<void> => {
-    if (!this.api) throw new Error('Not connected to the pahub service');
+    if (!this.api) throw new Error('Not connected to the Threadgarden service');
     await this.api.request('external.stop', { sessionId });
   };
 
   /** Forks the chat up to (and including) a user message; resolves to the new chat's id. */
   fork = async (sessionId: string, upToItemId: string): Promise<string> => {
-    if (!this.api) throw new Error('Not connected to the pahub service');
+    if (!this.api) throw new Error('Not connected to the Threadgarden service');
     const r = await this.api.request('chat.fork', { sessionId, upToItemId });
     return r.sessionId;
   };
 
   /** The terminal command that continues this chat (`claude --resume <id>` or `claude attach`). */
   resumeCommand = async (sessionId: string): Promise<string> => {
-    if (!this.api) throw new Error('Not connected to the pahub service');
+    if (!this.api) throw new Error('Not connected to the Threadgarden service');
     return (await this.api.request('chat.resumeCommand', { sessionId })).command;
   };
 

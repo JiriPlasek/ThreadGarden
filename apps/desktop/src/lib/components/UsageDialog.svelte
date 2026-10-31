@@ -10,7 +10,7 @@
   /**
    * v1.3 B "Usage" (spec §3): one bar per known window — 5-hour, weekly,
    * weekly per model, overage and extra usage — with its use, when it resets
-   * and when pahub last saw it, plus the plan when known. Opened from the
+   * and when Threadgarden last saw it, plus the plan when known. Opened from the
    * strip's meter or "Usage" in Ctrl/Cmd+K; opening asks a running chat for a
    * fresh reading (the service never starts one for it).
    */
@@ -77,7 +77,7 @@
         {#if noLimits}
           Nothing to show.
         {:else}
-          Nothing known yet. Usage shows up once a chat has run in pahub.
+          Nothing known yet. Usage shows up once a chat has run in Threadgarden.
         {/if}
       </p>
     {:else}

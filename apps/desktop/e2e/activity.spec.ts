@@ -16,7 +16,7 @@ test('activity panel: a subagent runs and ends, a dev server runs and is stopped
   const composer = page.getByRole('textbox', { name: 'Message' });
   const activity = page.getByRole('region', { name: 'Activity' });
   // v1.3: the panel is one global setting, shown on a history chat too.
-  await expect(activity).toContainText('Activity is available for chats running in pahub');
+  await expect(activity).toContainText('Activity is available for chats running in Threadgarden');
 
   // "agent": an Explore subagent reports progress, then completes.
   await composer.fill('Let an agent explore the code');

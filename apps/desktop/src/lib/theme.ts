@@ -5,7 +5,7 @@ export type Theme = Settings['theme'];
 const DARK_QUERY = '(prefers-color-scheme: dark)';
 
 /**
- * Applies pahub's theme (spec §6.5) as `data-theme="light" | "dark"` on the
+ * Applies Threadgarden's theme (spec §6.5) as `data-theme="light" | "dark"` on the
  * root element; the stylesheet keys both token sets and Tailwind's `dark:`
  * variant on it. `system` follows the OS preference live. Returns a function
  * that stops following it.

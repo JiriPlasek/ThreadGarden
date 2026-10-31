@@ -95,7 +95,7 @@
     <Dialog.Header>
       <Dialog.Title class="text-base">{title}</Dialog.Title>
       <Dialog.Description class="text-sm">
-        pahub sends the message then, resuming the chat if needed.
+        Threadgarden sends the message then, resuming the chat if needed.
       </Dialog.Description>
     </Dialog.Header>
     <form class="flex flex-col gap-3" onsubmit={save}>

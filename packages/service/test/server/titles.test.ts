@@ -1,6 +1,6 @@
 /**
  * v1.2 C1: chat titles through the real service wiring (fake adapter): the
- * provisional title of a chat pahub starts, the generated one after its first
+ * provisional title of a chat Threadgarden starts, the generated one after its first
  * turn, the setting and the API-key-only gate.
  */
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -95,7 +95,7 @@ describe('chat titles (service)', () => {
       text: 'Fix the login bug on Safari. It fails after the OAuth redirect.\nMore details…',
     });
     await c.waitFor(changedFor(sessionId));
-    // Not indexed yet (no transcript): the overlay carries pahub's title.
+    // Not indexed yet (no transcript): the overlay carries Threadgarden's title.
     expect(await titleOf(c, sessionId)).toBe('Fix the login bug on Safari.');
     const opened = await c.call<{ summary: ChatSummary }>('chat.open', { sessionId, tail: 10 });
     expect(opened.summary.title).toBe('Fix the login bug on Safari.');
@@ -188,7 +188,7 @@ describe('chat titles (service)', () => {
     answering(adapter, 'Generated for untitled');
     historyChat(adapter, 'titled', 'Claude Code named this');
     const c = await start(adapter);
-    // A chat pahub knows by id only (no index row, no title of any kind).
+    // A chat Threadgarden knows by id only (no index row, no title of any kind).
     // The SDK knows its folder, so it can be resumed.
     adapter.sessions.set('bare', {
       info: { sessionId: 'bare', summary: '', lastModified: 1, cwd: dir },
@@ -306,7 +306,7 @@ describe('chat titles (service)', () => {
       text: 'Fix the login bug',
     });
     await c.call('chat.end', { sessionId });
-    // Resumed later; its next turn is not a first turn pahub saw.
+    // Resumed later; its next turn is not a first turn Threadgarden saw.
     adapter.sessions.set(sessionId, {
       info: { sessionId, summary: '', lastModified: 1, cwd: dir },
       messages: [],

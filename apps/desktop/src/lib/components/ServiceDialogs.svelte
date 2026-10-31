@@ -5,10 +5,10 @@
   import type { ServiceAction } from '#lib/state/lifecycle.svelte.js';
 
   /**
-   * The lifecycle confirmations (spec §4.2): "Stop all work…" and "Quit pahub
+   * The lifecycle confirmations (spec §4.2): "Stop all work…" and "Quit Threadgarden
    * completely…" from the tray menu (and the quick switcher), and "Restart
-   * service" from the version banner. Each lists the pahub agents it stops.
-   * "Quit pahub (keep agents running)" needs no confirmation: the shell exits.
+   * service" from the version banner. Each lists the Threadgarden agents it stops.
+   * "Quit Threadgarden (keep agents running)" needs no confirmation: the shell exits.
    */
   const { lifecycle, connection } = useApp();
 
@@ -48,10 +48,10 @@
   {@const running = lifecycle.running}
   {#if connection.status === 'incompatible'}
     <p class="text-muted-foreground text-sm">
-      pahub can't list the agents of a service with another protocol; any it runs are stopped.
+      Threadgarden can't list the agents of a service with another protocol; any it runs are stopped.
     </p>
   {:else if running.length === 0}
-    <p class="text-muted-foreground text-sm">No agents are running in pahub.</p>
+    <p class="text-muted-foreground text-sm">No agents are running in Threadgarden.</p>
   {:else}
     <div class="text-sm">
       <p class="text-muted-foreground mb-1">
@@ -72,7 +72,7 @@
 <ConfirmDialog
   bind:open={stopAll.get, stopAll.set}
   title="Stop all work?"
-  description="Every chat running in pahub is interrupted and closed, with its background agents and processes. Sessions running in a terminal are not affected, and any chat can be resumed later."
+  description="Every chat running in Threadgarden is interrupted and closed, with its background agents and processes. Sessions running in a terminal are not affected, and any chat can be resumed later."
   confirmLabel="Stop all work"
   destructive
   onConfirm={lifecycle.stopAll}
@@ -82,8 +82,8 @@
 
 <ConfirmDialog
   bind:open={quitAll.get, quitAll.set}
-  title="Quit pahub completely?"
-  description="Stops every chat running in pahub, then the pahub service, then closes the app. Sessions running in a terminal are not affected."
+  title="Quit Threadgarden completely?"
+  description="Stops every chat running in Threadgarden, then the Threadgarden service, then closes the app. Sessions running in a terminal are not affected."
   confirmLabel="Quit completely"
   destructive
   onConfirm={lifecycle.quitCompletely}
@@ -93,10 +93,10 @@
 
 <ConfirmDialog
   bind:open={restart.get, restart.set}
-  title="Restart the pahub service?"
+  title="Restart the Threadgarden service?"
   description={`The service is replaced by the version that comes with this app${
     connection.appVersion ? ` (${connection.appVersion})` : ''
-  }. Every chat running in pahub is stopped first; you can resume them afterwards.`}
+  }. Every chat running in Threadgarden is stopped first; you can resume them afterwards.`}
   confirmLabel="Restart service"
   destructive
   onConfirm={lifecycle.restartService}

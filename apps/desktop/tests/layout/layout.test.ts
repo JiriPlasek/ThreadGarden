@@ -113,7 +113,7 @@ describe('agents strip', () => {
     expect(titles[3]).toContain('idle one');
   });
 
-  it('stop all is enabled for an idle pahub chat but not for external sessions only', async () => {
+  it('stop all is enabled for an idle Threadgarden chat but not for external sessions only', async () => {
     let items = [summary('i1', { status: 'idle', live: true })];
     const { app, context } = await setup((server) => {
       server.handlers['sessions.list'] = (p) =>

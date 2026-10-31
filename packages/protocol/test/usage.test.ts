@@ -109,7 +109,7 @@ describe('v1.3 scheduled sends', () => {
     const sent = {
       sessionId: 's1',
       title: 'Fix the build',
-      projectName: 'pahub',
+      projectName: 'Threadgarden',
       late: true,
       dueAt: 10,
     };

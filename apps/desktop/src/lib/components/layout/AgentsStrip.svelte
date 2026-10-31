@@ -11,10 +11,10 @@
   import UsageMeter from './UsageMeter.svelte';
 
   /**
-   * Bottom strip (spec §6.1, Ruling R21): every live pahub chat and every active
+   * Bottom strip (spec §6.1, Ruling R21): every live Threadgarden chat and every active
    * external session from every project, needs-you → working → idle. Clicking one
    * opens (or focuses) its tab; a chat with running background tasks shows its
-   * "N running" pill (Ruling R29). "Stop all work" (enabled while any pahub chat is
+   * "N running" pill (Ruling R29). "Stop all work" (enabled while any Threadgarden chat is
    * live; it closes idle ones too) sits behind a confirmation. v1.3 B: the
    * usage meter sits before it (hidden while nothing is known).
    */
@@ -82,7 +82,7 @@
 <ConfirmDialog
   bind:open={confirming}
   title="Stop all work?"
-  description="Every chat running in pahub is interrupted and closed, with its background agents and processes. Sessions running in a terminal are not affected, and any chat can be resumed later."
+  description="Every chat running in Threadgarden is interrupted and closed, with its background agents and processes. Sessions running in a terminal are not affected, and any chat can be resumed later."
   confirmLabel="Stop all work"
   destructive
   onConfirm={async () => {

@@ -40,7 +40,7 @@ describe('ScheduledSends', () => {
       busy: (id) => busy.has(id),
       limitResetAt: () => (reset !== undefined && reset > Date.now() ? reset : undefined),
       exists: (id) => id !== 'nope',
-      describe: (id) => ({ title: `Chat ${id}`, projectName: 'pahub' }),
+      describe: (id) => ({ title: `Chat ${id}`, projectName: 'Threadgarden' }),
       noteLate: (sessionId, dueAt) => late.push({ sessionId, dueAt }),
       onError: (err) => errors.push(err),
     });
@@ -76,7 +76,7 @@ describe('ScheduledSends', () => {
     expect(sent).toEqual([{ sessionId: 'a', text: 'Go on', images: [IMG] }]);
     expect(s.list('a')[0]?.state).toBe('sending');
     expect(sentEvents()).toEqual([
-      { sessionId: 'a', title: 'Chat a', projectName: 'pahub', late: false, dueAt: T0 + 5 * MIN },
+      { sessionId: 'a', title: 'Chat a', projectName: 'Threadgarden', late: false, dueAt: T0 + 5 * MIN },
     ]);
     s.turnEnded('a', false);
     expect(s.list()).toEqual([]);
@@ -165,7 +165,7 @@ describe('ScheduledSends', () => {
       rescheduled: true,
       sendAt: reset + LIMIT_RESET_MARGIN_MS,
     });
-    // The limit was lifted early as far as pahub knows; at the new time it goes again.
+    // The limit was lifted early as far as Threadgarden knows; at the new time it goes again.
     reset = undefined;
     await tick(59 * MIN + LIMIT_RESET_MARGIN_MS);
     expect(sent).toHaveLength(2);

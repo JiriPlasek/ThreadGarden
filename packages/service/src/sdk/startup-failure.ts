@@ -14,7 +14,7 @@ type Entry = { title: string; body: string; setup?: true };
 const MESSAGES: Record<SDKStartupFailureReason, Entry> = {
   org_pin_api_key_conflict: {
     title: 'Organization sign-in required',
-    body: 'Your organization requires Claude Code to use its own sign-in, but an Anthropic API key or auth token is configured. Remove the API key (in pahub settings or your environment) and sign in to Claude Code.',
+    body: 'Your organization requires Claude Code to use its own sign-in, but an Anthropic API key or auth token is configured. Remove the API key (in Threadgarden settings or your environment) and sign in to Claude Code.',
   },
   provider_not_allowed: {
     title: 'API provider not allowed',

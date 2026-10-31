@@ -21,7 +21,7 @@
 
   const onFailed = (error: unknown, reset: () => void): void => {
     retry = reset;
-    console.error('pahub: a chat item could not be rendered', error);
+    console.error('Threadgarden: a chat item could not be rendered', error);
   };
 </script>
 

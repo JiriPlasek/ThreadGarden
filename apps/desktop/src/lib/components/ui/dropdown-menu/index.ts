@@ -5,7 +5,7 @@ import Separator from './dropdown-menu-separator.svelte';
 import Trigger from './dropdown-menu-trigger.svelte';
 import Root from './dropdown-menu.svelte';
 
-/** The parts of shadcn-svelte's dropdown menu pahub uses (same styling as the context menu). */
+/** The parts of shadcn-svelte's dropdown menu Threadgarden uses (same styling as the context menu). */
 export {
   Root,
   Trigger,

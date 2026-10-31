@@ -1,20 +1,20 @@
-# Contributing to pahub
+# Contributing to Threadgarden
 
 Thanks for helping. This file covers the workflow, local setup and the rules the code base keeps. How the system fits together is in [docs/architecture.md](docs/architecture.md).
 
 ## Hard rule: Claude Code's data is read-only
 
-pahub must never write, rename, move or delete anything under the Claude config dir (`~/.claude`, or `CLAUDE_CONFIG_DIR` when set). A change that breaks this is not accepted, however useful the feature. In practice:
+Threadgarden must never write, rename, move or delete anything under the Claude config dir (`~/.claude`, or `CLAUDE_CONFIG_DIR` when set). A change that breaks this is not accepted, however useful the feature. In practice:
 
 - Read history only through the Agent SDK (`listSessions`, `getSessionInfo`, `getSessionMessages`, `forkSession`). Never open or parse transcript `.jsonl` files; their format is internal to Claude Code.
 - File-system access under `~/.claude/projects` is limited to watching for changes (names, sizes, mtimes). Never read `~/.claude/jobs/`.
-- Never call the SDK's `renameSession()` or `tagSession()`; titles and tags live in pahub's own database.
+- Never call the SDK's `renameSession()` or `tagSession()`; titles and tags live in Threadgarden's own database.
 - Read running sessions only from `claude agents --json`.
 - Parse every external input leniently: unknown SDK message types, content blocks and `claude agents` fields must render as a generic "unrecognised" item with the raw JSON, never crash or be dropped.
 
 `packages/service/test/e2e/read-only.test.ts` enforces this against a fixture config dir in every test run, and the opt-in real suite checks it against your real one.
 
-Two related rules: pahub never offers `bypassPermissions`, and it is never presented as Claude Code (it may say it works with Claude Code) or styled to look like it.
+Two related rules: Threadgarden never offers `bypassPermissions`, and it is never presented as Claude Code (it may say it works with Claude Code) or styled to look like it.
 
 ## Workflow
 

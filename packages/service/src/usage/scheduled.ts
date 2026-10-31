@@ -3,7 +3,7 @@
  * later, stored in `pahub.db` (`scheduled_sends`) so they survive restarts.
  *
  * A due send goes out through the same path as `chat.send` (resuming the
- * chat when pahub is not running it). A chat's sends go out in order, one
+ * chat when Threadgarden is not running it). A chat's sends go out in order, one
  * per turn: the next one waits while the chat works or waits on the user,
  * and until the turn the previous one started has ended. While the account
  * is known to be refused (a rejected window whose reset is ahead), a due send
@@ -35,7 +35,7 @@ import { ServiceError } from '../server/router.js';
 export const MAX_TIMER_MS = 60 * 60_000;
 
 export const STOPPED_WHILE_SENDING =
-  'pahub stopped while this message was going out. Check the chat, then send it again if it is missing.';
+  'Threadgarden stopped while this message was going out. Check the chat, then send it again if it is missing.';
 export const LIMIT_STILL_REACHED = 'The usage limit was still reached when this message went out.';
 export const LIMIT_RESET_UNKNOWN =
   'The usage limit refused this message, and when it resets is not known.';
@@ -52,7 +52,7 @@ export type ScheduledDeps = {
   busy: (sessionId: string) => boolean;
   /** The reset time of the usage limit refusing requests now, if one does and it is known. */
   limitResetAt: () => number | undefined;
-  /** A chat pahub knows (`NOT_FOUND` otherwise). */
+  /** A chat Threadgarden knows (`NOT_FOUND` otherwise). */
   exists: (sessionId: string) => boolean;
   describe: (sessionId: string) => { title: string; projectName: string };
   /** Says in the chat that a scheduled message went out late. */

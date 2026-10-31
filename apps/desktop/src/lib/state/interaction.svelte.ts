@@ -24,7 +24,7 @@ export class InteractionState {
   newChat = $state<{ open: boolean; cwd: string | null }>({ open: false, cwd: null });
   /** The Ctrl/Cmd+K quick switcher (spec §6.1). */
   switcherOpen = $state(false);
-  /** pahub's settings dialog (spec §6.5). */
+  /** Threadgarden's settings dialog (spec §6.5). */
   settingsOpen = $state(false);
   /** The keyboard shortcuts dialog (Ctrl/Cmd+/ or ?). */
   shortcutsOpen = $state(false);

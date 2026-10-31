@@ -100,7 +100,7 @@ describe('startService', () => {
     await svc.close();
   });
 
-  it('a paused or failed pahub chat now running in a terminal is external: resume is blocked', async () => {
+  it('a paused or failed Threadgarden chat now running in a terminal is external: resume is blocked', async () => {
     const adapter = generateCorpus({ sessions: 1, projects: 1, bigSessionMessages: 0 });
     const run = async () =>
       JSON.stringify([
@@ -145,7 +145,7 @@ describe('startService', () => {
     expect(await result('chat.resumeCheck', { sessionId: 'failed' })).toMatchObject({
       status: 'blocked',
     });
-    // A live pahub chat is pahub's own process, never "running elsewhere".
+    // A live Threadgarden chat is Threadgarden's own process, never "running elsewhere".
     expect(await result('chat.resumeCheck', { sessionId: 'mine' })).toMatchObject({ status: 'ok' });
     await svc.close();
   });

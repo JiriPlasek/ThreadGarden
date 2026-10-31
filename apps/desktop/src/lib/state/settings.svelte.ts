@@ -20,7 +20,7 @@ export const COLUMNS_SAVE_DELAY_MS = 300;
 export type ColumnWidths = Record<string, number>;
 export type CollapsedColumns = Record<string, boolean>;
 
-/** Where pahub's optional API key lives (the OS credential store; a fake in tests). */
+/** Where Threadgarden's optional API key lives (the OS credential store; a fake in tests). */
 export type KeyStore = typeof apiKey;
 
 /** The idle-reclaim setting's range in minutes (0 disables reclaiming). */

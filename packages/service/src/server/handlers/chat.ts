@@ -3,10 +3,10 @@
  * create / send / resume, controls, permission answers, fork, stopping a
  * task (v1.1 §2), the command and model lists, the seen state behind
  * "Your turn" (v1.1 `chat.markSeen`) and "Back from hold" (v1.2), and the
- * names of the chats pahub starts (v1.2 C1, `chat/titles.ts`).
+ * names of the chats Threadgarden starts (v1.2 C1, `chat/titles.ts`).
  *
  * Validation that the protocol schema leaves open happens here: permission
- * modes are limited to what pahub offers (Ruling R11: never
+ * modes are limited to what Threadgarden offers (Ruling R11: never
  * `bypassPermissions`), effort to the SDK's levels, models to non-empty names.
  *
  * Errors the UI acts on carry a code: `NOT_FOUND`, `NOT_LIVE`, `GAP` (the
@@ -37,7 +37,7 @@ import type {
 import type { ClaudeFound, ClaudeProblem } from '../../sdk/claude-path.js';
 import { ServiceError, type Router } from '../router.js';
 
-/** Permission modes pahub offers (Ruling R11). */
+/** Permission modes Threadgarden offers (Ruling R11). */
 export const PERMISSION_MODES: readonly PermissionMode[] = [
   'default',
   'acceptEdits',
@@ -75,7 +75,7 @@ export type ChatHandlerDeps = {
   apiKeyMissing?: () => boolean;
   resumeCheck: (sessionId: string) => Promise<ResumeCheck>;
   /**
-   * Indexes sessions now: a fork pahub just made, so it can be opened at
+   * Indexes sessions now: a fork Threadgarden just made, so it can be opened at
    * once, and a chat that ends (its index may have waited for its turn).
    */
   indexNow: (sessionIds: string[]) => Promise<void>;
@@ -88,7 +88,7 @@ export type ChatHandlerDeps = {
   /** Timer for `END_INDEX_WAIT_MS`; default Node's. */
   timers?: Pick<Timers, 'setTimeout' | 'clearTimeout'>;
   // ── v1.2 C1: chat titles ──
-  /** Names the chats pahub starts (provisional title, then a generated one). */
+  /** Names the chats Threadgarden starts (provisional title, then a generated one). */
   titles?: ChatTitles;
 };
 
@@ -110,7 +110,7 @@ const itemChars = (i: ChatItem): number => {
 };
 
 type CacheEntry = {
-  /** The host's session object when read while pahub held the chat, else undefined. */
+  /** The host's session object when read while Threadgarden held the chat, else undefined. */
   owner: LiveSession | undefined;
   /** For history-only chats: the indexed `lastModified:fileSize` at read time. */
   key: string | undefined;
@@ -133,7 +133,7 @@ const permissionMode = (v: string | undefined): PermissionMode | undefined => {
   if (!(PERMISSION_MODES as readonly string[]).includes(v)) {
     throw new ServiceError(
       'INVALID_PARAMS',
-      `Unsupported permission mode "${v}" (pahub offers ${PERMISSION_MODES.join(', ')})`,
+      `Unsupported permission mode "${v}" (Threadgarden offers ${PERMISSION_MODES.join(', ')})`,
     );
   }
   return v as PermissionMode;
@@ -224,7 +224,7 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
   };
 
   /**
-   * v1.2 C1: names a chat pahub starts (`untitledOnly`: one it continues,
+   * v1.2 C1: names a chat Threadgarden starts (`untitledOnly`: one it continues,
    * only while it has no title at all). True when its title changed. A
    * failure is reported and never fails the request.
    */
@@ -246,7 +246,7 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
     if (deps.apiKeyMissing?.()) {
       throw new ServiceError(
         'API_KEY_REQUIRED',
-        'This build of pahub runs chats only on an Anthropic API key. Add your key in Settings to start or continue a chat.',
+        'This build of Threadgarden runs chats only on an Anthropic API key. Add your key in Settings to start or continue a chat.',
       );
     }
     await deps.located?.();
@@ -320,7 +320,7 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
     try {
       history = await historyItems(sessionId);
     } catch (err) {
-      // A chat pahub runs may not have a transcript yet; a history-only chat needs one.
+      // A chat Threadgarden runs may not have a transcript yet; a history-only chat needs one.
       if (!host.get(sessionId)) throw err;
       deps.onError(err, `history of ${sessionId}`);
       history = [];
@@ -394,7 +394,7 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
 
   /**
    * `chat.send`, also the path scheduled sends (v1.3 B) go out by: resumes
-   * the chat when pahub is not running it (behind the resume-safety check).
+   * the chat when Threadgarden is not running it (behind the resume-safety check).
    */
   const send = async (p: { sessionId: string; text: string; images?: ImageRef[] | undefined }) => {
     const input = toInput(p);
@@ -483,7 +483,7 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
     return {};
   });
 
-  /** Only a chat pahub runs has tasks it can stop (`NOT_LIVE` otherwise). */
+  /** Only a chat Threadgarden runs has tasks it can stop (`NOT_LIVE` otherwise). */
   router.register('chat.stopTask', async (p) => {
     await requireLive(p.sessionId).stopTask(p.taskId);
     return {};

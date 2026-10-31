@@ -25,7 +25,7 @@ export type HistoryHandlerDeps = {
 };
 
 /**
- * `meta.update` only touches pahub's own tables: titles and pins are never
+ * `meta.update` only touches Threadgarden's own tables: titles and pins are never
  * written back to Claude Code (spec §5.3).
  */
 export const registerHistoryHandlers = (router: Router, deps: HistoryHandlerDeps): void => {

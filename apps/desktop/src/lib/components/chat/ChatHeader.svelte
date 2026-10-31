@@ -27,9 +27,9 @@
 
   /**
    * Title row plus the chat's controls (spec §6.4): model, effort and permission
-   * mode pickers (chats pahub runs only), context usage, cost, auth, Claude
+   * mode pickers (chats Threadgarden runs only), context usage, cost, auth, Claude
    * Code version, End session and Copy resume command. A chat running outside
-   * pahub gets Stop when Claude Code's background service runs it, and a
+   * Threadgarden gets Stop when Claude Code's background service runs it, and a
    * "stop it there" note when it is open in a terminal. The Activity button
    * shows or hides the Activity panel (Ctrl/Cmd+., handled by ChatView). The
    * "Chat state" menu moves the chat between Active, On hold and Archived; an
@@ -48,7 +48,7 @@
 
   const { chats, places, buckets } = useApp();
 
-  /** Ruling R11: pahub never offers bypassPermissions. */
+  /** Ruling R11: Threadgarden never offers bypassPermissions. */
   const PERMISSION_MODES = [
     { value: 'default', label: 'Default' },
     { value: 'acceptEdits', label: 'Accept edits' },
@@ -59,7 +59,7 @@
   const sessionId = $derived(chat.sessionId);
   const header = $derived(chat.header);
   const summary = $derived(chat.summary);
-  /** pahub's own process runs this chat: header controls and End session apply. */
+  /** Threadgarden's own process runs this chat: header controls and End session apply. */
   const live = $derived(chat.ownedLive);
   const external = $derived(chat.live ? (summary?.external ?? null) : null);
   /** Run by Claude Code's background service: `claude stop <id>` can stop it. */
@@ -291,7 +291,7 @@
     title={live
       ? undefined
       : external
-        ? 'This chat is running outside pahub'
+        ? 'This chat is running outside Threadgarden'
         : 'Settings apply to running chats; send a message to resume this one'}
   >
     {#if external && !background}

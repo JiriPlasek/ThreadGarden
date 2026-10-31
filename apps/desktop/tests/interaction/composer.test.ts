@@ -115,7 +115,7 @@ describe('composer', () => {
     });
     await userEvent.type(composer(), '/');
     const list = await screen.findByRole('listbox', { name: /commands/i });
-    // The SDK's commands come first, then pahub's terminal-only table (R25).
+    // The SDK's commands come first, then Threadgarden's terminal-only table (R25).
     expect(
       within(list)
         .getAllByRole('option')

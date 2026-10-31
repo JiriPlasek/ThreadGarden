@@ -106,7 +106,7 @@ describe.skipIf(!REAL)('real Claude Code (PAHUB_REAL=1)', () => {
     }
   });
 
-  it('runs a turn end to end with the sessionId pahub chose', async () => {
+  it('runs a turn end to end with the sessionId Threadgarden chose', async () => {
     const adapter = new TapAdapter();
     const events: EventMsg[] = [];
     const sessionId = randomUUID();
@@ -158,7 +158,7 @@ describe.skipIf(!REAL)('real Claude Code (PAHUB_REAL=1)', () => {
       expect(text.toLowerCase()).toContain('pong');
       expect(all.some((i) => i.kind === 'result')).toBe(true);
 
-      // (a) the CLI uses the id pahub passed as `sessionId`.
+      // (a) the CLI uses the id Threadgarden passed as `sessionId`.
       const init = adapter.raw.find(
         (m) => m.type === 'system' && (m as { subtype?: string }).subtype === 'init',
       ) as { session_id?: string; apiKeySource?: string; claude_code_version?: string };
@@ -193,7 +193,7 @@ describe.skipIf(!REAL)('real Claude Code (PAHUB_REAL=1)', () => {
         ),
       ]);
 
-      // Auth this session runs on (no pahub key set).
+      // Auth this session runs on (no Threadgarden key set).
       const account = await adapter.sessions[0]!.accountInfo();
       report('accountInfo(no key)', {
         apiProvider: account.apiProvider,
@@ -238,7 +238,7 @@ describe.skipIf(!REAL)('real Claude Code (PAHUB_REAL=1)', () => {
       env: buildSessionEnv(process.env, DUMMY_KEY),
       claudePath,
       permissionMode: 'default',
-      canUseTool: async () => ({ behavior: 'deny', message: 'pahub real test' }),
+      canUseTool: async () => ({ behavior: 'deny', message: 'Threadgarden real test' }),
     });
     try {
       const account = await session.accountInfo();

@@ -83,7 +83,7 @@ const SHELL_TYPES: ReadonlySet<string> = new Set(['local_bash', 'monitor_mcp', '
 
 /**
  * Activity section of a task: any `subagent_type` or an agent task type is an
- * agent; shells and monitors are shells. A type pahub does not know is placed
+ * agent; shells and monitors are shells. A type Threadgarden does not know is placed
  * by its name (…agent…/…teammate… → agent, …bash…/…shell…/…monitor… → shell),
  * else `other`.
  */
@@ -360,7 +360,7 @@ export class TaskTracker {
     if (!e) return false;
     const t = this.edit(e);
     this.setStatus(t, notificationStatus(m.status));
-    // An end edge ends the task even when its status is one pahub does not know.
+    // An end edge ends the task even when its status is one Threadgarden does not know.
     t.endedAt ??= this.opts.now();
     const summary = nonEmpty(m.summary);
     if (summary !== undefined) t.summary = summary;
@@ -438,7 +438,7 @@ export class TaskTracker {
    * `unknown` with `endedAt` (the same as leaving the level). A foreground
    * task blocks the tool call that spawned it, so it cannot outlive the turn;
    * if its end edge never came (a CLI that sends none, a lost frame, a status
-   * pahub does not know), it would otherwise show as running forever, keep
+   * Threadgarden does not know), it would otherwise show as running forever, keep
    * the chat in Running and block idle reclaim. A late end edge still sets
    * the real status.
    *

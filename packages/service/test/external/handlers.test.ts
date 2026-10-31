@@ -175,7 +175,7 @@ describe('external.stop', () => {
     expect(t.run).not.toHaveBeenCalledWith(expect.arrayContaining(['stop']));
   });
 
-  it('refuses a session that is not running outside pahub', async () => {
+  it('refuses a session that is not running outside Threadgarden', async () => {
     const t = stopSetup();
     expect(await t.stop('nope')).toMatchObject({ code: 'NOT_EXTERNAL' });
   });

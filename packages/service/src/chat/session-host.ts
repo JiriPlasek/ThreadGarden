@@ -1,5 +1,5 @@
 /**
- * Owns every pahub chat that has (or recently had) a live process (§4.2, §4.3):
+ * Owns every Threadgarden chat that has (or recently had) a live process (§4.2, §4.3):
  * creation, resume on demand, End session, Stop all work, idle reclaim and
  * recovery of sessions that were live when the service last stopped.
  *
@@ -33,7 +33,7 @@ export type { LiveRegistry } from './live-session.js';
 
 export const RECLAIM_INTERVAL_MS = 60_000;
 export const INTERRUPTED_TEXT =
-  'Interrupted when the pahub service stopped — send a message to resume';
+  'Interrupted when the Threadgarden service stopped — send a message to resume';
 
 export type SessionHostDeps = {
   adapter: AgentAdapter;

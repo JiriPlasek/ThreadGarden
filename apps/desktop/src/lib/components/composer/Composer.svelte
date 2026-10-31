@@ -101,7 +101,7 @@
     /** Sends; resolves true when the message went out (the box clears) or false to keep it. */
     onSubmit: (text: string, images: ImageRef[]) => Promise<boolean>;
     onInterrupt?: () => void;
-    /** Opens a pahub control for `/model`, `/effort`, `/permissions`; returns a notice when it cannot. */
+    /** Opens a Threadgarden control for `/model`, `/effort`, `/permissions`; returns a notice when it cannot. */
     onControl?: (control: Control) => string | null;
     /** v1.3 B: schedules the message instead; resolves true when it was scheduled (the box clears). */
     onSchedule?: (text: string, images: ImageRef[], when: SendWhen) => Promise<boolean>;

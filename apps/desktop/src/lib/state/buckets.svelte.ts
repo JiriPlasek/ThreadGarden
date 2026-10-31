@@ -47,7 +47,7 @@ const target = (t: BucketTarget): BucketTarget => ({
 export class BucketsState {
   /** The hold popover is open for these chats. */
   holding = $state.raw<{ targets: BucketTarget[]; onSaved?: () => void } | null>(null);
-  /** "End this chat and archive it?" is asked about this chat (pahub runs it). */
+  /** "End this chat and archive it?" is asked about this chat (Threadgarden runs it). */
   ending = $state.raw<BucketTarget | null>(null);
   /** The archive-older confirmation, with the count of a dry run. */
   archivingOlder = $state.raw<{ projectId?: string; count: number } | null>(null);
@@ -65,7 +65,7 @@ export class BucketsState {
   activate = (targets: readonly BucketTarget[]): Promise<void> => this.move(targets, 'active');
 
   /**
-   * Archives the chats. A single chat pahub runs is not archived but asked
+   * Archives the chats. A single chat Threadgarden runs is not archived but asked
    * about ("End this chat and archive it?"); in bulk, skipped chats are
    * reported in the notice instead.
    */
@@ -177,7 +177,7 @@ export class BucketsState {
     bucket: Bucket,
     hold: { holdUntil?: number; holdNote?: string } = {},
   ): Promise<Result<'chat.setBucket'>> => {
-    if (!this.api) throw new Error('Not connected to the pahub service');
+    if (!this.api) throw new Error('Not connected to the Threadgarden service');
     this.notice = null;
     return this.api.request('chat.setBucket', {
       sessionIds: targets.map((t) => t.sessionId),
@@ -203,16 +203,16 @@ export class BucketsState {
     if (updated > 0) parts.push(`${DONE[bucket]} ${chatsWord(updated)}.`);
     if (live.length > 0) {
       parts.push(
-        `${chatsWord(live.length)} ${live.length === 1 ? 'was' : 'were'} not archived because pahub is running ${live.length === 1 ? 'it' : 'them'}; end ${live.length === 1 ? 'it' : 'them'} first.`,
+        `${chatsWord(live.length)} ${live.length === 1 ? 'was' : 'were'} not archived because Threadgarden is running ${live.length === 1 ? 'it' : 'them'}; end ${live.length === 1 ? 'it' : 'them'} first.`,
       );
     }
     if (running.length === 1 && targets.length === 1) {
       parts.push(
-        `“${titleOf(running[0]!.sessionId)}” is running outside pahub. Stop it there, then archive it.`,
+        `“${titleOf(running[0]!.sessionId)}” is running outside Threadgarden. Stop it there, then archive it.`,
       );
     } else if (running.length > 0) {
       parts.push(
-        `${chatsWord(running.length)} ${running.length === 1 ? 'runs' : 'run'} outside pahub and ${running.length === 1 ? 'was' : 'were'} not archived; stop ${running.length === 1 ? 'it' : 'them'} there first.`,
+        `${chatsWord(running.length)} ${running.length === 1 ? 'runs' : 'run'} outside Threadgarden and ${running.length === 1 ? 'was' : 'were'} not archived; stop ${running.length === 1 ? 'it' : 'them'} there first.`,
       );
     }
     if (other > 0) parts.push(`${chatsWord(other)} could not be moved (no longer found).`);

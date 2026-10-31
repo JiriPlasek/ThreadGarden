@@ -1,5 +1,5 @@
 /**
- * The boundary between pahub and the Claude Agent SDK. Everything else in the
+ * The boundary between Threadgarden and the Claude Agent SDK. Everything else in the
  * service talks to an `AgentAdapter`, so tests can drive sessions with
  * `FakeAdapter` and only `real-adapter.ts` imports SDK runtime code.
  */
@@ -40,7 +40,7 @@ export type Effort = EffortLevel;
 export type StartOptions = {
   cwd: string;
   /**
-   * Session id for a new chat (a UUID chosen by pahub, maps to the SDK's
+   * Session id for a new chat (a UUID chosen by Threadgarden, maps to the SDK's
    * `sessionId` option), so the id is known before the CLI's `system/init`
    * arrives. Never combined with `resume`.
    */
@@ -68,14 +68,14 @@ export type OneShotOptions = {
   /** A model alias Claude Code's `--model` accepts (e.g. `haiku`) or a model id. */
   model: string;
   cwd: string;
-  /** The same environment as the user's sessions (pahub's API key included). */
+  /** The same environment as the user's sessions (Threadgarden's API key included). */
   env: Record<string, string | undefined>;
   claudePath: string;
   /** Aborts the query (timeout, service shutdown). */
   signal: AbortSignal;
   /**
    * The query's session id (a fresh UUID): its process shows in Claude Code's
-   * session list while it runs, and pahub leaves it out of external chats.
+   * session list while it runs, and Threadgarden leaves it out of external chats.
    */
   sessionId: string;
 };

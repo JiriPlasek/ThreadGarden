@@ -83,7 +83,7 @@
       role="status"
       class="shrink-0 bg-amber-500/15 px-3 py-1 text-xs text-amber-900 dark:text-amber-200"
     >
-      Reconnecting to the pahub service…
+      Reconnecting to the Threadgarden service…
     </div>
   {:else}
     <ServiceBanner />

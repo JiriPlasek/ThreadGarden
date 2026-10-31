@@ -24,7 +24,7 @@ export class ConnectionState {
   appVersion = $state<string | null>(null);
   indexing = $state<{ done: number; total: number } | null>(null);
 
-  /** Older or newer service still running (spec §4.2): the UI offers "Restart the pahub service to update". */
+  /** Older or newer service still running (spec §4.2): the UI offers "Restart the Threadgarden service to update". */
   restartNeeded = $derived(
     this.serviceVersion !== null &&
       this.appVersion !== null &&

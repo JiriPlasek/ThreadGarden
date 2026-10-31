@@ -1,5 +1,5 @@
 /**
- * Ruling R29: a live pahub chat with running background tasks (agents,
+ * Ruling R29: a live Threadgarden chat with running background tasks (agents,
  * processes) counts as Running even while its turn is idle.
  */
 import { describe, expect, it } from 'vitest';

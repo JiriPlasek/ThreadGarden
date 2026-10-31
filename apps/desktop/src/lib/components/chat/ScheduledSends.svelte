@@ -120,7 +120,7 @@
           {#if failed && s.error}
             <p class="text-destructive pl-5.5" role="alert">{s.error}</p>
           {:else if s.late}
-            <p class="text-muted-foreground pl-5.5">Due while pahub was not running.</p>
+            <p class="text-muted-foreground pl-5.5">Due while Threadgarden was not running.</p>
           {/if}
         </li>
       {/each}

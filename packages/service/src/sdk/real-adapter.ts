@@ -47,7 +47,7 @@ const realSdk: SdkApi = { query, listSessions, getSessionInfo, getSessionMessage
 /**
  * The environment for a session's `claude` process. The SDK's `env` option
  * replaces the inherited environment, so `base` is copied whole (PATH, HOME,
- * proxies, an inherited key…); pahub's own API key (§5.5) is added only when set.
+ * proxies, an inherited key…); Threadgarden's own API key (§5.5) is added only when set.
  */
 export const buildSessionEnv = (
   base: NodeJS.ProcessEnv,
@@ -59,13 +59,13 @@ export const buildSessionEnv = (
 };
 
 /**
- * SDK options for a session started by pahub (Global Constraints). User text
+ * SDK options for a session started by Threadgarden (Global Constraints). User text
  * is never `client_composed` / `verbatimPrompts`, so `@path` mentions and
  * `/commands` behave as in the CLI. `resume` and `sessionId` are exclusive
  * in the SDK (without `forkSession`); when resuming, the resumed id is the
  * session id.
  *
- * `perTaskStopAffordance` declares that pahub renders a Stop per background
+ * `perTaskStopAffordance` declares that Threadgarden renders a Stop per background
  * task wired to `stop_task` (the Activity panel). With it, an interrupt
  * (Stop / Esc) only aborts the current turn and spares running background
  * agents and processes; without it the CLI fails closed and an interrupt
@@ -98,13 +98,13 @@ export const buildQueryOptions = (o: StartOptions): Options => {
  * - `persistSession: false` — no transcript under `<config dir>/projects`
  *   (the `claude` process still keeps Claude Code's own runtime state, like
  *   every session: e.g. its entry in the `claude agents` list while it runs);
- * - `sessionId` — pahub's fresh UUID, so the poller leaves that entry out;
+ * - `sessionId` — Threadgarden's fresh UUID, so the poller leaves that entry out;
  * - `settingSources: []` — the SDK isolation mode: no settings files, hooks,
  *   plugins or CLAUDE.md;
  * - `tools: []` disables every built-in tool, and `strictMcpConfig` without
  *   `mcpServers` leaves no MCP tool either;
  * - `maxTurns: 1`, thinking off, a plain string system prompt.
- * `claude`, the environment (pahub's API key included) and the folder are
+ * `claude`, the environment (Threadgarden's API key included) and the folder are
  * the user's sessions' own; settings that could route requests elsewhere
  * skip the query instead (Ruling R33, `chat/title-routing.ts`).
  */
@@ -239,7 +239,7 @@ class RealSession implements AgentSession {
   }
 }
 
-/** Copies only the paging keys that are set (no `dir`: pahub reads all projects). */
+/** Copies only the paging keys that are set (no `dir`: Threadgarden reads all projects). */
 const paging = (o: PageOptions = {}): PageOptions => ({
   ...(o.limit === undefined ? {} : { limit: o.limit }),
   ...(o.offset === undefined ? {} : { offset: o.offset }),

@@ -11,14 +11,14 @@ import { externalStatus } from '../external/resume-safety.js';
 import type { BucketState, Db, SessionFilter, SessionRow } from './db.js';
 import { defaultGitCommonDir, projectIdFor, type GitCommonDir } from './projects.js';
 
-/** Title selection (spec §5.3). pahub never writes titles back to Claude Code. */
+/** Title selection (spec §5.3). Threadgarden never writes titles back to Claude Code. */
 export type TitleParts = {
   customTitle?: string | null;
   sdkTitle?: string | null;
   summary?: string | null;
   firstPrompt?: string | null;
-  // ── v1.2 C1: chat titles (pahub's own, `chat/titles.ts`) ──
-  /** The small model's title of a chat pahub started. */
+  // ── v1.2 C1: chat titles (Threadgarden's own, `chat/titles.ts`) ──
+  /** The small model's title of a chat Threadgarden started. */
   generatedTitle?: string | null;
   /** The provisional title from its first message. */
   autoTitle?: string | null;
@@ -42,7 +42,7 @@ const short = (s: string): string => s.replace(/\s+/g, ' ').slice(0, FIRST_PROMP
  * The SDK's summary is no title of Claude Code's own when the chat has none
  * (its titles arrive as `sdkTitle`): it is the last prompt, else the first.
  * So a summary equal to the first prompt ranks as the first prompt, and a
- * chat pahub named (a provisional title) ignores the summary altogether,
+ * chat Threadgarden named (a provisional title) ignores the summary altogether,
  * keeping a stable name instead of following its latest message.
  */
 export const titleFor = (s: TitleParts): string => {
@@ -198,7 +198,7 @@ const flag = (s: ChatSummary, turns: Turns): void => {
 };
 
 /**
- * A chat in use right now — pahub runs it, it has a live process elsewhere,
+ * A chat in use right now — Threadgarden runs it, it has a live process elsewhere,
  * or it waits or works — which a bulk archive leaves alone.
  */
 export const isActiveNow = (s: ChatSummary): boolean =>
@@ -208,7 +208,7 @@ export const isActiveNow = (s: ChatSummary): boolean =>
 
 /**
  * The Running place, its count and the projects' running counts: a working
- * chat, or (Ruling R29) a live pahub chat with running background tasks even
+ * chat, or (Ruling R29) a live Threadgarden chat with running background tasks even
  * while its turn is idle (e.g. its dev server still runs).
  */
 const isRunning = (s: ChatSummary): boolean => s.status === 'working' || (s.runningTasks ?? 0) > 0;
@@ -294,7 +294,7 @@ export class Catalog {
   }
 
   /**
-   * v1.2 C1: pahub's title of `sessionId` changed. Updates its cached corpus
+   * v1.2 C1: Threadgarden's title of `sessionId` changed. Updates its cached corpus
    * row in place (unindexed chats are not cached: they are read fresh).
    */
   titleChanged(sessionId: string): void {
@@ -489,9 +489,9 @@ export class Catalog {
   }
 
   /**
-   * Live and external sessions by id. A live pahub chat wins over an external
-   * entry (that is pahub's own process); an external entry wins over a paused
-   * or failed pahub chat, which has no process — it is running in a terminal.
+   * Live and external sessions by id. A live Threadgarden chat wins over an external
+   * entry (that is Threadgarden's own process); an external entry wins over a paused
+   * or failed Threadgarden chat, which has no process — it is running in a terminal.
    */
   private overlay(turns: Turns): Map<string, Entry> {
     const owned = this.live.list();
@@ -552,7 +552,7 @@ export class Catalog {
     const { pinned, ...meta } = this.db.metaOf(sessionId);
     return {
       sessionId,
-      // pahub's own titles (v1.2 C1); an external session's name is Claude Code's.
+      // Threadgarden's own titles (v1.2 C1); an external session's name is Claude Code's.
       title: titleFor({ ...meta, sdkTitle: title }),
       projectId: this.projectIdOfCwd(cwd),
       cwd,

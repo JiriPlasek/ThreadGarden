@@ -62,7 +62,7 @@ describe('buckets: actions (v1.2 §3)', () => {
     expect(app.buckets.notice).toBeNull();
   });
 
-  it('archiving a chat pahub runs asks to end it, then ends and archives it', async () => {
+  it('archiving a chat Threadgarden runs asks to end it, then ends and archives it', async () => {
     const { server, app } = await withBuckets({ a: 'LIVE' });
     await app.buckets.archive([chat('a', { live: true })]);
     expect(app.buckets.ending?.sessionId).toBe('a');
@@ -82,7 +82,7 @@ describe('buckets: actions (v1.2 §3)', () => {
     expect(app.buckets.notice).toBeNull();
   });
 
-  it('a chat running outside pahub is explained, not retried', async () => {
+  it('a chat running outside Threadgarden is explained, not retried', async () => {
     const { server, app } = await withBuckets({ x: 'RUNNING' });
     await app.buckets.archive([chat('x', { title: 'terminal chat' })]);
     expect(app.buckets.ending).toBeNull();
@@ -97,7 +97,7 @@ describe('buckets: actions (v1.2 §3)', () => {
     expect(app.buckets.ending).toBeNull();
     const notice = app.buckets.notice ?? '';
     expect(notice).toMatch(/^Archived 2 chats\./);
-    expect(notice).toMatch(/2 chats were not archived because pahub is running them/);
+    expect(notice).toMatch(/2 chats were not archived because Threadgarden is running them/);
     expect(notice).toMatch(/1 chat runs outside pahub/);
     expect(notice).toMatch(/1 chat could not be moved/);
     app.buckets.dismissNotice();

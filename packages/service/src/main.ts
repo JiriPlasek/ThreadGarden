@@ -46,7 +46,7 @@ const IDLE_CHECK_MS = 60_000;
 const IN_TURN: ReadonlySet<ChatStatus> = new Set(['working', 'needsYou', 'unknown']);
 /** Said in a chat whose scheduled message was due while the service was not running. */
 export const LATE_NOTE =
-  'This scheduled message went out late: pahub was not running when it was due.';
+  'This scheduled message went out late: Threadgarden was not running when it was due.';
 /** pahub-db key of the last chat seq epoch (see `nextSeqEpoch`). */
 const SEQ_EPOCH_KEY = 'service:seqEpoch';
 
@@ -68,7 +68,7 @@ export type StartOptions = {
    * and runs the session host (every `chat.*` method).
    */
   adapter?: AgentAdapter;
-  /** Claude Code's config dir (`CLAUDE_CONFIG_DIR` or `~/.claude`); read-only for pahub. */
+  /** Claude Code's config dir (`CLAUDE_CONFIG_DIR` or `~/.claude`); read-only for Threadgarden. */
   claudeConfigDir?: string;
   /** Overrides the session host as the source of pahub-owned chats for lists and the poller. */
   live?: { list(): LiveChat[] };
@@ -80,7 +80,7 @@ export type StartOptions = {
   /** Where `claude` was found (or why not), as `findInstalledClaude` reports it. */
   claude?: ClaudeStatus;
   /**
-   * Finds `claude` given pahub's `claudePath` setting, when `claude` is not
+   * Finds `claude` given Threadgarden's `claudePath` setting, when `claude` is not
    * passed; run at start and again whenever that setting changes.
    */
   locateClaude?: (settingPath: string | null) => Promise<ClaudeStatus>;
@@ -141,7 +141,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
 
   await mkdir(dataDir, { recursive: true });
   const lock = await acquireInstanceLock(dataDir);
-  if (!lock) throw new Error('pahub service is already running for this data directory');
+  if (!lock) throw new Error('Threadgarden service is already running for this data directory');
 
   const token = opts.token ?? randomBytes(32).toString('hex');
   const router = new Router(log);
@@ -167,7 +167,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   /** v1.2: runs once the catalog exists (the poller is created before it). */
   const bucketsRef: { onExternals: () => void } = { onExternals: () => {} };
   const claude: { current: ClaudeStatus | undefined } = { current: opts.claude };
-  /** pahub's optional API key (§5.5): in memory only, never logged or stored. */
+  /** Threadgarden's optional API key (§5.5): in memory only, never logged or stored. */
   let apiKey: string | null = null;
   let db: Db | undefined;
   let host: SessionHost | undefined;
@@ -244,9 +244,9 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     if (run) {
       poller = new ExternalPoller(
         run,
-        // Only *live* pahub chats are pahub's own processes. A paused or failed
+        // Only *live* Threadgarden chats are Threadgarden's own processes. A paused or failed
         // chat has none, so one that is running now runs in a terminal (§4.4).
-        // v1.2 C1: so are the title queries pahub runs (`claude` lists them while they run).
+        // v1.2 C1: so are the title queries Threadgarden runs (`claude` lists them while they run).
         () =>
           new Set([
             ...(live()?.list() ?? []).filter((c) => c.live).map((c) => c.sessionId),
@@ -309,7 +309,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       const describeChat = (id: string): { title?: string; projectName?: string } => {
         const row = opened.getSession(id);
         if (!row) {
-          // Not indexed yet: pahub's own title of it, if any (v1.2 C1).
+          // Not indexed yet: Threadgarden's own title of it, if any (v1.2 C1).
           const title = titleFor(opened.metaOf(id));
           return title === UNTITLED_TITLE ? {} : { title };
         }
@@ -335,7 +335,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         describe: describeChat,
         onError,
         seqBase: seqBaseForEpoch(epoch),
-        // v1.1 "Your turn": pahub's own record of the turn end; lists show the chat unread.
+        // v1.1 "Your turn": Threadgarden's own record of the turn end; lists show the chat unread.
         onTurnEnded: (id, at) => {
           opened.setTurnEnded(id, at);
           emitChat({ event: 'sessions.changed', data: { sessionIds: [id] } });
@@ -662,7 +662,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   }, IDLE_CHECK_MS);
   timer.unref?.();
 
-  // Quit pahub completely (§4.2): stop all work, then the service.
+  // Quit Threadgarden completely (§4.2): stop all work, then the service.
   router.register('service.shutdown', async () => {
     host?.stopAll();
     setImmediate(() => void close());

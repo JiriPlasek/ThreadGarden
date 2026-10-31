@@ -148,7 +148,7 @@ describe('buckets: migration', () => {
     }
   });
 
-  it('an unknown stored bucket (a newer pahub) reads as active', async () => {
+  it('an unknown stored bucket (a newer Threadgarden) reads as active', async () => {
     const t = await setup();
     t.db.raw
       .prepare(`INSERT INTO chat_buckets (session_id, bucket) VALUES ('session-3', 'someday')`)
@@ -207,7 +207,7 @@ describe('buckets: chat.setBucket', () => {
     ]);
   });
 
-  it('refuses to archive a chat pahub runs (LIVE) or one running elsewhere (RUNNING); unknown ids are skipped', async () => {
+  it('refuses to archive a chat Threadgarden runs (LIVE) or one running elsewhere (RUNNING); unknown ids are skipped', async () => {
     const t = await setup();
     t.setLive([
       lc('session-0', '/work/proj-0', 'idle'),
@@ -244,7 +244,7 @@ describe('buckets: chat.setBucket', () => {
     });
   });
 
-  it('a chat pahub runs that was never indexed can be put in a bucket', async () => {
+  it('a chat Threadgarden runs that was never indexed can be put in a bucket', async () => {
     const t = await setup();
     t.setLive([lc('fresh', '/work/proj-0', 'idle', { live: false })]);
     await t.setBucket(['fresh'], 'onHold', { holdNote: 'later' });

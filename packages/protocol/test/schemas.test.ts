@@ -295,7 +295,7 @@ describe('protocol schemas', () => {
     expect(methods['chat.markSeen'].params.safeParse({ sessionId: 's' }).success).toBe(true);
     expect(methods['chat.markSeen'].params.safeParse({}).success).toBe(false);
     expect(methods['chat.markSeen'].result.safeParse({}).success).toBe(true);
-    const finished = { sessionId: 's', title: 'Fix the build', projectName: 'pahub' };
+    const finished = { sessionId: 's', title: 'Fix the build', projectName: 'Threadgarden' };
     expect(events.chatFinished.parse(finished)).toEqual(finished);
     expect(events.chatFinished.safeParse({ sessionId: 's' }).success).toBe(false);
   });
@@ -397,7 +397,7 @@ describe('protocol schemas', () => {
       const r = methods['search.quick'].result;
       expect(r.parse({ items: [hit] }).items[0]).not.toHaveProperty('archived');
       expect(r.parse({ items: [{ ...hit, archived: true }] }).items[0]?.archived).toBe(true);
-      const back = { sessionId: 's', title: 'Fix the build', projectName: 'pahub' };
+      const back = { sessionId: 's', title: 'Fix the build', projectName: 'Threadgarden' };
       expect(events.chatBackFromHold.parse(back)).toEqual(back);
       expect(events.chatBackFromHold.safeParse({ sessionId: 's' }).success).toBe(false);
     });
