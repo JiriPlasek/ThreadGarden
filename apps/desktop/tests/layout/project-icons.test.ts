@@ -167,7 +167,7 @@ describe('project icons in the UI', () => {
       .calls('projects.icon')
       .map((c) => (c.params as { projectId: string }).projectId);
     expect(asked.sort()).toEqual(['p1', 'p2']);
-    expect(container.querySelectorAll('img')).toHaveLength(1);
+    expect(container.querySelectorAll('[data-project-icon] img')).toHaveLength(1);
   });
 
   it('the chat header shows the project icon next to its name', async () => {

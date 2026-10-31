@@ -86,7 +86,7 @@ describe('buckets: actions (v1.2 §3)', () => {
     const { server, app } = await withBuckets({ x: 'RUNNING' });
     await app.buckets.archive([chat('x', { title: 'terminal chat' })]);
     expect(app.buckets.ending).toBeNull();
-    expect(app.buckets.notice).toMatch(/“terminal chat” is running outside pahub/);
+    expect(app.buckets.notice).toMatch(/“terminal chat” is running outside Threadgarden/);
     expect(server.calls('chat.setBucket')).toHaveLength(1);
     expect(server.calls('chat.end')).toHaveLength(0);
   });
@@ -98,7 +98,7 @@ describe('buckets: actions (v1.2 §3)', () => {
     const notice = app.buckets.notice ?? '';
     expect(notice).toMatch(/^Archived 2 chats\./);
     expect(notice).toMatch(/2 chats were not archived because Threadgarden is running them/);
-    expect(notice).toMatch(/1 chat runs outside pahub/);
+    expect(notice).toMatch(/1 chat runs outside Threadgarden/);
     expect(notice).toMatch(/1 chat could not be moved/);
     app.buckets.dismissNotice();
     expect(app.buckets.notice).toBeNull();

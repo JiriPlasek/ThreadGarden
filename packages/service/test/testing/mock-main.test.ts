@@ -74,7 +74,7 @@ describe('mock service', () => {
     await c.waitFor(chatStatus(plain.sessionId, 'idle'), 10_000);
     const reply = itemsOf(c.events, plain.sessionId).find((i) => i.kind === 'assistantText');
     expect(reply).toMatchObject({ streaming: false });
-    expect((reply as { markdown: string }).markdown).toMatch(/pahub mock service/);
+    expect((reply as { markdown: string }).markdown).toMatch(/Threadgarden mock service/);
     const header = await c.call<{ header: { auth?: { kind: string } } }>('chat.open', {
       sessionId: plain.sessionId,
       tail: 10,
