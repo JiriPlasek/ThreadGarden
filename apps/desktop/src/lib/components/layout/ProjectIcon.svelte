@@ -4,7 +4,8 @@
   import { tileColor, tileLetter } from './project-icon';
 
   /**
-   * A project's icon (v1.3 §5): its favicon as a 16 px rounded image, or a
+   * A project's icon (v1.3 §5): its favicon as a rounded image at the row-icon
+   * size (1rem, scaling with the interface size), or a
    * letter tile while unknown and for projects without one. Decorative: the
    * project's name is always shown next to it. The icon is asked for once the
    * element scrolls into view.

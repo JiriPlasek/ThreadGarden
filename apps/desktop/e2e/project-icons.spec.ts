@@ -22,8 +22,7 @@ test('projects show their favicon or a letter tile', async ({ page }) => {
     const img = row.locator('img');
     await expect(img).toHaveAttribute('src', /^data:image\/svg\+xml;base64,/);
     await expect(img).toHaveAttribute('alt', '');
-    // Decoded and drawn at the row-icon size: 1rem, 16 px at a 16 px base font
-    // (the interface size scales it like the other row icons).
+    // Decoded and drawn at the row-icon size, 1rem (it follows the interface size).
     await expect
       .poll(() => img.evaluate((el: HTMLImageElement) => el.complete && el.naturalWidth > 0))
       .toBe(true);

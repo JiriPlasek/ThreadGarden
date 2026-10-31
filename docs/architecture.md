@@ -224,8 +224,10 @@ minutes or when the file changed or vanished. A project whose folder is
 missing (the cached folder check above) answers null without touching the
 disk. The UI asks once a project's icon element scrolls into view, keeps the
 answers in memory (asking again after 10 minutes, on a projects refresh) and
-shows them as 16 px rounded images in the places column, the chat header and
-the quick switcher (search hits now carry `projectId`). Without an icon, or
+shows them as rounded images at the row-icon size (1rem: the spec's 16 px,
+scaled with the interface size like the other row icons) in the places
+column, the chat header and the quick switcher (search hits now carry
+`projectId`). Without an icon, or
 while it loads, a project gets a letter tile: the first letter or digit of its
 name (the base of a disambiguated `parent/base` name) in white, drawn as CSS
 content so the row's text stays the name, on one of eight colours picked by a
