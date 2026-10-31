@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { IncomingMessage } from 'node:http';
 import { createServer, type Server } from 'node:https';
-import { BlockList, isIP } from 'node:net';
+import { BlockList, isIP, type Socket } from 'node:net';
 import type { Duplex } from 'node:stream';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { MAX_REQUEST_BYTES, type EventMsg } from '@threadgarden/protocol';
@@ -20,6 +20,11 @@ export const PAIRING_MAX_SOCKETS = 4;
 export const PAIRING_SOCKET_TTL_MS = 60_000;
 /** TCP connections each address's server holds at once (TLS handshakes included); more are dropped. */
 export const REMOTE_MAX_CONNECTIONS = 64;
+/**
+ * A TLS handshake not finished by then closes its connection, so idle TCP
+ * connections cannot hold the `REMOTE_MAX_CONNECTIONS` slots (Node's default: 120 s).
+ */
+export const REMOTE_HANDSHAKE_TIMEOUT_MS = 10_000;
 
 const UNAUTHORIZED = 4401;
 const REVOKED = 4403;
@@ -61,12 +66,25 @@ const listen = (server: Server, port: number, host: string): Promise<number> =>
     });
   });
 
+/** Each server's TCP connections from accept on, TLS handshakes included. */
+const accepted = new WeakMap<Server, Set<Socket>>();
+const trackConnections = (https: Server): void => {
+  const sockets = new Set<Socket>();
+  accepted.set(https, sockets);
+  https.on('connection', (socket: Socket) => {
+    sockets.add(socket);
+    socket.once('close', () => sockets.delete(socket));
+  });
+};
+
 const closeHttps = (https: Server): Promise<void> =>
   new Promise((resolve) => {
     // Called back with an error when it never listened; closed either way.
     https.close(() => resolve());
     // Idle TLS connections that never upgraded would hold close() open.
     https.closeAllConnections();
+    // So would one still in its TLS handshake, which closeAllConnections does not see.
+    for (const socket of accepted.get(https) ?? []) socket.destroy();
   });
 
 const closeWss = (wss: WebSocketServer): Promise<void> =>
@@ -106,6 +124,8 @@ export const startRemoteServer = async (opts: {
   pairingOpen?(): boolean;
   /** Tests: how long a pairing socket stays open (default `PAIRING_SOCKET_TTL_MS`). */
   pairingTtlMs?: number;
+  /** Tests: the TLS handshake timeout (default `REMOTE_HANDSHAKE_TIMEOUT_MS`). */
+  handshakeTimeoutMs?: number;
 }): Promise<{
   addresses: string[];
   port: number;
@@ -243,10 +263,18 @@ export const startRemoteServer = async (opts: {
   let port = opts.port;
   try {
     for (const address of opts.addresses) {
-      const https = createServer({ key: opts.tls.keyPem, cert: opts.tls.certPem }, (_req, res) => {
-        res.writeHead(426, { Connection: 'close', Upgrade: 'websocket' }).end();
-      });
+      const https = createServer(
+        {
+          key: opts.tls.keyPem,
+          cert: opts.tls.certPem,
+          handshakeTimeout: opts.handshakeTimeoutMs ?? REMOTE_HANDSHAKE_TIMEOUT_MS,
+        },
+        (_req, res) => {
+          res.writeHead(426, { Connection: 'close', Upgrade: 'websocket' }).end();
+        },
+      );
       https.maxConnections = REMOTE_MAX_CONNECTIONS;
+      trackConnections(https);
       https.on('upgrade', onUpgrade);
       servers.push(https);
       // The first address picks the port (0 = any free one); the others share it.

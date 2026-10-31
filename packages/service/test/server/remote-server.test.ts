@@ -15,6 +15,7 @@ import {
   PAIRING_MAX_PAYLOAD,
   PAIRING_MAX_SOCKETS,
   PAIRING_SOCKET_TTL_MS,
+  REMOTE_HANDSHAKE_TIMEOUT_MS,
   REMOTE_MAX_CONNECTIONS,
   REMOTE_PORT,
   startRemoteServer,
@@ -415,6 +416,36 @@ describe('remote server', () => {
     } finally {
       for (const sock of sockets) sock.destroy();
     }
+  });
+
+  it('closes a connection that never finishes the TLS handshake', async () => {
+    expect(REMOTE_HANDSHAKE_TIMEOUT_MS).toBe(10_000);
+    const short = await startAnother({ handshakeTimeoutMs: 100 });
+    const sock = await new Promise<Socket>((resolve, reject) => {
+      const s2 = connect(short.port, '127.0.0.1', () => resolve(s2));
+      s2.once('error', reject);
+    });
+    sock.on('error', () => {});
+    const started = Date.now();
+    // Nothing is sent: an idle TCP connection must not hold a slot for long.
+    await new Promise((r) => sock.once('close', r));
+    expect(Date.now() - started).toBeLessThan(2_000);
+    // A device that does finish its handshake still connects.
+    (await openTls(short, `threadgarden-device.${token}`)).close();
+  });
+
+  it('closes at once while a connection is still in its TLS handshake', async () => {
+    const other = await startAnother();
+    const sock = await new Promise<Socket>((resolve, reject) => {
+      const s2 = connect(other.port, '127.0.0.1', () => resolve(s2));
+      s2.once('error', reject);
+    });
+    sock.on('error', () => {});
+    const closed = new Promise((r) => sock.once('close', r));
+    const started = Date.now();
+    await other.close();
+    await closed;
+    expect(Date.now() - started).toBeLessThan(2_000);
   });
 
   it('closes a pairing socket when its time is up', async () => {
