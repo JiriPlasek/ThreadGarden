@@ -35,6 +35,13 @@
  * watcher and indexer pick new chats up. On start it prints the discovery
  * record (port, token, …) as one JSON line on stdout. `THREADGARDEN_MOCK_PORT` and
  * `THREADGARDEN_MOCK_TOKEN` (or `--port` / `--token`) fix the port and token.
+ *
+ * Remote machines (v1.4): `--remote [--remote-port <port>] --pairing-code
+ * <code>` starts a second machine to pair with instead: headless, named
+ * "Ubuntu", with a history of its own (20 chats in the project `tg-cli`), its
+ * device listener on 127.0.0.1 (default port 47380) and `<code>` kept live as
+ * its pairing code. Loopback is for tests only: the real service listens on
+ * private addresses only (`bin.ts` never sets the addresses), ledger Ruling R4.
  */
 import { randomUUID } from 'node:crypto';
 import { appendFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -43,7 +50,13 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { readDiscovery } from '../discovery.js';
 import { findProjectIcon } from '../history/project-icons.js';
+import {
+  PAIRING_ALPHABET,
+  isWellFormedPairingCode,
+  normalisePairingCode,
+} from '../machine/devices.js';
 import { startService, type ServiceHandle } from '../main.js';
+import { REMOTE_PORT } from '../server/remote-server.js';
 import type {
   OneShotOptions,
   PermissionResult,
@@ -79,6 +92,16 @@ const MOCK_WINDOW_MS = 3 * 3_600_000 + 12 * 60_000;
 /** 5-hour utilization (a fraction, like the CLI's events) at start, and added per turn. */
 const MOCK_USAGE_START = 0.42;
 const MOCK_USAGE_STEP = 0.03;
+
+/** The `--remote` mock (v1.4): a second machine's name, its one project and its history's size. */
+export const REMOTE_MACHINE_NAME = 'Ubuntu';
+export const REMOTE_PROJECT_PATH = '/home/owner/tg-cli';
+const REMOTE_SESSIONS = 20;
+/**
+ * The fixed pairing code is made live again this often: a spent or
+ * expired code is back at once, so a spec can pair again right away.
+ */
+const PAIRING_REFRESH_MS = 1_000;
 
 const SENTENCES = [
   'This is the Threadgarden mock service answering.',
@@ -730,6 +753,12 @@ export type MockOptions = {
   port?: number;
   token?: string;
   installSignalHandlers?: boolean;
+  /**
+   * v1.4: a second machine to pair with instead (see the file comment): its
+   * device listener on 127.0.0.1:`port` (0: any free port; tests only) and
+   * the well-formed `pairingCode` it keeps live.
+   */
+  remote?: { port: number; pairingCode: string };
 };
 
 export type MockService = {
@@ -788,25 +817,54 @@ const writeMockIcons = async (root: string): Promise<Map<string, string>> => {
   return dirs;
 };
 
+/**
+ * Random bytes that make `DeviceRegistry.createPairingCode` produce `code`
+ * (each byte an alphabet index, below its rejection limit).
+ */
+const fixedPairingRandom = (code: string): ((n: number) => Buffer) => {
+  const indexes = [...normalisePairingCode(code)].map((c) => PAIRING_ALPHABET.indexOf(c));
+  return (n) => Buffer.from(Array.from({ length: n }, (_, i) => indexes[i % indexes.length]!));
+};
+
+/** Calls `method` as this machine's own desktop would (origin local); throws its error. */
+const callLocal = async (svc: ServiceHandle, method: string, params: unknown): Promise<void> => {
+  const res = await svc.router.dispatch(
+    { id: 0, method, params },
+    { clientId: 'mock', origin: 'local' },
+  );
+  if ('error' in res) throw new Error(`${method}: ${res.error.message}`);
+};
+
 /** Starts the mock service; its temp dirs are removed when it closes. */
 export const startMockService = async (o: MockOptions = {}): Promise<MockService> => {
+  const remote = o.remote;
+  if (remote && !isWellFormedPairingCode(remote.pairingCode)) {
+    throw new Error(
+      `Invalid pairing code ${remote.pairingCode}: 12 of ${PAIRING_ALPHABET}, dashes allowed`,
+    );
+  }
   const root = await mkdtemp(join(tmpdir(), 'threadgarden-mock-'));
   const dataDir = join(root, 'data');
   const claudeDir = join(root, 'claude');
   await mkdir(join(claudeDir, 'projects'), { recursive: true });
   const adapter = new ScriptedAdapter(claudeDir);
   const corpus = generateCorpus({
-    sessions: o.sessions ?? 1000,
-    projects: o.projects ?? 50,
-    bigSessionMessages: o.bigSessionMessages ?? 2000,
+    sessions: o.sessions ?? (remote ? REMOTE_SESSIONS : 1000),
+    projects: o.projects ?? (remote ? 1 : 50),
+    bigSessionMessages: o.bigSessionMessages ?? (remote ? 0 : 2000),
     // Dated up to now, with models, tokens and tool calls: the Analytics view has data.
     recent: { now: Date.now(), days: HISTORY_DAYS },
   });
-  for (const [id, s] of corpus.sessions) adapter.sessions.set(id, s);
-  const iconDirs = await writeMockIcons(root);
+  for (const [id, s] of corpus.sessions) {
+    // The second machine's chats all belong to its one project.
+    if (remote) s.info.cwd = REMOTE_PROJECT_PATH;
+    adapter.sessions.set(id, s);
+  }
+  const iconDirs = remote ? new Map<string, string>() : await writeMockIcons(root);
 
-  // One "external" Claude Code session, so the UI's external states and resume block show.
-  const externalId = corpus.sessions.keys().next().value;
+  // One "external" Claude Code session (This PC's mock only), so the UI's
+  // external states and resume block show.
+  const externalId = remote ? undefined : corpus.sessions.keys().next().value;
   const externals = externalId
     ? [
         {
@@ -836,7 +894,33 @@ export const startMockService = async (o: MockOptions = {}): Promise<MockService
       ...(o.port === undefined ? {} : { port: o.port }),
       ...(o.token === undefined ? {} : { token: o.token }),
       installSignalHandlers: o.installSignalHandlers ?? true,
+      ...(remote
+        ? {
+            headless: true,
+            // Test-only: loopback (Ruling R4). `bin.ts` lets the service find its private addresses.
+            remote: { port: remote.port, addresses: ['127.0.0.1'] },
+            pairingRandom: fixedPairingRandom(remote.pairingCode),
+          }
+        : {}),
     });
+    if (remote) {
+      // The real service retries a listener that failed to start; a test mock must say so at once.
+      if (!svc.remote) {
+        await svc.close();
+        throw new Error(`The device listener did not start on 127.0.0.1:${remote.port}`);
+      }
+      // A recognisable name, and the code live from the start for as long as the mock runs
+      // (as if the owner ran `threadgarden pair` again whenever it expired or was spent).
+      await callLocal(svc, 'machine.rename', { name: REMOTE_MACHINE_NAME });
+      const keepCodeLive = (): void =>
+        void callLocal(svc, 'pairing.create', {}).catch((err: unknown) =>
+          process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`),
+        );
+      keepCodeLive();
+      const timer = setInterval(keepCodeLive, PAIRING_REFRESH_MS);
+      timer.unref();
+      svc.onClosed(() => clearInterval(timer));
+    }
     // The mock account's usage is known from the start (v1.3 B), so the meter shows at once.
     svc.usage?.observeEvent('mock', {
       status: 'allowed',
@@ -864,31 +948,50 @@ export const startMockService = async (o: MockOptions = {}): Promise<MockService
   }
 };
 
+/** Whether the flag `--name` is in argv. */
+const flag = (name: string): boolean => process.argv.slice(2).includes(`--${name}`);
+
 /** `--name value` / `--name=value` from argv, else the env variable. */
-const option = (name: string, envName: string): string | undefined => {
+const option = (name: string, envName?: string): string | undefined => {
   const argv = process.argv.slice(2);
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]!;
     if (a === `--${name}`) return argv[i + 1];
     if (a.startsWith(`--${name}=`)) return a.slice(name.length + 3);
   }
-  return process.env[envName] || undefined;
+  return (envName && process.env[envName]) || undefined;
+};
+
+/** A port option (0: any free port); exits with a message when it is not one. */
+const portOption = (name: string, envName?: string): number | undefined => {
+  const text = option(name, envName);
+  const port = text === undefined ? undefined : Number(text);
+  if (port !== undefined && !(Number.isInteger(port) && port >= 0 && port < 65536)) {
+    process.stderr.write(`Invalid port: ${text}\n`);
+    process.exit(1);
+  }
+  return port;
 };
 
 const isEntry = (): boolean =>
   process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href;
 
 if (isEntry()) {
-  const portText = option('port', 'THREADGARDEN_MOCK_PORT');
-  const port = portText === undefined ? undefined : Number(portText);
-  if (port !== undefined && !(Number.isInteger(port) && port >= 0 && port < 65536)) {
-    process.stderr.write(`Invalid port: ${portText}\n`);
-    process.exit(1);
-  }
+  const port = portOption('port', 'THREADGARDEN_MOCK_PORT');
   const token = option('token', 'THREADGARDEN_MOCK_TOKEN');
+  let remote: MockOptions['remote'];
+  if (flag('remote')) {
+    const pairingCode = option('pairing-code');
+    if (pairingCode === undefined) {
+      process.stderr.write('--remote needs --pairing-code <code>, such as TEST-TEST-TEST\n');
+      process.exit(1);
+    }
+    remote = { port: portOption('remote-port') ?? REMOTE_PORT, pairingCode };
+  }
   startMockService({
     ...(port === undefined ? {} : { port }),
     ...(token === undefined ? {} : { token }),
+    ...(remote ? { remote } : {}),
   })
     .then(async ({ dataDir, claudeDir, removed }) => {
       const discovery = await readDiscovery(dataDir);

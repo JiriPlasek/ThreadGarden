@@ -284,6 +284,9 @@ describe('Settings → Machines', () => {
     await waitFor(() => expect(env.app.machines.get(M1)).toBeUndefined());
     expect(clear).toHaveBeenCalledWith(M1);
     expect(screen.queryByRole('status')).toBeNull();
+    // The Remove button that opened the confirmation is gone: focus lands on the Machines heading.
+    const heading = within(settings).getByRole('heading', { name: 'Machines' });
+    await waitFor(() => expect(document.activeElement).toBe(heading));
   });
 
   it('says what to run on the machine when it could not be reached to revoke', async () => {

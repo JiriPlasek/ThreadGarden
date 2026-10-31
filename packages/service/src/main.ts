@@ -151,6 +151,12 @@ export type StartOptions = {
    * remote listener.
    */
   remote?: { port?: number; addresses?: string[]; addressSource?: () => string[] };
+  /**
+   * Random bytes for pairing codes (default `crypto.randomBytes`). Tests and
+   * the mock service (`mock --remote --pairing-code`) fix the code with it;
+   * `bin.ts` never sets it.
+   */
+  pairingRandom?: (n: number) => Buffer;
 };
 
 /** How long shutdown waits for a running index pass to reach a stopping point. */
@@ -387,7 +393,10 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       db = opened;
       // One registry for the handlers and the remote listener: the live pairing
       // code and the revoke listeners belong to it.
-      const devices = new DeviceRegistry(opened.raw);
+      const devices = new DeviceRegistry(
+        opened.raw,
+        opts.pairingRandom ? { random: opts.pairingRandom } : {},
+      );
       let tls: TlsIdentity | undefined;
       if (headless) {
         // Loaded up front, whether or not there is an address yet: the handlers

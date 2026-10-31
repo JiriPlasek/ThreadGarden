@@ -1,7 +1,13 @@
 import { createServer } from 'node:net';
 import type { ChatItem, EventMsg } from '@threadgarden/protocol';
 import { afterEach, describe, expect, it } from 'vitest';
-import { startMockService, type MockService } from '../../src/testing/mock-main.js';
+import { pairWithMachine } from '../../src/machine/pairing-client.js';
+import {
+  REMOTE_MACHINE_NAME,
+  REMOTE_PROJECT_PATH,
+  startMockService,
+  type MockService,
+} from '../../src/testing/mock-main.js';
 import { TestClient, chatStatus, eventually } from '../e2e/ws-client.js';
 
 const freePort = () =>
@@ -257,4 +263,68 @@ describe('mock service', () => {
     });
     expect(scheduled.sendAt).toBeGreaterThan(Date.now());
   }, 30_000);
+});
+
+describe('mock service --remote (v1.4)', () => {
+  it('is a headless "Ubuntu" with tg-cli on 127.0.0.1 that keeps its fixed code live', async () => {
+    mock = await startMockService({
+      remote: { port: 0, pairingCode: 'TEST-TEST-TEST' },
+      installSignalHandlers: false,
+    });
+    expect(mock.svc.remote?.addresses).toEqual(['127.0.0.1']);
+    const remotePort = mock.svc.remote!.port;
+    const c = (client = await TestClient.connect(mock.svc.port, mock.svc.token));
+    await eventually(async () => (await c.call<{ all: number }>('places.counts', {})).all === 20);
+    const projects = await c.call<{ displayName: string; path: string }[]>('projects.list', {});
+    // (Paths are in this OS's form: backslashes on Windows.)
+    expect(projects.map((p) => [p.displayName, p.path.replace(/\\/g, '/')])).toEqual([
+      ['tg-cli', REMOTE_PROJECT_PATH],
+    ]);
+
+    // Paired with the fixed code (typed any way); the spent code is live again soon after.
+    const pairAs = (deviceName: string) =>
+      pairWithMachine({
+        address: '127.0.0.1',
+        port: remotePort,
+        code: 'test-test-test',
+        deviceName,
+      });
+    const first = await pairAs('Desk');
+    expect(first.machine).toMatchObject({ name: REMOTE_MACHINE_NAME, headless: true });
+    await eventually(
+      () =>
+        pairAs('Laptop').then(
+          () => true,
+          () => new Promise<false>((r) => setTimeout(() => r(false), 200)),
+        ),
+      5_000,
+    );
+    const devices = await c.call<{ name: string }[]>('devices.list', {});
+    expect(devices.map((d) => d.name)).toEqual(['Desk', 'Laptop']);
+  }, 30_000);
+
+  it('fails when its device port is taken', async () => {
+    const taken = createServer();
+    await new Promise<void>((r) => taken.listen(0, '127.0.0.1', r));
+    const { port } = taken.address() as { port: number };
+    try {
+      await expect(
+        startMockService({
+          remote: { port, pairingCode: 'TEST-TEST-TEST' },
+          installSignalHandlers: false,
+        }),
+      ).rejects.toThrow(/device listener did not start/);
+    } finally {
+      await new Promise((r) => taken.close(r));
+    }
+  });
+
+  it('refuses a pairing code that cannot be one', async () => {
+    await expect(
+      startMockService({
+        remote: { port: 0, pairingCode: 'TEST-TEST' },
+        installSignalHandlers: false,
+      }),
+    ).rejects.toThrow(/Invalid pairing code/);
+  });
 });

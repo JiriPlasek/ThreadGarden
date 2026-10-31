@@ -209,4 +209,5 @@
   confirmLabel="Remove"
   destructive
   onConfirm={() => (removing ? remove(removing) : undefined)}
+  focusAfterConfirm={() => document.getElementById('settings-machines')}
 />
