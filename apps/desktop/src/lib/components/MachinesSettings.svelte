@@ -4,6 +4,7 @@
   import AddMachineDialog from '#lib/components/AddMachineDialog.svelte';
   import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
   import { machineState } from '#lib/components/layout/MachineHeading.svelte';
+  import PowerSettings from '#lib/components/PowerSettings.svelte';
   import { Button } from '#lib/components/ui/button/index.js';
   import { useApp } from '#lib/state/context.js';
   import type { MachineEntry } from '#lib/state/machines.svelte.js';
@@ -188,6 +189,7 @@
           }}>Remove {m.name}</Button
         >
       </div>
+      <PowerSettings machine={m} />
     </div>
   {/each}
 
