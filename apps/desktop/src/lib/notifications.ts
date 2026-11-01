@@ -22,7 +22,9 @@
  * The notification plugin cannot report clicks (ruling R26). Clicking a
  * notification focuses Threadgarden, so when the window gains focus within
  * `FOCUS_OPENS_WITHIN_MS` of a notification, Threadgarden selects "Needs you" and
- * opens the waiting chat if it is the only one (on any machine).
+ * opens the waiting chat if it is the only one (on any machine), unless every
+ * notification was about the open chat: that one is in front already, so the
+ * place stays.
  *
  * Remote machines: every machine's scope gets a watcher of its own (started
  * when the machine appears, stopped when it goes), so every machine's chats
@@ -86,6 +88,7 @@ export const startAttention = (deps: AttentionDeps): (() => void) => {
   const shared: AttentionShared = {
     focused: doc.visibilityState !== 'hidden' && doc.hasFocus(),
     notifiedAt: null,
+    notified: new Set(),
     reporters: new Set(),
   };
   let badge = -1;
@@ -93,8 +96,12 @@ export const startAttention = (deps: AttentionDeps): (() => void) => {
   /** The user came back soon after a notification: show what is waiting, on every machine. */
   const openNotified = async (): Promise<void> => {
     const at = shared.notifiedAt;
+    const about = shared.notified;
     shared.notifiedAt = null;
+    shared.notified = new Set();
     if (at === null || now() - at > FOCUS_OPENS_WITHIN_MS) return;
+    // Every notification was about the open chat: it is in front now, so the place stays.
+    if (tabs.active !== null && [...about].every((key) => key === tabs.active)) return;
     // Finished chats are listed there too, below the ones waiting on an answer.
     places.select({ kind: 'needsYou' });
     // A machine that cannot answer is left out; the others still count.
@@ -155,6 +162,8 @@ type AttentionShared = {
   focused: boolean;
   /** When the last notification went out (any machine's), until the window is focused. */
   notifiedAt: number | null;
+  /** The chats (keys) notified about since the window was last focused. */
+  notified: Set<string>;
   /** Each machine's `ui.visibility` reporter, run when the focus changes. */
   reporters: Set<(force?: boolean) => void>;
 };
@@ -188,6 +197,7 @@ const watch = (scope: MachineScope, deps: AttentionDeps, shared: AttentionShared
   };
   const say = (title: string, text: string, sessionId: string): void => {
     shared.notifiedAt = now();
+    shared.notified.add(keyOf(sessionId));
     quietly(notify(title, body(text), keyOf(sessionId)));
   };
 
