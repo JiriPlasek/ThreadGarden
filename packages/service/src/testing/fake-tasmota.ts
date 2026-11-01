@@ -1,7 +1,8 @@
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
-export type FakeDevice = { name: string | null; on: boolean; watts: number };
+/** `metering: false` is a device without power metering: no ActivePower in its ZbStatus3. */
+export type FakeDevice = { name: string | null; on: boolean; watts: number; metering?: boolean };
 
 export type FakeTasmota = {
   /** `127.0.0.1:<port>` */
@@ -19,7 +20,7 @@ export type FakeTasmota = {
   /** The global `Timers` flag (default on). */
   timersOn: boolean;
   /** The next `ZbPermitJoin 1` pairs this device. */
-  joinNext(dev: { id: string; name?: string | null; on?: boolean; watts?: number }): void;
+  joinNext(dev: { id: string; name?: string | null; on?: boolean; watts?: number; metering?: boolean }): void;
 };
 
 export type FakeTasmotaOptions = {
@@ -91,7 +92,7 @@ const iso = (d: Date) =>
 export async function startFakeTasmota(o: FakeTasmotaOptions = {}): Promise<FakeTasmota> {
   const kind = o.kind ?? 'zigbee';
   const version = o.version ?? (kind === 'zigbee' ? '16.0.0(release-zbbrdgpro)' : '16.0.0(tasmota)');
-  const pending: { id: string; name: string | null; on: boolean; watts: number }[] = [];
+  const pending: { id: string; name: string | null; on: boolean; watts: number; metering: boolean }[] = [];
   let setOption83 = true;
 
   const devices = new Map<string, FakeDevice>();
@@ -114,7 +115,13 @@ export async function startFakeTasmota(o: FakeTasmotaOptions = {}): Promise<Fake
     utcOffsetMinutes: 60,
     timersOn: true,
     joinNext(dev) {
-      pending.push({ id: dev.id, name: dev.name ?? null, on: dev.on ?? true, watts: dev.watts ?? 0 });
+      pending.push({
+        id: dev.id,
+        name: dev.name ?? null,
+        on: dev.on ?? true,
+        watts: dev.watts ?? 0,
+        metering: dev.metering ?? true,
+      });
     },
   };
 
@@ -181,7 +188,7 @@ export async function startFakeTasmota(o: FakeTasmotaOptions = {}): Promise<Fake
               Endpoints: [1, 242],
               Config: ['P01', 'O01'],
               RMSVoltage: 233.83,
-              ActivePower: d.on ? d.watts : 0,
+              ...(d.metering === false ? {} : { ActivePower: d.on ? d.watts : 0 }),
               Power: d.on ? 1 : 0,
               Reachable: true,
               LastSeen: 3,
@@ -208,7 +215,7 @@ export async function startFakeTasmota(o: FakeTasmotaOptions = {}): Promise<Fake
       if (name === 'zbpermitjoin') {
         if (arg === '1') {
           for (const p of pending.splice(0)) {
-            devices.set(p.id, { name: p.name, on: p.on, watts: p.watts });
+            devices.set(p.id, { name: p.name, on: p.on, watts: p.watts, metering: p.metering });
           }
         } else if (arg !== '0') return unknown(input);
         return { ZbPermitJoin: 'Done' };

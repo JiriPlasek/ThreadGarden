@@ -171,6 +171,20 @@ describe('fake Tasmota', () => {
     expect(f.timersOn).toBe(false);
   });
 
+  it('a device with metering false has no ActivePower in ZbStatus3', async () => {
+    const f = await fake();
+    f.devices.get('0x1234')!.metering = false;
+    f.joinNext({ id: '0xAAAA', metering: false });
+    const c = new TasmotaClient({ address: f.address, password: '' });
+    await c.command('ZbPermitJoin 1');
+    const plain = (await c.command('ZbStatus3 0x1234')).ZbStatus3 as Record<string, unknown>[];
+    expect(plain[0]).not.toHaveProperty('ActivePower');
+    const joined = (await c.command('ZbStatus3 0xAAAA')).ZbStatus3 as Record<string, unknown>[];
+    expect(joined[0]).not.toHaveProperty('ActivePower');
+    const metered = (await c.command('ZbStatus3 0x863B')).ZbStatus3 as Record<string, unknown>[];
+    expect(metered[0]).toHaveProperty('ActivePower', 47);
+  });
+
   it('can truncate rules like a small firmware', async () => {
     const f = await fake({ maxRuleLength: 10 });
     const c = new TasmotaClient({ address: f.address, password: 'pw' });

@@ -12,6 +12,9 @@ export const RESOURCES = {
 type Slot = 1 | 2 | 3;
 type Rules = Record<Slot, string>;
 
+/** A Zigbee device name Threadgarden can put in a rule or a ZbSend. */
+export const isZigbeeName = (s: string): boolean => /^[A-Za-z0-9_.-]{1,32}$/.test(s);
+
 export function commandsFor(config: PowerConfig): {
   off: string;
   on: string;
@@ -20,7 +23,7 @@ export function commandsFor(config: PowerConfig): {
 } {
   if (config.kind === 'tasmota-zigbee') {
     const d = config.device ?? '';
-    if (!/^[A-Za-z0-9_.-]{1,32}$/.test(d)) {
+    if (!isZigbeeName(d)) {
       throw new PowerError(
         POWER_ERRORS.notConfigured,
         "The Zigbee plug's name can only use letters, digits, '.', '_' and '-'",
