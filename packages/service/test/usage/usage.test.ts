@@ -304,7 +304,7 @@ describe('UsageTracker', () => {
       rate_limits_available: true,
       rate_limits: { five_hour: { utilization: read.mock.calls.length * 10 } },
     }));
-    let running: typeof read | undefined;
+    let running: typeof read | undefined = undefined;
     t.autoRefresh(() => running);
 
     // No chat runs: nothing to ask, and no process is started for it.
