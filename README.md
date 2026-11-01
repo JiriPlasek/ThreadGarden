@@ -1,119 +1,72 @@
-<img src="docs/images/logo.png" alt="" width="96" align="right">
+<p align="center">
+  <img src="docs/images/logo.png" alt="" width="80">
+</p>
 
-# Threadgarden
+<h1 align="center">Threadgarden</h1>
 
-**A desktop home for your [Claude Code](https://code.claude.com/docs) work.** Threadgarden lists every Claude Code conversation on your machine, runs new and resumed chats in tabs through the official Agent SDK and your own installed `claude`, and gathers everything that waits for you in one place. Agents keep running when you close the window, and an old PC on your network can do the work while your main one is busy.
+<p align="center">A desktop app for your <a href="https://code.claude.com/docs">Claude Code</a> chats.</p>
 
-> **Status:** experimental (0.3). Windows, macOS and Linux. Threadgarden works with Claude Code; it is not affiliated with or endorsed by Anthropic.
+Threadgarden shows every Claude Code conversation you've had on this machine, runs new ones in tabs, and tells you when an agent is waiting on you. Close the window and your agents keep going. Got an old PC lying around? It can do the work instead.
+
+It runs your own `claude` install, with your own login, through the official Agent SDK. Not affiliated with Anthropic.
+
+> Still early (0.3). Expect rough edges.
 
 <!-- Screenshots will live in docs/images/. -->
 
-## Features
+## What's in it
 
-**Your history**
-
-- Every Claude Code conversation, grouped by project (worktrees under their repository), with titles, previews and full-text search. Reading history never changes it.
-- Chats sorted into **Now**, last 24 hours, 7 days, 30 days and older; filed as **Active**, **On hold** (until a time you pick, with a note) or **Archived**.
-- New chats get a short title from a small model after their first turn (optional).
-- **Analytics**: activity over time, tokens per model, busiest projects, most-used tools and a weekday × hour heatmap.
-
-**Live chats**
-
-- Tabs with streaming markdown, highlighted code, diffs, todo lists, thinking blocks and subagent activity under the call that started it.
-- **Needs you** and **Running** across all projects, a strip with every running agent, a tray badge and notifications. Permission prompts, questions and plan approvals are answered inline.
-- **Activity panel** (Ctrl/Cmd+.): a chat's subagents and background processes, with model, progress and details; processes can be stopped from there.
-- Composer with `@` file mentions, slash commands, pasted images, queued messages and drafts that survive restarts.
-- **Usage meter** for your plan's limits, and **scheduled sends**: "Send when the limit resets", or at any time you pick.
-- Resume, fork and end any chat. Sessions started elsewhere (a terminal, `claude --bg`) show up too, with hand-off commands.
-
-**Remote machines**
-
-- Run chats on another computer on your network, such as an always-on Ubuntu PC, from the same window. Pair it once with a code; it gets its own group in the sidebar, and Needs you, Running and notifications cover every machine.
-- The connection stays on your network, uses TLS pinned to the machine's certificate, and can be revoked from either side. Setup: [docs/remote-machines.md](docs/remote-machines.md).
-
-**Comfort**
-
-- Ctrl/Cmd+K quick switcher over chats, projects, messages and commands; every action has a [keyboard shortcut](#keyboard-shortcuts).
-- Themes: light, dark or system, seven accents, a warm paper tint, Dim or true-black Midnight, your own fonts (WCAG AA contrast throughout).
-- Project icons from each project's own favicon or logo; adjustable interface size.
+- All your history in one place, grouped by project and searchable. File chats as Active, On hold or Archived so the list stays readable.
+- Live chats in tabs, with proper rendering for code, diffs, todos and subagents. Permission prompts and questions are answered right in the chat.
+- **Needs you** and **Running** lists across all projects, plus a tray badge and notifications, so you don't have to babysit tabs.
+- Chats started in a terminal show up too.
+- An activity panel to see what subagents and background processes are up to, and stop them.
+- A usage meter for your plan limits, and "send when the limit resets" for that one message you'd otherwise forget.
+- Remote machines: pair another computer on your network (an always-on Ubuntu box, say) and run chats there from the same window. See [docs/remote-machines.md](docs/remote-machines.md).
+- Analytics, if you're curious where your tokens go.
+- A quick switcher (Ctrl+K), shortcuts for everything, themes.
 
 ## Install
 
-Download the [latest release](https://github.com/JiriPlasek/ThreadGarden/releases/latest):
+Grab the [latest release](https://github.com/JiriPlasek/ThreadGarden/releases/latest):
 
-| Platform                    | File                                                                                             |
-| --------------------------- | ------------------------------------------------------------------------------------------------ |
-| Windows (x64)               | `Threadgarden_<version>_x64-setup.exe` (or the `.msi`)                                           |
-| macOS (Apple silicon)       | `Threadgarden_<version>_aarch64.dmg`                                                             |
-| Linux (x64)                 | `.AppImage` (updates itself), or the `.deb` / `.rpm`                                             |
-| A remote machine (headless) | `threadgarden-headless-linux-x64.tar.gz`, see [docs/remote-machines.md](docs/remote-machines.md) |
+- **Windows**: the `-setup.exe` (or the `.msi`)
+- **macOS** (Apple silicon): the `.dmg`
+- **Linux**: the `.AppImage`, or the `.deb` / `.rpm`
 
-Threadgarden then keeps itself up to date: it checks for a new release now and then, and installs it when you click **Restart to update** (deb and rpm installs get a download link instead). Builds are not code-signed, so SmartScreen and Gatekeeper warn on first launch; updates are signed, and the app installs only those. Every release has a `SHA256SUMS` file.
+The builds aren't code-signed yet, so SmartScreen and Gatekeeper will grumble the first time you open it. After that the app updates itself (the updates are signed and checked). The deb and rpm installs just get a link to the new version.
 
-**From source.** Node.js 22, pnpm 11, Rust (rustup picks the version in `rust-toolchain.toml`) and the [Tauri 2 prerequisites](https://v2.tauri.app/start/prerequisites/):
+You'll need Claude Code installed and signed in, or an Anthropic API key set in Settings. On Linux you also need WebKitGTK 4.1.
 
-```sh
-pnpm install
-node scripts/fetch-node-sidecar.mjs   # the Node.js runtime bundled into the app, hash-checked
-pnpm --filter desktop tauri build --config src-tauri/tauri.bundle.conf.json
-```
-
-Installers land in `apps/desktop/src-tauri/target/release/bundle/`. Users need no Node.js: the app ships its own runtime.
+Want to build it yourself? See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 <details>
-<summary><b>Upgrading from pahub</b></summary>
+<summary><b>Coming from pahub?</b></summary>
 
-Threadgarden was called pahub before v1.3. Install Threadgarden and start it; nothing is lost:
-
-- **Your data moves.** On first start the service copies `pahub.db` from pahub's data dir to `threadgarden.db` in Threadgarden's, in one step, and uses only that afterwards. The old folder stays as it was, plus a `MOVED-TO-THREADGARDEN.txt`; delete it once Threadgarden runs fine.
-- **A pahub service still running** shows as a service of another version: restart it from that screen and the new one takes over.
-- **Your API key** moves from the `pahub` credential entry to `threadgarden` the first time it is read.
-- **Not moved:** the notification permission and the start-on-login entry. Uninstall the old pahub app, and toggle Start on login again if you used it.
-- `PAHUB_DATA_DIR` and `PAHUB_API_KEY_ONLY` still work for one release; use the `THREADGARDEN_` names.
+Threadgarden used to be called pahub. Install it and start it: your data is copied over on first launch, and the old folder is left alone (delete it once you're happy). If an old pahub service is still running, restart it from the screen that shows up. Then uninstall pahub, and turn Start on login back on if you used it. The `PAHUB_*` environment variables still work for one more release; switch to the `THREADGARDEN_*` names.
 
 </details>
 
-## Requirements
+## Your data
 
-- **Claude Code**, installed and signed in as you would use it in a terminal. Threadgarden runs your own `claude` and ships no copy of it. Alternatively, set an Anthropic API key in Settings.
-- **Windows** 10/11 x64 (WebView2), **macOS** on Apple silicon, or **Linux** x64 with WebKitGTK 4.1.
-- **Remote machine** (optional): Linux x64 with systemd and its own signed-in Claude Code.
+Threadgarden never writes to `~/.claude`. It reads your history through the Agent SDK, and the only things that land there are Claude Code's own transcripts of the chats you run.
 
-## Data and privacy
+Its own data (a search index of your chats, your titles, drafts and settings) lives in `%APPDATA%\threadgarden`, `~/Library/Application Support/threadgarden` or `~/.local/share/threadgarden`. Delete the folder to start fresh. It holds the text of your chats, so treat it like `~/.claude`.
 
-- **Claude Code's data is read-only to Threadgarden.** It never writes, renames, moves or deletes anything under `~/.claude`. History is read only through the Agent SDK; running sessions through `claude agents --json`. The only writes there are Claude Code's own (the transcripts of chats you run, and the new file of a fork).
-- **Threadgarden's own data** lives in `%APPDATA%\threadgarden`, `~/Library/Application Support/threadgarden` or `~/.local/share/threadgarden` (override with `THREADGARDEN_DATA_DIR`): a SQLite index of your conversations' text, your titles, buckets, drafts, settings and scheduled messages, plus logs without message content. Deleting the folder resets Threadgarden and touches nothing of Claude Code's. Treat it like `~/.claude` itself.
-- **Secrets** (an API key, remote-machine pairing tokens) stay in the OS credential store and in memory; never in the database, files or logs.
-- **Network:** the desktop service listens on `127.0.0.1` only, behind a random token. A headless remote machine also listens on its private network addresses (port 47380, TLS) for paired devices. Threadgarden contacts nothing else but GitHub, to check for and download its own updates; the `claude` processes it starts talk to Anthropic exactly as in a terminal. Remote images in chats are not loaded.
+API keys and pairing tokens go to your OS keychain. The app itself only talks to localhost, your paired machines and GitHub (for updates); `claude` talks to Anthropic as it always does.
 
-## Authentication and terms
+## Login and terms
 
-Threadgarden has no login of its own. Sessions use whatever authentication your Claude Code already uses (subscription, API key or a third-party provider), or the API key set in Settings; the chat header shows which. An API-key-only build is available: build with `THREADGARDEN_API_KEY_ONLY=1`.
-
-You are responsible for complying with Anthropic's terms for the authentication you use. The Agent SDK documentation states that, unless previously approved, Anthropic does not allow third-party developers to offer claude.ai login or rate limits for their products and points to API keys instead; use of the SDK is governed by Anthropic's Commercial Terms. Read the current terms yourself; this is not legal advice. Details: [docs/architecture.md](docs/architecture.md#authentication).
+There's no Threadgarden account. It uses whatever Claude Code uses: a subscription, an API key or a third-party provider. Anthropic's Agent SDK docs say third-party products shouldn't offer claude.ai login unless approved, and point to API keys instead. Whether your setup is fine is between you and Anthropic's terms, so give them a read (this isn't legal advice). There's also an API-key-only build, `THREADGARDEN_API_KEY_ONLY=1`. More in [docs/architecture.md](docs/architecture.md#authentication).
 
 ## Known limitations
 
-- No agent teams or embedded terminal (the Agent SDK has no interactive terminal session); tabs only, no split view yet.
-- `bypassPermissions` is not offered; terminal-only slash commands (`/config`, `/login`, `/doctor`…) are listed as unavailable.
-- Sessions running in another process are shown, not driven: Threadgarden offers hand-off commands and continues them once they stop.
-- After Claude Code compacts a conversation, history shows it from the compaction onward (the SDK returns only the compacted part).
-- Clicking a notification only focuses the window. Builds are unsigned, with no auto-update. macOS and Linux builds are tested in CI, not yet by hand.
-
-## Development
-
-```sh
-pnpm install
-pnpm lint && pnpm typecheck && pnpm test   # tests include the performance budgets
-pnpm --filter desktop tauri dev            # run the app
-pnpm test:e2e                              # Playwright against the mock service
-```
-
-- **Mock service:** `pnpm --filter @threadgarden/service mock` serves a synthetic history (1,000 chats) with a scripted fake Claude Code. Messages containing "perm", "ask", "plan" or "limit" trigger those flows. Point the UI at it in a browser with `VITE_THREADGARDEN_MOCK_URL` and `VITE_THREADGARDEN_MOCK_TOKEN`.
-- **Rust:** in `apps/desktop/src-tauri`, `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` (build the UI first).
-- **Real Claude Code suite:** `pnpm --filter @threadgarden/service test:real`, opt-in, uses your login for a few tiny turns.
-
-Layout: `packages/protocol` (shared schemas), `packages/service` (the Node.js service), `apps/desktop` (Tauri shell and SvelteKit UI), `packaging/headless` (the remote-machine package), `scripts/` (release tooling). How it fits together: [docs/architecture.md](docs/architecture.md). Workflow and rules: [CONTRIBUTING.md](CONTRIBUTING.md). Releasing: [docs/releasing.md](docs/releasing.md).
+- Tabs only: no split view, no embedded terminal.
+- No `bypassPermissions`, and terminal-only commands like `/config` or `/login` don't work here.
+- Chats running in another terminal are shown, not driven. You get a command to hand them over.
+- After Claude Code compacts a chat, history starts at the compaction (that's all the SDK returns).
+- Clicking a notification only focuses the window.
+- macOS and Linux pass CI but haven't seen much real use yet.
 
 ## Keyboard shortcuts
 
