@@ -161,68 +161,33 @@ Threadgarden itself never stores GitHub credentials.
 
 ### The Threadgarden headless service
 
-There are no published releases yet. Every CI run builds the x64 package as
-the artifact `threadgarden-headless`: a
-`threadgarden-headless-<version>-linux-x64.tar.gz` and its `.sha256`.
-Download them into a new, empty folder with the GitHub CLI you just signed
-in (replace `<owner>` with the GitHub account the Threadgarden repository
-belongs to). Remote machines arrive on `main` when the branch
-`feat/remote-machines-1` is merged; until then, take the package from that
-branch:
+Download the latest release's package and its checksum into a new, empty
+folder:
 
 ```sh
-repo=<owner>/threadgarden
-branch=main     # before the merge: branch=feat/remote-machines-1
 rm -rf ~/threadgarden-download && mkdir ~/threadgarden-download && cd ~/threadgarden-download
-run=$(gh run list --repo "$repo" --workflow ci.yml --branch "$branch" --limit 1 --json databaseId --jq '.[0].databaseId')
-gh run download "$run" --repo "$repo" --name threadgarden-headless
-ls
+base=https://github.com/JiriPlasek/ThreadGarden/releases/latest/download
+curl -fLO "$base/threadgarden-headless-linux-x64.tar.gz"
+curl -fLO "$base/threadgarden-headless-linux-x64.tar.gz.sha256"
 ```
 
-The latest run is taken whatever its result: the package is built by the
-job `check` on Ubuntu, so another job that fails (`rust`, or `bundle` with
-its end-to-end tests) marks the run failed but leaves the artifact in place. If
-`gh run download` finds no artifact, that run is still in progress or its
-Ubuntu `check` job failed: list the runs with
-`gh run list --repo "$repo" --workflow ci.yml --branch "$branch"`, or open
-the pull request's **Checks** on GitHub (the run id is the number after
-`/actions/runs/` in a run's address), then set `run=<id>` and download
-again.
+The same two files are on the
+[Releases page](https://github.com/JiriPlasek/ThreadGarden/releases/latest),
+if you would rather download them on Windows and copy them over with `scp`.
 
-Artifacts are kept for **7 days**. When the run you want is older, re-run
-it (`gh run rerun "$run" --repo "$repo"`, or **Re-run all jobs** on the
-run's page on GitHub) and download once its `check` job has finished.
-
-`gh run list` with `--json` needs a recent GitHub CLI (`gh --version` 2.40 or
-newer; Ubuntu 24.04's package is). If Ubuntu's `gh` is older, install it from
-GitHub's own package repository as described in
-[the GitHub CLI's Linux install guide](https://github.com/cli/cli/blob/trunk/docs/install_linux.md),
-or download the artifact on Windows instead: open the CI run on GitHub (as
-above: the latest run of the branch, or the run id from the pull request's
-checks), download `threadgarden-headless` under Artifacts and unzip it into
-a new, empty folder. Empty the download folder on the Ubuntu PC too:
-
-```sh
-rm -rf ~/threadgarden-download && mkdir ~/threadgarden-download
-```
-
-then copy both files over from PowerShell in the folder you unzipped to
-(with your version in the names):
-
-```powershell
-scp threadgarden-headless-0.2.0-linux-x64.tar.gz threadgarden-headless-0.2.0-linux-x64.tar.gz.sha256 <your-ubuntu-user>@192.168.1.50:threadgarden-download/
-```
-
-For an arm64 PC, build the package yourself from a checkout with
-`node scripts/build-headless.mjs --arch arm64`.
+To try an unreleased branch instead, take the `threadgarden-headless`
+artifact of its latest CI run (`gh run download <run-id> --repo
+JiriPlasek/ThreadGarden --name threadgarden-headless`; artifacts are kept 7
+days) and use its versioned file names below. For an arm64 PC, build the
+package yourself from a checkout with `pnpm build:headless -- --arch arm64`.
 
 Check the download, unpack it and run the installer **as your own user, not
 with sudo**:
 
 ```sh
 cd ~/threadgarden-download
-sha256sum -c threadgarden-headless-*-linux-x64.tar.gz.sha256
-tar -xzf threadgarden-headless-*-linux-x64.tar.gz
+sha256sum -c threadgarden-headless-linux-x64.tar.gz.sha256
+tar -xzf threadgarden-headless-linux-x64.tar.gz
 cd threadgarden-headless-*/
 ./install.sh
 ```
