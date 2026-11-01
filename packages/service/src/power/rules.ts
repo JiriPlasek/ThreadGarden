@@ -51,7 +51,8 @@ export function ruleText(config: PowerConfig): string {
     `on ${t}>=${w} do Var14 0 endon`,
     'on Var14#State>=6 do Backlog %mem12%;Mem11 %utctime%;Event tgo endon',
     'on Rules#Timer=8 do Event tgo endon',
-    `on Event#tgw do Backlog %mem12%;RuleTimer6 ${m} endon`,
+    // A wake or a cycle is a cut too: Mem11 records it, so a Turn on waits out the minimum off time.
+    `on Event#tgw do Backlog %mem12%;Mem11 %utctime%;RuleTimer6 ${m} endon`,
     'on Rules#Timer=6 do %mem13% endon',
     'on Clock#Timer=16 do Event tgw endon',
   ].join(' ');
@@ -83,6 +84,23 @@ const CLAIMED: string[] = [
   `Timer${RESOURCES.timer}`,
 ];
 
+/** Triggers and commands that reach every timer, ours included, without naming one. */
+const EVERY_TIMER: { pattern: RegExp; problem: (slot: Slot) => string }[] = [
+  {
+    // Without `=<n>`: no number, or a comparison such as `Rules#Timer>5`.
+    pattern: /(?<![A-Za-z0-9_])Rules#Timer(?!=\d)/i,
+    problem: (s) => `Rule ${s} reacts to every Rules#Timer, Threadgarden's too.`,
+  },
+  {
+    pattern: /(?<![A-Za-z0-9_])Clock#Timer(?!=\d)/i,
+    problem: (s) => `Rule ${s} reacts to every Clock#Timer, Threadgarden's too.`,
+  },
+  {
+    pattern: /(?<![A-Za-z0-9_])RuleTimer0(?![A-Za-z0-9_])/i,
+    problem: (s) => `Rule ${s} uses RuleTimer0, which sets Threadgarden's rule timers too.`,
+  },
+];
+
 function mentions(text: string, name: string): boolean {
   const esc = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   return new RegExp(`(?<![A-Za-z0-9_])${esc}(?![A-Za-z0-9_])`, 'i').test(text);
@@ -102,6 +120,7 @@ export function conflicts(
     for (const name of CLAIMED) {
       if (mentions(text, name)) problems.push(`Rule ${s} uses ${name}, which Threadgarden needs.`);
     }
+    for (const e of EVERY_TIMER) if (e.pattern.test(text)) problems.push(e.problem(s));
   }
   const slotText = rules[slot] ?? '';
   const slotIsOurs = isOurs(slotText);

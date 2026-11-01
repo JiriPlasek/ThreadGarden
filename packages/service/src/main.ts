@@ -66,8 +66,9 @@ export const IDLE_EXIT_MS = 30 * 60_000;
  * the precise one).
  */
 const IDLE_CHECK_MS = 60_000;
-/** A chat in a turn (working, waiting on the user): its next scheduled send waits (v1.3 B). */
+/** UI-state key of this machine's keep awake setting (it outlives a restart). */
 const KEEP_AWAKE_KEY = 'power.keepAwake';
+/** A chat in a turn (working, waiting on the user): its next scheduled send waits (v1.3 B). */
 const IN_TURN: ReadonlySet<ChatStatus> = new Set(['working', 'needsYou', 'unknown']);
 /** Said in a chat whose scheduled message was due while the service was not running. */
 export const LATE_NOTE =
@@ -648,6 +649,14 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         if (e.event === 'chat.status') {
           const { sessionId, status } = e.data as { sessionId: string; status: ChatStatus };
           setImmediate(() => scheduledRef.current?.statusChanged(sessionId, status));
+          // A turn started or ended: a blocked shutdown's notice no longer holds.
+          setImmediate(() => {
+            try {
+              shutdown?.activity();
+            } catch (err) {
+              log.error(`power: ${errorText(err)}`);
+            }
+          });
         }
         if (e.event !== 'chat.status' && e.event !== 'sessions.changed') return;
         // After the host has finished the transition that emitted this.

@@ -244,6 +244,13 @@ describe('ShutdownSequence.run', () => {
     expect(r.f.commands).toEqual([]);
   });
 
+  it('an overdue send held back does not postpone the shutdown: it goes out at the next start', async () => {
+    const r = await rig({ sends: [{ sendAt: Date.now() - 5 * MIN, state: 'pending' }] });
+    const s = await r.seq.run({ force: false, reason: 'idle' });
+    expect(s).toMatchObject({ phase: 'shuttingDown', problem: null });
+    expect(r.order).toEqual(CLEAN);
+  });
+
   it('a failed or sending send does not count; the earliest pending one does', async () => {
     const at = Date.now() + 3 * 60 * MIN;
     const r = await rig({
@@ -501,6 +508,19 @@ describe('ShutdownSequence.run', () => {
     expect((await first).phase).toBe('shuttingDown');
     expect(checks).toBe(1);
     expect(r.order).toEqual(CLEAN);
+  });
+
+  it('a blocked machine is running again once a chat turn starts or ends', async () => {
+    const r = await rig({ found: [unpushed] });
+    expect((await r.seq.run({ force: false, reason: 'idle' })).phase).toBe('blocked');
+    const before = r.emitted.length;
+    r.seq.activity();
+    expect(r.seq.status()).toMatchObject({ phase: 'running', unpushed: [], problem: null });
+    expect(r.emitted.length).toBe(before + 1);
+    expect(r.emitted.at(-1)).toMatchObject({ phase: 'running', unpushed: [] });
+    // Nothing to clear: nothing announced.
+    r.seq.activity();
+    expect(r.emitted.length).toBe(before + 1);
   });
 
   it('a new run clears an earlier problem and block', async () => {

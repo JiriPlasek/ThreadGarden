@@ -39,8 +39,10 @@
 </script>
 
 <script lang="ts">
+  import { POWER_CAPABILITY } from '@threadgarden/protocol';
   import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
   import PowerIcon from '@lucide/svelte/icons/power';
+  import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
   import { Button } from '#lib/components/ui/button/index.js';
   import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
   import * as Tooltip from '#lib/components/ui/tooltip/index.js';
@@ -60,7 +62,7 @@
    * A machine with power control also gets a ⏻ menu (Turn on, Shut down now,
    * Keep awake), its idle-shutdown countdown or keep-awake time in the state
    * label's title, and, when turning it on failed, the reason in a line under
-   * the heading.
+   * the heading. Shutting down a machine at work asks first.
    */
   let {
     machine,
@@ -73,7 +75,12 @@
   const name = $derived(machineLabel(machine));
   const status = $derived(machines.shown(machine));
   const shown = $derived(machineState({ name: machine.name, status }));
-  const hasPower = $derived(!machine.local && power.config(machine.id) !== null);
+  // A machine that answered says whether it has power control; one that has not yet, the stored switch.
+  const hasPower = $derived(
+    !machine.local &&
+      power.config(machine.id) !== null &&
+      (!machine.info || machine.info.capabilities.includes(POWER_CAPABILITY)),
+  );
   const awake = $derived(power.machine(machine.id)?.keepAwake);
   const starting = $derived(power.turningOn(machine.id));
   // What failed when asked (turning on, shutting down), else why the machine stopped a shutdown.
@@ -120,6 +127,12 @@
 
   const HOUR = 3_600_000;
   const quiet = (p: Promise<unknown>): void => void p.catch(() => {});
+  /** Asking whether to shut down a machine that is at work. */
+  let confirmShutDown = $state(false);
+  const shutDown = (): void => {
+    if (power.machine(machine.id)?.busy) confirmShutDown = true;
+    else quiet(power.shutDown(machine.id, false));
+  };
   const keepAwake = (mode: 'until' | 'always' | 'off', ms?: number): void =>
     quiet(
       power.keepAwake(machine.id, {
@@ -197,10 +210,7 @@
             <DropdownMenu.Item class="py-1 text-xs" disabled>{shown.label}</DropdownMenu.Item>
           {/if}
           {#if status === 'on'}
-            <DropdownMenu.Item
-              class="py-1 text-xs"
-              onSelect={() => quiet(power.shutDown(machine.id, false))}
-            >
+            <DropdownMenu.Item class="py-1 text-xs" onSelect={shutDown}>
               Shut down now
             </DropdownMenu.Item>
             <DropdownMenu.Sub>
@@ -252,6 +262,13 @@
       <span id={reasonId} hidden>{shown.reason}</span>
     {/if}
   </div>
+  <ConfirmDialog
+    bind:open={confirmShutDown}
+    title="{name} is working on something. Shut it down anyway?"
+    confirmLabel="Shut down"
+    destructive
+    onConfirm={() => quiet(power.shutDown(machine.id, false))}
+  />
   <!-- Always present, so assistive technology announces what is put in it. -->
   <p class="px-2 text-xs text-red-700 empty:hidden dark:text-red-400" role="status">
     {failure ?? ''}

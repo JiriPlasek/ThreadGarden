@@ -32,7 +32,7 @@ const expected = [
   'on ZbReceived#UbuntuPlug#ActivePower>=5 do Var14 0 endon',
   'on Var14#State>=6 do Backlog %mem12%;Mem11 %utctime%;Event tgo endon',
   'on Rules#Timer=8 do Event tgo endon',
-  'on Event#tgw do Backlog %mem12%;RuleTimer6 90 endon',
+  'on Event#tgw do Backlog %mem12%;Mem11 %utctime%;RuleTimer6 90 endon',
   'on Rules#Timer=6 do %mem13% endon',
   'on Clock#Timer=16 do Event tgw endon',
 ].join(' ');
@@ -160,6 +160,29 @@ describe('claiming', () => {
     expect(conflicts({ 1: '', 2: '', 3: '' }, 1, { 16: { Enable: 1 } }, {}, memsFor(cfg))).toEqual([
       'Timer 16 is in use by another rule.',
     ]);
+  });
+  it.each([
+    ['on Rules#Timer do Var1 1 endon', "Rule 2 reacts to every Rules#Timer, Threadgarden's too."],
+    ['on Rules#Timer>5 do Var1 1 endon', "Rule 2 reacts to every Rules#Timer, Threadgarden's too."],
+    [
+      'on rules#timer<=8 do Var1 1 endon',
+      "Rule 2 reacts to every Rules#Timer, Threadgarden's too.",
+    ],
+    ['on Clock#Timer do Var1 1 endon', "Rule 2 reacts to every Clock#Timer, Threadgarden's too."],
+    [
+      'on Clock#Timer>=3 do Var1 1 endon',
+      "Rule 2 reacts to every Clock#Timer, Threadgarden's too.",
+    ],
+    [
+      'on x do RuleTimer0 10 endon',
+      "Rule 2 uses RuleTimer0, which sets Threadgarden's rule timers too.",
+    ],
+  ])('an index-less timer trigger or RuleTimer0 is a conflict: %s', (text, problem) => {
+    expect(conflicts({ 1: '', 2: text, 3: '' }, 1, timers, {}, memsFor(cfg))).toEqual([problem]);
+  });
+  it('numbered timer triggers of other rules are no conflict', () => {
+    const r = { 1: '', 2: 'on Rules#Timer=3 do x endon on Clock#Timer=2 do y endon', 3: '' };
+    expect(conflicts(r, 1, timers, {}, memsFor(cfg))).toEqual([]);
   });
   it('a Mem holding a foreign value is a conflict', () => {
     expect(

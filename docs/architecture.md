@@ -711,10 +711,17 @@ Var14–15, Mem11–14, Timer16); the list is in
 and nothing else on the switch is changed. Arming sets a counter and a 5 s
 timer that makes the plug report its watts; six readings in a row below the
 "off" line (about 30 s) switch the plug off, a reading at or above the line
-resets the count, and the arm expires after 900 s. The service also disarms at
-every start, so a machine started by hand while armed is never cut. A wake is
+resets the count, and the arm expires after 900 s. Every reading the plug
+reports counts, not only the timer's: while the desktop also reads the plug
+during a shutdown (every 5 s), the cut can come after about 15 s, but still only
+after six readings under the line. The service also disarms at every start
+(retrying until the switch answers, since the network may come up after the
+service), so a machine started by hand while armed is never cut. A wake is
 Timer16 set to 5 minutes before a scheduled message, in the switch's own local
-time (read from the device), and cycles the plug when it is on but in standby.
+time (read from the device), and cycles the plug when it is on but in standby;
+a cycle records its time like a cut, and a Turn on from the desktop clears a
+pending wake. Turn on cycles a plug in standby only on a fresh reading (the
+bridge's `LastSeen` within 5 s).
 
 **The password** is entered once in Settings and goes to the local service in
 the request; it is stored in the OS credential store (account

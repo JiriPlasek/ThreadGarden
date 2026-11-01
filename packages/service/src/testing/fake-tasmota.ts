@@ -47,6 +47,8 @@ export type FakeTasmotaOptions = {
   version?: string;
   /** Rules longer than this are cut off when written (a small firmware). */
   maxRuleLength?: number;
+  /** Mem values longer than this are cut off when written. */
+  maxMemLength?: number;
 };
 
 const DEFAULT_TIMER = {
@@ -292,7 +294,9 @@ export async function startFakeTasmota(o: FakeTasmotaOptions = {}): Promise<Fake
       const n = Number(m[2]);
       const store = m[1] === 'mem' ? state.mems : state.vars;
       if (arg === '"' || arg === '""') store[n] = '';
-      else if (arg !== '') store[n] = arg;
+      else if (arg !== '')
+        store[n] =
+          m[1] === 'mem' && o.maxMemLength !== undefined ? arg.slice(0, o.maxMemLength) : arg;
       return { [`${m[1] === 'mem' ? 'Mem' : 'Var'}${n}`]: store[n] ?? '' };
     }
     if (name === 'setoption83') {

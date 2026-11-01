@@ -50,11 +50,13 @@ const start = async (
     plugOn?: boolean;
     link?: 'locked';
     status?: () => MachinePowerStatus;
+    /** What the machine says it can do (default: power when configured). */
+    capabilities?: string[];
   } = {},
 ) => {
   const withPower = o.power !== false;
   const env = await setupTwoMachines({
-    m1Capabilities: withPower ? ['remote', POWER_CAPABILITY] : ['remote'],
+    m1Capabilities: o.capabilities ?? (withPower ? ['remote', POWER_CAPABILITY] : ['remote']),
     powerPasswords: { [M1]: 'pw' },
     waitForOn: !o.off,
     m1Status: o.link,
@@ -115,6 +117,31 @@ describe('the power menu', () => {
     await userEvent.click(await screen.findByText('Shut down now'));
     await waitFor(() => expect(remote.calls('power.shutdown')).toHaveLength(1));
     expect(remote.calls('power.shutdown')[0]!.params).toEqual({ force: false });
+  });
+
+  it('asks first before shutting down a machine at work', async () => {
+    const { group, remote } = await start({ status: () => status({ busy: true }) });
+    const ask = async () => {
+      await openMenu(group);
+      await userEvent.click(await screen.findByText('Shut down now'));
+      const dialog = await screen.findByRole('alertdialog');
+      expect(
+        within(dialog).getByText('Ubuntu PC is working on something. Shut it down anyway?'),
+      ).toBeTruthy();
+      return dialog;
+    };
+    await userEvent.click(within(await ask()).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(remote.calls('power.shutdown')).toHaveLength(0);
+    await userEvent.click(within(await ask()).getByRole('button', { name: 'Shut down' }));
+    await waitFor(() => expect(remote.calls('power.shutdown')).toHaveLength(1));
+    expect(remote.calls('power.shutdown')[0]!.params).toEqual({ force: false });
+  });
+
+  it('no ⏻ for a machine that says it has no power control, even with a stored switch', async () => {
+    const { group } = await start({ capabilities: ['remote'] });
+    expect(within(group).getByText('On')).toBeTruthy();
+    expect(within(group).queryByRole('button', { name: 'Power for Ubuntu PC' })).toBeNull();
   });
 
   it('Keep awake, For 1 hour sends power.keepAwake {mode:until, until: now+3600000}', async () => {

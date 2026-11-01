@@ -182,12 +182,20 @@ export function createSwitch(
           );
         }
       }
-      if (!rules[slot].on) await client.command(`Rule${slot} 1`);
       // Mem11 holds the last cut's time: written only while empty.
       if (mems[11] === '') await client.command(`Mem11 ${wanted[11]}`);
       for (const n of [12, 13, 14] as const) {
-        if (mems[n] !== wanted[n]) await client.command(`Mem${n} ${wanted[n]}`);
+        if (mems[n] === wanted[n]) continue;
+        await client.command(`Mem${n} ${wanted[n]}`);
+        // A cut-off command would leave the plug off for good: the rule stays off then.
+        if ((await readMem(n)) !== wanted[n]) {
+          throw new PowerError(
+            POWER_ERRORS.conflict,
+            "The switch didn't store Threadgarden's settings intact.",
+          );
+        }
       }
+      if (!rules[slot].on) await client.command(`Rule${slot} 1`);
     },
 
     async uninstall() {

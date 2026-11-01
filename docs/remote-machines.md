@@ -419,12 +419,15 @@ up power control…**:
 4. **Save.** Threadgarden installs what it needs on the switch (4.5). The
    machine's heading now has a **⏻** menu, and Settings shows the plug, its
    watts and the settings. After the first shutdown Threadgarden measured,
-   Settings suggests an off line between the running and shut-down readings.
+   Settings suggests an off line between the lowest running draw and the
+   shut-down reading.
 
 **The ⏻ menu.** **Turn on** switches the plug on (if the PC is standing by with
-the plug already on, it cuts power, waits, and switches it on again). The
-machine then shows **Starting…**, and **Unreachable** if it has not answered
-after 5 minutes. **Shut down now** starts the shutdown below. **Keep awake**
+the plug already on, it cuts power, waits, and switches it on again; it does
+that only on a fresh reading from the plug, and otherwise asks you to try
+again). The machine then shows **Starting…**, and **Unreachable** if it has
+not answered after 5 minutes. **Shut down now** starts the shutdown below; on
+a machine that is working on something it asks first. **Keep awake**
 stops idle shutdown for 1 hour, 4 hours or until you turn it off, and survives
 a service restart. The states are **Off**, **Starting…**, **On**, **Shutting
 down** and **Unreachable**; hover over the state to see "Shuts down in 42 min".
@@ -447,11 +450,15 @@ keep the machine awake.
    repository without a remote is skipped.
 2. If it found something, the machine stays on and Needs you shows **Unpushed
    work on ‹machine›**, with **Ask Claude to push it** and **Shut down
-   anyway**. Nothing is deleted either way.
-3. If a scheduled message is due within 15 minutes, the shutdown is postponed.
+   anyway**. Nothing is deleted either way. Once a chat there starts or ends a
+   turn, the notice goes away and the check runs again after the next idle
+   period.
+3. If a scheduled message is due within 15 minutes, the shutdown is postponed
+   (one already overdue goes out when the machine is next on).
 4. Otherwise it arms the power cut on the switch (and, if a scheduled message
-   is due within 7 days, a wake for 5 minutes before it), stops the chats (they
-   become resumable), and runs `systemctl poweroff`.
+   is due within 7 days, a wake for 5 minutes before it). If a chat got to work
+   meanwhile, it disarms again and the machine stays on. Otherwise it stops the
+   chats (they become resumable) and runs `systemctl poweroff`.
 5. The switch cuts the power once the plug has read below the off line for about
    30 seconds. It never cuts on a timer alone, so a PC that hangs while shutting
    down keeps its power.

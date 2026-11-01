@@ -204,6 +204,16 @@ export class ShutdownSequence {
     return this.startDisarm().then(() => this.scheduleRetry());
   }
 
+  /**
+   * A chat turn started or ended: a blocked notice no longer holds (the work it
+   * named may be pushed by now), so the machine is running again and says so. The
+   * push check runs again after the next idle period.
+   */
+  activity(): void {
+    if (this.inFlight || this.state.phase !== 'blocked') return;
+    this.set(RUNNING);
+  }
+
   /** Stops the start disarm's retries (the service is closing). */
   close(): void {
     this.closed = true;
@@ -304,10 +314,12 @@ export class ShutdownSequence {
     }
 
     // 2. The next scheduled send: one due soon keeps the machine on; a far one goes out late.
+    // One already overdue (held back) goes out at the next start: it never postpones.
     const now = this.now();
     let earliest: number | null = null;
     for (const s of this.o.scheduled()) {
-      if (s.state === 'pending' && (earliest === null || s.sendAt < earliest)) earliest = s.sendAt;
+      if (s.state !== 'pending' || s.sendAt <= now) continue;
+      if (earliest === null || s.sendAt < earliest) earliest = s.sendAt;
     }
     if (earliest !== null && earliest - now <= SEND_SOON_MS) {
       return this.settle({ ...RUNNING, problem: SEND_DUE_SOON });

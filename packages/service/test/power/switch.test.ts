@@ -340,6 +340,18 @@ describe('Tasmota switch', () => {
     expect(f.rules[1].on).toBe(false);
   });
 
+  it('Mems the switch does not store intact: POWER_CONFLICT, and the rule is not enabled', async () => {
+    const f = await startFakeTasmota({ maxMemLength: 20 });
+    fakes.push(f);
+    const sw = createSwitch({ ...cfg, address: f.address }, 'pw', { readWaitMs: 0 });
+    await expect(sw.ensureInstalled()).rejects.toMatchObject({
+      code: 'POWER_CONFLICT',
+      message: "The switch didn't store Threadgarden's settings intact.",
+    });
+    expect(f.rules[1].on).toBe(false);
+    expect(f.commands).not.toContain('Rule1 1');
+  });
+
   it('a missing Mem answer is POWER_NOT_TASMOTA', async () => {
     const odd = createSwitch({ ...cfg, address: '1.2.3.4' }, 'pw', {
       fetch: async () => new Response('{"Command":"Unknown"}'),

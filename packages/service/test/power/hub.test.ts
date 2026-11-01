@@ -285,6 +285,22 @@ describe('PowerHub', () => {
     expect(hub.list()[0]!.config.address).toBe(g.address);
   });
 
+  it('reconfiguring to a switch that refuses the install leaves the old switch as it was', async () => {
+    const { f, hub, config } = await setup();
+    const g = await startFakeTasmota();
+    fakes.push(g);
+    g.rules[1] = { text: 'on x do y endon', on: true };
+    g.rules[2] = { text: 'on x do y endon', on: true };
+    g.rules[3] = { text: 'on x do y endon', on: true };
+    await hub.configure('m1', config, 'pw');
+    const rule = { ...f.rules[1] };
+    await expect(hub.configure('m1', { ...config, address: g.address })).rejects.toMatchObject({
+      code: 'POWER_CONFLICT',
+    });
+    expect(f.rules[1]).toEqual(rule);
+    expect(hub.list()[0]!.config.address).toBe(f.address);
+  });
+
   it('turnOn when off long ago switches on at once', async () => {
     const { f, hub, config, clock, t } = await setup();
     f.devices.get('0x863B')!.on = false;

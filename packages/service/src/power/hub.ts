@@ -186,10 +186,11 @@ export class PowerHub {
     const pw = password ?? this.passwords.get(machineId);
     if (pw === undefined) throw notConfigured('The switch password is needed to set this up.');
     const old = this.config(machineId);
-    if (old && (old.address !== config.address || old.kind !== config.kind)) {
-      await this.uninstallOld(machineId);
-    }
+    // The new switch first: a failed install leaves the old one working as it was.
     await this.switchFor(config, pw).ensureInstalled();
+    // Then off the old switch (best effort). On the same switch the install above
+    // already rewrote our slot in place, so there is nothing to remove.
+    if (old && !sameAddress(old.address, config.address)) await this.uninstallOld(machineId);
     this.store(machineId, config);
     this.passwords.set(machineId, pw);
     this.reset(machineId);
