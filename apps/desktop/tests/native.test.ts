@@ -54,6 +54,18 @@ describe('native (browser stubs)', () => {
     await expect(native.apiKey.get()).resolves.toBeNull();
   });
 
+  it('keeps power switch passwords in memory only, apart from device tokens', async () => {
+    const native = await load();
+    await expect(native.powerPasswords.get('m1')).resolves.toBeNull();
+    await native.powerPasswords.set('m1', 'pw1');
+    await native.powerPasswords.set('m2', 'pw2');
+    await expect(native.powerPasswords.get('m1')).resolves.toBe('pw1');
+    await expect(native.machineTokens.get('m1')).resolves.toBeNull();
+    await native.powerPasswords.clear('m1');
+    await expect(native.powerPasswords.get('m1')).resolves.toBeNull();
+    await expect(native.powerPasswords.get('m2')).resolves.toBe('pw2');
+  });
+
   it('makes native-only calls harmless no-ops', async () => {
     const native = await load();
     const unlisten = await native.onTray('stop-all', () => {});

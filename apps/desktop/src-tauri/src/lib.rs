@@ -125,6 +125,21 @@ async fn machine_token_clear(machine_id: String) -> Result<(), String> {
     blocking(move || secrets::machine_token_clear(&machine_id)).await
 }
 
+#[tauri::command]
+async fn power_password_get(machine_id: String) -> Result<Option<String>, String> {
+    blocking(move || secrets::power_password_get(&machine_id)).await
+}
+
+#[tauri::command]
+async fn power_password_set(machine_id: String, password: String) -> Result<(), String> {
+    blocking(move || secrets::power_password_set(&machine_id, &password)).await
+}
+
+#[tauri::command]
+async fn power_password_clear(machine_id: String) -> Result<(), String> {
+    blocking(move || secrets::power_password_clear(&machine_id)).await
+}
+
 /// Exits the app only; the service and its agents keep running.
 #[tauri::command]
 fn app_quit(app: AppHandle) {
@@ -182,6 +197,9 @@ pub fn run() {
             machine_token_get,
             machine_token_set,
             machine_token_clear,
+            power_password_get,
+            power_password_set,
+            power_password_clear,
             app_quit,
             set_tray_needs_you,
             read_dropped_image,

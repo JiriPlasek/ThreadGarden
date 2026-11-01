@@ -91,6 +91,24 @@ export const machineTokens = {
   },
 };
 
+const browserPowerPasswords = new Map<string, string>();
+
+/** A machine's power switch web password, kept in the OS credential store (in memory in a browser). */
+export const powerPasswords = {
+  get: async (id: string): Promise<string | null> =>
+    isTauri
+      ? invoke<string | null>('power_password_get', { machineId: id })
+      : (browserPowerPasswords.get(id) ?? null),
+  set: async (id: string, password: string): Promise<void> => {
+    if (isTauri) await invoke('power_password_set', { machineId: id, password });
+    else browserPowerPasswords.set(id, password);
+  },
+  clear: async (id: string): Promise<void> => {
+    if (isTauri) await invoke('power_password_clear', { machineId: id });
+    else browserPowerPasswords.delete(id);
+  },
+};
+
 /**
  * Shows an OS notification. The notification plugin cannot report clicks back
  * (ruling R26): the chat's key (`machineId/sessionId`, see `chatKey`) rides

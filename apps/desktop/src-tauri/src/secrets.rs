@@ -101,12 +101,22 @@ pub fn clear() -> Result<(), String> {
 /// (`^[0-9a-f-]{36}$`); anything else is refused so an id can never shape
 /// another account name.
 fn machine_user(machine_id: &str) -> Result<String, String> {
+    account("machine", machine_id)
+}
+
+/// The keychain account of a machine's power-switch password.
+fn power_user(machine_id: &str) -> Result<String, String> {
+    account("power", machine_id)
+}
+
+/// `<kind>:<machine-id>`, with the id validated once for every kind of secret.
+fn account(kind: &str, machine_id: &str) -> Result<String, String> {
     let valid = machine_id.len() == 36
         && machine_id
             .bytes()
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b) || b == b'-');
     if valid {
-        Ok(format!("machine:{machine_id}"))
+        Ok(format!("{kind}:{machine_id}"))
     } else {
         Err("machine-id-invalid".into())
     }
@@ -136,6 +146,36 @@ pub fn machine_token_set(machine_id: &str, token: &str) -> Result<(), String> {
 /// Removing a token that is not stored is fine.
 pub fn machine_token_clear(machine_id: &str) -> Result<(), String> {
     machine_token_clear_in(&Keyring, machine_id)
+}
+
+fn power_password_get_from(store: &impl Store, machine_id: &str) -> Result<Option<String>, String> {
+    store.get(SERVICE, &power_user(machine_id)?)
+}
+
+fn power_password_set_in(
+    store: &impl Store,
+    machine_id: &str,
+    password: &str,
+) -> Result<(), String> {
+    store.set(SERVICE, &power_user(machine_id)?, password)
+}
+
+fn power_password_clear_in(store: &impl Store, machine_id: &str) -> Result<(), String> {
+    store.delete(SERVICE, &power_user(machine_id)?)
+}
+
+/// The web password of a machine's Tasmota power switch.
+pub fn power_password_get(machine_id: &str) -> Result<Option<String>, String> {
+    power_password_get_from(&Keyring, machine_id)
+}
+
+pub fn power_password_set(machine_id: &str, password: &str) -> Result<(), String> {
+    power_password_set_in(&Keyring, machine_id, password)
+}
+
+/// Removing a password that is not stored is fine.
+pub fn power_password_clear(machine_id: &str) -> Result<(), String> {
+    power_password_clear_in(&Keyring, machine_id)
 }
 
 #[cfg(test)]
@@ -304,6 +344,38 @@ mod tests {
             assert_eq!(machine_token_get_from(&store, bad), Err(err.clone()));
             assert_eq!(machine_token_set_in(&store, bad, "t"), Err(err.clone()));
             assert_eq!(machine_token_clear_in(&store, bad), Err(err));
+        }
+        assert!(store.entries.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_power_password_round_trips_under_its_own_account() {
+        let store = FakeStore::default();
+        assert_eq!(power_password_get_from(&store, ID), Ok(None));
+        assert_eq!(power_password_set_in(&store, ID, "pw"), Ok(()));
+        assert_eq!(
+            power_password_get_from(&store, ID),
+            Ok(Some("pw".to_string()))
+        );
+        assert_eq!(
+            store.stored_as(SERVICE, &format!("power:{ID}")),
+            Some("pw".to_string())
+        );
+        // A machine's device token is a different account.
+        assert_eq!(machine_token_get_from(&store, ID), Ok(None));
+        assert_eq!(power_password_clear_in(&store, ID), Ok(()));
+        assert_eq!(power_password_get_from(&store, ID), Ok(None));
+        assert_eq!(power_password_clear_in(&store, ID), Ok(()));
+    }
+
+    #[test]
+    fn an_invalid_machine_id_is_refused_for_power_passwords() {
+        let store = FakeStore::default();
+        for bad in ["", "../x", "ABCDEFAB-5a7d-4e2b-9c8a-1d2e3f4a5b6c", "short"] {
+            let err = "machine-id-invalid".to_string();
+            assert_eq!(power_password_get_from(&store, bad), Err(err.clone()));
+            assert_eq!(power_password_set_in(&store, bad, "p"), Err(err.clone()));
+            assert_eq!(power_password_clear_in(&store, bad), Err(err));
         }
         assert!(store.entries.borrow().is_empty());
     }
