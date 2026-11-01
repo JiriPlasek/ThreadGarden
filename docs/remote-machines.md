@@ -482,6 +482,12 @@ and it says so if no rule slot is free. On a Zigbee bridge it also sets
 names a Zigbee device by its address. Remove power control and its rule and
 timer go away again (see 4.4 for what Remove leaves).
 
+One switch powers one machine for now: its one rule slot belongs to that
+machine, even on a Zigbee bridge with several plugs. Setting up a second
+machine on the same switch stops with "This switch already powers ‹machine›";
+remove power control from the first machine, or give the second its own
+switch.
+
 Two more things. Wakes use Tasmota's timers, so Tasmota's global **Timers**
 switch must be on (Configuration → Configure Timer). With it off and a message
 scheduled within the next 7 days, shutdowns stop too, until you turn it back on

@@ -13,6 +13,8 @@ import { ServiceError } from '../server/router.js';
 import { PowerError } from './tasmota.js';
 
 const READING_TTL_MS = 3000;
+/** A standby reading older than this (seconds) never drives a cycle: the PC may have been started since. */
+const FRESH_READING_S = 5;
 
 type Timers = { set(fn: () => void, ms: number): unknown; clear(handle: unknown): void };
 export type PowerHubOptions = {
@@ -29,6 +31,9 @@ export type PowerHubOptions = {
 
 type TurnOnResult = { cycled: boolean; waitMs: number };
 type Pending = { result: TurnOnResult; handle: unknown };
+
+const sameAddress = (a: string, b: string): boolean =>
+  a.trim().toLowerCase() === b.trim().toLowerCase();
 
 const notConfigured = (message = 'No power switch is set up for this machine.') =>
   new PowerError(POWER_ERRORS.notConfigured, message);
@@ -168,6 +173,16 @@ export class PowerHub {
       this.passwords.delete(machineId);
       return null;
     }
+    // One rule slot per switch: a second machine would take over the first one's rule.
+    const other = this.list().find(
+      (p) => p.machineId !== machineId && sameAddress(p.config.address, config.address),
+    );
+    if (other) {
+      throw new PowerError(
+        POWER_ERRORS.conflict,
+        `This switch already powers ${this.machineName(other.machineId)}; Threadgarden supports one machine per switch for now.`,
+      );
+    }
     const pw = password ?? this.passwords.get(machineId);
     if (pw === undefined) throw notConfigured('The switch password is needed to set this up.');
     const old = this.config(machineId);
@@ -179,6 +194,13 @@ export class PowerHub {
     this.passwords.set(machineId, pw);
     this.reset(machineId);
     return config;
+  }
+
+  /** A paired machine's name, else its id. */
+  private machineName(machineId: string): string {
+    const r = this.db.raw.prepare('SELECT name FROM machines WHERE id = ?').get(machineId) as
+      { name: string } | undefined;
+    return r?.name ?? machineId;
   }
 
   /** Best effort, with the stored config and the known password; a no-op when our rule isn't there. */
@@ -244,6 +266,14 @@ export class PowerHub {
 
     if (reading.on) {
       if (reading.watts !== null && reading.watts < config.offWatts) {
+        // A stale standby reading would cycle a PC just started by hand, cutting its power.
+        const age = reading.age ?? null;
+        if (age === null || age > FRESH_READING_S) {
+          throw new PowerError(
+            POWER_ERRORS.unreachable,
+            "Couldn't get a fresh reading from the plug; try again.",
+          );
+        }
         // Standby: cut and restore power, which a PC set to power on after a cut then boots from.
         await sw.cycle();
         await clearWake();

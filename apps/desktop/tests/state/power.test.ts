@@ -458,21 +458,29 @@ describe('PowerState', () => {
     expect(app.power.machine(M1)?.phase).toBe('running');
   });
 
-  it('notes the running draw only when it moved by more than 5 %', async () => {
+  it('notes the lowest running draw: a peak never raises it', async () => {
     plug = { on: true, watts: 46 };
-    const { server } = await start();
+    const { app, server } = await start();
     const running = () =>
       server
         .calls('power.noteMeasurement')
         .filter((c) => (c.params as { kind: string }).kind === 'running')
         .map((c) => (c.params as { watts: number }).watts);
     await vi.waitFor(() => expect(running()).toEqual([46]));
-    plug = { on: true, watts: 47 };
+    plug = { on: true, watts: 120 };
     await vi.advanceTimersByTimeAsync(60_000);
     expect(running()).toEqual([46]);
-    plug = { on: true, watts: 50 };
+    plug = { on: true, watts: 31 };
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(running()).toEqual([46, 50]);
+    expect(running()).toEqual([46, 31]);
+    plug = { on: true, watts: 33 };
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(running()).toEqual([46, 31]);
+    // A plug that reads nothing drawn (cut, the link not yet down) is not a running draw.
+    plug = { on: false, watts: 0 };
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(running()).toEqual([46, 31]);
+    expect(app.power.config(M1)?.measured.running).toBe(31);
   });
 
   it('configure stores the password in the keychain first and restores it when the service refuses', async () => {

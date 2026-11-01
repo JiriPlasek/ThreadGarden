@@ -27,6 +27,8 @@ export const PlugReadingSchema = z.object({
   on: z.boolean().nullable(),
   watts: z.number().nullable(),
   at: z.number(),
+  /** How old the plug's own report is, in seconds (Zigbee `LastSeen`); null when unknown. */
+  age: z.number().nullable().optional(),
 });
 export type PlugReading = z.infer<typeof PlugReadingSchema>;
 

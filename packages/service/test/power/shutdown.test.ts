@@ -2,7 +2,13 @@ import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { EventMsg, MachinePowerStatus, PowerConfig, Unpushed } from '@threadgarden/protocol';
+import type {
+  ChatStatus,
+  EventMsg,
+  MachinePowerStatus,
+  PowerConfig,
+  Unpushed,
+} from '@threadgarden/protocol';
 import { IdleMonitor } from '../../src/power/idle.js';
 import { ruleText } from '../../src/power/rules.js';
 import { ShutdownSequence } from '../../src/power/shutdown.js';
@@ -50,7 +56,7 @@ type RigOptions = {
   poweroff?: () => Promise<void>;
   check?: (d: { cwd: string; sessionId: string | null }[]) => Promise<Unpushed[]>;
   /** The idle monitor's sessions, given what has happened so far. */
-  sessions?: (order: string[]) => { live: boolean; status: 'idle' }[];
+  sessions?: (order: string[]) => { live: boolean; status: ChatStatus; lastActivity?: number }[];
   /** Every command of the first switch made (onStart's) waits this long before it is sent. */
   slowFirstSwitchMs?: number;
   /** While this says true, the switch cannot be reached (no network yet). */
@@ -415,6 +421,47 @@ describe('ShutdownSequence.run', () => {
     expect(r.f.commands.lastIndexOf('Event tgo')).toBeGreaterThan(
       r.f.commands.indexOf('Event tga'),
     );
+  });
+
+  it('a turn that starts while the cut is armed: disarmed again, no poweroff', async () => {
+    const r = await rig({
+      sessions: (order) => (order.includes('Event tga') ? [{ live: true, status: 'working' }] : []),
+    });
+    const s = await r.seq.run({ force: false, reason: 'idle' });
+    expect(s).toMatchObject({ phase: 'running', problem: null });
+    expect(r.order).not.toContain('stopAll');
+    expect(r.order).not.toContain('poweroff');
+    expect(r.f.commands.lastIndexOf('Event tgo')).toBeGreaterThan(
+      r.f.commands.indexOf('Event tga'),
+    );
+  });
+
+  it('a turn that began and ended during the sequence stops it too, and idle starts afresh', async () => {
+    const r = await rig({
+      sessions: (order) =>
+        order.includes('Event tga')
+          ? [{ live: true, status: 'idle', lastActivity: Date.now() + 1 }]
+          : [],
+    });
+    r.idle.tick();
+    const s = await r.seq.run({ force: false, reason: 'manual' });
+    expect(s).toMatchObject({ phase: 'running', problem: null });
+    // Idle counts from the chat's activity: a whole idle period before the next try.
+    expect(s.idleSince).toBeGreaterThanOrEqual(r.clock.now);
+    expect(r.idle.due()).toBe(false);
+    expect(r.order).not.toContain('poweroff');
+    expect(r.f.commands.lastIndexOf('Event tgo')).toBeGreaterThan(
+      r.f.commands.indexOf('Event tga'),
+    );
+  });
+
+  it('a manual shutdown of a machine already at work goes ahead (the owner was asked)', async () => {
+    const r = await rig({
+      sessions: () => [{ live: true, status: 'working', lastActivity: Date.now() + 60_000 }],
+    });
+    const s = await r.seq.run({ force: false, reason: 'manual' });
+    expect(s.phase).toBe('shuttingDown');
+    expect(r.order).toEqual(CLEAN);
   });
 
   it('a run waits for the disarm at start: it never interleaves with a slow switch', async () => {

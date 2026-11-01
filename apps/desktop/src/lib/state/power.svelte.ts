@@ -65,9 +65,8 @@ const plainError = (e: unknown): string => {
   }
 };
 
-/** A running draw worth noting: none stored yet, or more than 5 % away from the stored one. */
-const movedMuch = (stored: number | null, watts: number): boolean =>
-  stored === null || Math.abs(watts - stored) > 0.05 * stored;
+/** A running draw worth noting: the lowest yet (a reading tends to catch a peak, never a dip). */
+const lowest = (stored: number | null, watts: number): boolean => stored === null || watts < stored;
 
 const hasPower = (m: MachineEntry | undefined): boolean =>
   !!m?.info?.capabilities.includes(POWER_CAPABILITY);
@@ -161,6 +160,15 @@ export class PowerState {
       // A closed link says nothing: the notice returns with the link, if the status still holds.
       .filter(([id, s]) => s.phase === 'blocked' && this.machines?.get(id)?.status === 'on')
       .map(([id]) => id);
+
+  /**
+   * Whether a new chat or send may go to machine `id` as far as power goes: not
+   * while it checks for unpushed work or shuts down (a turn started then is cut).
+   */
+  takesWork = (id: string): boolean => {
+    const phase = this.statuses[id]?.phase;
+    return phase !== 'checking' && phase !== 'shuttingDown';
+  };
 
   /** The Needs you count: the chats waiting for you plus one per blocked machine (the one place that adds them). */
   needsYouCount = (chats: number): number => chats + this.blockedIds().length;
@@ -546,7 +554,7 @@ export class PowerState {
     this.schedule();
   };
 
-  /** Learns the PC's running and standby draw from readings (spec §10). */
+  /** Learns the PC's lowest running draw and its standby draw from readings (spec §10). */
   private measure = (id: string, config: PowerConfig, r: PlugReading): void => {
     if (r.watts === null || !this.api) return;
     const link = this.machines?.get(id)?.status;
@@ -558,7 +566,10 @@ export class PowerState {
     } else if (
       link === 'on' &&
       this.statuses[id]?.phase !== 'shuttingDown' &&
-      movedMuch(config.measured.running, r.watts)
+      // A plug that draws nothing is cut (the link has not noticed yet), not running.
+      r.on !== false &&
+      r.watts > 0 &&
+      lowest(config.measured.running, r.watts)
     ) {
       kind = 'running';
     }

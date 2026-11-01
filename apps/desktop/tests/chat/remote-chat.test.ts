@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
+import { POWER_CAPABILITY } from '@threadgarden/protocol';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { routeFileDrop } from '../../src/lib/components/composer/drop';
 import ChatPane from '../../src/lib/components/layout/ChatPane.svelte';
@@ -222,6 +223,54 @@ describe('a new chat on another machine', () => {
     const folder = within(dialog).getByRole('combobox', { name: /folder/i }) as HTMLSelectElement;
     expect(folder.value).toBe('/work/tg-cli');
   });
+
+  it.each(['checking', 'shuttingDown'] as const)(
+    'a machine whose power phase is %s is not offered for a new chat',
+    async (phase) => {
+      const { app, context } = await setupTwoMachines({
+        m1Capabilities: ['remote', POWER_CAPABILITY],
+        configure: (s) => {
+          chatHandlers(s, { cwd: '/work/alpha', title: 'Local' });
+          s.handlers['projects.list'] = () => [project('p1', 'alpha')];
+        },
+        configureRemote: (s) => {
+          chatHandlers(s, { cwd: '/home/jiri', title: 'New' });
+          s.handlers['projects.list'] = () => [project('p9', 'tg-cli')];
+          s.handlers['power.status'] = () => ({
+            configured: true,
+            busy: false,
+            idleSince: null,
+            shutsDownAt: null,
+            keepAwake: { mode: 'off', until: null },
+            phase,
+            unpushed: [],
+            problem: null,
+          });
+        },
+      });
+      try {
+        const ubuntu = app.scopes.get(M1)!;
+        await waitFor(() => expect(ubuntu.places.projects).toHaveLength(1));
+        await waitFor(() => expect(app.power.machine(M1)?.phase).toBe(phase));
+        // Even with its project selected, the dialog opens on This PC and offers only it.
+        app.places.select({ kind: 'project', projectId: 'p9', machineId: M1 });
+        app.interaction.openNewChat();
+        render(NewChatDialog, { context });
+        const dialog = await screen.findByRole('dialog', { name: /new chat/i });
+        const folder = within(dialog).getByRole('combobox', {
+          name: /folder/i,
+        }) as HTMLSelectElement;
+        expect(folder.value).toBe('/work/alpha');
+        const machine = within(dialog).getByRole('combobox', {
+          name: /machine/i,
+        }) as HTMLSelectElement;
+        expect(machine.value).toBe(LOCAL);
+        expect(machine.querySelector(`option[value="${M1}"]`)).toBeNull();
+      } finally {
+        app.power.stop();
+      }
+    },
+  );
 
   it('Ctrl+N with an unreachable machine’s project selected opens on This PC', async () => {
     const { app, context, remote } = await twoMachines();

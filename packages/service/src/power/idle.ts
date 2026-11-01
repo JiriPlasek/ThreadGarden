@@ -56,6 +56,14 @@ export class IdleMonitor {
     this.idleSince = since;
   }
 
+  /** Ticks, then: busy now, or a chat active after `t` (a turn that began, and perhaps ended, since). */
+  activeSince(t: number): boolean {
+    this.tick();
+    return (
+      this.busy || this.o.sessions().some((s) => s.lastActivity !== undefined && s.lastActivity > t)
+    );
+  }
+
   /** The keep awake setting; an `until` that has passed reads as off. */
   get keepAwake(): KeepAwake {
     return this.expired(this.keep) ? OFF : this.keep;

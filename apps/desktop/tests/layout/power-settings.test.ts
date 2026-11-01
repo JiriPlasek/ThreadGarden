@@ -277,7 +277,7 @@ describe('power setup', () => {
       stored: { ...CONFIG, measured: { running: 47, standby: 0 } },
     });
     const text = await within(card).findByText(
-      'Measured: 47 W running, 0 W shut down — suggest off below 12 W',
+      'Measured: 47 W lowest running draw, 0 W shut down — suggest off below 12 W',
     );
     expect(text).toBeTruthy();
     await userEvent.click(within(card).getByRole('button', { name: 'Use' }));

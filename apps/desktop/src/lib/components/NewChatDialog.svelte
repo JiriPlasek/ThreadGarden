@@ -25,7 +25,7 @@
    * starts there and the composer talks to it. The folder picker is This
    * PC's only.
    */
-  const { interaction, places, tabs, settings, scopes, machines } = useApp();
+  const { interaction, places, tabs, settings, scopes, machines, power } = useApp();
 
   /** Ruling R11: Threadgarden never offers bypassPermissions. */
   const PERMISSION_MODES = [
@@ -45,15 +45,18 @@
   let machineId = $state(local.machineId);
   const scope = $derived(scopes.get(machineId) ?? local);
   const onThisPc = $derived(scope === local);
-  /** The machines a chat can start on: those that are on and have their stores. */
+  /**
+   * The machines a chat can start on: those that are on, not checking or
+   * shutting down (`power.takesWork`), and have their stores.
+   */
   const choices = $derived(
     machines.list
-      .filter((m) => m.status === 'on' && scopes.get(m.id))
+      .filter((m) => m.status === 'on' && power.takesWork(m.id) && scopes.get(m.id))
       .map((m) => ({ id: m.id, label: machineLabel(m) })),
   );
-  /** A machine a chat can start on now: it has its stores and is on. */
+  /** A machine a chat can start on now: it has its stores and takes work. */
   const usable = (id: string | null | undefined): id is string =>
-    !!id && !!scopes.get(id) && machines.get(id)?.status === 'on';
+    !!id && !!scopes.get(id) && machines.get(id)?.status === 'on' && power.takesWork(id);
   /**
    * The machine the dialog opens on: the one asked for, else the selected
    * project place's, when it is on; else This PC.

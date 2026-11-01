@@ -283,7 +283,10 @@ export class ShutdownSequence {
     force: boolean;
     reason: 'idle' | 'manual';
   }): Promise<MachinePowerStatus> {
+    const startedAt = this.now();
     this.set({ phase: 'checking', unpushed: [], problem: null });
+    // A machine at work when asked (manual only: idle never is) goes down as asked.
+    const busyAtStart = this.o.idle.busy;
 
     // 1. Work that never reached GitHub, or that could not be checked, keeps the machine on.
     if (!r.force) {
@@ -338,6 +341,14 @@ export class ShutdownSequence {
       // A cut armed before the wake failed must not stay armed on a running machine.
       await disarmQuietly(sw);
       return this.settle({ ...RUNNING, problem });
+    }
+    // A turn that started meanwhile (a message, a scheduled send) was never checked
+    // and would be killed: the machine stays on, and idle starts afresh.
+    if (!busyAtStart && this.o.idle.activeSince(startedAt)) {
+      this.armed = null;
+      this.o.log?.info(`power: ${r.reason} shutdown stopped, a chat got to work meanwhile`);
+      await disarmQuietly(sw);
+      return this.settle(RUNNING);
     }
 
     // 4. Stop the sessions and power off.

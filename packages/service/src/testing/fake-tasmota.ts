@@ -1,8 +1,17 @@
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 
-/** `metering: false` is a device without power metering: no ActivePower in its ZbStatus3. */
-export type FakeDevice = { name: string | null; on: boolean; watts: number; metering?: boolean };
+/**
+ * `metering: false` is a device without power metering: no ActivePower in its ZbStatus3.
+ * `lastSeen`: seconds since the bridge last heard from it (default 3; null leaves it out).
+ */
+export type FakeDevice = {
+  name: string | null;
+  on: boolean;
+  watts: number;
+  metering?: boolean;
+  lastSeen?: number | null;
+};
 
 export type FakeTasmota = {
   /** `127.0.0.1:<port>` */
@@ -209,7 +218,7 @@ export async function startFakeTasmota(o: FakeTasmotaOptions = {}): Promise<Fake
               ...(d.metering === false ? {} : { ActivePower: d.on ? d.watts : 0 }),
               Power: d.on ? 1 : 0,
               Reachable: true,
-              LastSeen: 3,
+              ...(d.lastSeen === null ? {} : { LastSeen: d.lastSeen ?? 3 }),
               LinkQuality: 109,
             },
           ],

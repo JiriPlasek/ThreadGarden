@@ -80,7 +80,7 @@ export const offLineSuggestion = (running: number, standby: number): number | nu
   return watts > 100 ? null : watts;
 };
 
-/** The "off" line between a PC's standby and running draw, a quarter of the way up (spec §10). */
+/** The "off" line between a PC's standby and lowest running draw, a quarter of the way up (spec §10). */
 export const suggestOffWatts = (running: number, standby: number): number =>
   Math.max(2, Math.round(standby + (running - standby) / 4));
 

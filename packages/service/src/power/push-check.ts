@@ -17,8 +17,12 @@ class GitFailure extends Error {
 
 const reasonOf = (e: unknown): string => (e instanceof GitFailure ? e.reason : 'git failed');
 
-const cleanEnv = (): NodeJS.ProcessEnv => {
-  const env = { ...process.env };
+/**
+ * The environment git runs in: no repository forced on it from outside, and the C
+ * locale, so the messages matched below are English in any language.
+ */
+export const cleanEnv = (base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv => {
+  const env: NodeJS.ProcessEnv = { ...base, LC_ALL: 'C', LANGUAGE: '' };
   for (const k of ['GIT_DIR', 'GIT_INDEX_FILE', 'GIT_WORK_TREE']) delete env[k];
   return env;
 };

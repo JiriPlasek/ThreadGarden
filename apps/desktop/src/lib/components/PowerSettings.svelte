@@ -163,7 +163,7 @@
       {#if suggestion !== null}
         <p class="flex flex-wrap items-center gap-2 text-xs">
           <span
-            >Measured: {wattsText(config.measured.running)} running, {wattsText(
+            >Measured: {wattsText(config.measured.running)} lowest running draw, {wattsText(
               config.measured.standby,
             )} shut down — suggest off below {suggestion} W</span
           >

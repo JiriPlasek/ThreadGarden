@@ -3,6 +3,7 @@ import {
   CAPABILITIES,
   PROTOCOL_VERSION,
   POWER_CAPABILITY,
+  PlugReadingSchema,
   PowerConfigSchema,
   SettingsSchema,
   acceptsRemoteProtocol,
@@ -30,6 +31,16 @@ describe('power protocol', () => {
       minOffSeconds: 5,
     });
     expect(r.success).toBe(false);
+  });
+
+  it("a plug reading carries its report's age; one without it (older) still parses", () => {
+    expect(PlugReadingSchema.parse({ on: true, watts: 1.5, at: 1, age: 3 }).age).toBe(3);
+    expect(PlugReadingSchema.parse({ on: true, watts: 1.5, at: 1, age: null }).age).toBeNull();
+    expect(PlugReadingSchema.parse({ on: true, watts: 1.5, at: 1 })).toEqual({
+      on: true,
+      watts: 1.5,
+      at: 1,
+    });
   });
 
   it('has the methods and the event', () => {

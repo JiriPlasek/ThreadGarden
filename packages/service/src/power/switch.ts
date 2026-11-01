@@ -114,14 +114,18 @@ export function createSwitch(
       if (readWaitMs > 0) await sleep(readWaitMs);
       let on: boolean | null = null;
       let watts: number | null = null;
+      // A Wi-Fi plug measures as it answers; a bridge answers from what it last heard.
+      let age: number | null = 0;
       if (isZigbee) {
+        age = null;
         const st = field(await client.command(`ZbStatus3 ${config.device}`), 'ZbStatus3');
         const d = Array.isArray(st)
-          ? (st[0] as { Power?: unknown; ActivePower?: unknown } | undefined)
+          ? (st[0] as { Power?: unknown; ActivePower?: unknown; LastSeen?: unknown } | undefined)
           : undefined;
         if (d && typeof d === 'object') {
           if (typeof d.Power === 'number') on = d.Power === 1;
           if (typeof d.ActivePower === 'number') watts = d.ActivePower;
+          if (typeof d.LastSeen === 'number' && d.LastSeen >= 0) age = d.LastSeen;
         }
       } else {
         const sns = field(await client.command('Status 8'), 'StatusSNS') as
@@ -131,7 +135,7 @@ export function createSwitch(
         const power = field(await client.command('Power'), 'POWER');
         if (typeof power === 'string') on = power.toUpperCase() === 'ON';
       }
-      return { on, watts, at: now() };
+      return { on, watts, at: now(), age };
     },
 
     async setPower(on) {

@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { checkUnpushed } from '../../src/power/push-check.js';
+import { checkUnpushed, cleanEnv } from '../../src/power/push-check.js';
 
 const hasGit = (() => {
   try {
@@ -201,5 +201,26 @@ describe.skipIf(!hasGit)('checkUnpushed', () => {
       { branch: 'feature', count: 1, sessionId: 's0' },
     ]);
     expect(r.filter((x) => x.kind === 'uncommitted')).toHaveLength(1);
+  });
+});
+
+describe('the environment git runs in', () => {
+  it('is the C locale, so its messages are matched in any language', () => {
+    const env = cleanEnv({
+      LANG: 'cs_CZ.UTF-8',
+      LC_ALL: 'cs_CZ.UTF-8',
+      LC_MESSAGES: 'cs_CZ.UTF-8',
+      LANGUAGE: 'cs',
+      GIT_DIR: '/elsewhere/.git',
+      GIT_INDEX_FILE: 'x',
+      GIT_WORK_TREE: '/elsewhere',
+      PATH: '/usr/bin',
+    });
+    expect(env.LC_ALL).toBe('C');
+    expect(env.LANGUAGE).toBe('');
+    expect(env.GIT_DIR).toBeUndefined();
+    expect(env.GIT_INDEX_FILE).toBeUndefined();
+    expect(env.GIT_WORK_TREE).toBeUndefined();
+    expect(env.PATH).toBe('/usr/bin');
   });
 });

@@ -141,6 +141,20 @@ describe('Tasmota switch', () => {
     expect(typeof r.at).toBe('number');
   });
 
+  it("reading says how old the Zigbee plug's report is (LastSeen), null when unknown", async () => {
+    const { f, sw } = await setup();
+    expect(await sw.reading()).toMatchObject({ age: 3 });
+    f.devices.get('0x863B')!.lastSeen = 120;
+    expect(await sw.reading()).toMatchObject({ age: 120 });
+    f.devices.get('0x863B')!.lastSeen = null;
+    expect(await sw.reading()).toMatchObject({ age: null });
+  });
+
+  it("a Wi-Fi plug's reading is always fresh", async () => {
+    const { sw } = await setup({ kind: 'plug' });
+    expect(await sw.reading()).toMatchObject({ age: 0 });
+  });
+
   it('reading on a Wi-Fi plug uses Status 8 and Power', async () => {
     const { f, sw } = await setup({ kind: 'plug' });
     f.devices.get('plug')!.on = false;

@@ -118,6 +118,53 @@ describe('PowerHub', () => {
     expect(f.devices.get('0x863B')!.on).toBe(true);
   });
 
+  it.each([60, null])(
+    'turnOn never cycles on a stale standby reading (LastSeen %s)',
+    async (lastSeen) => {
+      const { f, hub, config } = await setup();
+      await hub.configure('m1', config, 'pw');
+      f.devices.get('0x863B')!.lastSeen = lastSeen;
+      await expect(hub.turnOn('m1')).rejects.toMatchObject({
+        code: 'POWER_UNREACHABLE',
+        message: "Couldn't get a fresh reading from the plug; try again.",
+      });
+      expect(f.commands).not.toContain('Event tgw');
+      expect(f.devices.get('0x863B')!.on).toBe(true);
+    },
+  );
+
+  it('a second machine on the same switch is refused, naming the first', async () => {
+    const { f, hub, config, db } = await setup();
+    db.raw
+      .prepare(
+        'INSERT INTO machines (id, name, address, port, cert_pem, fingerprint, device_id, added_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+      )
+      .run('m1', 'Ubuntu PC', '192.168.1.20', 7443, 'cert', 'fp', 'd1', 1);
+    await hub.configure('m1', config, 'pw');
+    const rule = f.rules[1].text;
+    const before = f.commands.length;
+    await expect(
+      hub.configure('m2', { ...config, device: 'OtherPlug' }, 'pw'),
+    ).rejects.toMatchObject({
+      code: 'POWER_CONFLICT',
+      message:
+        'This switch already powers Ubuntu PC; Threadgarden supports one machine per switch for now.',
+    });
+    expect(f.commands.length).toBe(before);
+    expect(f.rules[1].text).toBe(rule);
+    expect(hub.list().map((p) => p.machineId)).toEqual(['m1']);
+    // A machine this PC no longer knows by name is named by its id.
+    db.raw.prepare('DELETE FROM machines WHERE id = ?').run('m1');
+    await expect(hub.configure('m3', config, 'pw')).rejects.toMatchObject({
+      code: 'POWER_CONFLICT',
+      message: expect.stringMatching(/^This switch already powers m1;/),
+    });
+    // The machine itself may be set up again on its switch.
+    await expect(hub.configure('m1', { ...config, offWatts: 8 })).resolves.toMatchObject({
+      offWatts: 8,
+    });
+  });
+
   it('turnOn while the machine runs sends nothing', async () => {
     const { f, hub, config } = await setup();
     f.devices.get('0x863B')!.watts = 80;
