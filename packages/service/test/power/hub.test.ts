@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { PowerConfig } from '@threadgarden/protocol';
 import { openDb, type Db } from '../../src/history/db.js';
 import { PowerHub } from '../../src/power/hub.js';
@@ -37,6 +37,7 @@ function manualTimers() {
   };
 }
 
+const warnings: string[] = [];
 async function setup(nowMs = 1_000_000_000_000) {
   const f = await startFakeTasmota();
   fakes.push(f);
@@ -48,6 +49,7 @@ async function setup(nowMs = 1_000_000_000_000) {
     readWaitMs: 0,
     now: () => clock.t,
     timers: t.timers,
+    log: { warn: (m: string) => warnings.push(m) },
     pairing: { timeoutMs: 50, pollMs: 10, closePauseMs: 0 },
   });
   const config: PowerConfig = {
@@ -62,6 +64,8 @@ async function setup(nowMs = 1_000_000_000_000) {
   return { f, hub, config, clock, t, db };
 }
 
+const powerOn = (f: FakeTasmota) =>
+  f.commands.some((c) => c.startsWith('ZbSend') && c.includes('"Power":1'));
 const count = (f: FakeTasmota, prefix: string) => f.commands.filter((c) => c.startsWith(prefix)).length;
 
 describe('PowerHub', () => {
@@ -95,8 +99,93 @@ describe('PowerHub', () => {
     expect(await hub.turnOn('m1')).toEqual(r);
     expect(t.scheduled.length).toBe(1);
     t.fire();
-    await new Promise((r) => setTimeout(r, 50));
-    expect(f.commands.some((c) => c.startsWith('ZbSend') && c.includes('"Power":1'))).toBe(true);
+    await vi.waitFor(() => expect(powerOn(f)).toBe(true));
+  });
+
+  async function recentCut(hub: PowerHub, f: FakeTasmota, config: PowerConfig, clock: { t: number }) {
+    f.devices.get('0x863B')!.on = false;
+    await hub.configure('m1', config, 'pw');
+    f.mems[11] = String(Math.floor((clock.t - 30_000) / 1000));
+  }
+  const settle = () => new Promise((r) => setTimeout(r, 20));
+
+  it('two concurrent turnOn from standby cycle once', async () => {
+    const { f, hub, config } = await setup();
+    await hub.configure('m1', config, 'pw');
+    const [a, b] = await Promise.all([hub.turnOn('m1'), hub.turnOn('m1')]);
+    expect(a).toEqual(b);
+    expect(count(f, 'Event tgw')).toBe(1);
+  });
+
+  it('two concurrent turnOn after a recent cut schedule one timer', async () => {
+    const { f, hub, config, clock, t } = await setup();
+    await recentCut(hub, f, config, clock);
+    await Promise.all([hub.turnOn('m1'), hub.turnOn('m1')]);
+    expect(t.scheduled.length).toBe(1);
+  });
+
+  it('configure(null) during an in-flight turnOn schedules nothing', async () => {
+    const { f, hub, config, clock, t } = await setup();
+    await recentCut(hub, f, config, clock);
+    const turning = hub.turnOn('m1');
+    await hub.configure('m1', null);
+    await turning.catch(() => {});
+    t.fire();
+    await settle();
+    expect(t.scheduled.filter((x) => x.live).length).toBe(0);
+    expect(powerOn(f)).toBe(false);
+  });
+
+  it('configure(null) during a pending wait cancels it', async () => {
+    const { f, hub, config, clock, t } = await setup();
+    await recentCut(hub, f, config, clock);
+    await hub.turnOn('m1');
+    await hub.configure('m1', null);
+    t.fire();
+    await settle();
+    expect(powerOn(f)).toBe(false);
+  });
+
+  it('close() cancels a pending wait', async () => {
+    const { f, hub, config, clock, t } = await setup();
+    await recentCut(hub, f, config, clock);
+    await hub.turnOn('m1');
+    hub.close();
+    t.fire();
+    await settle();
+    expect(powerOn(f)).toBe(false);
+  });
+
+  it('configure(null) removes the config even when the switch is unreachable', async () => {
+    const { f, hub, config } = await setup();
+    await hub.configure('m1', config, 'pw');
+    await f.close();
+    await expect(hub.configure('m1', null)).resolves.toBeNull();
+    expect(hub.list()).toEqual([]);
+    expect(warnings.some((w) => w.includes('POWER_'))).toBe(true);
+    expect(warnings.join()).not.toContain('"pw"');
+  });
+
+  it('a failed delayed switch-on is logged by code', async () => {
+    const { f, hub, config, clock, t } = await setup();
+    await recentCut(hub, f, config, clock);
+    await hub.turnOn('m1');
+    warnings.length = 0;
+    await f.close();
+    t.fire();
+    await vi.waitFor(() => expect(warnings.some((w) => w.includes('POWER_'))).toBe(true));
+  });
+
+  it('reconfiguring to another address uninstalls from the old switch', async () => {
+    const { f, hub, config } = await setup();
+    const g = await startFakeTasmota();
+    fakes.push(g);
+    await hub.configure('m1', config, 'pw');
+    expect(f.rules[1].text).not.toBe('');
+    await hub.configure('m1', { ...config, address: g.address });
+    expect(f.rules[1].text).toBe('');
+    expect(g.rules[1].text).not.toBe('');
+    expect(hub.list()[0]!.config.address).toBe(g.address);
   });
 
   it('turnOn when off long ago switches on at once', async () => {

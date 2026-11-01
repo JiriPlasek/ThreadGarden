@@ -239,6 +239,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   /** Threadgarden's optional API key (§5.5): in memory only, never logged or stored. */
   let apiKey: string | null = null;
   let db: Db | undefined;
+  let power: PowerHub | undefined;
   let host: SessionHost | undefined;
   let indexing = { done: 0, total: 0 };
   let indexer: Indexer | undefined;
@@ -431,7 +432,8 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         emitLocal: (e) => server?.broadcast(e),
       });
       // Power switches of the paired machines (v1.4): local only, never polled.
-      registerPowerClientHandlers(router, { hub: new PowerHub(opened) });
+      power = new PowerHub(opened, { log: { warn: (m) => log.warn(m) } });
+      registerPowerClientHandlers(router, { hub: power });
     }
     const found = claude.current;
     noteProblem(found);
@@ -782,6 +784,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     await step('indexer', () => indexer?.stop());
     await step('remote server', () => remote?.close());
     await step('relay', () => relay?.close());
+    await step('power', () => power?.close());
     await step('server', () => server?.close());
     await step('database', () => db?.close());
     await step('lock', () => lock.release());
@@ -855,6 +858,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
           await remote?.close();
         });
         await step('relay', () => relay?.close());
+        await step('power', () => power?.close());
         await step('server', () => wsServer.close());
         await step('discovery', () => removeDiscovery(dataDir));
         await step('database', () => db?.close());
