@@ -1,4 +1,4 @@
-import { chmodSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { PowerConfigSchema, type PowerConfig } from '@threadgarden/protocol';
 import { z } from 'zod';
@@ -39,12 +39,16 @@ export class PowerStore {
   save(config: PowerConfig | null, password?: string): void {
     if (config === null) {
       rmSync(this.file, { force: true });
+      rmSync(`${this.file}.tmp`, { force: true });
       return;
     }
     const pw = password ?? this.load()?.password;
     if (pw === undefined) throw new Error('A power configuration needs a password');
-    writeFileSync(this.file, JSON.stringify({ config, password: pw }), { mode: 0o600 });
+    // Written beside the file and renamed over it: a crash never leaves half a file.
+    const tmp = `${this.file}.tmp`;
+    writeFileSync(tmp, JSON.stringify({ config, password: pw }), { mode: 0o600 });
     // `mode` only applies to a new file; an existing one keeps its old mode.
-    if (process.platform !== 'win32') chmodSync(this.file, 0o600);
+    if (process.platform !== 'win32') chmodSync(tmp, 0o600);
+    renameSync(tmp, this.file);
   }
 }

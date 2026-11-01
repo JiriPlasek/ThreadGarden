@@ -6,6 +6,7 @@
 import {
   POWER_ERRORS,
   PowerConfigSchema,
+  type KeepAwake,
   type MachinePowerStatus,
 } from '@threadgarden/protocol';
 import type { PowerHub } from '../../power/hub.js';
@@ -55,6 +56,8 @@ export type PowerMachineDeps = {
   store: PowerStore;
   idle: IdleMonitor;
   emit: (e: { event: 'power.changed'; data: MachinePowerStatus }) => void;
+  /** Called with the keep awake setting after each change, to keep it across restarts. */
+  persistKeepAwake?: (k: KeepAwake) => void;
 };
 
 /**
@@ -68,7 +71,6 @@ export const registerPowerMachineHandlers = (
   deps: PowerMachineDeps,
 ): { status: () => MachinePowerStatus; notify: () => void } => {
   const { store, idle } = deps;
-  let last = '';
 
   const status = (): MachinePowerStatus => {
     idle.tick();
@@ -83,6 +85,7 @@ export const registerPowerMachineHandlers = (
       problem: null,
     };
   };
+  let last = JSON.stringify(status());
   const announce = (): MachinePowerStatus => {
     const s = status();
     last = JSON.stringify(s);
@@ -93,11 +96,8 @@ export const registerPowerMachineHandlers = (
     if (JSON.stringify(status()) !== last) announce();
   };
 
-  router.register('power.status', async () => {
-    const s = status();
-    last = JSON.stringify(s);
-    return s;
-  });
+  // A read that finds a change announces it too: other clients must not miss it.
+  router.register('power.status', async () => (JSON.stringify(status()) === last ? status() : announce()));
   router.register('power.adopt', async (p) => {
     if (p.config === null) {
       store.save(null);
@@ -114,6 +114,7 @@ export const registerPowerMachineHandlers = (
   });
   router.register('power.keepAwake', async (p) => {
     idle.setKeepAwake(p);
+    deps.persistKeepAwake?.(idle.keepAwake);
     return announce();
   });
   return { status, notify };

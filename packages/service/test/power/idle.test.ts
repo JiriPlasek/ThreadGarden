@@ -10,8 +10,8 @@ import { Router } from '../../src/server/router.js';
 import { startService } from '../../src/main.js';
 import { generateCorpus } from '../../src/testing/corpus.js';
 
-type S = { live: boolean; status: ChatStatus; runningTasks?: number };
-type E = { status?: 'busy' | 'waiting' | 'idle' };
+type S = { live: boolean; status: ChatStatus; runningAgents?: number; lastActivity?: number };
+type E = { status?: string; state?: string };
 
 const MIN = 60_000;
 
@@ -39,7 +39,7 @@ describe('idle: what is busy', () => {
     expect(m.busy).toBe(false);
     expect(m.idleSince).toBe(s.now);
 
-    s.sessions = [{ live: true, status: 'needsYou', runningTasks: 1 }];
+    s.sessions = [{ live: true, status: 'needsYou', runningAgents: 1 }];
     m.tick();
     expect(m.busy).toBe(true);
     expect(m.idleSince).toBeNull();
@@ -52,7 +52,7 @@ describe('idle: what is busy', () => {
     m.tick();
     expect(m.busy).toBe(false);
 
-    s.sessions = [{ live: false, status: 'working', runningTasks: 2 }];
+    s.sessions = [{ live: false, status: 'working', runningAgents: 2 }];
     m.tick();
     expect(m.busy).toBe(true);
 
@@ -125,12 +125,120 @@ describe('idle: when it is due', () => {
     expect(m.keepAwake).toEqual({ mode: 'until', until: s.now + 10 * MIN });
     s.now += 10 * MIN;
     expect(m.keepAwake).toEqual({ mode: 'off', until: null });
+    expect(m.due()).toBe(false); // idle starts fresh when keep awake ends
+    s.now += 60 * MIN;
     expect(m.due()).toBe(true);
 
     m.setKeepAwake({ mode: 'until', until: s.now - 1 });
     expect(m.keepAwake).toEqual({ mode: 'off', until: null });
     m.setKeepAwake({ mode: 'until', until: null });
     expect(m.keepAwake).toEqual({ mode: 'off', until: null });
+  });
+});
+
+describe('idle: fix round 1', () => {
+  it('a turn between ticks pushes the shutdown out (lastActivity)', () => {
+    const { s, m } = rig();
+    m.tick();
+    const since = m.idleSince!;
+    s.now += 30 * MIN;
+    s.sessions = [{ live: true, status: 'idle', lastActivity: s.now - 5_000 }];
+    m.tick();
+    expect(m.busy).toBe(false);
+    expect(m.idleSince).toBe(s.now - 5_000);
+    expect(m.shutsDownAt()).toBe(s.now - 5_000 + 60 * MIN);
+    expect(m.idleSince!).toBeGreaterThan(since);
+    // an old activity changes nothing
+    s.sessions = [{ live: true, status: 'idle', lastActivity: since - 1 }];
+    m.tick();
+    expect(m.idleSince).toBe(s.now - 5_000);
+  });
+
+  it("an external session in state 'working' is busy", () => {
+    const { s, m } = rig();
+    s.external = [{ state: 'working' }];
+    m.tick();
+    expect(m.busy).toBe(true);
+    s.external = [{ state: 'done' }];
+    m.tick();
+    expect(m.busy).toBe(false);
+  });
+
+  it('only running agents keep it busy, not shells', () => {
+    const { s, m } = rig();
+    // the host reports no runningAgents for a chat that has only a shell task
+    s.sessions = [{ live: true, status: 'needsYou' }];
+    m.tick();
+    expect(m.busy).toBe(false);
+    s.sessions = [{ live: true, status: 'needsYou', runningAgents: 1 }];
+    m.tick();
+    expect(m.busy).toBe(true);
+  });
+
+  it('keep awake survives a restart; an expired until restores as off', () => {
+    const { s, m } = rig();
+    m.restoreKeepAwake({ mode: 'always', until: null });
+    expect(m.keepAwake).toEqual({ mode: 'always', until: null });
+    m.restoreKeepAwake({ mode: 'until', until: s.now + MIN });
+    expect(m.keepAwake.mode).toBe('until');
+    m.restoreKeepAwake({ mode: 'until', until: s.now - 1 });
+    expect(m.keepAwake.mode).toBe('off');
+    m.restoreKeepAwake('junk');
+    expect(m.keepAwake.mode).toBe('off');
+  });
+
+  it('when keep awake ends, idle starts fresh', () => {
+    const { s, m } = rig();
+    m.tick();
+    m.setKeepAwake({ mode: 'always', until: null });
+    s.now += 120 * MIN;
+    m.tick();
+    m.setKeepAwake({ mode: 'off', until: null });
+    expect(m.due()).toBe(false);
+    expect(m.shutsDownAt()).toBe(s.now + 60 * MIN);
+    s.now += 59 * MIN;
+    expect(m.due()).toBe(false);
+    s.now += MIN;
+    expect(m.due()).toBe(true);
+  });
+
+  it('when keep awake runs out, idle starts at that moment', () => {
+    const { s, m } = rig();
+    m.tick();
+    const until = s.now + 90 * MIN;
+    m.setKeepAwake({ mode: 'until', until });
+    s.now += 100 * MIN;
+    m.tick();
+    expect(m.shutsDownAt()).toBe(until + 60 * MIN);
+    expect(m.due()).toBe(false);
+    s.now = until + 60 * MIN;
+    expect(m.due()).toBe(true);
+  });
+});
+
+describe('machine power handlers', () => {
+  it('power.status announces a change that notify would otherwise miss, once', async () => {
+    const { m } = rig();
+    const events: EventMsg[] = [];
+    const router = new Router({ debug() {}, info() {}, warn() {}, error() {} } as never);
+    const dir = await mkdtemp(join(tmpdir(), 'threadgarden-power-notify-'));
+    try {
+      const handlers = registerPowerMachineHandlers(router, {
+        store: new PowerStore(dir),
+        idle: m,
+        emit: (e) => events.push(e),
+      });
+      m.setKeepAwake({ mode: 'always', until: null });
+      const res = (await router.dispatch(
+        { id: 1, method: 'power.status', params: {} } as never,
+        { clientId: 'p', origin: 'remote', deviceId: 'd' } as never,
+      )) as { result: unknown };
+      expect(events).toEqual([{ event: 'power.changed', data: res.result }]);
+      handlers.notify();
+      expect(events.length).toBe(1);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -208,6 +316,19 @@ describe('power on a service', () => {
       ...(headless ? { remote: { addresses: ['127.0.0.1'], port: 0 } } : {}),
       logger: { debug() {}, info() {}, warn() {}, error() {}, flush: async () => {} },
     });
+
+  it('keep awake survives a service restart', async () => {
+    const status = async (svc: Awaited<ReturnType<typeof start>>, method: string, params: unknown) =>
+      (await svc.router.dispatch({ id: 1, method, params } as never, { clientId: 't', origin: 'local' })) as {
+        result: { keepAwake: unknown };
+      };
+    const a = await start(true);
+    await status(a, 'power.keepAwake', { mode: 'always', until: null });
+    await a.close();
+    const b = await start(true);
+    expect((await status(b, 'power.status', {})).result.keepAwake).toEqual({ mode: 'always', until: null });
+    await b.close();
+  });
 
   it('capabilities include power only when headless', async () => {
     const hello = async (svc: Awaited<ReturnType<typeof start>>) =>

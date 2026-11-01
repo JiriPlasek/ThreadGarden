@@ -46,6 +46,16 @@ describe('PowerStore', () => {
     store.save(null); // nothing to delete is fine
   });
 
+  it('writes atomically: no .tmp is left, and a leftover one does not break load', () => {
+    const store = new PowerStore(dir);
+    writeFileSync(join(dir, 'power-switch.json.tmp'), '{half');
+    expect(store.load()).toBeNull();
+    store.save(config, 'pw');
+    expect(existsSync(join(dir, 'power-switch.json.tmp'))).toBe(false);
+    writeFileSync(join(dir, 'power-switch.json.tmp'), '{half');
+    expect(store.load()).toEqual({ config, password: 'pw' });
+  });
+
   it('treats a corrupt file as not configured', () => {
     writeFileSync(join(dir, 'power-switch.json'), '{nope');
     expect(new PowerStore(dir).load()).toBeNull();

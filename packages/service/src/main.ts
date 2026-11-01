@@ -66,6 +66,7 @@ export const IDLE_EXIT_MS = 30 * 60_000;
  */
 const IDLE_CHECK_MS = 60_000;
 /** A chat in a turn (working, waiting on the user): its next scheduled send waits (v1.3 B). */
+const KEEP_AWAKE_KEY = 'power.keepAwake';
 const IN_TURN: ReadonlySet<ChatStatus> = new Set(['working', 'needsYou', 'unknown']);
 /** Said in a chat whose scheduled message was due while the service was not running. */
 export const LATE_NOTE =
@@ -261,13 +262,15 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   let poller: ExternalPoller | undefined;
   let projectOrder: ProjectOrderNotifier | undefined;
   /** Idle tracking for idle shutdown (a headless machine's power control). */
-  const idle = new IdleMonitor({
-    sessions: () => host?.list() ?? [],
-    external: () => (opts.externals ?? (() => poller?.snapshot() ?? []))(),
-    // null is "never"; 60 until the database is open.
-    minutes: () => (db ? db.getSettings().idleShutdownMinutes : 60),
-    now: clock,
-  });
+  const idle = headless
+    ? new IdleMonitor({
+        sessions: () => host?.list() ?? [],
+        external: () => (opts.externals ?? (() => poller?.snapshot() ?? []))(),
+        // null is "never"; 60 until the database is open.
+        minutes: () => (db ? db.getSettings().idleShutdownMinutes : 60),
+        now: clock,
+      })
+    : undefined;
   let powerMachine: ReturnType<typeof registerPowerMachineHandlers> | undefined;
   let buckets: Buckets | undefined;
   let titles: ChatTitles | undefined;
@@ -451,11 +454,14 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       power = new PowerHub(opened, { log: { warn: (m) => log.warn(m) } });
       registerPowerClientHandlers(router, { hub: power });
       // This machine's own power control: open to paired devices, announced to all.
-      if (headless) {
+      if (idle) {
+        // Keep awake outlives a restart (an expired `until` comes back as off).
+        idle.restoreKeepAwake(opened.getUiState(KEEP_AWAKE_KEY));
         powerMachine = registerPowerMachineHandlers(router, {
           store: new PowerStore(dataDir),
           idle,
           emit: (e) => broadcastRef.fn(e),
+          persistKeepAwake: (k) => opened.setUiState(KEEP_AWAKE_KEY, k),
         });
       }
     }
@@ -910,8 +916,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     checkScheduled();
     followAddresses();
     try {
-      if (powerMachine) powerMachine.notify();
-      else idle.tick();
+      powerMachine?.notify();
     } catch (err) {
       log.error(`idle tracking: ${errorText(err)}`);
     }

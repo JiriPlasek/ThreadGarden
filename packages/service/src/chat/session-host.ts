@@ -230,11 +230,14 @@ export class SessionHost {
     waitingFor?: string;
     lastActivity?: number;
     runningTasks?: number;
+    /** `runningTasks` without background shells. */
+    runningAgents?: number;
   }[] {
     return [...this.sessions.values()].map((s) => {
       const waitingFor = s.waitingFor();
       const lastActivity = s.lastActivity;
       const runningTasks = s.live ? s.runningTasks : 0;
+      const runningAgents = s.live ? s.runningAgents : 0;
       return {
         sessionId: s.sessionId,
         cwd: s.cwd,
@@ -243,6 +246,7 @@ export class SessionHost {
         ...(waitingFor === undefined ? {} : { waitingFor }),
         ...(lastActivity === null ? {} : { lastActivity }),
         ...(runningTasks > 0 ? { runningTasks } : {}),
+        ...(runningAgents > 0 ? { runningAgents } : {}),
       };
     });
   }
