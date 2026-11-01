@@ -5,12 +5,14 @@ name: Release
 # into a draft release, then the update manifest and checksums, and only when
 # all of that succeeded, publishing. A failure leaves a draft, never a half release.
 #
-# "Run workflow" (dry_run) rehearses everything on a branch and deletes the
-# draft at the end instead of publishing.
+# "Run workflow" (dry_run), or pushing a commit to the branch
+# `release-rehearsal`, rehearses everything and deletes the draft at the end
+# instead of publishing.
 
 on:
   push:
     tags: ['v*']
+    branches: [release-rehearsal]
   workflow_dispatch:
     inputs:
       dry_run:
@@ -38,7 +40,11 @@ jobs:
         name: The tag must match the version in the repository
         run: |
           version=$(node -p "require('./package.json').version")
-          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+          if grep -q 'REPLACE_WITH' apps/desktop/src-tauri/tauri.conf.json; then
+            echo "::error::The updater's public key is still a placeholder (docs/releasing.md, 'Once: the signing key')."
+            exit 1
+          fi
+          if [ "$GITHUB_EVENT_NAME" = "push" ] && [ "$GITHUB_REF_TYPE" = "tag" ]; then
             if [ "$GITHUB_REF_NAME" != "v$version" ]; then
               echo "::error::Tag $GITHUB_REF_NAME does not match the repository version $version (run pnpm release:version first)."
               exit 1
@@ -46,7 +52,7 @@ jobs:
             tag="v$version"; publish=true
           else
             tag="v$version-dryrun-${GITHUB_SHA::7}"
-            publish=$([ "${{ inputs.dry_run }}" = "false" ] && echo true || echo false)
+            publish=$([ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "${{ inputs.dry_run }}" = "false" ] && echo true || echo false)
             if [ "$publish" = "true" ]; then
               echo "::error::Publish only by pushing a tag; manual runs are rehearsals."
               exit 1

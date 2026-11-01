@@ -37,7 +37,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "REPLACE_WITH_THE_OWNERS_PUBLIC_KEY",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDA2ODhGQTdCNTY1MTk4OTEKUldTUm1GRldlL3FJQml6M3FES25XZUZKREtkVzlSZVYrbytJalhabEQ1WVpwSUh1bFlOQTNhaEsK",
       "endpoints": [
         "https://github.com/JiriPlasek/ThreadGarden/releases/latest/download/latest.json"
       ],

@@ -68,3 +68,8 @@ terminal:
 ```sh
 gh workflow run release.yml --ref <branch> -f dry_run=true
 ```
+
+A workflow can only be started by hand once it exists on `main`. To rehearse
+a branch that changes the workflow itself, push it to the branch
+`release-rehearsal` instead (`git push origin <branch>:release-rehearsal`);
+every push there runs a rehearsal. Delete that branch afterwards.
