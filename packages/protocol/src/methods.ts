@@ -20,6 +20,14 @@ import {
   MachinePortSchema,
   PairedMachineSchema,
 } from './machines.js';
+import {
+  KeepAwakeSchema,
+  MachinePowerStatusSchema,
+  PlugReadingSchema,
+  PowerConfigSchema,
+  ProbeResultSchema,
+  SwitchDeviceSchema,
+} from './power.js';
 import { ChatTaskSchema } from './tasks.js';
 import { ScheduledSendSchema, UsageStateSchema } from './usage.js';
 
@@ -27,6 +35,9 @@ const empty = z.object({});
 const sessionIdOnly = z.object({ sessionId: z.string() });
 const setValue = z.object({ sessionId: z.string(), value: z.string() });
 const lookupScope = z.object({ sessionId: z.string().optional(), cwd: z.string().optional() });
+
+const machineIdOnly = z.object({ machineId: z.string() });
+const powerAuth = z.object({ address: z.string().min(1), password: z.string() });
 
 const scheduledId = z.object({ id: z.string() });
 /** A scheduled send's time: a moment, or when the usage limit resets (plus a margin). */
@@ -415,6 +426,41 @@ export const methods = {
     z.object({ range: AnalyticsRangeSchema, projectId: z.string().optional() }),
     AnalyticsSchema,
   ),
+  // ── power (protocol 6) ─────────────────────────────────────────────────────
+  // Client side, local only: the switch is reached from the desktop's service.
+  /** Reads the Tasmota switch at `address`: version, kind, devices. Errors: `POWER_*`. */
+  'power.probe': def(powerAuth, ProbeResultSchema),
+  /** Opens Zigbee pairing and waits at most 60 s for a plug to join; null when none did. */
+  'power.pairPlug': def(powerAuth, SwitchDeviceSchema.nullable()),
+  /** Stores (or with null, clears) a machine's switch configuration; the password goes to the keychain. */
+  'power.configure': def(
+    z.object({
+      machineId: z.string(),
+      config: PowerConfigSchema.nullable(),
+      password: z.string().optional(),
+    }),
+    PowerConfigSchema.nullable(),
+  ),
+  /** Hands over a machine's switch password (from the keychain) at unlock. */
+  'power.unlock': def(z.object({ machineId: z.string(), password: z.string() }), empty),
+  'power.list': def(empty, z.array(z.object({ machineId: z.string(), config: PowerConfigSchema }))),
+  'power.reading': def(machineIdOnly, PlugReadingSchema),
+  /** Turns the machine on; `cycled`: it had to cut and restore power first. */
+  'power.turnOn': def(machineIdOnly, z.object({ cycled: z.boolean(), waitMs: z.number() })),
+  'power.rename': def(powerAuth.extend({ id: z.string(), name: z.string() }), empty),
+  'power.noteMeasurement': def(
+    z.object({ machineId: z.string(), kind: z.enum(['running', 'standby']), watts: z.number() }),
+    empty,
+  ),
+  // Machine side, open to paired devices.
+  /** Hands the machine its switch configuration (null clears it) and password. */
+  'power.adopt': def(
+    z.object({ config: PowerConfigSchema.nullable(), password: z.string().optional() }),
+    empty,
+  ),
+  'power.status': def(empty, MachinePowerStatusSchema),
+  'power.keepAwake': def(KeepAwakeSchema, MachinePowerStatusSchema),
+  'power.shutdown': def(z.object({ force: z.boolean() }), MachinePowerStatusSchema),
 } as const;
 
 export type MethodName = keyof typeof methods;
