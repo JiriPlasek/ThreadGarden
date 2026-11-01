@@ -36,7 +36,7 @@ describe.skipIf(!hasGit)('checkUnpushed', () => {
   let repo: string;
 
   beforeEach(() => {
-    root = realpathSync(mkdtempSync(join(tmpdir(), 'tg-push-')));
+    root = realpathSync.native(mkdtempSync(join(tmpdir(), 'tg-push-')));
     const bare = join(root, 'remote.git');
     repo = join(root, 'work');
     mkdirSync(bare);
@@ -62,7 +62,7 @@ describe.skipIf(!hasGit)('checkUnpushed', () => {
   it('an untracked file is uncommitted work', async () => {
     writeFileSync(join(repo, 'new.txt'), 'x');
     expect(await check(repo)).toEqual([
-      { repo, branch: null, kind: 'uncommitted', count: 1, sessionId: 's0' },
+      { repo, branch: null, kind: 'uncommitted', count: 1, sessionId: 's0', reason: null },
     ]);
   });
 
@@ -75,7 +75,7 @@ describe.skipIf(!hasGit)('checkUnpushed', () => {
     writeFileSync(join(repo, 'a.txt'), 'b\n');
     git(repo, 'commit', '-am', 'more');
     expect(await check(repo)).toEqual([
-      { repo, branch: 'main', kind: 'unpushed', count: 1, sessionId: 's0' },
+      { repo, branch: 'main', kind: 'unpushed', count: 1, sessionId: 's0', reason: null },
     ]);
   });
 
@@ -115,20 +115,82 @@ describe.skipIf(!hasGit)('checkUnpushed', () => {
     expect(r).toMatchObject([{ kind: 'uncommitted', count: 1 }]);
   });
 
-  it('a git failure skips only that directory', async () => {
+  const failing = (op: string) => async (args: string[], cwd: string) => {
+    if (args.includes(op)) throw new Error('boom');
+    return git(cwd, ...args);
+  };
+
+  it('a failing status is unchecked, never clean', async () => {
+    const r = await checkUnpushed([{ cwd: repo, sessionId: 's0' }], { git: failing('status') });
+    expect(r).toEqual([
+      { repo, branch: null, kind: 'unchecked', count: 0, sessionId: 's0', reason: 'git failed' },
+    ]);
+  });
+
+  it('a failing rev-list is unchecked and keeps findings already gathered', async () => {
     writeFileSync(join(repo, 'new.txt'), 'x');
-    const r = await checkUnpushed(
-      [
-        { cwd: 'bad', sessionId: null },
-        { cwd: repo, sessionId: null },
-      ],
-      {
-        git: async (args, cwd) => {
-          if (cwd === 'bad') throw new Error('boom');
-          return git(cwd, ...args);
-        },
-      },
-    );
-    expect(r).toHaveLength(1);
+    const r = await checkUnpushed([{ cwd: repo, sessionId: null }], { git: failing('rev-list') });
+    expect(r.map((x) => x.kind).sort()).toEqual(['unchecked', 'uncommitted']);
+  });
+
+  it('a directory where git fails for another reason is unchecked, not skipped', async () => {
+    const r = await checkUnpushed([{ cwd: repo, sessionId: null }], { git: failing('--show-toplevel') });
+    expect(r).toMatchObject([{ repo, kind: 'unchecked' }]);
+  });
+
+  it('a tag named like a branch does not hide its commits', async () => {
+    git(repo, 'tag', 'feature');
+    git(repo, 'checkout', '-b', 'feature');
+    writeFileSync(join(repo, 'f.txt'), 'f\n');
+    git(repo, 'add', '.');
+    git(repo, 'commit', '-m', 'f');
+    const r = await check(repo);
+    expect(r).toMatchObject([{ branch: 'feature', kind: 'unpushed', count: 1 }]);
+  });
+
+  it('commits on a detached HEAD are unpushed work', async () => {
+    git(repo, 'checkout', '--detach');
+    writeFileSync(join(repo, 'd.txt'), 'd\n');
+    git(repo, 'add', '.');
+    git(repo, 'commit', '-m', 'd');
+    const r = await check(repo);
+    expect(r).toMatchObject([{ branch: null, kind: 'unpushed', count: 1 }]);
+  });
+
+  it('stashed changes are work', async () => {
+    writeFileSync(join(repo, 'a.txt'), 'changed\n');
+    git(repo, 'stash');
+    const r = await check(repo);
+    expect(r).toEqual([
+      { repo, branch: null, kind: 'uncommitted', count: 1, sessionId: 's0', reason: 'stashed changes' },
+    ]);
+  });
+
+  it('a remote with no fetched refs leaves every commit unpushed', async () => {
+    const other = join(root, 'other');
+    mkdirSync(other);
+    git(other, 'init', '--initial-branch=main');
+    writeFileSync(join(other, 'x.txt'), 'x');
+    git(other, 'add', '.');
+    git(other, 'commit', '-m', 'x');
+    git(other, 'remote', 'add', 'origin', join(root, 'nowhere.git'));
+    const r = await check(other);
+    expect(r).toMatchObject([{ branch: 'main', kind: 'unpushed', count: 1 }]);
+  });
+
+  it('a branch shared by worktrees is reported once, uncommitted stays per worktree', async () => {
+    git(repo, 'checkout', '-b', 'feature');
+    writeFileSync(join(repo, 'f.txt'), 'f\n');
+    git(repo, 'add', '.');
+    git(repo, 'commit', '-m', 'f');
+    git(repo, 'checkout', 'main');
+    const wt = join(root, 'wt');
+    git(repo, 'worktree', 'add', wt, 'feature');
+    writeFileSync(join(wt, 'dirty.txt'), 'x');
+    const r = await check(wt, repo);
+    expect(r.filter((x) => x.kind === 'unpushed')).toMatchObject([
+      { branch: 'feature', count: 1, sessionId: 's0' },
+    ]);
+    expect(r.filter((x) => x.kind === 'uncommitted')).toHaveLength(1);
   });
 });

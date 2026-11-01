@@ -50,9 +50,11 @@ export type ProbeResult = z.infer<typeof ProbeResultSchema>;
 export const UnpushedSchema = z.object({
   repo: z.string(),
   branch: z.string().nullable(),
-  kind: z.enum(['uncommitted', 'unpushed']),
+  kind: z.enum(['uncommitted', 'unpushed', 'unchecked']),
   count: z.number().int(),
   sessionId: z.string().nullable(),
+  /** A short plain reason ("git timed out"); never anything secret. */
+  reason: z.string().nullable().default(null),
 });
 export type Unpushed = z.infer<typeof UnpushedSchema>;
 
