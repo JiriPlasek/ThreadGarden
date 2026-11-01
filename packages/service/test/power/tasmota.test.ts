@@ -117,4 +117,36 @@ describe('fake Tasmota', () => {
     await c.command('Timer16 {"Enable":1,"Time":"02:55"}');
     expect(f.timers[16]).toMatchObject({ Enable: 1, Time: '02:55' });
   });
+
+  it('Timer normalises relaxed, differently-cased keys', async () => {
+    const f = await fake();
+    const c = new TasmotaClient({ address: f.address, password: 'pw' });
+    await c.command('Timer16 {enable:1,TIME:"02:55",days:"0100000",ACTION:3}');
+    expect(f.timers[16]).toEqual({
+      Enable: 1,
+      Mode: 0,
+      Time: '02:55',
+      Window: 0,
+      Days: '0100000',
+      Repeat: 0,
+      Action: 3,
+    });
+  });
+
+  it('Timer with bad JSON answers an error and changes nothing', async () => {
+    const f = await fake();
+    const c = new TasmotaClient({ address: f.address, password: 'pw' });
+    expect(await c.command('Timer16 {oops')).toEqual({ Timer16: 'Error' });
+    expect(f.timers[16]).toBeUndefined();
+  });
+
+  it('Timer<n> 0 and 1 disable and enable', async () => {
+    const f = await fake();
+    const c = new TasmotaClient({ address: f.address, password: 'pw' });
+    await c.command('Timer16 {"Enable":1,"Time":"01:00"}');
+    await c.command('Timer16 0');
+    expect(f.timers[16]).toMatchObject({ Enable: 0, Time: '01:00' });
+    await c.command('Timer16 1');
+    expect(f.timers[16]).toMatchObject({ Enable: 1 });
+  });
 });

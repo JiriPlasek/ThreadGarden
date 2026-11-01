@@ -37,6 +37,11 @@ const DEFAULT_TIMER = {
   Action: 0,
 };
 
+/** Tasmota matches timer keys case-insensitively; the stored form is canonical. */
+const TIMER_KEYS: Record<string, string> = Object.fromEntries(
+  Object.keys(DEFAULT_TIMER).map((k) => [k.toLowerCase(), k]),
+);
+
 /** Splits on `;` outside braces, so JSON arguments survive. */
 function splitBacklog(s: string): string[] {
   const parts: string[] = [];
@@ -209,6 +214,7 @@ export async function startFakeTasmota(o: FakeTasmotaOptions = {}): Promise<Fake
       const n = Number(m[1]) as 1 | 2 | 3;
       const r = state.rules[n];
       if (arg === '0' || arg === '1') r.on = arg === '1';
+      else if (arg === '"' || arg === '""') r.text = ''; // Tasmota's way to clear a rule
       else if (arg !== '') r.text = arg;
       return {
         [`Rule${n}`]: {
@@ -223,17 +229,28 @@ export async function startFakeTasmota(o: FakeTasmotaOptions = {}): Promise<Fake
     }
     if ((m = name.match(/^timer(\d+)$/))) {
       const n = Number(m[1]);
+      const current = () => ({ ...DEFAULT_TIMER, ...(state.timers[n] ?? {}) });
       if (arg.startsWith('{')) {
-        const j = JSON.parse(arg) as object;
-        state.timers[n] = { ...DEFAULT_TIMER, ...(state.timers[n] ?? {}), ...j };
-      }
+        const j = parseRelaxed(arg);
+        if (!j || typeof j !== 'object' || Array.isArray(j)) return { [`Timer${n}`]: 'Error' };
+        const next: Record<string, unknown> = current();
+        for (const [k, v] of Object.entries(j)) {
+          const canon = TIMER_KEYS[k];
+          if (canon) next[canon] = v;
+        }
+        state.timers[n] = next;
+      } else if (arg === '0' || arg === '1' || arg === '2') {
+        const t = current();
+        state.timers[n] = { ...t, Enable: arg === '2' ? 1 - t.Enable : Number(arg) };
+      } else if (arg !== '') return { [`Timer${n}`]: 'Error' };
       return { [`Timer${n}`]: state.timers[n] ?? DEFAULT_TIMER };
     }
     if ((m = name.match(/^(mem|var)(\d+)$/))) {
       const n = Number(m[2]);
       const store = m[1] === 'mem' ? state.mems : state.vars;
-      if (arg !== '') store[n] = arg;
-      return { [`${m[1] === 'mem' ? 'Mem' : 'Var'}${n}`]: store[n] ?? '0' };
+      if (arg === '"' || arg === '""') store[n] = '';
+      else if (arg !== '') store[n] = arg;
+      return { [`${m[1] === 'mem' ? 'Mem' : 'Var'}${n}`]: store[n] ?? '' };
     }
     if (name === 'setoption83') {
       if (arg !== '') setOption83 = arg === '1' || arg.toLowerCase() === 'on';
