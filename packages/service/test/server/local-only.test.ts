@@ -62,6 +62,7 @@ describe('methods a paired device may not call', () => {
   const machinesMethods = Object.keys(methods).filter((m) => m.startsWith('machines.'));
   const forbidden = [
     'service.shutdown',
+    'ui.error',
     'auth.setApiKey',
     'pairing.create',
     'devices.list',

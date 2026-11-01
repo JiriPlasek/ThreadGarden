@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
   import { prettyJson } from '../tools';
+  import { reportUiError } from '#lib/ui-error-reporter.js';
 
   /**
    * Error boundary around one chat item (spec §7): a renderer bug shows a
@@ -21,7 +22,7 @@
 
   const onFailed = (error: unknown, reset: () => void): void => {
     retry = reset;
-    console.error('Threadgarden: a chat item could not be rendered', error);
+    reportUiError('item', error);
   };
 </script>
 
