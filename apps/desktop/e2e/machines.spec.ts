@@ -131,3 +131,29 @@ test('pair with a second machine, chat on it, see its Needs you item, remove it'
   await expect(places.locator('[title="Chats waiting for you"]')).toHaveCount(0);
   expect(await serviceCall<unknown[]>('machines.list', {})).toEqual([]);
 });
+
+test('a machine with a long name does not make Settings scroll sideways', async ({ page }) => {
+  const name = 'kumbal-machine-Z270-Gaming-K3';
+  await page.setViewportSize({ width: 600, height: 900 });
+  await openApp(page);
+  await page
+    .getByRole('navigation', { name: 'Places' })
+    .getByRole('button', { name: 'Settings' })
+    .click();
+  const settings = page.getByRole('dialog', { name: 'Settings' });
+  await settings.getByRole('button', { name: 'Add machine…' }).click();
+  const add = page.getByRole('dialog', { name: 'Add machine' });
+  await add.getByLabel('Address').fill('127.0.0.1');
+  await add.getByText('More').click();
+  await add.getByLabel('Port').fill(String(REMOTE_MOCK_PORT));
+  await add.getByLabel('Pairing code').fill(REMOTE_PAIRING_CODE);
+  await add.getByRole('button', { name: 'Pair' }).click();
+  await expect(add).toBeHidden();
+
+  const entry = settings.getByRole('group', { name: MACHINE });
+  await entry.getByLabel('Name').fill(name);
+  await entry.getByRole('button', { name: `Save ${MACHINE}` }).click();
+  // Its buttons still name the machine to assistive technology.
+  await expect(settings.getByRole('button', { name: `Remove ${name}` })).toBeVisible();
+  expect(await settings.evaluate((d) => d.scrollWidth - d.clientWidth)).toBe(0);
+});

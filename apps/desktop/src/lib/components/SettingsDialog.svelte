@@ -167,7 +167,10 @@
     if (!open) close();
   }}
 >
-  <Dialog.Content class="max-h-[90vh] gap-4 overflow-y-auto p-5 sm:max-w-2xl">
+  <!-- One column that never grows past the dialog: no row can make it scroll sideways. -->
+  <Dialog.Content
+    class="max-h-[90vh] grid-cols-[minmax(0,1fr)] gap-4 overflow-y-auto p-5 sm:max-w-4xl"
+  >
     <Dialog.Header>
       <Dialog.Title class="text-base">Settings</Dialog.Title>
       <Dialog.Description class="text-xs"
