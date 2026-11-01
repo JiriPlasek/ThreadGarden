@@ -368,6 +368,7 @@ rm -rf ~/.config/systemd/user/threadgarden.service.d
 systemctl --user daemon-reload
 rm -f ~/.local/bin/threadgarden
 rm -rf ~/.local/share/threadgarden-headless
+sudo rm /etc/polkit-1/rules.d/49-threadgarden-power.rules
 ```
 
 That removes the program. Threadgarden's own data on the PC (its database

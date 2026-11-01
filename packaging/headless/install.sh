@@ -103,6 +103,51 @@ case $linger in
     ;;
 esac
 
+# Idle shutdown runs `systemctl poweroff` from the user service. Without a rule
+# polkit refuses that to a user session that is not at the console.
+polkit_rules_dir=${POLKIT_RULES_DIR:-/etc/polkit-1/rules.d}
+polkit_rule=$polkit_rules_dir/49-threadgarden-power.rules
+
+polkit_rule_text() {
+  cat <<EOF
+// Lets the Threadgarden service of $user power the machine off (idle shutdown).
+polkit.addRule(function (action, subject) {
+  if ((action.id == "org.freedesktop.login1.power-off" ||
+       action.id == "org.freedesktop.login1.power-off-multiple-sessions") &&
+      subject.user == "$user") {
+    return polkit.Result.YES;
+  }
+});
+EOF
+}
+
+echo
+if [ ! -d "$polkit_rules_dir" ]; then
+  echo "This system has no polkit rules directory ($polkit_rules_dir), so it is" >&2
+  echo "probably too old for JavaScript rules. Threadgarden won't be able to power" >&2
+  echo "this machine off for idle shutdown; everything else works." >&2
+elif [ "$(cat "$polkit_rule" 2>/dev/null || true)" = "$(polkit_rule_text)" ]; then
+  echo "The rule that lets Threadgarden power this machine off is already in place."
+else
+  echo "Threadgarden can shut this machine down when it has been idle, and a"
+  echo "power switch can then cut its power. Powering off from a user service"
+  echo "needs a polkit rule that allows it for your account only. To add it,"
+  echo "this runs once:"
+  echo "  sudo tee $polkit_rule"
+  echo "  sudo chmod 644 $polkit_rule"
+  echo "(it may ask for your password; skip it with Ctrl+C and idle shutdown will"
+  echo "fail to power the machine off)."
+  skipped=0
+  trap 'skipped=1; echo "Skipped the power-off rule; idle shutdown will fail to power the machine off."' INT
+  {
+    polkit_rule_text | $SUDO tee "$polkit_rule" >/dev/null && $SUDO chmod 644 "$polkit_rule"
+  } || {
+    [ "$skipped" = 1 ] ||
+      echo "Could not write $polkit_rule; idle shutdown will fail to power the machine off."
+  }
+  trap - INT
+fi
+
 echo
 echo "Running: systemctl --user daemon-reload"
 $SYSTEMCTL --user daemon-reload
