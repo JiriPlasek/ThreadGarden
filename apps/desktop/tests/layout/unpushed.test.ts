@@ -86,6 +86,15 @@ describe('unpushed work in Needs you', () => {
     expect(within(needsYou).getByText('1')).toBeTruthy();
   });
 
+  it('does not claim nothing needs you while a notice is shown', async () => {
+    const env = await start(() => status());
+    // Nothing waiting: the list says so.
+    expect(await screen.findByText('Nothing needs you right now.')).toBeTruthy();
+    env.remote.push('power.changed', blocked());
+    await screen.findByRole('region', { name: 'Unpushed work on Ubuntu PC' });
+    expect(screen.queryByText('Nothing needs you right now.')).toBeNull();
+  });
+
   it('Ask Claude to push it sends the message to the session', async () => {
     const { remote } = await start();
     await userEvent.click(await screen.findByRole('button', { name: 'Ask Claude to push it' }));
