@@ -79,10 +79,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.version.outputs.tag }}
           VERSION: ${{ needs.version.outputs.version }}
+        # Created through the API, which answers with the new release's id: the
+        # bundle jobs upload to exactly this draft (a lookup by tag can miss a draft).
         run: |
-          gh release create "$TAG" --draft --target "$GITHUB_SHA" \
-            --title "Threadgarden $VERSION" --generate-notes
-          id=$(gh api "repos/$GITHUB_REPOSITORY/releases" --jq ".[] | select(.tag_name == \"$TAG\" and .draft) | .id" | head -1)
+          id=$(gh api "repos/$GITHUB_REPOSITORY/releases" \
+            -f tag_name="$TAG" -f target_commitish="$GITHUB_SHA" \
+            -f name="Threadgarden $VERSION" -F draft=true -F generate_release_notes=true \
+            --jq .id)
+          if [ -z "$id" ]; then
+            echo "::error::The draft release was not created."
+            exit 1
+          fi
+          echo "Draft release $id for $TAG"
           echo "release_id=$id" >> "$GITHUB_OUTPUT"
 
   bundle:
@@ -122,6 +130,8 @@ jobs:
           path: apps/desktop/src-tauri/binaries
           key: node-sidecar-${{ matrix.target }}-${{ hashFiles('scripts/fetch-node-sidecar.mjs') }}
       - run: node scripts/fetch-node-sidecar.mjs --target ${{ matrix.target }}
+      - name: The draft to upload to
+        run: test -n "${{ needs.draft.outputs.release_id }}" || { echo "::error::No draft release id"; exit 1; }
       # Signed builds with updater files, uploaded to the draft; the manifest is made later, once.
       - uses: tauri-apps/tauri-action@v0
         env:
