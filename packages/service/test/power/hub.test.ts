@@ -75,7 +75,47 @@ describe('PowerHub', () => {
     await hub.configure('m1', config, 'pw');
     const r = await hub.turnOn('m1');
     expect(r).toEqual({ cycled: true, waitMs: 90_000 });
-    expect(f.commands.at(-1)).toBe('Event tgw');
+    expect(f.commands).toContain('Event tgw');
+  });
+
+  const WAKE = {
+    Enable: 1,
+    Mode: 0,
+    Time: '01:00',
+    Window: 0,
+    Days: '1000000',
+    Repeat: 0,
+    Action: 3,
+  };
+
+  it('a turnOn that cycles clears a wake left on the switch', async () => {
+    const { f, hub, config } = await setup();
+    await hub.configure('m1', config, 'pw');
+    f.timers[16] = { ...WAKE };
+    expect(await hub.turnOn('m1')).toMatchObject({ cycled: true });
+    expect(f.commands.lastIndexOf('Timer16 {"Enable":0}')).toBeGreaterThan(
+      f.commands.indexOf('Event tgw'),
+    );
+    expect(f.timers[16]).toMatchObject({ Enable: 0 });
+  });
+
+  it('a turnOn that switches on clears a wake left on the switch, at once or after the wait', async () => {
+    const { f, hub, config, clock, t } = await setup();
+    f.devices.get('0x863B')!.on = false;
+    await hub.configure('m1', config, 'pw');
+    f.timers[16] = { ...WAKE };
+    f.mems[11] = String(Math.floor((clock.t - 3_600_000) / 1000));
+    expect(await hub.turnOn('m1')).toEqual({ cycled: false, waitMs: 0 });
+    expect(f.timers[16]).toMatchObject({ Enable: 0 });
+
+    f.devices.get('0x863B')!.on = false;
+    f.timers[16] = { ...WAKE };
+    f.mems[11] = String(Math.floor((clock.t - 30_000) / 1000));
+    expect(await hub.turnOn('m1')).toMatchObject({ waitMs: 60_000 });
+    expect(f.timers[16]).toMatchObject({ Enable: 1 });
+    t.fire();
+    await vi.waitFor(() => expect(f.timers[16]).toMatchObject({ Enable: 0 }));
+    expect(f.devices.get('0x863B')!.on).toBe(true);
   });
 
   it('turnOn while the machine runs sends nothing', async () => {

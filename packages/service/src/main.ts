@@ -837,7 +837,10 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     await step('indexer', () => indexer?.stop());
     await step('remote server', () => remote?.close());
     await step('relay', () => relay?.close());
-    await step('power', () => power?.close());
+    await step('power', () => {
+      shutdown?.close();
+      power?.close();
+    });
     await step('server', () => server?.close());
     await step('database', () => db?.close());
     await step('lock', () => lock.release());
@@ -911,7 +914,10 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
           await remote?.close();
         });
         await step('relay', () => relay?.close());
-        await step('power', () => power?.close());
+        await step('power', () => {
+          shutdown?.close();
+          power?.close();
+        });
         await step('server', () => wsServer.close());
         await step('discovery', () => removeDiscovery(dataDir));
         await step('database', () => db?.close());

@@ -228,6 +228,9 @@ export class PowerHub {
       if (this.closed || this.generation(machineId) !== gen) throw stale();
     };
     const sw = this.switchFor(config, password);
+    // Turned on from here: a wake left on the switch is stale and would cycle the
+    // running machine. Best effort; the next shutdown sets it again.
+    const clearWake = () => sw.armWake(null).catch(() => {});
     const minOffMs = config.minOffSeconds * 1000;
     this.cache.delete(machineId);
     const reading = await sw.reading();
@@ -243,6 +246,7 @@ export class PowerHub {
       if (reading.watts !== null && reading.watts < config.offWatts) {
         // Standby: cut and restore power, which a PC set to power on after a cut then boots from.
         await sw.cycle();
+        await clearWake();
         check();
         return this.hold(machineId, gen, { cycled: true, waitMs: minOffMs }, null);
       }
@@ -254,9 +258,13 @@ export class PowerHub {
     const waitMs = Math.max(0, cut === null ? 0 : cut + minOffMs - this.now());
     if (waitMs === 0) {
       await sw.setPower(true);
+      await clearWake();
       return { cycled: false, waitMs: 0 };
     }
-    return this.hold(machineId, gen, { cycled: false, waitMs }, () => sw.setPower(true));
+    return this.hold(machineId, gen, { cycled: false, waitMs }, async () => {
+      await sw.setPower(true);
+      await clearWake();
+    });
   }
 
   /** Remembers a turn-on until its wait is over; `act` runs then, unless power control changed. */

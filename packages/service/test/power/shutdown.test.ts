@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { EventMsg, MachinePowerStatus, PowerConfig, Unpushed } from '@threadgarden/protocol';
 import { IdleMonitor } from '../../src/power/idle.js';
 import { ruleText } from '../../src/power/rules.js';
@@ -53,7 +53,35 @@ type RigOptions = {
   sessions?: (order: string[]) => { live: boolean; status: 'idle' }[];
   /** Every command of the first switch made (onStart's) waits this long before it is sent. */
   slowFirstSwitchMs?: number;
+  /** While this says true, the switch cannot be reached (no network yet). */
+  offline?: () => boolean;
 };
+
+/** Timers that fire only when told to (the start disarm's retries). */
+function manualTimers() {
+  const scheduled: { fn: () => void; ms: number; live: boolean }[] = [];
+  return {
+    timers: {
+      set: (fn: () => void, ms: number) => {
+        const t = { fn, ms, live: true };
+        scheduled.push(t);
+        return t;
+      },
+      clear: (h: unknown) => {
+        (h as { live: boolean }).live = false;
+      },
+    },
+    /** The delays of the timers still waiting. */
+    live: () => scheduled.filter((t) => t.live).map((t) => t.ms),
+    fire: () => {
+      for (const t of scheduled.splice(0)) {
+        if (!t.live) continue;
+        t.live = false;
+        t.fn();
+      }
+    },
+  };
+}
 
 async function rig(o: RigOptions = {}) {
   const f = await startFakeTasmota({ password: 'pw' });
@@ -74,6 +102,7 @@ async function rig(o: RigOptions = {}) {
     now: () => clock.now,
   });
   let switches = 0;
+  const retries = manualTimers();
   const emitted: MachinePowerStatus[] = [];
   const checked: { cwd: string; sessionId: string | null }[][] = [];
   const seq = new ShutdownSequence({
@@ -101,6 +130,9 @@ async function rig(o: RigOptions = {}) {
         readWaitMs: 0,
         fetch: async (input, init) => {
           if (delay > 0) await new Promise((res) => setTimeout(res, delay));
+          if (o.offline?.()) {
+            throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'EHOSTUNREACH' } });
+          }
           const cmnd = new URL(String(input)).searchParams.get('cmnd') ?? '';
           if (cmnd === 'Event tga' || cmnd.startsWith('Timer16 ')) order.push(cmnd);
           return fetch(input, init);
@@ -108,8 +140,9 @@ async function rig(o: RigOptions = {}) {
       });
     },
     emit: (s) => emitted.push(s),
+    timers: retries.timers,
   });
-  return { f, config, store, idle, clock, seq, order, emitted, checked };
+  return { f, config, store, idle, clock, seq, order, emitted, checked, retries };
 }
 
 /** A clean shutdown without a send waiting: the cut, no wake, then sessions and poweroff. */
@@ -485,6 +518,82 @@ describe('ShutdownSequence.onStart', () => {
     const none = await rig({ password: null });
     await expect(none.seq.onStart()).resolves.toBeUndefined();
     expect(none.f.commands).toEqual([]);
+    expect(none.retries.live()).toEqual([]);
+  });
+
+  /** A wake of ours, still set from before the machine went down. */
+  const staleWake = (r: Awaited<ReturnType<typeof rig>>) => {
+    installRule(r.f, r.config);
+    r.f.timers[16] = {
+      Enable: 1,
+      Mode: 0,
+      Time: '01:00',
+      Window: 0,
+      Days: '1000000',
+      Repeat: 0,
+      Action: 3,
+    };
+  };
+
+  it('no network yet at start: retries every 10 s until the wake is cleared', async () => {
+    let offline = true;
+    const r = await rig({ offline: () => offline });
+    staleWake(r);
+    await r.seq.onStart();
+    expect(r.f.commands).toEqual([]);
+    expect(r.retries.live()).toEqual([10_000]);
+    r.retries.fire();
+    await vi.waitFor(() => expect(r.retries.live()).toEqual([10_000]));
+    expect(r.f.timers[16]).toMatchObject({ Enable: 1 });
+    offline = false;
+    r.retries.fire();
+    await vi.waitFor(() => expect(r.f.timers[16]).toMatchObject({ Enable: 0 }));
+    expect(r.f.commands).toContain('Event tgo');
+    expect(r.retries.live()).toEqual([]);
+  });
+
+  it('after a few minutes of retries the minute tick keeps trying', async () => {
+    let offline = true;
+    const r = await rig({ offline: () => offline });
+    staleWake(r);
+    await r.seq.onStart();
+    for (let i = 0; i < 30; i++) {
+      expect(r.retries.live()).toEqual([10_000]);
+      r.retries.fire();
+      await new Promise((res) => setTimeout(res, 5));
+    }
+    await vi.waitFor(() => expect(r.retries.live()).toEqual([]));
+    expect(r.f.timers[16]).toMatchObject({ Enable: 1 });
+    // The minute tick, still offline: nothing yet, and no shutdown is attempted either.
+    await r.seq.idleTick();
+    expect(r.f.timers[16]).toMatchObject({ Enable: 1 });
+    offline = false;
+    await r.seq.idleTick();
+    expect(r.f.commands).toContain('Event tgo');
+    expect(r.f.timers[16]).toMatchObject({ Enable: 0 });
+  });
+
+  it('a run while the start disarm is pending disarms first, and never arms without it', async () => {
+    let offline = true;
+    const r = await rig({ offline: () => offline });
+    staleWake(r);
+    await r.seq.onStart();
+    const failed = await r.seq.run({ force: true, reason: 'manual' });
+    expect(failed.phase).toBe('running');
+    expect(failed.problem).toMatch(/did not answer/);
+    expect(r.order).toEqual([]);
+    offline = false;
+    const s = await r.seq.run({ force: true, reason: 'manual' });
+    expect(s.phase).toBe('shuttingDown');
+    const c = r.f.commands;
+    expect(c.indexOf('Event tgo')).toBeGreaterThanOrEqual(0);
+    expect(c.indexOf('Event tgo')).toBeLessThan(c.indexOf('Event tga'));
+    // The start disarm's clearing of the wake, then a clean shutdown.
+    expect(r.order).toEqual(['Timer16 {"Enable":0}', ...CLEAN]);
+    // Done: no retry is left to disarm the cut just armed.
+    r.retries.fire();
+    await new Promise((res) => setTimeout(res, 20));
+    expect(c.lastIndexOf('Event tgo')).toBeLessThan(c.indexOf('Event tga'));
   });
 });
 
