@@ -167,7 +167,7 @@
     if (!open) close();
   }}
 >
-  <Dialog.Content class="max-h-[90vh] gap-4 overflow-y-auto p-5 sm:max-w-lg">
+  <Dialog.Content class="max-h-[90vh] gap-4 overflow-y-auto p-5 sm:max-w-2xl">
     <Dialog.Header>
       <Dialog.Title class="text-base">Settings</Dialog.Title>
       <Dialog.Description class="text-xs"
