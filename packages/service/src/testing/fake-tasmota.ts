@@ -16,6 +16,8 @@ export type FakeTasmota = {
   /** Keyed by short address, e.g. `0x863B`. On the plug kind the one device is keyed `plug`. */
   devices: Map<string, FakeDevice>;
   utcOffsetMinutes: number;
+  /** The global `Timers` flag (default on). */
+  timersOn: boolean;
   /** The next `ZbPermitJoin 1` pairs this device. */
   joinNext(dev: { id: string; name?: string | null; on?: boolean; watts?: number }): void;
 };
@@ -25,6 +27,8 @@ export type FakeTasmotaOptions = {
   requireReferer?: boolean;
   kind?: 'zigbee' | 'plug';
   version?: string;
+  /** Rules longer than this are cut off when written (a small firmware). */
+  maxRuleLength?: number;
 };
 
 const DEFAULT_TIMER = {
@@ -108,6 +112,7 @@ export async function startFakeTasmota(o: FakeTasmotaOptions = {}): Promise<Fake
     vars: {},
     devices,
     utcOffsetMinutes: 60,
+    timersOn: true,
     joinNext(dev) {
       pending.push({ id: dev.id, name: dev.name ?? null, on: dev.on ?? true, watts: dev.watts ?? 0 });
     },
@@ -139,7 +144,7 @@ export async function startFakeTasmota(o: FakeTasmotaOptions = {}): Promise<Fake
       if (arg === '7') {
         const now = new Date();
         const local = new Date(now.getTime() + state.utcOffsetMinutes * 60_000);
-        return { StatusTIM: { UTC: `${iso(now)}Z`, Local: iso(local) } };
+        return { StatusTIM: { UTC: iso(now), Local: iso(local) } };
       }
       if (arg === '8' && kind === 'plug') {
         const p = devices.get('plug')!;
@@ -215,7 +220,7 @@ export async function startFakeTasmota(o: FakeTasmotaOptions = {}): Promise<Fake
       const r = state.rules[n];
       if (arg === '0' || arg === '1') r.on = arg === '1';
       else if (arg === '"' || arg === '""') r.text = ''; // Tasmota's way to clear a rule
-      else if (arg !== '') r.text = arg;
+      else if (arg !== '') r.text = o.maxRuleLength === undefined ? arg : arg.slice(0, o.maxRuleLength);
       return {
         [`Rule${n}`]: {
           State: r.on ? 'ON' : 'OFF',
@@ -239,9 +244,10 @@ export async function startFakeTasmota(o: FakeTasmotaOptions = {}): Promise<Fake
           if (canon) next[canon] = v;
         }
         state.timers[n] = next;
-      } else if (arg === '0' || arg === '1' || arg === '2') {
-        const t = current();
-        state.timers[n] = { ...t, Enable: arg === '2' ? 1 - t.Enable : Number(arg) };
+      } else if (arg === '0') {
+        state.timers[n] = { ...DEFAULT_TIMER }; // resets every parameter, as Tasmota does
+      } else if (/^\d+$/.test(arg) && Number(arg) >= 1 && Number(arg) <= 16) {
+        state.timers[n] = { ...DEFAULT_TIMER, ...(state.timers[Number(arg)] ?? {}) }; // copy Timer<y>
       } else if (arg !== '') return { [`Timer${n}`]: 'Error' };
       return { [`Timer${n}`]: state.timers[n] ?? DEFAULT_TIMER };
     }
@@ -255,6 +261,10 @@ export async function startFakeTasmota(o: FakeTasmotaOptions = {}): Promise<Fake
     if (name === 'setoption83') {
       if (arg !== '') setOption83 = arg === '1' || arg.toLowerCase() === 'on';
       return { SetOption83: setOption83 ? 'ON' : 'OFF' };
+    }
+    if (name === 'timers') {
+      if (arg !== '') state.timersOn = arg === '1' || arg.toLowerCase() === 'on';
+      return { Timers: state.timersOn ? 'ON' : 'OFF' };
     }
     if (name === 'event') return { Event: 'Done' };
     return unknown(input);

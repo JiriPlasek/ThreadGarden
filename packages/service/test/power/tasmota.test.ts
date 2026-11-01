@@ -140,13 +140,41 @@ describe('fake Tasmota', () => {
     expect(f.timers[16]).toBeUndefined();
   });
 
-  it('Timer<n> 0 and 1 disable and enable', async () => {
+  it('Timer<n> 0 resets to defaults; Timer<n> <y> copies Timer<y>', async () => {
     const f = await fake();
     const c = new TasmotaClient({ address: f.address, password: 'pw' });
-    await c.command('Timer16 {"Enable":1,"Time":"01:00"}');
+    await c.command('Timer16 {"Enable":1,"Time":"01:00","Days":"0100000"}');
+    await c.command('Timer3 16');
+    expect(f.timers[3]).toEqual(f.timers[16]);
+    expect(f.timers[3]).not.toBe(f.timers[16]);
     await c.command('Timer16 0');
-    expect(f.timers[16]).toMatchObject({ Enable: 0, Time: '01:00' });
-    await c.command('Timer16 1');
-    expect(f.timers[16]).toMatchObject({ Enable: 1 });
+    expect(f.timers[16]).toEqual({
+      Enable: 0,
+      Mode: 0,
+      Time: '00:00',
+      Window: 0,
+      Days: '0000000',
+      Repeat: 0,
+      Action: 0,
+    });
+    expect(f.timers[3]).toMatchObject({ Enable: 1, Time: '01:00' });
+  });
+
+  it('Status 7 reports bare UTC and Local, and Timers a global flag', async () => {
+    const f = await fake();
+    const c = new TasmotaClient({ address: f.address, password: 'pw' });
+    const tim = ((await c.command('Status 7')) as { StatusTIM: { UTC: string; Local: string } }).StatusTIM;
+    expect(tim.UTC).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d$/);
+    expect(tim.Local).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d$/);
+    expect(await c.command('Timers')).toEqual({ Timers: 'ON' });
+    expect(await c.command('Timers 0')).toEqual({ Timers: 'OFF' });
+    expect(f.timersOn).toBe(false);
+  });
+
+  it('can truncate rules like a small firmware', async () => {
+    const f = await fake({ maxRuleLength: 10 });
+    const c = new TasmotaClient({ address: f.address, password: 'pw' });
+    await c.command('Rule1 on System#Boot do Var1 1 endon');
+    expect(f.rules[1].text).toBe('on System#');
   });
 });

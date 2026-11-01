@@ -24,9 +24,6 @@ type Slot = (typeof SLOTS)[number];
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
-/** An unset Mem answers ""; a stray "0" in Mem12-14 is treated alike (only Mem11 legitimately holds "0"). */
-const blank = (v: string) => (v === '0' ? '' : v);
-
 const notTasmota = (address: string) =>
   new PowerError(POWER_ERRORS.notTasmota, `${address} did not answer like a Tasmota device.`);
 
@@ -47,7 +44,8 @@ export function createSwitch(
 
   const readMem = async (n: number): Promise<string> => {
     const v = field(await client.command(`Mem${n}`), `Mem${n}`);
-    return typeof v === 'string' || typeof v === 'number' ? String(v) : '';
+    if (typeof v !== 'string' && typeof v !== 'number') throw notTasmota(config.address);
+    return String(v);
   };
 
   const readRule = async (n: Slot): Promise<{ text: string; on: boolean }> => {
@@ -68,15 +66,28 @@ export function createSwitch(
     return String(v).toUpperCase() === 'ON' || v === 1 || v === '1';
   };
 
-  const utcOffsetMs = async (): Promise<number> => {
+  /** The device's clock: UTC instant and local offset. Tasmota's UTC/Local are bare date-times. */
+  const deviceClock = async (): Promise<{ utcMs: number; offsetMs: number }> => {
     const tim = field(await client.command('Status 7'), 'StatusTIM') as
       | { UTC?: unknown; Local?: unknown }
       | undefined;
-    const utc = typeof tim?.UTC === 'string' ? Date.parse(tim.UTC) : NaN;
-    const local = typeof tim?.Local === 'string' ? Date.parse(`${tim.Local}Z`) : NaN;
+    // Read both as if UTC, whatever zone the host is in; a trailing Z or offset is dropped.
+    const asUtc = (s: unknown) =>
+      typeof s === 'string' ? Date.parse(`${s.replace(/(Z|[+-]\d\d:?\d\d)$/i, '')}Z`) : NaN;
+    const utc = asUtc(tim?.UTC);
+    const local = asUtc(tim?.Local);
     if (Number.isNaN(utc) || Number.isNaN(local)) throw notTasmota(config.address);
-    return Math.round((local - utc) / 60_000) * 60_000;
+    return { utcMs: utc, offsetMs: Math.round((local - utc) / 60_000) * 60_000 };
   };
+
+  const timersEnabled = async (): Promise<boolean> => {
+    const v = field(await client.command('Timers'), 'Timers');
+    if (typeof v !== 'string' && typeof v !== 'number') throw notTasmota(config.address);
+    return String(v).toUpperCase() === 'ON' || String(v) === '1';
+  };
+
+  const notInstalled = () =>
+    new PowerError(POWER_ERRORS.notConfigured, "Threadgarden's rule isn't installed on this switch");
 
   const ourSlot = async (): Promise<Slot | null> => {
     for (const s of SLOTS) if (isOurs((await readRule(s)).text)) return s;
@@ -127,7 +138,7 @@ export function createSwitch(
       }
       const timers = { [RESOURCES.timer]: await readTimer(RESOURCES.timer) };
       const mems: Record<number, string> = {};
-      for (const n of RESOURCES.mems) mems[n] = n === 11 ? await readMem(n) : blank(await readMem(n));
+      for (const n of RESOURCES.mems) mems[n] = await readMem(n);
       const wanted = memsFor(config);
       const problems = conflicts(texts, slot, timers, mems, wanted);
 
@@ -144,7 +155,15 @@ export function createSwitch(
 
       if (needOption83) await client.command('SetOption83 1');
       const text = ruleText(config);
-      if (rules[slot].text !== text) await client.command(`Rule${slot} ${text}`);
+      if (rules[slot].text !== text) {
+        await client.command(`Rule${slot} ${text}`);
+        if ((await readRule(slot)).text !== text) {
+          throw new PowerError(
+            POWER_ERRORS.conflict,
+            "The switch didn't store Threadgarden's rule intact (it may be too long for this firmware).",
+          );
+        }
+      }
       if (!rules[slot].on) await client.command(`Rule${slot} 1`);
       // Mem11 holds the last cut's time: written only while empty.
       if (mems[11] === '') await client.command(`Mem11 ${wanted[11]}`);
@@ -155,10 +174,9 @@ export function createSwitch(
 
     async uninstall() {
       const slot = await ourSlot();
-      if (slot !== null) {
-        await client.command(`Rule${slot} 0`);
-        await client.command(`Rule${slot} "`);
-      }
+      if (slot === null) return; // nothing of ours here, so nothing to clear
+      await client.command(`Rule${slot} 0`);
+      await client.command(`Rule${slot} "`);
       for (const n of RESOURCES.mems) await client.command(`Mem${n} "`);
       await client.command(`Timer${RESOURCES.timer} {"Enable":0}`);
     },
@@ -174,11 +192,27 @@ export function createSwitch(
 
     async armWake(atMs) {
       const n = RESOURCES.timer;
+      if ((await ourSlot()) === null) throw notInstalled();
       if (atMs === null) {
         await client.command(`Timer${n} {"Enable":0}`);
         return;
       }
-      const local = new Date(atMs - WAKE_LEAD_MS + (await utcOffsetMs()));
+      if (!(await timersEnabled())) {
+        throw new PowerError(
+          POWER_ERRORS.conflict,
+          "Timers are switched off on this switch (Timers 1 turns them on), so Threadgarden can't wake the machine.",
+        );
+      }
+      const clock = await deviceClock();
+      const armAt = atMs - WAKE_LEAD_MS;
+      // Repeat 0 matches the next such weekday: a past time would fire a week late, a far one too early.
+      if (!(armAt > clock.utcMs + 60_000 && armAt < clock.utcMs + 7 * 86_400_000)) {
+        throw new PowerError(
+          POWER_ERRORS.conflict,
+          'The wake time must be between 1 minute and 7 days from now.',
+        );
+      }
+      const local = new Date(armAt + clock.offsetMs);
       const pad = (v: number) => String(v).padStart(2, '0');
       const time = `${pad(local.getUTCHours())}:${pad(local.getUTCMinutes())}`;
       const days = Array.from({ length: 7 }, (_, i) => (i === local.getUTCDay() ? '1' : '0')).join('');
