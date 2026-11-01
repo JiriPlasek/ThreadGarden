@@ -89,6 +89,26 @@ describe('tray actions', () => {
     );
   });
 
+  it("stopping This PC's service for an update waits until the process has exited", async () => {
+    const { app } = await setup((s) => {
+      s.handlers['service.shutdown'] = () => {
+        native.order.push('shutdown');
+        return {};
+      };
+    });
+    native.order.length = 0;
+    await app.lifecycle.stopLocalService();
+    // The installer replaces the service's runtime: asking is not enough, the shell waits for the pid.
+    expect(native.order).toEqual(['shutdown', 'stopService']);
+  });
+
+  it("after a failed update, finds This PC's service again and reconnects", async () => {
+    const { app } = await setup();
+    native.order.length = 0;
+    await app.lifecycle.startLocalService();
+    expect(native.order).toEqual(['serviceConnection']);
+  });
+
   it('cancelling quit completely does nothing', async () => {
     const { app, context } = await setup(withAgents);
     await app.agents.refresh();

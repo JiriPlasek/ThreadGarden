@@ -11,7 +11,7 @@ type Calls = string[];
 const handle = (
   version: string,
   calls: Calls,
-  opts: { failDownload?: boolean } = {},
+  opts: { failDownload?: boolean; failInstall?: boolean } = {},
 ): UpdateHandle => ({
   version,
   notes: `Notes for ${version}`,
@@ -23,14 +23,21 @@ const handle = (
   },
   install: async () => {
     calls.push('install');
+    if (opts.failInstall) throw new Error('installer refused');
   },
 });
 
 /** A fake updater: `next` is what the next check finds (a version, null, or an error). */
 const fakeUpdater = (calls: Calls, kind: InstallKind = 'windows') => {
-  const state: { next: string | null | Error; failDownload: boolean; checks: number } = {
+  const state: {
+    next: string | null | Error;
+    failDownload: boolean;
+    failInstall: boolean;
+    checks: number;
+  } = {
     next: null,
     failDownload: false,
+    failInstall: false,
     checks: 0,
   };
   const updater: Updater = {
@@ -39,7 +46,10 @@ const fakeUpdater = (calls: Calls, kind: InstallKind = 'windows') => {
       if (state.next instanceof Error) throw state.next;
       return state.next === null
         ? null
-        : handle(state.next, calls, { failDownload: state.failDownload });
+        : handle(state.next, calls, {
+            failDownload: state.failDownload,
+            failInstall: state.failInstall,
+          });
     },
     relaunch: async () => {
       calls.push('relaunch');
@@ -71,7 +81,9 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-const start = async (opts: { kind?: InstallKind; stored?: Record<string, unknown> } = {}) => {
+const start = async (
+  opts: { kind?: InstallKind; stored?: Record<string, unknown>; failStop?: boolean } = {},
+) => {
   const calls: Calls = [];
   const { updater, state } = fakeUpdater(calls, opts.kind);
   const api = fakeApi(opts.stored);
@@ -82,6 +94,10 @@ const start = async (opts: { kind?: InstallKind; stored?: Record<string, unknown
     appVersion: '0.3.0',
     stopLocalService: async () => {
       calls.push('stopLocalService');
+      if (opts.failStop) throw new Error('service would not stop');
+    },
+    restoreLocalService: async () => {
+      calls.push('restoreLocalService');
     },
   });
   await flush();
@@ -167,6 +183,77 @@ describe('UpdatesState', () => {
       "The update couldn't be downloaded or verified. Nothing was changed.",
     );
     expect(updates.phase).toBe('available');
+  });
+
+  it('brings the service back and says so when stopping it fails', async () => {
+    const { calls, state } = await start({ failStop: true });
+    state.next = '0.3.1';
+    await updates.check();
+    await updates.install();
+    expect(calls).toEqual(['download', 'stopLocalService', 'restoreLocalService']);
+    expect(updates.lastError).toBe("The update couldn't be installed. Threadgarden is unchanged.");
+    expect(updates.phase).toBe('available');
+  });
+
+  it('brings the service back and says so when the installer fails', async () => {
+    const { calls, state } = await start();
+    state.next = '0.3.1';
+    state.failInstall = true;
+    await updates.check();
+    await updates.install();
+    expect(calls).toEqual(['download', 'stopLocalService', 'install', 'restoreLocalService']);
+    expect(updates.lastError).toBe("The update couldn't be installed. Threadgarden is unchanged.");
+    expect(updates.phase).toBe('available');
+  });
+
+  it('shows a dismissed update again when you check by hand', async () => {
+    const { state } = await start();
+    state.next = '0.3.1';
+    await updates.check();
+    updates.dismiss();
+    expect(updates.dismissed).toBe(true);
+    await updates.check({ manual: true });
+    expect(updates.dismissed).toBe(false);
+  });
+
+  it('keeps an update on show while a scheduled check runs', async () => {
+    const { state } = await start();
+    state.next = '0.3.1';
+    await updates.check();
+    const pending = updates.check();
+    const during = updates.phase;
+    await pending;
+    expect(during).toBe('available');
+  });
+
+  it("works before This PC's service answers, reading the dismissal once it does", async () => {
+    const calls: Calls = [];
+    const { updater, state } = fakeUpdater(calls);
+    let up = false;
+    const stored: Record<string, unknown> = { 'updates.dismissed': '0.3.1' };
+    const api = {
+      request: (async (method: string, params: { key: string }) => {
+        if (!up) throw new Error('DISCONNECTED');
+        if (method === 'uiState.get') return { value: stored[params.key] ?? null };
+        return {};
+      }) as never,
+    };
+    updates = new UpdatesState();
+    updates.init({
+      api,
+      updater,
+      appVersion: '0.3.0',
+      stopLocalService: async () => {},
+      restoreLocalService: async () => {},
+    });
+    await flush();
+    state.next = '0.3.1';
+    await updates.check();
+    expect(updates.phase).toBe('available');
+    expect(updates.dismissed).toBe(false);
+    up = true;
+    await updates.check();
+    expect(updates.dismissed).toBe(true);
   });
 
   it('cannot update deb and rpm installs by itself', async () => {

@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/svelte';
+import { render, screen, waitFor, within } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import type { ScheduledSend } from '@threadgarden/protocol';
 import { describe, expect, it, vi } from 'vitest';
@@ -88,6 +88,35 @@ describe('update notice', () => {
     expect(open).toHaveBeenCalledWith(
       'https://github.com/JiriPlasek/ThreadGarden/releases/tag/v0.3.1',
     );
+  });
+
+  it('shows what went wrong right in the notice', async () => {
+    const env = await withUpdate();
+    env.app.updates.lastError =
+      "The update couldn't be downloaded or verified. Nothing was changed.";
+    render(UpdateNotice, { context: env.context });
+    expect(screen.getByRole('alert').textContent).toBe(
+      "The update couldn't be downloaded or verified. Nothing was changed.",
+    );
+  });
+
+  it('closes the confirmation at once, so the strip shows the download', async () => {
+    const env = await withUpdate();
+    vi.spyOn(env.app.lifecycle, 'running', 'get').mockReturnValue([chat('s1', 'Fix tabs')]);
+    let finish = () => {};
+    const install = vi
+      .spyOn(env.app.updates, 'install')
+      .mockImplementation(() => new Promise<void>((r) => (finish = r)));
+    render(UpdateNotice, { context: env.context });
+    await userEvent.click(screen.getByRole('button', { name: 'Restart to update' }));
+    await userEvent.click(
+      within(await screen.findByRole('alertdialog')).getByRole('button', {
+        name: 'Update and restart',
+      }),
+    );
+    expect(install).toHaveBeenCalledOnce();
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    finish();
   });
 
   it('shows download progress', async () => {

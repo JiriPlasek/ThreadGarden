@@ -25,6 +25,9 @@ export type TrayEvent = 'stop-all' | 'quit-all';
 
 export const isTauri: boolean = detectTauri();
 
+/** This build's version (the app and its bundled service share it). */
+export const appVersion: string = pkg.version;
+
 const mockConnection = (): ServiceConnection => {
   const url = import.meta.env.VITE_THREADGARDEN_MOCK_URL as string | undefined;
   const token = import.meta.env.VITE_THREADGARDEN_MOCK_TOKEN as string | undefined;

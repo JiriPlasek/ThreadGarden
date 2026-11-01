@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, generateKeyPairSync, sign as edSign } from 'node:crypto';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { checkManifest } from '../../../../scripts/check-manifest.mjs';
 import { makeManifest } from '../../../../scripts/make-manifest.mjs';
 import { sumsFor } from '../../../../scripts/release-sums.mjs';
+import { verifySignature } from '../../../../scripts/verify-signatures.mjs';
 
 const BASE = 'https://github.com/JiriPlasek/ThreadGarden/releases/download/v0.3.0';
 const ASSETS = [
@@ -137,5 +138,44 @@ describe('makeManifest', () => {
     });
     expect(Object.keys(m.platforms)).toEqual(['windows-x86_64', 'darwin-aarch64']);
     expect(checkManifest(m, '0.3.0', files)).toEqual(['linux-x86_64 is missing']);
+  });
+});
+
+describe('verifySignature', () => {
+  /** A minisign key pair as Tauri's signer writes it, and a signer for files. */
+  const keyPair = (keyId: Buffer) => {
+    const { publicKey, privateKey } = generateKeyPairSync('ed25519');
+    const raw = Buffer.from(publicKey.export({ format: 'jwk' }).x!, 'base64url');
+    const keyText = `untrusted comment: minisign public key: ${keyId.toString('hex').toUpperCase()}\n${Buffer.concat([Buffer.from('Ed'), keyId, raw]).toString('base64')}\n`;
+    const sign = (file: Buffer): string => {
+      const sig = edSign(null, createHash('blake2b512').update(file).digest(), privateKey);
+      const trusted = 'timestamp:1793500000\tfile:app.exe';
+      const global = edSign(null, Buffer.concat([sig, Buffer.from(trusted)]), privateKey);
+      const text = `untrusted comment: signature from tauri secret key\n${Buffer.concat([Buffer.from('ED'), keyId, sig]).toString('base64')}\ntrusted comment: ${trusted}\n${global.toString('base64')}\n`;
+      return Buffer.from(text).toString('base64');
+    };
+    return { pubkey: Buffer.from(keyText).toString('base64'), sign };
+  };
+  const file = Buffer.from('the installer bytes');
+
+  it('accepts a file signed with the key the app ships', () => {
+    const k = keyPair(Buffer.from('0688fa7b56519891', 'hex'));
+    expect(verifySignature(file, k.sign(file), k.pubkey)).toBe(true);
+  });
+
+  it('refuses a file that changed after signing', () => {
+    const k = keyPair(Buffer.from('0688fa7b56519891', 'hex'));
+    expect(verifySignature(Buffer.from('other bytes'), k.sign(file), k.pubkey)).toBe(false);
+  });
+
+  it('refuses a signature made with another key', () => {
+    const shipped = keyPair(Buffer.from('0688fa7b56519891', 'hex'));
+    const other = keyPair(Buffer.from('1111111111111111', 'hex'));
+    expect(verifySignature(file, other.sign(file), shipped.pubkey)).toBe(false);
+  });
+
+  it('refuses something that is not a signature', () => {
+    const k = keyPair(Buffer.from('0688fa7b56519891', 'hex'));
+    expect(verifySignature(file, Buffer.from('nonsense').toString('base64'), k.pubkey)).toBe(false);
   });
 });

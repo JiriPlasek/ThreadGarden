@@ -42,7 +42,11 @@
     {:else if busy}
       <span class="text-muted-foreground">Installing update…</span>
     {:else}
-      <span>Threadgarden {version} is available.</span>
+      {#if updates.lastError}
+        <span class="text-destructive" role="alert">{updates.lastError}</span>
+      {:else}
+        <span>Threadgarden {version} is available.</span>
+      {/if}
       {#if updates.canSelfUpdate}
         <Button variant="ghost" size="xs" onclick={restart}>Restart to update</Button>
       {:else}
@@ -74,5 +78,8 @@
     pendingSends,
   )}
   confirmLabel="Update and restart"
-  onConfirm={() => updates.install()}
+  onConfirm={() => {
+    // The dialog closes at once; the strip shows the download and any error.
+    void updates.install();
+  }}
 />

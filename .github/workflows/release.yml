@@ -171,7 +171,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Manifest, checks and checksums
+      - name: Signatures, manifest, checks and checksums
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.version.outputs.tag }}
@@ -179,6 +179,8 @@ jobs:
         run: |
           mkdir assets
           gh release download "$TAG" --dir assets
+          # Every update must be signed with the key the app ships, or installed copies could never verify it.
+          node scripts/verify-signatures.mjs assets apps/desktop/src-tauri/tauri.conf.json
           base="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG"
           node scripts/make-manifest.mjs assets "$VERSION" "$base"
           node scripts/check-manifest.mjs assets/latest.json "$VERSION" $(ls assets)

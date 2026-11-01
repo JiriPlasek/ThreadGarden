@@ -17,6 +17,7 @@ const DISMISSED_KEY = 'updates.dismissed';
 
 const UNREACHABLE = "Couldn't reach GitHub. Try again later.";
 const NOT_DOWNLOADED = "The update couldn't be downloaded or verified. Nothing was changed.";
+const NOT_INSTALLED = "The update couldn't be installed. Threadgarden is unchanged.";
 
 export type UpdatePhase =
   'idle' | 'checking' | 'available' | 'downloading' | 'ready' | 'installing' | 'unsupported';
@@ -25,8 +26,10 @@ export type UpdatesDeps = {
   api: Pick<Api, 'request'>;
   updater: Updater;
   appVersion: string;
-  /** Stops This PC's service (and its work) so the installer can replace it. */
+  /** Stops This PC's service (and its work) and waits for it to exit, so the installer can replace it. */
   stopLocalService(): Promise<void>;
+  /** Starts (or finds) This PC's service again and reconnects, after a failed install. */
+  restoreLocalService(): Promise<void>;
   now?: () => number;
 };
 
@@ -45,6 +48,8 @@ export class UpdatesState {
   private handle: UpdateHandle | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private disposed = false;
+  /** Whether the dismissed version was read from the local service (it may not answer yet). */
+  private dismissalLoaded = false;
 
   /** The notice is hidden for this version. */
   get dismissed(): boolean {
@@ -70,12 +75,20 @@ export class UpdatesState {
       this.phase = 'unsupported';
       return;
     }
-    const stored = await deps.api
-      .request('uiState.get', { key: DISMISSED_KEY })
-      .then((r) => r.value)
-      .catch(() => null);
-    if (typeof stored === 'string') this.dismissedVersion = stored;
+    await this.loadDismissal();
     this.schedule(FIRST_CHECK_DELAY_MS);
+  };
+
+  /** Reads the dismissed version once This PC's service answers; tried again at each check until then. */
+  private loadDismissal = async (): Promise<void> => {
+    if (this.dismissalLoaded || !this.deps) return;
+    try {
+      const { value } = await this.deps.api.request('uiState.get', { key: DISMISSED_KEY });
+      if (typeof value === 'string') this.dismissedVersion = value;
+      this.dismissalLoaded = true;
+    } catch {
+      // Not connected yet.
+    }
   };
 
   private schedule = (ms: number): void => {
@@ -91,15 +104,21 @@ export class UpdatesState {
   check = async (opts: { manual?: boolean } = {}): Promise<void> => {
     const deps = this.deps;
     if (!deps || this.phase === 'unsupported') return;
-    if (this.phase === 'downloading' || this.phase === 'installing') return;
-    this.phase = 'checking';
+    if (this.phase === 'downloading' || this.phase === 'ready' || this.phase === 'installing')
+      return;
+    // An update already on show stays on show while the check runs.
+    if (this.phase !== 'available') this.phase = 'checking';
     if (opts.manual) this.lastError = null;
+    await this.loadDismissal();
     try {
       const found = await deps.updater.check();
       this.lastCheck = (deps.now ?? Date.now)();
       this.handle = found;
       this.available = found ? { version: found.version, notes: found.notes } : null;
       this.phase = found ? 'available' : 'idle';
+      // Checking by hand brings back a notice that was dismissed.
+      if (opts.manual && found && found.version === this.dismissedVersion)
+        this.dismissedVersion = null;
     } catch {
       this.phase = this.available ? 'available' : 'idle';
       if (opts.manual) this.lastError = UNREACHABLE;
@@ -133,9 +152,18 @@ export class UpdatesState {
       return;
     }
     this.phase = 'ready';
-    await deps.stopLocalService();
-    this.phase = 'installing';
-    await handle.install();
+    try {
+      await deps.stopLocalService();
+      this.phase = 'installing';
+      await handle.install();
+    } catch {
+      // Nothing was replaced: bring This PC's service back and say so.
+      await deps.restoreLocalService().catch(() => {});
+      this.phase = 'available';
+      this.progress = null;
+      this.lastError = NOT_INSTALLED;
+      return;
+    }
     await deps.updater.relaunch();
   };
 

@@ -2,7 +2,7 @@
  * Wires the service client to every state module. The UI calls `startApp` once;
  * tests build their own instances and call `init` with a fake client instead.
  */
-import { serviceConnection, updater, type ServiceConnection } from '../native';
+import { appVersion, serviceConnection, updater, type ServiceConnection } from '../native';
 import { startAttention } from '../notifications';
 import { agents } from './agents.svelte';
 import { analytics } from './analytics.svelte';
@@ -85,17 +85,19 @@ const connectTo = async (conn: ServiceConnection): Promise<void> => {
     tabs.restore(),
   ]);
   loaded = true;
-  // Self-update: checks GitHub shortly after start, then every 6 hours.
-  updates.init({
-    api: client,
-    updater,
-    appVersion: conn.appVersion,
-    stopLocalService: lifecycle.stopLocalService,
-  });
 };
 
 const run = async (): Promise<void> => {
   // Wired first, so "Restart service" works even when no service could be used.
   wire();
+  // Self-update: started before connecting, so a release whose service cannot
+  // start can still be replaced by the next one.
+  updates.init({
+    api: client,
+    updater,
+    appVersion,
+    stopLocalService: lifecycle.stopLocalService,
+    restoreLocalService: lifecycle.startLocalService,
+  });
   await connectTo(await serviceConnection());
 };
