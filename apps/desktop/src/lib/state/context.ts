@@ -17,6 +17,7 @@ import { scopes, type MachineScope, type Scopes } from './scope';
 import { sessions, type SessionsState } from './sessions.svelte';
 import { settings, type SettingsState } from './settings.svelte';
 import { tabs, type TabsState } from './tabs.svelte';
+import { updates, type UpdatesState } from './updates.svelte';
 import { usage, type UsageStore } from './usage.svelte';
 
 export type AppState = {
@@ -35,6 +36,8 @@ export type AppState = {
   scheduled: ScheduledState;
   /** v1.3: the Analytics view. */
   analytics: AnalyticsState;
+  /** Self-update from GitHub Releases. */
+  updates: UpdatesState;
   /** Remote machines: This PC plus the paired ones. */
   machines: MachinesState;
   /**
@@ -60,6 +63,7 @@ const singletons: AppState = {
   usage,
   scheduled,
   analytics,
+  updates,
   machines,
   scopes,
 };

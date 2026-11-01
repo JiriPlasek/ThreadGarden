@@ -13,6 +13,7 @@
   import RunningBadge from './RunningBadge.svelte';
   import StatusIcon, { statusLabel } from './StatusIcon.svelte';
   import UsageMeter from './UsageMeter.svelte';
+  import UpdateNotice from '#lib/components/UpdateNotice.svelte';
 
   /**
    * Bottom strip (spec §6.1, Ruling R21): every live Threadgarden chat and every active
@@ -96,6 +97,7 @@
       {/each}
     </ul>
   {/if}
+  <UpdateNotice />
   <UsageMeter />
   <Button
     variant="ghost"

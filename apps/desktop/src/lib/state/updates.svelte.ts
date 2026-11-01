@@ -147,3 +147,22 @@ export class UpdatesState {
 }
 
 export const updates = new UpdatesState();
+
+/** At most this many chats are named when an update would stop them. */
+const NAMED_CHATS = 5;
+
+/**
+ * What updating stops on This PC, for its confirmation: up to five chats by
+ * title (then "and N more"), then the scheduled messages.
+ */
+export const updateStops = (titles: readonly string[], scheduled: number): string => {
+  const parts: string[] = [];
+  if (titles.length > 0) {
+    const named = titles.slice(0, NAMED_CHATS).join(', ');
+    const more = titles.length - NAMED_CHATS;
+    parts.push(more > 0 ? `${named} and ${more} more` : named);
+  }
+  if (scheduled > 0)
+    parts.push(`${scheduled} scheduled ${scheduled === 1 ? 'message' : 'messages'}`);
+  return `Updating restarts Threadgarden's service on This PC, which stops: ${parts.join(', and ')}. You can resume them afterwards. Chats on other machines keep running.`;
+};

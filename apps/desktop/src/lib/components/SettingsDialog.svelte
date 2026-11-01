@@ -18,6 +18,7 @@
   import { IDLE_MINUTES_MAX } from '#lib/state/settings.svelte.js';
   import AppearancePreview from './AppearancePreview.svelte';
   import MachinesSettings from './MachinesSettings.svelte';
+  import UpdatesSettings from './UpdatesSettings.svelte';
 
   type Accent = Settings['accent'];
 
@@ -436,6 +437,8 @@
         </p>
       {/if}
     </section>
+
+    <UpdatesSettings />
 
     {#if error}
       <p class="text-destructive text-xs" role="alert">{error}</p>
