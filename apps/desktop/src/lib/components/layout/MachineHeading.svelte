@@ -16,6 +16,12 @@
         return { label: 'Connecting…', tone: 'amber' };
       case 'unreachable':
         return { label: 'Unreachable', tone: 'amber' };
+      case 'off':
+        return { label: 'Off', tone: 'red' };
+      case 'starting':
+        return { label: 'Starting…', tone: 'amber' };
+      case 'shuttingDown':
+        return { label: 'Shutting down', tone: 'amber' };
       case 'mismatch':
         return attention('This address answers as a different machine');
       case 'refused':
@@ -53,10 +59,10 @@
     onToggle,
   }: { machine: MachineEntry; collapsed: boolean; onToggle: () => void } = $props();
 
-  const { interaction } = useApp();
+  const { interaction, machines } = useApp();
 
   const name = $derived(machineLabel(machine));
-  const shown = $derived(machineState(machine));
+  const shown = $derived(machineState({ name: machine.name, status: machines.shown(machine) }));
   const reasonId = $derived(`machine-reason-${machine.id}`);
 </script>
 

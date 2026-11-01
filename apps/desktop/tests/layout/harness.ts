@@ -19,6 +19,7 @@ import { LifecycleState } from '../../src/lib/state/lifecycle.svelte';
 import { APP_CONTEXT, type AppState } from '../../src/lib/state/context';
 import { MachinesState } from '../../src/lib/state/machines.svelte';
 import { PlacesState } from '../../src/lib/state/places.svelte';
+import { PowerState } from '../../src/lib/state/power.svelte';
 import { machineIdOf } from '../../src/lib/state/refs';
 import { ScheduledState } from '../../src/lib/state/scheduled.svelte';
 import { createScope, makeScope, Scopes, wireScope } from '../../src/lib/state/scope';
@@ -69,13 +70,18 @@ export const project = (projectId: string, displayName: string, over: Partial<Pr
   ...over,
 });
 
-export const machineInfo = (id: string, name: string): MachineInfo => ({
+/** `capabilities`: what its `hello` advertises (`['remote', 'power']` for a machine with power control). */
+export const machineInfo = (
+  id: string,
+  name: string,
+  capabilities: string[] = ['remote'],
+): MachineInfo => ({
   id,
   name,
   platform: 'linux',
   headless: id !== LOCAL,
   home: '/home/u',
-  capabilities: ['remote'],
+  capabilities,
 });
 
 export const pairedMachine = (id: string, name: string): PairedMachine => ({
@@ -121,10 +127,11 @@ const serve = (server: FakeServer, machine: MachineInfo): void => {
     'machines.list': () => [],
     'machines.unlock': () => ({}),
     'machines.remove': () => ({ revoked: true }),
+    'power.list': () => [],
   });
 };
 
-/** Device tokens in memory instead of the OS keychain. */
+/** Device tokens (or power switch passwords) in memory instead of the OS keychain. */
 const memoryTokens = (stored: Record<string, string>) => {
   const store = new Map(Object.entries(stored));
   return {
@@ -143,6 +150,7 @@ const wire = (
   client: ServiceClient,
   impl: typeof WebSocket,
   tokens: Record<string, string>,
+  passwords: Record<string, string> = {},
 ): AppState => {
   const tabs = new TabsState();
   const settings = new SettingsState();
@@ -173,6 +181,7 @@ const wire = (
     analytics: new AnalyticsState(),
     updates: new UpdatesState(),
     machines: new MachinesState(),
+    power: new PowerState(),
     scopes,
   };
   const chatOptions = { schedule: (cb: () => void) => cb() };
@@ -194,6 +203,7 @@ const wire = (
   scopes.follow(app.machines, tabs, (m) =>
     createScope(m.id, m.client, { tabs, agents: app.agents, chats: chatOptions }),
   );
+  app.power.init(client, app.machines, { passwords: memoryTokens(passwords) });
   app.machines.init(client, client, {
     relayUrl: (id) => `ws://fake:1/relay?machine=${id}`,
     localToken: () => 't',
@@ -231,19 +241,23 @@ export const setupTwoMachines = async (
      * with the code the local service uses for them.
      */
     m1Status?: 'on' | 'mismatch' | 'refused' | 'locked';
+    /** What M1's `hello` advertises (default `['remote']`; `['remote', 'power']` for power control). */
+    m1Capabilities?: string[];
+    /** Power switch passwords in the fake keychain, by machine id. */
+    powerPasswords?: Record<string, string>;
   } = {},
 ) => {
   const server = new FakeServer();
   const remote = new FakeServer();
   serve(server, machineInfo(LOCAL, 'my-host'));
-  serve(remote, machineInfo(M1, 'ubuntu-pc'));
+  serve(remote, machineInfo(M1, 'ubuntu-pc', o.m1Capabilities));
   server.handlers['machines.list'] = () => [pairedMachine(M1, 'Ubuntu PC')];
   o.configure?.(server);
   o.configureRemote?.(remote);
   const impl = routedImpl((url) => (url.includes('/relay?machine=') ? remote : server));
   const client = new ServiceClient({ WebSocketImpl: impl });
   await client.connect('ws://fake:1', 't');
-  const app = wire(client, impl, { [M1]: 'device-token' });
+  const app = wire(client, impl, { [M1]: 'device-token' }, o.powerPasswords);
   if (o.waitForOn !== false)
     await vi.waitFor(() => expect(app.machines.get(M1)?.status).toBe('on'));
   const status = o.m1Status ?? 'on';

@@ -463,6 +463,9 @@ describe('fix round 1', () => {
     expect(at('on')).toEqual({ label: 'On', tone: 'green' });
     expect(at('connecting')).toEqual({ label: 'Connecting…', tone: 'amber' });
     expect(at('unreachable')).toEqual({ label: 'Unreachable', tone: 'amber' });
+    expect(at('off')).toEqual({ label: 'Off', tone: 'red' });
+    expect(at('starting')).toEqual({ label: 'Starting…', tone: 'amber' });
+    expect(at('shuttingDown')).toEqual({ label: 'Shutting down', tone: 'amber' });
     const attention = (reason: string) => ({ label: 'Needs attention', tone: 'red', reason });
     expect(at('mismatch')).toEqual(attention('This address answers as a different machine'));
     expect(at('refused')).toEqual(attention('This device was removed on Ubuntu PC'));

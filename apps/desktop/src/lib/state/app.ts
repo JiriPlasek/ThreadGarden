@@ -10,6 +10,7 @@ import { connection } from './connection.svelte';
 import { lifecycle } from './lifecycle.svelte';
 import { machines, relayUrl } from './machines.svelte';
 import { places } from './places.svelte';
+import { power } from './power.svelte';
 import { client, createScope, scopes, wireScope } from './scope';
 import { settings } from './settings.svelte';
 import { tabs } from './tabs.svelte';
@@ -58,6 +59,8 @@ const wire = (): void => {
   places.follow(scopes);
   agents.follow(scopes);
   scopes.follow(machines, tabs, (m) => createScope(m.id, m.client, { tabs, agents }));
+  // Power control: before the machines connect, so it sees each one added.
+  power.init(client, machines);
   machines.init(client, client, {
     relayUrl: (id) => relayUrl(current?.port ?? 0, id),
     localToken: () => current?.token ?? '',
