@@ -33,6 +33,8 @@ export type FakeTasmotaOptions = {
   password?: string;
   requireReferer?: boolean;
   kind?: 'zigbee' | 'plug';
+  /** The port to listen on (default: any free one). */
+  port?: number;
   version?: string;
   /** Rules longer than this are cut off when written (a small firmware). */
   maxRuleLength?: number;
@@ -326,7 +328,7 @@ export async function startFakeTasmota(o: FakeTasmotaOptions = {}): Promise<Fake
     send(200, run(cmnd));
   });
 
-  await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  await new Promise<void>((resolve) => server.listen(o.port ?? 0, '127.0.0.1', resolve));
   state.address = `127.0.0.1:${(server.address() as AddressInfo).port}`;
   state.close = () =>
     new Promise<void>((resolve) => {

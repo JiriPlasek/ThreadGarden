@@ -21,12 +21,13 @@ do the steps once, over SSH; after that everything happens in Threadgarden.
   service.
 - Every paired device has **full control** of the Ubuntu PC's chats (send,
   answer permissions, stop). Pairing can be revoked from either side.
-- Not yet: turning the PC on and off from Threadgarden (power control comes
-  in a later release, with the smart plug), cloning or creating projects
-  there from Threadgarden, moving chats between machines, and showing a
-  machine's chats while it is off. Analytics and the usage meter show This
-  PC only for now. Until power control arrives, the Ubuntu PC simply stays
-  on.
+- Optionally, Threadgarden turns the PC on and shuts it down through a
+  Tasmota smart plug on your network: see [Power control](#4-power-control).
+  Without it the PC simply stays on.
+- Not yet: cloning or creating projects there from Threadgarden, moving
+  chats between machines, and showing a machine's chats while it is off
+  (an Off machine's group says "Its chats appear once it's on."). Analytics
+  and the usage meter show This PC only for now.
 
 > **Status of the installer.** `install.sh` has so far only been tested in
 > CI (on GitHub's Ubuntu runner, with stand-ins for `systemctl`, `loginctl`
@@ -89,7 +90,9 @@ sudo systemctl mask sleep.target suspend.target hibernate.target hybrid-sleep.ta
 ```
 
 Check: `sudo reboot`, do **not** log in at the PC, and connect again from
-Windows with `ssh`. If that works, the PC is reachable headless.
+Windows with `ssh`. If that works, the PC is reachable headless. A first
+headless boot can take a few minutes, so give it time before you decide it
+failed.
 
 ### A stable address
 
@@ -150,13 +153,16 @@ Claude works on git repositories there, and pushes with your GitHub account:
 sudo apt install -y git gh
 git config --global user.name "Your Name"
 git config --global user.email "you@example.com"
-gh auth login
+gh auth login --insecure-storage
 gh auth setup-git
 ```
 
 In `gh auth login`, choose GitHub.com, HTTPS, and "Login with a web
 browser": it prints a one-time code and the address
 `https://github.com/login/device`; open that on Windows and enter the code.
+`--insecure-storage` keeps the token in `gh`'s config file instead of the
+desktop keyring: on a PC that logs in without a password the keyring stays
+locked, and the headless service could not read a token kept there.
 Threadgarden itself never stores GitHub credentials.
 
 ### The Threadgarden headless service
@@ -203,6 +209,10 @@ install. The installer:
   your user's services start at boot and keep running after you log out. It
   may ask for your password. Ctrl+C skips it, but then Threadgarden runs only
   while you are logged in, so accept it;
+- offers to write `/etc/polkit-1/rules.d/49-threadgarden-power.rules` with
+  `sudo`, which lets your user power the machine off from the service (idle
+  shutdown and Shut down now). Ctrl+C skips it; do that if you will not use
+  power control, everything else works without it;
 - enables and starts the service, and prints what to do next.
 
 The service runs with `PATH=~/.local/bin:/usr/local/bin:/usr/bin:/bin`. If
@@ -230,7 +240,7 @@ Check that it runs and listens:
 threadgarden status
 ```
 
-It should say `Threadgarden <version> is running (protocol 5, headless).` and
+It should say `Threadgarden <version> is running (protocol 6, headless).` and
 `Listening for devices on 192.168.1.50:47380`. Optionally give the machine
 the name Threadgarden should show (the host name until you do):
 
@@ -283,6 +293,190 @@ folder on the Ubuntu PC becomes a project there once a chat has run in it:
 the simplest way is to clone it over SSH and run `claude` in it once
 (`cd ~/projects/<repo> && claude`, one message, `/exit`).
 
+## 4. Power control
+
+Optional. With a Tasmota smart plug that measures power, Threadgarden turns the
+Ubuntu PC on (by switching its power), shuts it down when it has been idle, and
+wakes it for a scheduled message. It all goes over your home network, from the
+Threadgarden services to the switch; the desktop's window never talks to it.
+The plug powers the PC, so the PC has to boot by itself whenever power returns
+(4.3).
+
+### 4.1 Choose a switch
+
+- **A ZB Bridge-P with a Zigbee plug**: a SONOFF ZBBridge-P running Tasmota,
+  and a Zigbee plug that reports watts, such as the SONOFF S60ZBTPF. This is
+  the route that has been tried on real hardware. The bridge can keep serving
+  other Zigbee devices; Threadgarden leaves them alone (4.5). Prepare it as in
+  4.2.
+- **A Tasmota Wi-Fi plug with power metering**, several makers sell them
+  pre-flashed. Join it to your Wi-Fi with its own setup page, set a web
+  password and reserve its address on the router (as in 4.2, steps 5 and 6).
+  This route is **Experimental**: it is covered by tests against a fake
+  Tasmota but has not been tried on a real plug.
+
+### 4.2 Prepare a ZB Bridge-P
+
+The stock firmware only works through eWeLink's cloud, so the bridge is
+reflashed with Tasmota; every Zigbee device on it then leaves eWeLink. You need
+a USB-UART adapter set to **3.3 V logic** (FT232RL or CP2102), a few Dupont
+cables, a small screwdriver, and Python on your PC with `python -m pip install
+esptool`. Download `tasmota32-zbbrdgpro.factory.bin` from the
+[Tasmota releases](https://github.com/arendst/Tasmota/releases) and check it
+against the release's checksum.
+
+1. **Open the case.** The board's pads are labelled 3V3, GND, TXD, RXD and
+   GPIO0. Power the bridge from **its own USB port**, not from the adapter: an
+   FT232RL's 3.3 V output is too weak for the bridge's two chips. Connect only
+   GND, the bridge's TXD to the adapter's RX, its RXD to the adapter's TX, and
+   GPIO0 to GND while you plug the power in (then release it).
+2. **Flash Tasmota.** Use esptool, not the browser installer (it wrote an HTML
+   page instead of the firmware). Replace `COM5` with the adapter's port:
+
+   ```powershell
+   python -m esptool --port COM5 --baud 460800 --before no-reset --after no-reset write-flash --erase-all 0x0 tasmota32-zbbrdgpro.factory.bin
+   ```
+
+   Then unplug the bridge's power and plug it in again, without GPIO0 held.
+3. **Join your Wi-Fi over the serial line.** Tasmota 16 may offer no setup
+   access point. Open the adapter's port in a serial terminal (115200 baud) and
+   enter:
+
+   ```text
+   Backlog SSID1 your-wifi-name; Password1 your-wifi-password
+   ```
+
+   The bridge restarts and joins; its address is printed on the serial line
+   (or look it up in your router). Open `http://<address>/` in a browser to
+   check.
+4. **Update the Zigbee chip.** In the bridge's web page, Consoles → Manage File
+   System: upload the newest `SonoffZBPro_coord_*.hex` from the Tasmota project
+   (this guide was verified with `SonoffZBPro_coord_20240710.hex`). Then
+   Consoles → Berry Scripting console, and run, one line at a time:
+
+   ```berry
+   import sonoff_zb_pro_flasher as cc
+   cc.load("SonoffZBPro_coord_20240710.hex")
+   cc.check()
+   cc.flash()
+   ```
+
+   Use your file's name in `cc.load`, and wait for `cc.flash()` to finish.
+5. **Set a web password** (Configuration → Configure Other → Web Admin
+   Password). Threadgarden signs in as `admin` with it.
+6. **Reserve the bridge's address** in your router (a DHCP reservation, as for
+   the Ubuntu PC), so Threadgarden finds it again.
+
+Pairing the plug to the bridge happens in Threadgarden (4.4).
+
+### 4.3 The BIOS
+
+Switching power only boots the PC if its firmware starts it when power
+returns. In the BIOS, set **Restore on AC power loss** (ASRock calls it **AC
+Back**) to **On**. Test it: shut the PC down, unplug it for **more than 10
+seconds** (a shorter cut may leave it off), plug it in, and it must start by
+itself. Threadgarden's default wait before switching on again is 90 seconds,
+which is proven to work.
+
+### 4.4 In Threadgarden
+
+Plug the Ubuntu PC into the smart plug, turn it on, and make sure the machine
+shows On. Then, in Settings → Machines → the machine → **Power**, click **Set
+up power control…**:
+
+1. **Connect.** Enter the switch's address and its web password (the user name
+   is always `admin`). Threadgarden checks what the device is and says plainly
+   if it is not Tasmota or refuses the password.
+2. **Choose the plug** (a Zigbee bridge only). The list shows the paired plugs
+   that measure power, each with its watts right now: the one the PC is on is
+   drawing tens of watts. A plug whose name has characters Threadgarden can't
+   use is greyed out with a note: rename it on the switch's console with
+   `ZbName <id>,<name>` and press Refresh. For a new plug, **Pair a new
+   plug…** opens Zigbee pairing on the bridge for 60 seconds (hold the plug's
+   button until its LED blinks fast) and names it "‹machine›_plug".
+3. **Check.** Threadgarden shows the plug's watts, with **Refresh**. **Off
+   below** (default 5 W): the machine counts as off under that many watts.
+   **Wait before switching on** (default 90 s): how long power stays cut
+   before it comes back. Nothing in setup switches the plug off, since the PC
+   is running on it.
+4. **Save.** Threadgarden installs what it needs on the switch (4.5). The
+   machine's heading now has a **⏻** menu, and Settings shows the plug, its
+   watts and the settings. After the first shutdown Threadgarden measured,
+   Settings suggests an off line between the running and shut-down readings.
+
+**The ⏻ menu.** **Turn on** switches the plug on (if the PC is standing by with
+the plug already on, it cuts power, waits, and switches it on again). The
+machine then shows **Starting…**, and **Unreachable** if it has not answered
+after 5 minutes. **Shut down now** starts the shutdown below. **Keep awake**
+stops idle shutdown for 1 hour, 4 hours or until you turn it off, and survives
+a service restart. The states are **Off**, **Starting…**, **On**, **Shutting
+down** and **Unreachable**; hover over the state to see "Shuts down in 42 min".
+
+**Shut down after idle** (Settings → Power: Never, 30 min, 1 hour, 2 hours or
+4 hours; default 1 hour) is kept on the machine itself, so it works with every
+window closed. A machine is busy while a chat on it is mid-turn, while a
+background agent a chat started is still running, or while a Claude Code
+session Threadgarden did not start is working (the last one is only seen while
+the "external sessions" polling setting is on). A chat waiting for your answer
+counts as idle, and a dev server or file watcher left running by a chat does not
+keep the machine awake.
+
+**What a shutdown does.**
+
+1. It checks every repository the machine's chats worked in for work that
+   exists only on that disk: uncommitted changes (including untracked files that
+   are not ignored), commits on no remote branch, commits on a detached HEAD,
+   and stashes. A repository it cannot check also pauses the shutdown; a
+   repository without a remote is skipped.
+2. If it found something, the machine stays on and Needs you shows **Unpushed
+   work on ‹machine›**, with **Ask Claude to push it** and **Shut down
+   anyway**. Nothing is deleted either way.
+3. If a scheduled message is due within 15 minutes, the shutdown is postponed.
+4. Otherwise it stops the chats (they become resumable), arms the power cut on
+   the switch, and runs `systemctl poweroff`. If a scheduled message is due
+   within 7 days, it also sets a wake on the switch for 5 minutes before it.
+5. The switch cuts the power once the plug has read below the off line for about
+   30 seconds. It never cuts on a timer alone, so a PC that hangs while shutting
+   down keeps its power.
+
+If the switch cannot be reached or refuses, the machine **stays on** and
+Threadgarden says why: powering it off without being able to switch it on again
+would strand it.
+
+**Remove power control** (Settings → Power) takes Threadgarden's rule off the
+switch and forgets the switch. If the machine is off at that moment, it is told
+when it is next on.
+
+### 4.5 What Threadgarden changes on your switch
+
+On a switch, Threadgarden uses only:
+
+- one **rule slot** (1, 2 or 3): a free one, or the one it used before;
+- **RuleTimer** 6, 7 and 8, **Var** 14 and 15, **Mem** 11 to 14, and **Timer16**
+  (the wake).
+
+It never touches your other rules, timers, variables, devices, Wi-Fi settings
+or firmware, and never removes a Zigbee device. If something of yours already
+uses one of the above, setup stops with an explanation instead of taking it,
+and it says so if no rule slot is free. On a Zigbee bridge it also sets
+`SetOption83 1` (devices addressed by name), but only if none of your rules
+names a Zigbee device by its address. Remove power control and its rule and
+timer go away again.
+
+Two more things. Wakes use Tasmota's timers, so Tasmota's global **Timers**
+switch must be on (Configuration → Configure Timer). And Threadgarden sends the
+`Referer` header Tasmota 16 wants itself, so you do not need `SetOption128`; if
+a switch still refuses requests, enter `SetOption128 1` on its console.
+
+### 4.6 Security
+
+Tasmota has no TLS, so the web password crosses your network in clear text. Keep
+the switch on your home network behind your router, never forwarded to the
+internet, and give it a web password. Threadgarden keeps the password in the
+desktop's credential store and, on the Ubuntu PC (whose own service arms the
+cut), in `~/.local/share/threadgarden/power-switch.json`, readable only by your
+user. It never appears in the interface, logs or errors after you type it.
+
 ## Troubleshooting
 
 ### By the state Threadgarden shows
@@ -298,6 +492,10 @@ under the heading's **Open settings** and in Settings → Machines.
 | **Needs attention:** This address answers as a different machine | Something answers at the address, but not with the certificate that was paired. Nothing was sent to it. | Usually the address now belongs to another device (DHCP): find the PC's address (`hostname -I`) and change it in Settings → Machines. If the Ubuntu PC's Threadgarden data was reset (or its TLS identity was replaced; its log says "created a new one — paired devices must pair again"), **Remove** the machine and pair again. |
 | **Needs attention:** This device was removed on ‹name› | The Ubuntu PC revoked this desktop (`threadgarden revoke`). | **Remove** it in Settings → Machines, then `threadgarden pair` and **Add machine…** again. |
 | **Needs attention:** Pair again | This PC no longer has the machine's device token (for example the Windows credential store entry was deleted). | **Remove** it, then pair again. |
+| **Starting…** then **Unreachable** | The plug came on but the service did not answer within 5 minutes. | Check the BIOS setting and the wait (see "Stays Off after Turn on" below), that Wi-Fi connects at boot without a login, and that the service starts (`systemctl --user status threadgarden`). A first headless boot can take a few minutes. Press **Turn on** again once it is up or has been reset. |
+| **Shutdown paused: unpushed work** | Needs you shows "Unpushed work on ‹machine›": a repository there has changes, commits or stashes that are on no remote branch, or it could not be checked. | **Ask Claude to push it**, or push over SSH, then shut down again. **Shut down anyway** leaves the work on the machine's disk. |
+| **The power switch refused the password** | The switch rejected `admin` with the saved password, so the machine stays on. | Set the password again in Settings → Power (remove power control and set it up again). On Tasmota 16, if requests are refused even with the right password, enter `SetOption128 1` on the switch's console. |
+| **Stays Off after Turn on** | The plug is on but the PC does not boot. | Check the BIOS "Restore on AC power loss" = On (4.3), and that **Wait before switching on** is long enough: a PC cut for less than about 10 s may not notice the power return. To change it, remove power control and set it up again with a longer wait (90 s is proven), then press Turn on. |
 | **Needs attention:** Different Threadgarden version | The two versions are too far apart (more than one protocol version). | Install the matching release on the Ubuntu PC (see [Upgrading](#upgrading)) or update the desktop app. |
 
 ### When pairing fails

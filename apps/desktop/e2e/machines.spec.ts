@@ -97,7 +97,7 @@ test('pair with a second machine, chat on it, see its Needs you item, remove it'
   await composer.fill('List the files, perm needed');
   await composer.press('Enter');
   await expect(page.getByRole('group', { name: 'Permission request: Bash' })).toBeVisible();
-  await expect(places.locator('[title="Chats waiting for you"]')).toHaveText('1');
+  await expect(places.locator('[title="Waiting for you"]')).toHaveText('1');
   await places.getByRole('button', { name: /Needs you/ }).click();
   const waiting = list.locator('[role="option"][data-session-id]');
   await expect(waiting).toHaveCount(1);
@@ -128,6 +128,6 @@ test('pair with a second machine, chat on it, see its Needs you item, remove it'
 
   // Back to This PC alone: no machine groups, nothing waiting.
   await expect(places.getByRole('group', { name: MACHINE })).toHaveCount(0);
-  await expect(places.locator('[title="Chats waiting for you"]')).toHaveCount(0);
+  await expect(places.locator('[title="Waiting for you"]')).toHaveCount(0);
   expect(await serviceCall<unknown[]>('machines.list', {})).toEqual([]);
 });
