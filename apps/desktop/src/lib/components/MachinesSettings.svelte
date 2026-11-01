@@ -172,21 +172,24 @@
           <p class="text-destructive text-xs" role="alert">{errors[m.id]}</p>
         {/if}
       </div>
-      <div class="flex justify-end gap-1.5">
+      <!-- The group names the machine; the buttons say so to assistive technology only, so a long name never widens Settings. -->
+      <div class="flex flex-wrap justify-end gap-1.5">
         <Button
           variant="outline"
           size="sm"
+          aria-label="Save {m.name}"
           disabled={!dirty(m) || busy[m.id]}
-          onclick={() => void save(m)}>Save {m.name}</Button
+          onclick={() => void save(m)}>Save</Button
         >
         <Button
           variant="ghost"
           size="sm"
           class="text-destructive"
+          aria-label="Remove {m.name}"
           onclick={() => {
             removing = m;
             removeOpen = true;
-          }}>Remove {m.name}</Button
+          }}>Remove</Button
         >
       </div>
       <PowerSettings machine={m} />

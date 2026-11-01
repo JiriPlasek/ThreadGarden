@@ -30,9 +30,10 @@
 
   /**
    * Middle column (spec §6.1): searchable chats of the selected place, in
-   * recency sections with sticky headers (v1.2 §2): "Now" (needs you, your
-   * turn, running) in the service's order, then Last 24 hours, Last 7 days,
-   * Last 30 days and Older.
+   * recency sections with sticky headers (v1.2 §2): Last hour (led by the
+   * chats that need you, your turn and running ones, in the service's order),
+   * then Last 24 hours, Last 7 days, Last 30 days and Older; "Now" in the
+   * Needs you and Running places.
    *
    * Accessibility: the listbox holds the chats only. Section headers are
    * visual rows (`role="presentation"`, hidden from assistive technology);

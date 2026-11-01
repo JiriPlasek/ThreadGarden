@@ -2,6 +2,7 @@ import type { UsageState } from '@threadgarden/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { openDb, type Db } from '../../src/history/db.js';
 import {
+  USAGE_AUTO_READ_MS,
   USAGE_READ_INTERVAL_MS,
   USAGE_READ_TIMEOUT_MS,
   UsageTracker,
@@ -293,6 +294,40 @@ describe('UsageTracker', () => {
     expect(read).toHaveBeenCalledTimes(1);
     now += 1;
     await t.refresh(read);
+    expect(read).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps the reading fresh by itself: after every turn, and every few minutes while a chat runs', async () => {
+    vi.useFakeTimers();
+    const t = tracker();
+    const read = vi.fn(async () => ({
+      rate_limits_available: true,
+      rate_limits: { five_hour: { utilization: read.mock.calls.length * 10 } },
+    }));
+    let running: typeof read | undefined = undefined;
+    t.autoRefresh(() => running);
+
+    // No chat runs: nothing to ask, and no process is started for it.
+    now += USAGE_AUTO_READ_MS;
+    await vi.advanceTimersByTimeAsync(USAGE_AUTO_READ_MS);
+    t.turnEnded('a');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(read).not.toHaveBeenCalled();
+
+    running = read;
+    t.turnEnded('a');
+    await vi.advanceTimersByTimeAsync(0);
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(t.state().windows[0]).toMatchObject({ key: 'five_hour', utilization: 10 });
+
+    now += USAGE_AUTO_READ_MS;
+    await vi.advanceTimersByTimeAsync(USAGE_AUTO_READ_MS);
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(emitted.at(-1)?.windows[0]).toMatchObject({ utilization: 20 });
+
+    t.dispose();
+    now += USAGE_AUTO_READ_MS;
+    await vi.advanceTimersByTimeAsync(USAGE_AUTO_READ_MS);
     expect(read).toHaveBeenCalledTimes(2);
   });
 

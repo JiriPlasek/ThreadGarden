@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   DAY_MS,
+  HOUR_MS,
   groupChats,
   isNow,
   recencySection,
@@ -19,8 +20,10 @@ const shape = (rows: readonly ListRow[]): string[] =>
   );
 
 describe('recency sections (v1.2 §2)', () => {
-  it('puts the boundaries in the newer section: exactly 24 h, 7 d and 30 d', () => {
-    expect(recencySection(NOW, NOW)).toBe('day');
+  it('puts the boundaries in the newer section: exactly 1 h, 24 h, 7 d and 30 d', () => {
+    expect(recencySection(NOW, NOW)).toBe('hour');
+    expect(recencySection(ago(HOUR_MS), NOW)).toBe('hour');
+    expect(recencySection(ago(HOUR_MS + 1), NOW)).toBe('day');
     expect(recencySection(ago(DAY_MS), NOW)).toBe('day');
     expect(recencySection(ago(DAY_MS + 1), NOW)).toBe('week');
     expect(recencySection(ago(7 * DAY_MS), NOW)).toBe('week');
@@ -30,12 +33,12 @@ describe('recency sections (v1.2 §2)', () => {
   });
 
   it('reads clock skew as recent and a missing timestamp as older', () => {
-    expect(recencySection(NOW + 60_000, NOW)).toBe('day');
+    expect(recencySection(NOW + 60_000, NOW)).toBe('hour');
     expect(recencySection(0, NOW)).toBe('older');
     expect(recencySection(Number.NaN, NOW)).toBe('older');
   });
 
-  it('the "now" section holds needs-you, your-turn, working and running chats', () => {
+  it('needs-you, your-turn, working and running chats belong at the top', () => {
     expect(isNow(summary('a', { status: 'needsYou' }))).toBe(true);
     expect(isNow(summary('a', { status: 'working' }))).toBe(true);
     expect(isNow(summary('a', { status: 'idle', live: true, unread: true }))).toBe(true);
@@ -47,7 +50,7 @@ describe('recency sections (v1.2 §2)', () => {
     expect(isNow(summary('a', { status: 'paused' }))).toBe(false);
     expect(isNow(summary('a', { status: 'history' }))).toBe(false);
     // An unread history row keeps its recency section: the service lists it at
-    // its recency position, so a later page never moves it into "Now".
+    // its recency position, so a later page never moves it to the top.
     expect(isNow(summary('a', { status: 'history', unread: true }))).toBe(false);
     expect(isNow(summary('a', { status: 'idle', unread: true }))).toBe(false);
     // Forward compatibility: a status from a newer service goes by its recency.
@@ -56,25 +59,27 @@ describe('recency sections (v1.2 §2)', () => {
 });
 
 describe('groupChats', () => {
-  it('lists "now" first in service order, then recency sections with counts', () => {
+  it('lists the last hour first, with the chats that need the user or run, then by recency', () => {
     const items = [
       summary('n1', { status: 'needsYou', lastActivity: ago(40 * DAY_MS) }),
       summary('w1', { status: 'working', lastActivity: ago(1000) }),
       summary('i1', { status: 'idle', live: true, lastActivity: ago(3 * DAY_MS) }),
       summary('h1', { lastActivity: ago(60_000) }),
       summary('u1', { status: 'idle', live: true, unread: true, lastActivity: ago(2 * 60_000) }),
+      summary('d1', { lastActivity: ago(5 * HOUR_MS) }),
       summary('h2', { lastActivity: ago(2 * DAY_MS) }),
       summary('h3', { lastActivity: ago(20 * DAY_MS) }),
       summary('h4', { lastActivity: ago(400 * DAY_MS) }),
     ];
     const g = groupChats(items, NOW);
     expect(shape(g.rows)).toEqual([
-      'Now (3)',
+      'Last hour (4)',
       'n1',
       'w1',
+      'h1',
       'u1',
       'Last 24 hours (1)',
-      'h1',
+      'd1',
       'Last 7 days (2)',
       'i1',
       'h2',
@@ -87,8 +92,9 @@ describe('groupChats', () => {
     expect(g.chats.map((c) => c.sessionId)).toEqual([
       'n1',
       'w1',
-      'u1',
       'h1',
+      'u1',
+      'd1',
       'i1',
       'h2',
       'h3',
@@ -106,7 +112,7 @@ describe('groupChats', () => {
       [summary('h1', { lastActivity: ago(60_000) }), summary('h2', { lastActivity: ago(0) })],
       NOW,
     );
-    expect(shape(g.rows)).toEqual(['Last 24 hours (2)', 'h1', 'h2']);
+    expect(shape(g.rows)).toEqual(['Last hour (2)', 'h1', 'h2']);
     expect(groupChats([], NOW).rows).toEqual([]);
   });
 
@@ -125,7 +131,7 @@ describe('groupChats', () => {
       summary('h2', { lastActivity: ago(40 * DAY_MS) }),
     ];
     expect(shape(groupChats(page, NOW, { hasMore: true }).rows)).toEqual([
-      'Last 24 hours (1)',
+      'Last hour (1)',
       'h1',
       'Older (1+)',
       'h2',
@@ -144,18 +150,16 @@ describe('groupChats', () => {
       summary('h4', { lastActivity: ago(90 * DAY_MS) }),
     ];
     expect(shape(groupChats(page1, NOW, { hasMore: true }).rows)).toEqual([
-      'Now (1)',
+      'Last hour (2)',
       'w1',
-      'Last 24 hours (1)',
       'h1',
       'Last 7 days (1+)',
       'h2',
     ]);
     // An unread history chat paged in later stays at its recency position (M3).
     expect(shape(groupChats([...page1, ...page2], NOW).rows)).toEqual([
-      'Now (1)',
+      'Last hour (2)',
       'w1',
-      'Last 24 hours (1)',
       'h1',
       'Last 7 days (2)',
       'h2',

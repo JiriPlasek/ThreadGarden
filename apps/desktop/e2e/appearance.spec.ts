@@ -119,3 +119,17 @@ test('screenshots of a few combinations', async ({ page }) => {
   await dialog.getByRole('group', { name: 'Appearance preview' }).scrollIntoViewIfNeeded();
   await dialog.screenshot({ path: `${SHOTS}/settings-appearance.png` });
 });
+
+test('the Settings dialog is wide, and does not scroll sideways', async ({ page }) => {
+  await openApp(page);
+  const dialog = await openSettings(page);
+  await expect(dialog).toBeVisible();
+  const box = await dialog.boundingBox();
+  expect(box!.width).toBeGreaterThanOrEqual(900);
+  const sideways = () => dialog.evaluate((d) => d.scrollWidth - d.clientWidth);
+  expect(await sideways()).toBe(0);
+  // A small window: the dialog keeps within it, still without scrolling sideways.
+  await page.setViewportSize({ width: 560, height: 700 });
+  expect((await dialog.boundingBox())!.width).toBeLessThanOrEqual(560);
+  expect(await sideways()).toBe(0);
+});

@@ -271,16 +271,17 @@ export class Indexer {
         }
         done++;
       }
+      // Before yielding: a chat anyone can count by then has its project listed.
+      try {
+        this.syncProjects(seenProjects);
+      } catch (e) {
+        this.onError(e, { sessionId: '', step: 'sync' });
+      }
       if (progress) this.emit({ event: 'index.progress', data: { done, total: infos.length } });
       await yieldLoop();
     }
     if (progress && infos.length === 0) {
       this.emit({ event: 'index.progress', data: { done: 0, total: 0 } });
-    }
-    try {
-      this.syncProjects(seenProjects);
-    } catch (e) {
-      this.onError(e, { sessionId: '', step: 'sync' });
     }
     if (changed.length > 0) this.emit({ event: 'sessions.changed', data: { sessionIds: changed } });
   }
