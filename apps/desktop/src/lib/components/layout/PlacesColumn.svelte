@@ -45,7 +45,7 @@
    */
   let { onCollapse }: { onCollapse?: () => void } = $props();
 
-  const { places, interaction, tabs, scopes, machines } = useApp();
+  const { places, interaction, tabs, scopes, machines, power } = useApp();
   const local = scopes.local();
 
   type Group = { machine: MachineEntry | undefined; scope: MachineScope };
@@ -266,7 +266,11 @@
         >
           <StatusIcon status="needsYou" decorative class="mx-px" />
           <span class="truncate">Needs you</span>
-          {@render badge(places.counts.needsYou, 'amber', 'Chats waiting for you')}
+          {@render badge(
+            places.counts.needsYou + power.blockedIds().length,
+            'amber',
+            'Chats waiting for you',
+          )}
         </button>
       </li>
       <li>

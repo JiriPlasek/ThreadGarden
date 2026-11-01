@@ -105,6 +105,9 @@ export class PowerState {
   private pending = $state<Record<string, true>>({});
   private storage: Store | null = null;
   private perMachine = new Map<string, () => void>();
+  private blockedWatchers = new Set<(id: string) => void>();
+  /** Machines last seen blocked (kept across a reconnect, so a reopened link does not announce it again). */
+  private wasBlocked = new Set<string>();
   private offs: (() => void)[] = [];
 
   init = (localApi: Api, machines: Machines, opts: PowerOptions = {}): void => {
@@ -153,6 +156,18 @@ export class PowerState {
   reading = (id: string): PlugReading | null => this.readings[id] ?? null;
   machine = (id: string): MachinePowerStatus | null => this.statuses[id] ?? null;
   /** Power control was removed here but `machine` has not been told yet (it is off, or unreachable). */
+  /** The machines whose idle shutdown is paused by unpushed work (spec §10): each wants an answer in Needs you. */
+  blockedIds = (): string[] =>
+    Object.entries(this.statuses)
+      .filter(([, s]) => s.phase === 'blocked')
+      .map(([id]) => id);
+
+  /** Calls `cb` with a machine's id each time it goes into `blocked` (not again while it stays there). */
+  onBlocked = (cb: (id: string) => void): (() => void) => {
+    this.blockedWatchers.add(cb);
+    return () => this.blockedWatchers.delete(cb);
+  };
+
   pendingRemoval = (id: string): boolean => this.pending[id] === true;
   /** The last power request for the machine that failed, in plain words (null: none since). */
   error = (id: string): string | null => this.errors[id] ?? null;
@@ -327,6 +342,7 @@ export class PowerState {
     this.dropPlug(id);
     delete this.statuses[id];
     delete this.errors[id];
+    this.wasBlocked.delete(id);
     this.adopted.delete(id);
     // Unpaired: there is no machine left to tell.
     this.setPending(id, false);
@@ -367,6 +383,11 @@ export class PowerState {
 
   private setMachine = (id: string, s: MachinePowerStatus): void => {
     this.statuses[id] = s;
+    if (s.phase !== 'blocked') this.wasBlocked.delete(id);
+    else if (!this.wasBlocked.has(id)) {
+      this.wasBlocked.add(id);
+      for (const cb of this.blockedWatchers) cb(id);
+    }
     if (s.phase === 'shuttingDown') {
       this.shutSeenAt[id] = Date.now();
       delete this.startedAt[id];

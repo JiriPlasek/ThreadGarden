@@ -53,7 +53,7 @@ const wire = (): void => {
   usage.init(client);
   analytics.init(client);
   // Notifications: a watcher per machine (the scopes below), one tray badge (the sum).
-  startAttention({ scopes, machines, settings, tabs, places });
+  startAttention({ scopes, machines, settings, tabs, places, power });
   // Paired machines: a scope each, on its relay client through the local service.
   // Needs you, Running, the bucket counts and the agents strip add up every machine's.
   places.follow(scopes);

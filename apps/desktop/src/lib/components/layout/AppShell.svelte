@@ -37,7 +37,9 @@
    * with = + - 0 changes the interface size; an older service shows the
    * restart banner.
    */
-  const { settings, connection, places, interaction } = useApp();
+  const { settings, connection, places, interaction, power } = useApp();
+  /** Chats waiting for you, plus one per machine whose shutdown is paused by unpushed work. */
+  const needsYouCount = $derived(places.counts.needsYou + power.blockedIds().length);
 
   let checking = $state(false);
   const checkAgain = (): void => {
@@ -117,13 +119,13 @@
           >
             <SettingsIcon />
           </IconButton>
-          {#if places.counts.needsYou > 0}
+          {#if needsYouCount > 0}
             <button
               type="button"
               class="rounded-full bg-amber-500/20 px-1.5 text-[0.6875rem] leading-4 font-medium text-amber-800 tabular-nums dark:text-amber-300"
               title="Needs you"
-              aria-label="Needs you: {places.counts.needsYou}"
-              onclick={() => places.select({ kind: 'needsYou' })}>{places.counts.needsYou}</button
+              aria-label="Needs you: {needsYouCount}"
+              onclick={() => places.select({ kind: 'needsYou' })}>{needsYouCount}</button
             >
           {/if}
         </div>
