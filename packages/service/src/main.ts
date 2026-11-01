@@ -559,6 +559,8 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         },
       });
       host = sessionHost;
+      // v1.3 B: the meter keeps up by itself, from a running chat's usage reading.
+      usageTracker.autoRefresh(() => sessionHost.usageReader());
 
       const catalogRef: { current?: Catalog } = {};
       const index = new Indexer(
@@ -836,6 +838,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       try {
         clearTimer(timer);
         await step('scheduled sends', () => scheduled?.dispose());
+        await step('usage', () => usage?.dispose());
         // Live sessions end with the process; the registry still lists them,
         // so the next start shows them as interrupted (§4.2).
         await step('sessions', () => host?.dispose());

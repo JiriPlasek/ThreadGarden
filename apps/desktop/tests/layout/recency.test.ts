@@ -39,20 +39,20 @@ const options = (): string[] =>
 const mixed = () => [
   summary('n1', { status: 'needsYou', lastActivity: NOW - 40 * DAY_MS }),
   summary('w1', { status: 'working', lastActivity: NOW - 1000 }),
-  summary('h1', { lastActivity: NOW - HOUR }),
+  summary('h1', { lastActivity: NOW - 2 * HOUR }),
   summary('h2', { lastActivity: NOW - 3 * DAY_MS }),
   summary('h3', { lastActivity: NOW - 400 * DAY_MS }),
 ];
 
 describe('chat list recency sections (v1.2 §2)', () => {
-  it('shows "now" first, then recency sections with counts; empty ones are hidden', async () => {
+  it('shows the last hour first (with the chats that need you or run), then by recency; empty sections are hidden', async () => {
     freezeClock();
     const { context } = await setup((server) => {
       server.handlers['sessions.list'] = () => ({ items: mixed() });
     });
     render(ChatList, { context });
     await waitFor(() => expect(screen.getAllByRole('option')).toHaveLength(5));
-    expect(headers()).toEqual(['Now 2', 'Last 24 hours 1', 'Last 7 days 1', 'Older 1']);
+    expect(headers()).toEqual(['Last hour 2', 'Last 24 hours 1', 'Last 7 days 1', 'Older 1']);
     expect(options()).toEqual(['n1', 'w1', 'h1', 'h2', 'h3']);
   });
 
@@ -75,7 +75,7 @@ describe('chat list recency sections (v1.2 §2)', () => {
         .getAttribute('aria-describedby')!;
       return document.getElementById(ref)!.textContent!.trim();
     };
-    expect(describe('n1')).toBe('Now');
+    expect(describe('n1')).toBe('Last hour');
     expect(describe('h1')).toBe('Last 24 hours');
     expect(describe('h3')).toBe('Older');
     // Positions count chats only, across sections.
@@ -121,7 +121,7 @@ describe('chat list recency sections (v1.2 §2)', () => {
     freezeClock();
     const page1 = [
       summary('w1', { status: 'working', lastActivity: NOW - 1000 }),
-      summary('a1', { lastActivity: NOW - HOUR }),
+      summary('a1', { lastActivity: NOW - 2 * HOUR }),
       summary('a2', { lastActivity: NOW - 2 * DAY_MS }),
     ];
     const page2 = [
@@ -136,7 +136,7 @@ describe('chat list recency sections (v1.2 §2)', () => {
     });
     render(ChatList, { context });
     await waitFor(() => expect(screen.getAllByRole('option')).toHaveLength(5));
-    expect(headers()).toEqual(['Now 1', 'Last 24 hours 1', 'Last 7 days 2', 'Older 1']);
+    expect(headers()).toEqual(['Last hour 1', 'Last 24 hours 1', 'Last 7 days 2', 'Older 1']);
     expect(options()).toEqual(['w1', 'a1', 'a2', 'b1', 'b2']);
   });
 
@@ -168,7 +168,7 @@ describe('chat list recency sections (v1.2 §2)', () => {
     const rows = () => list.querySelectorAll('[role="option"], [data-section-header]');
     expect(rows().length).toBeLessThan(60);
     expect(screen.getAllByRole('option')[0]!.getAttribute('aria-setsize')).toBe('1000');
-    expect(headers()[0]).toBe('Last 24 hours 25');
+    expect(headers().slice(0, 2)).toEqual(['Last hour 2', 'Last 24 hours 23']);
 
     // jsdom does not scroll: make scrollTop writable for this element.
     let top = 0;

@@ -99,6 +99,26 @@ describe('notifications', () => {
     expect(env.app.places.selected).toEqual({ kind: 'needsYou' });
   });
 
+  it('focus soon after a notification about the open chat keeps the place', async () => {
+    const env = await start((server) => {
+      server.handlers['sessions.list'] = (p) =>
+        (p as ListParams).place.kind === 'needsYou'
+          ? { items: [summary('s2', { status: 'needsYou', live: true })] }
+          : { items: [] };
+    });
+    env.app.tabs.openTab('s2');
+    window.dispatchEvent(new Event('blur'));
+    env.server.push('needsYou', needsYou('s2'));
+    await flush();
+    expect(env.notify).toHaveBeenCalledTimes(1);
+
+    env.advance(5_000);
+    window.dispatchEvent(new Event('focus'));
+    await flush();
+    expect(env.app.places.selected).toEqual({ kind: 'active' });
+    expect(env.app.tabs.active).toBe(here('s2'));
+  });
+
   it('focus long after a notification changes nothing', async () => {
     const env = await start();
     window.dispatchEvent(new Event('blur'));
