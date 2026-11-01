@@ -9,7 +9,10 @@ export const REMOTE_PROTOCOL_RANGE = { min: 5, max: 7 } as const;
 export const acceptsRemoteProtocol = (v: number): boolean =>
   Number.isInteger(v) && v >= REMOTE_PROTOCOL_RANGE.min && v <= REMOTE_PROTOCOL_RANGE.max;
 
-/** What a service can do for a remote desktop. Later plans add `projects`, `move` and `power`. */
+/**
+ * What every service can do for a remote desktop. Later plans add `projects` and `move`.
+ * `power` is not here: a headless service adds it to its own `hello` at runtime.
+ */
 export const CAPABILITIES = ['remote'] as const;
 
 export const MachineInfoSchema = z.object({

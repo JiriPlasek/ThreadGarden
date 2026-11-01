@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   CAPABILITIES,
+  POWER_CAPABILITY,
   PROTOCOL_VERSION,
   type ChatStatus,
   type EventMsg,
@@ -42,7 +43,12 @@ import { makeResumeChecker, registerExternalHandlers } from './server/handlers/e
 import { registerFileHandlers } from './server/handlers/files.js';
 import { machineFor, registerMachineHandlers } from './server/handlers/machines.js';
 import { registerHistoryHandlers } from './server/handlers/history.js';
-import { registerPowerClientHandlers } from './server/handlers/power.js';
+import {
+  registerPowerClientHandlers,
+  registerPowerMachineHandlers,
+} from './server/handlers/power.js';
+import { IdleMonitor } from './power/idle.js';
+import { PowerStore } from './power/store.js';
 import { registerUsageHandlers } from './server/handlers/usage.js';
 import { PowerHub } from './power/hub.js';
 import { REMOTE_PORT, startRemoteServer } from './server/remote-server.js';
@@ -223,7 +229,8 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       platform: process.platform as MachineInfo['platform'],
       headless,
       home: os.homedir(),
-      capabilities: [...CAPABILITIES],
+      // `power` is for headless machines only (a desktop is never switched off this way).
+      capabilities: headless ? [...CAPABILITIES, POWER_CAPABILITY] : [...CAPABILITIES],
     };
   };
   router.register('hello', async (_p, ctx) => ({
@@ -253,6 +260,15 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   let relay: Relay | undefined;
   let poller: ExternalPoller | undefined;
   let projectOrder: ProjectOrderNotifier | undefined;
+  /** Idle tracking for idle shutdown (a headless machine's power control). */
+  const idle = new IdleMonitor({
+    sessions: () => host?.list() ?? [],
+    external: () => (opts.externals ?? (() => poller?.snapshot() ?? []))(),
+    // null is "never"; 60 until the database is open.
+    minutes: () => (db ? db.getSettings().idleShutdownMinutes : 60),
+    now: clock,
+  });
+  let powerMachine: ReturnType<typeof registerPowerMachineHandlers> | undefined;
   let buckets: Buckets | undefined;
   let titles: ChatTitles | undefined;
   let usage: UsageTracker | undefined;
@@ -434,6 +450,14 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       // Power switches of the paired machines (v1.4): local only, never polled.
       power = new PowerHub(opened, { log: { warn: (m) => log.warn(m) } });
       registerPowerClientHandlers(router, { hub: power });
+      // This machine's own power control: open to paired devices, announced to all.
+      if (headless) {
+        powerMachine = registerPowerMachineHandlers(router, {
+          store: new PowerStore(dataDir),
+          idle,
+          emit: (e) => broadcastRef.fn(e),
+        });
+      }
     }
     const found = claude.current;
     noteProblem(found);
@@ -885,6 +909,12 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     sweepHolds();
     checkScheduled();
     followAddresses();
+    try {
+      if (powerMachine) powerMachine.notify();
+      else idle.tick();
+    } catch (err) {
+      log.error(`idle tracking: ${errorText(err)}`);
+    }
     if (liveCount() > 0 || localClients + remoteClients > 0 || sendsPending()) {
       lastActive = clock();
     } else if (!headless && clock() - lastActive >= IDLE_EXIT_MS) {
