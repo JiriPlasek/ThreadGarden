@@ -314,6 +314,15 @@ export const methods = {
   'work.stopAll': def(empty, z.object({ stopped: z.number() })),
   'service.shutdown': def(z.object({ stopAll: z.literal(true) }), empty),
   'ui.visibility': def(z.object({ visible: z.boolean() }), empty),
+  /** An error the window could not handle, for the service's log (local only). */
+  'ui.error': def(
+    z.object({
+      where: z.string().max(100),
+      message: z.string().max(2000),
+      stack: z.string().max(8000).optional(),
+    }),
+    empty,
+  ),
   'system.status': def(
     empty,
     z.object({

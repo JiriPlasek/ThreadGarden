@@ -133,6 +133,7 @@ describe('protocol schemas', () => {
       'work.stopAll',
       'service.shutdown',
       'ui.visibility',
+      'ui.error',
       'system.status',
       // v1.1 T2: "Your turn"
       'chat.markSeen',

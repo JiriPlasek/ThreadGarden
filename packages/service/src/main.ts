@@ -985,6 +985,16 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     { localOnly: true },
   );
 
+  // The window's own errors: its webview keeps no log, so they are kept here.
+  router.register(
+    'ui.error',
+    async (p) => {
+      log.error(`ui (${p.where}): ${p.message}${p.stack ? `\n${p.stack}` : ''}`);
+      return {};
+    },
+    { localOnly: true },
+  );
+
   if (opts.installSignalHandlers ?? true) {
     for (const sig of ['SIGINT', 'SIGTERM'] as const) process.once(sig, () => void close());
   }
