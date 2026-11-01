@@ -33,6 +33,16 @@ describe('probeSwitch', () => {
     expect(f.commands.indexOf(asks[1]!)).toBeLessThan(f.commands.findIndex((c) => c.startsWith('ZbStatus3')));
   });
 
+  it('only sends read-only commands', async () => {
+    const allowed = [/^Status \d$/, /^ZbStatus1$/, /^ZbStatus3 \S+$/, /^ZbSend .*"Read"/, /^Power$/];
+    for (const kind of ['zigbee', 'plug'] as const) {
+      const f = await fake({ kind });
+      await probeSwitch(f.address, 'pw', fast);
+      expect(f.commands.length).toBeGreaterThan(0);
+      for (const c of f.commands) expect(allowed.some((re) => re.test(c)), c).toBe(true);
+    }
+  });
+
   it('plug kind', async () => {
     const f = await fake({ kind: 'plug' });
     const r = await probeSwitch(f.address, 'pw', fast);
@@ -120,11 +130,73 @@ describe('pairPlug', () => {
     expect(permits(f).at(-1)).toBe('ZbPermitJoin 0');
   });
 
-  it('a Wi-Fi plug has nothing to pair', async () => {
+  it('a Wi-Fi plug has nothing to pair and pairing is never opened', async () => {
     const f = await fake({ kind: 'plug' });
     await expect(pairPlug(f.address, 'pw', { timeoutMs: 100, pollMs: 10, ...fast })).rejects.toMatchObject({
-      code: POWER_ERRORS.notTasmota,
+      code: POWER_ERRORS.notConfigured,
+      message: 'This switch has no Zigbee radio, so there is nothing to pair.',
     });
+    expect(permits(f)).toEqual([]);
+  });
+
+  /** Fails the first `n` `ZbPermitJoin 0` requests as a dropped connection. */
+  const dropClose = (n: number): { fetch: typeof fetch; attempts: () => number } => {
+    const real = globalThis.fetch;
+    let attempts = 0;
+    return {
+      attempts: () => attempts,
+      fetch: async (url, init) => {
+        if (String(url).includes('ZbPermitJoin%200') && ++attempts <= n) throw new TypeError('fetch failed');
+        return real(url, init);
+      },
+    };
+  };
+  const closeOpts = { pollMs: 5, timeoutMs: 2000, closePauseMs: 0, ...fast };
+
+  it('a close that fails once is retried and the result is normal', async () => {
+    const f = await fake();
+    f.joinNext({ id: '0xBEEF', watts: 9 });
+    const d = dropClose(1);
+    const dev = await pairPlug(f.address, 'pw', { fetch: d.fetch, ...closeOpts });
+    expect(dev?.id).toBe('0xBEEF');
+    expect(d.attempts()).toBe(2);
+  });
+
+  it('a close that always fails is reported after 3 attempts', async () => {
+    const f = await fake();
+    f.joinNext({ id: '0xBEEF', watts: 9 });
+    const d = dropClose(99);
+    await expect(pairPlug(f.address, 'pw', { fetch: d.fetch, ...closeOpts })).rejects.toMatchObject({
+      code: POWER_ERRORS.unreachable,
+      message: expect.stringContaining("Couldn't close pairing"),
+    });
+    expect(d.attempts()).toBe(3);
+  });
+
+  it('when the body already threw and the close fails too, the body error wins', async () => {
+    const f = await fake({ password: 'right' });
+    const d = dropClose(99);
+    const real = d.fetch;
+    let polls = 0;
+    const both: typeof fetch = async (url, init) => {
+      if (String(url).includes('ZbStatus1') && ++polls === 2) throw new Error('boom'); // not a PowerError source
+      return real(url, init);
+    };
+    // the poll failure surfaces as POWER_UNREACHABLE from the client with its own message
+    await expect(
+      pairPlug(f.address, 'right', { fetch: both, ...closeOpts }),
+    ).rejects.toMatchObject({ message: expect.stringContaining('could not be reached') });
+    expect(d.attempts()).toBe(3);
+  });
+
+  it('closes pairing before reading the new device', async () => {
+    const f = await fake();
+    f.joinNext({ id: '0xBEEF', watts: 9 });
+    await pairPlug(f.address, 'pw', { pollMs: 5, timeoutMs: 2000, ...fast });
+    const close = f.commands.indexOf('ZbPermitJoin 0');
+    const read = f.commands.findIndex((c) => c.startsWith('ZbSend') && c.includes('0xBEEF'));
+    expect(close).toBeGreaterThan(-1);
+    expect(read).toBeGreaterThan(close);
   });
 });
 

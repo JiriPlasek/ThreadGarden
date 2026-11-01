@@ -120,28 +120,54 @@ export async function probeSwitch(
 export async function pairPlug(
   address: string,
   password: string,
-  o: Options & { timeoutMs?: number; pollMs?: number } = {},
+  o: Options & { timeoutMs?: number; pollMs?: number; closePauseMs?: number } = {},
 ): Promise<SwitchDevice | null> {
   const client = new TasmotaClient({ address, password, fetch: o.fetch });
   const timeoutMs = o.timeoutMs ?? 60_000;
   const pollMs = o.pollMs ?? 3000;
   const before = await zigbeeDevices(client);
-  if (before === null) throw notTasmota(address);
+  if (before === null) {
+    throw new PowerError(
+      POWER_ERRORS.notConfigured,
+      'This switch has no Zigbee radio, so there is nothing to pair.',
+    );
+  }
   const known = new Set(before.map((d) => d.id));
 
+  let fresh: RawDevice | undefined;
+  let bodyError: unknown;
   try {
     await client.command('ZbPermitJoin 1');
     const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
+    while (!fresh && Date.now() < deadline) {
       await sleep(Math.min(pollMs, Math.max(0, deadline - Date.now())));
-      const now = (await zigbeeDevices(client)) ?? [];
-      const fresh = now.find((d) => !known.has(d.id));
-      if (fresh) return (await describeDevices(client, [fresh], o.readWaitMs ?? 1500))[0]!;
+      fresh = ((await zigbeeDevices(client)) ?? []).find((d) => !known.has(d.id));
     }
-    return null;
-  } finally {
-    await client.command('ZbPermitJoin 0').catch(() => {});
+  } catch (err) {
+    bodyError = err;
   }
+  // Close pairing before anything else, so the network is not open during the read below.
+  const closeError = await closePairing(client, o.closePauseMs ?? 500);
+  if (bodyError !== undefined) throw bodyError;
+  if (closeError) throw closeError;
+  if (!fresh) return null;
+  return (await describeDevices(client, [fresh], o.readWaitMs ?? 1500))[0]!;
+}
+
+/** `ZbPermitJoin 0`, up to 3 attempts; returns the error to report, or null once it is closed. */
+async function closePairing(client: TasmotaClient, pauseMs: number): Promise<PowerError | null> {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      await client.command('ZbPermitJoin 0');
+      return null;
+    } catch {
+      if (attempt < 3 && pauseMs > 0) await sleep(pauseMs);
+    }
+  }
+  return new PowerError(
+    POWER_ERRORS.unreachable,
+    "Couldn't close pairing on the switch; it closes by itself within a minute, or run ZbPermitJoin 0 on the switch's console.",
+  );
 }
 
 /** `ZbName <id>,<name>`. The name must be usable in a rule, so it follows the same rule as `commandsFor`. */
