@@ -48,6 +48,17 @@ describe('methods a paired device may not call', () => {
     await rm(dir, { recursive: true, force: true });
   });
 
+  const powerClient = [
+    'power.probe',
+    'power.pairPlug',
+    'power.rename',
+    'power.configure',
+    'power.unlock',
+    'power.list',
+    'power.reading',
+    'power.turnOn',
+    'power.noteMeasurement',
+  ];
   const machinesMethods = Object.keys(methods).filter((m) => m.startsWith('machines.'));
   const forbidden = [
     'service.shutdown',
@@ -55,6 +66,7 @@ describe('methods a paired device may not call', () => {
     'pairing.create',
     'devices.list',
     'machine.rename',
+    ...powerClient,
     ...machinesMethods,
   ];
 

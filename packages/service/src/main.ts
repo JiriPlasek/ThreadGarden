@@ -42,7 +42,9 @@ import { makeResumeChecker, registerExternalHandlers } from './server/handlers/e
 import { registerFileHandlers } from './server/handlers/files.js';
 import { machineFor, registerMachineHandlers } from './server/handlers/machines.js';
 import { registerHistoryHandlers } from './server/handlers/history.js';
+import { registerPowerClientHandlers } from './server/handlers/power.js';
 import { registerUsageHandlers } from './server/handlers/usage.js';
+import { PowerHub } from './power/hub.js';
 import { REMOTE_PORT, startRemoteServer } from './server/remote-server.js';
 import { Router } from './server/router.js';
 import { createRelay, type Relay } from './server/relay.js';
@@ -428,6 +430,8 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         // Paired machines are this machine's business: never told to its devices.
         emitLocal: (e) => server?.broadcast(e),
       });
+      // Power switches of the paired machines (v1.4): local only, never polled.
+      registerPowerClientHandlers(router, { hub: new PowerHub(opened) });
     }
     const found = claude.current;
     noteProblem(found);
