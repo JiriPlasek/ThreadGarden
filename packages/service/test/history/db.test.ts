@@ -301,3 +301,27 @@ describe('v1.2 chat titles', () => {
     db.close();
   });
 });
+
+describe('recentCwds (the push check before a shutdown)', () => {
+  it('lists each directory once, newest activity first, with its newest session', () => {
+    const db = openDb(':memory:');
+    db.upsertSession(info('a1', { cwd: '/w/a', lastModified: 10 }), 'pa');
+    db.upsertSession(info('b1', { cwd: '/w/b', lastModified: 20 }), 'pb');
+    db.upsertSession(info('a2', { cwd: '/w/a', lastModified: 30 }), 'pa');
+    db.upsertSession(info('c1', { cwd: '/w/c', lastModified: 5 }), 'pc');
+    // A session without a known directory has nothing to check.
+    db.upsertSession(info('n1', { lastModified: 99 }), 'pn');
+    expect(db.recentCwds()).toEqual([
+      { cwd: '/w/a', sessionId: 'a2' },
+      { cwd: '/w/b', sessionId: 'b1' },
+      { cwd: '/w/c', sessionId: 'c1' },
+    ]);
+    db.close();
+  });
+
+  it('is empty without sessions', () => {
+    const db = openDb(':memory:');
+    expect(db.recentCwds()).toEqual([]);
+    db.close();
+  });
+});

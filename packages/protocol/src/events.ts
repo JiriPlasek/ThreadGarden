@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { ChatHeaderInfoSchema, ChatStatusSchema } from './chat.js';
 import { ChatItemSchema } from './items.js';
 import { PairedMachineSchema } from './machines.js';
+import { MachinePowerStatusSchema } from './power.js';
 import { ChatTaskSchema } from './tasks.js';
 import { ScheduledSendSchema, UsageStateSchema } from './usage.js';
 
@@ -82,6 +83,8 @@ export const events = {
   // ── v1.4: machines ─────────────────────────────────────────────────────────
   /** Every paired machine (as `machines.list`), after any change; local clients only. */
   'machines.changed': z.array(PairedMachineSchema),
+  /** Power: this machine's power status changed (machines that advertise `power`). */
+  'power.changed': MachinePowerStatusSchema,
 } as const;
 
 export type EventName = keyof typeof events;

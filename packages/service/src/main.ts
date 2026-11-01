@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   CAPABILITIES,
+  POWER_CAPABILITY,
   PROTOCOL_VERSION,
   type ChatStatus,
   type EventMsg,
@@ -42,7 +43,15 @@ import { makeResumeChecker, registerExternalHandlers } from './server/handlers/e
 import { registerFileHandlers } from './server/handlers/files.js';
 import { machineFor, registerMachineHandlers } from './server/handlers/machines.js';
 import { registerHistoryHandlers } from './server/handlers/history.js';
+import {
+  registerPowerClientHandlers,
+  registerPowerMachineHandlers,
+} from './server/handlers/power.js';
+import { IdleMonitor } from './power/idle.js';
+import { ShutdownSequence } from './power/shutdown.js';
+import { PowerStore } from './power/store.js';
 import { registerUsageHandlers } from './server/handlers/usage.js';
+import { PowerHub } from './power/hub.js';
 import { REMOTE_PORT, startRemoteServer } from './server/remote-server.js';
 import { Router } from './server/router.js';
 import { createRelay, type Relay } from './server/relay.js';
@@ -57,6 +66,8 @@ export const IDLE_EXIT_MS = 30 * 60_000;
  * the precise one).
  */
 const IDLE_CHECK_MS = 60_000;
+/** UI-state key of this machine's keep awake setting (it outlives a restart). */
+const KEEP_AWAKE_KEY = 'power.keepAwake';
 /** A chat in a turn (working, waiting on the user): its next scheduled send waits (v1.3 B). */
 const IN_TURN: ReadonlySet<ChatStatus> = new Set(['working', 'needsYou', 'unknown']);
 /** Said in a chat whose scheduled message was due while the service was not running. */
@@ -142,6 +153,8 @@ export type StartOptions = {
    * (devices live in the database). Default: neither, as on a desktop.
    */
   headless?: boolean;
+  /** Headless only: powers the machine off (default `systemctl poweroff`; tests replace it). */
+  poweroff?: () => Promise<void>;
   /**
    * Headless only: the remote listener's port (default `REMOTE_PORT`; 0 = any
    * free one) and where it listens. `addresses` fixes the addresses (tests:
@@ -221,7 +234,8 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       platform: process.platform as MachineInfo['platform'],
       headless,
       home: os.homedir(),
-      capabilities: [...CAPABILITIES],
+      // `power` is for headless machines only (a desktop is never switched off this way).
+      capabilities: headless ? [...CAPABILITIES, POWER_CAPABILITY] : [...CAPABILITIES],
     };
   };
   router.register('hello', async (_p, ctx) => ({
@@ -237,6 +251,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   /** Threadgarden's optional API key (§5.5): in memory only, never logged or stored. */
   let apiKey: string | null = null;
   let db: Db | undefined;
+  let power: PowerHub | undefined;
   let host: SessionHost | undefined;
   let indexing = { done: 0, total: 0 };
   let indexer: Indexer | undefined;
@@ -250,6 +265,19 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   let relay: Relay | undefined;
   let poller: ExternalPoller | undefined;
   let projectOrder: ProjectOrderNotifier | undefined;
+  /** Idle tracking for idle shutdown (a headless machine's power control). */
+  const idle = headless
+    ? new IdleMonitor({
+        sessions: () => host?.list() ?? [],
+        external: () => (opts.externals ?? (() => poller?.snapshot() ?? []))(),
+        // null is "never"; 60 until the database is open.
+        minutes: () => (db ? db.getSettings().idleShutdownMinutes : 60),
+        now: clock,
+      })
+    : undefined;
+  let powerMachine: ReturnType<typeof registerPowerMachineHandlers> | undefined;
+  /** Idle and manual shutdown (headless, with a database). */
+  let shutdown: ShutdownSequence | undefined;
   let buckets: Buckets | undefined;
   let titles: ChatTitles | undefined;
   let usage: UsageTracker | undefined;
@@ -428,6 +456,38 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         // Paired machines are this machine's business: never told to its devices.
         emitLocal: (e) => server?.broadcast(e),
       });
+      // Power switches of the paired machines (v1.4): local only, never polled.
+      power = new PowerHub(opened, { log: { warn: (m) => log.warn(m) } });
+      registerPowerClientHandlers(router, { hub: power });
+      // This machine's own power control: open to paired devices, announced to all.
+      if (idle) {
+        // Keep awake outlives a restart (an expired `until` comes back as off).
+        idle.restoreKeepAwake(opened.getUiState(KEEP_AWAKE_KEY));
+        const store = new PowerStore(dataDir);
+        // Sessions and scheduled sends exist once history is set up below; read them lazily.
+        shutdown = new ShutdownSequence({
+          store,
+          idle,
+          dirs: () => opened.recentCwds(),
+          scheduled: () => scheduled?.list() ?? [],
+          stopAll: async () => {
+            host?.stopAll();
+          },
+          ...(opts.poweroff ? { poweroff: opts.poweroff } : {}),
+          now: clock,
+          emit: (s) => powerMachine?.publish(s),
+          log,
+        });
+        powerMachine = registerPowerMachineHandlers(router, {
+          store,
+          idle,
+          shutdown,
+          emit: (e) => broadcastRef.fn(e),
+          persistKeepAwake: (k) => opened.setUiState(KEEP_AWAKE_KEY, k),
+        });
+        // A cut still armed must never fire on this running machine (Review Focus 1).
+        shutdown.onStart().catch((err: unknown) => log.warn(`power: at start: ${errorText(err)}`));
+      }
     }
     const found = claude.current;
     noteProblem(found);
@@ -591,6 +651,14 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         if (e.event === 'chat.status') {
           const { sessionId, status } = e.data as { sessionId: string; status: ChatStatus };
           setImmediate(() => scheduledRef.current?.statusChanged(sessionId, status));
+          // A turn started or ended: a blocked shutdown's notice no longer holds.
+          setImmediate(() => {
+            try {
+              shutdown?.activity();
+            } catch (err) {
+              log.error(`power: ${errorText(err)}`);
+            }
+          });
         }
         if (e.event !== 'chat.status' && e.event !== 'sessions.changed') return;
         // After the host has finished the transition that emitted this.
@@ -780,6 +848,10 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     await step('indexer', () => indexer?.stop());
     await step('remote server', () => remote?.close());
     await step('relay', () => relay?.close());
+    await step('power', () => {
+      shutdown?.close();
+      power?.close();
+    });
     await step('server', () => server?.close());
     await step('database', () => db?.close());
     await step('lock', () => lock.release());
@@ -854,6 +926,10 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
           await remote?.close();
         });
         await step('relay', () => relay?.close());
+        await step('power', () => {
+          shutdown?.close();
+          power?.close();
+        });
         await step('server', () => wsServer.close());
         await step('discovery', () => removeDiscovery(dataDir));
         await step('database', () => db?.close());
@@ -880,6 +956,15 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     sweepHolds();
     checkScheduled();
     followAddresses();
+    try {
+      powerMachine?.notify();
+    } catch (err) {
+      log.error(`idle tracking: ${errorText(err)}`);
+    }
+    // Idle long enough, with a power switch set up: shut the machine down.
+    if (!closing) {
+      shutdown?.idleTick().catch((err: unknown) => log.error(`idle shutdown: ${errorText(err)}`));
+    }
     if (liveCount() > 0 || localClients + remoteClients > 0 || sendsPending()) {
       lastActive = clock();
     } else if (!headless && clock() - lastActive >= IDLE_EXIT_MS) {

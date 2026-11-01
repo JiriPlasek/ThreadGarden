@@ -20,6 +20,7 @@
   import { includesOtherBuckets } from '#lib/state/places.svelte.js';
   import { chatKey } from '#lib/state/refs.js';
   import type { MachineScope } from '#lib/state/scope.js';
+  import UnpushedNotice from '#lib/components/UnpushedNotice.svelte';
   import { baseName } from './chat-info';
   import ChatListRow from './ChatListRow.svelte';
   import IconButton from './IconButton.svelte';
@@ -55,7 +56,7 @@
    */
   let { onCollapse }: { onCollapse?: () => void } = $props();
 
-  const { sessions, places, tabs, agents, settings, machines, scopes } = useApp();
+  const { sessions, places, tabs, agents, settings, machines, scopes, power } = useApp();
   const local = scopes.local();
 
   /** The scope of a machine (This PC's for a project without one). */
@@ -534,6 +535,12 @@
     <p class="text-destructive px-3 pb-2 text-xs" role="alert">
       Could not load chats: {error}
     </p>
+  {/if}
+
+  {#if places.selected.kind === 'needsYou' && !sessions.query}
+    {#each power.blockedIds() as id (id)}
+      <UnpushedNotice machineId={id} />
+    {/each}
   {/if}
 
   {#each skipped as name, i (i)}

@@ -10,6 +10,7 @@ import { connection } from './connection.svelte';
 import { lifecycle } from './lifecycle.svelte';
 import { machines, relayUrl } from './machines.svelte';
 import { places } from './places.svelte';
+import { power } from './power.svelte';
 import { client, createScope, scopes, wireScope } from './scope';
 import { settings } from './settings.svelte';
 import { tabs } from './tabs.svelte';
@@ -52,12 +53,14 @@ const wire = (): void => {
   usage.init(client);
   analytics.init(client);
   // Notifications: a watcher per machine (the scopes below), one tray badge (the sum).
-  startAttention({ scopes, machines, settings, tabs, places });
+  startAttention({ scopes, machines, settings, tabs, places, power });
   // Paired machines: a scope each, on its relay client through the local service.
   // Needs you, Running, the bucket counts and the agents strip add up every machine's.
   places.follow(scopes);
   agents.follow(scopes);
   scopes.follow(machines, tabs, (m) => createScope(m.id, m.client, { tabs, agents }));
+  // Power control: before the machines connect, so it sees each one added.
+  power.init(client, machines);
   machines.init(client, client, {
     relayUrl: (id) => relayUrl(current?.port ?? 0, id),
     localToken: () => current?.token ?? '',

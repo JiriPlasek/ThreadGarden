@@ -95,6 +95,8 @@ describe.skipIf(process.platform === 'win32' || isRoot)('headless install.sh', (
       SYSTEMCTL: systemctl,
       LOGINCTL: loginctl,
       SUDO: sudo,
+      // Never the real /etc: a missing directory is the "old polkit" case.
+      POLKIT_RULES_DIR: join(root, 'no-polkit'),
       ...extra,
     });
   };
@@ -123,6 +125,37 @@ describe.skipIf(process.platform === 'win32' || isRoot)('headless install.sh', (
     );
     expect(c).toContain('sudo loginctl enable-linger tester');
     expect(c).toContain('loginctl enable-linger tester');
+  });
+
+  it('writes a world-readable polkit rule letting this user power off, through sudo', async () => {
+    const rules = join(root, 'rules.d');
+    await mkdir(rules);
+    const { code, stdout } = await install({ POLKIT_RULES_DIR: rules });
+    expect(code).toBe(0);
+    const file = join(rules, '49-threadgarden-power.rules');
+    const text = await readFile(file, 'utf8');
+    expect(text).toContain('subject.user == "tester"');
+    expect(text).toContain('"org.freedesktop.login1.power-off"');
+    expect(text).toContain('"org.freedesktop.login1.power-off-multiple-sessions"');
+    expect(text).toContain('polkit.Result.YES');
+    expect((await stat(file)).mode & 0o777).toBe(0o644);
+    expect(stdout).toContain('power');
+    const c = await calls();
+    expect(
+      c.some((l) => l.startsWith('sudo tee ') && l.endsWith('49-threadgarden-power.rules')),
+    ).toBe(true);
+    expect(c).toContain('sudo chmod 644 ' + file);
+    // Reinstalling over an identical rule succeeds and leaves it unchanged.
+    expect((await install({ POLKIT_RULES_DIR: rules })).code).toBe(0);
+    expect(await readFile(file, 'utf8')).toBe(text);
+  });
+
+  it('warns and carries on when there is no polkit rules directory', async () => {
+    const { code, stderr } = await install({ POLKIT_RULES_DIR: join(root, 'missing') });
+    expect(code).toBe(0);
+    expect(stderr).toContain("won't be able to power");
+    expect((await calls()).some((l) => l.startsWith('sudo tee'))).toBe(false);
+    expect(await calls()).toContain('systemctl --user restart threadgarden');
   });
 
   it('works with USER unset and skips sudo when lingering is already on', async () => {

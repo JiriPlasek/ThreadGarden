@@ -12,6 +12,7 @@ import { interaction, type InteractionState } from './interaction.svelte';
 import { lifecycle, type LifecycleState } from './lifecycle.svelte';
 import { machines, type MachinesState } from './machines.svelte';
 import { places, type PlacesState } from './places.svelte';
+import { power, type PowerState } from './power.svelte';
 import { scheduled, type ScheduledState } from './scheduled.svelte';
 import { scopes, type MachineScope, type Scopes } from './scope';
 import { sessions, type SessionsState } from './sessions.svelte';
@@ -40,6 +41,8 @@ export type AppState = {
   updates: UpdatesState;
   /** Remote machines: This PC plus the paired ones. */
   machines: MachinesState;
+  /** Power control of paired machines: plug readings, power status, Off / Starting… / Shutting down. */
+  power: PowerState;
   /**
    * One scope of per-machine stores per machine. The keys above (`places`,
    * `sessions`, `chats`, …) are This PC's scope.
@@ -65,6 +68,7 @@ const singletons: AppState = {
   analytics,
   updates,
   machines,
+  power,
   scopes,
 };
 

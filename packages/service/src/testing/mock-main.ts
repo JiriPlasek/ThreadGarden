@@ -42,6 +42,13 @@
  * device listener on 127.0.0.1 (default port 47380) and `<code>` kept live as
  * its pairing code. Loopback is for tests only: the real service listens on
  * private addresses only (`bin.ts` never sets the addresses), ledger Ruling R4.
+ *
+ * Power control (v1.4, plan 4): `--fake-tasmota [--fake-tasmota-port <port>]`
+ * also starts a fake Tasmota Zigbee bridge on 127.0.0.1 (password
+ * `FAKE_TASMOTA_PASSWORD`) with one plug, `MockPlug`, drawing 47 W, and prints
+ * the fake's own address (`127.0.0.1:<port>`) on stderr. It is meant for
+ * `--remote` (a headless machine, which offers power control). The mock never
+ * powers anything off: its shutdown sequence ends in `mockPoweroff`.
  */
 import { randomUUID } from 'node:crypto';
 import { appendFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -56,6 +63,7 @@ import {
   normalisePairingCode,
 } from '../machine/devices.js';
 import { startService, type ServiceHandle } from '../main.js';
+import { startFakeTasmota, type FakeTasmota } from './fake-tasmota.js';
 import { REMOTE_PORT } from '../server/remote-server.js';
 import type {
   OneShotOptions,
@@ -759,13 +767,25 @@ export type MockOptions = {
    * the well-formed `pairingCode` it keeps live.
    */
   remote?: { port: number; pairingCode: string };
+  /** Plan 4: a fake Tasmota Zigbee bridge with the plug `MockPlug` (port 0: any free one). */
+  fakeTasmota?: { port: number };
 };
+
+/** What the mock does where a machine would power off. */
+const mockPoweroff = async (): Promise<void> => {
+  process.stderr.write('mock: would power off\n');
+};
+
+/** The web password of the mock's fake Tasmota switch (user `admin`). */
+export const FAKE_TASMOTA_PASSWORD = 'mock-switch';
 
 export type MockService = {
   svc: ServiceHandle;
   dataDir: string;
   claudeDir: string;
   adapter: FakeAdapter;
+  /** The fake switch, when `fakeTasmota` was asked for; closed with the service. */
+  fakeTasmota?: FakeTasmota;
   /** Resolves once the temp dirs are gone after the service closed. */
   removed: Promise<void>;
 };
@@ -878,7 +898,17 @@ export const startMockService = async (o: MockOptions = {}): Promise<MockService
       ]
     : [];
 
+  let fakeTasmota: FakeTasmota | undefined;
   try {
+    if (o.fakeTasmota) {
+      fakeTasmota = await startFakeTasmota({
+        kind: 'zigbee',
+        password: FAKE_TASMOTA_PASSWORD,
+        port: o.fakeTasmota.port,
+      });
+      fakeTasmota.devices.clear();
+      fakeTasmota.devices.set('0x863B', { name: 'MockPlug', on: true, watts: 47 });
+    }
     const svc = await startService({
       dataDir,
       claudeConfigDir: claudeDir,
@@ -894,6 +924,8 @@ export const startMockService = async (o: MockOptions = {}): Promise<MockService
       ...(o.port === undefined ? {} : { port: o.port }),
       ...(o.token === undefined ? {} : { token: o.token }),
       installSignalHandlers: o.installSignalHandlers ?? true,
+      // Never the real `systemctl poweroff`: a mock must not power off a developer's machine.
+      poweroff: mockPoweroff,
       ...(remote
         ? {
             headless: true,
@@ -936,13 +968,15 @@ export const startMockService = async (o: MockOptions = {}): Promise<MockService
     });
     const removed = new Promise<void>((resolve) =>
       svc.onClosed(() => {
+        void fakeTasmota?.close().catch(() => {});
         void rm(root, { recursive: true, force: true })
           .catch(() => {})
           .finally(resolve);
       }),
     );
-    return { svc, dataDir, claudeDir, adapter, removed };
+    return { svc, dataDir, claudeDir, adapter, ...(fakeTasmota ? { fakeTasmota } : {}), removed };
   } catch (err) {
+    await fakeTasmota?.close().catch(() => {});
     await rm(root, { recursive: true, force: true }).catch(() => {});
     throw err;
   }
@@ -988,13 +1022,22 @@ if (isEntry()) {
     }
     remote = { port: portOption('remote-port') ?? REMOTE_PORT, pairingCode };
   }
+  const fakeTasmota = flag('fake-tasmota')
+    ? { port: portOption('fake-tasmota-port') ?? 0 }
+    : undefined;
   startMockService({
+    ...(fakeTasmota ? { fakeTasmota } : {}),
     ...(port === undefined ? {} : { port }),
     ...(token === undefined ? {} : { token }),
     ...(remote ? { remote } : {}),
   })
-    .then(async ({ dataDir, claudeDir, removed }) => {
+    .then(async ({ dataDir, claudeDir, fakeTasmota: switchHandle, removed }) => {
       const discovery = await readDiscovery(dataDir);
+      if (switchHandle) {
+        process.stderr.write(
+          `Fake Tasmota switch at ${switchHandle.address} (user admin, password ${FAKE_TASMOTA_PASSWORD}), plug MockPlug at 47 W\n`,
+        );
+      }
       process.stdout.write(`${JSON.stringify({ ...discovery, dataDir, claudeDir })}\n`);
       void removed.then(() => process.exit(0));
     })

@@ -1,5 +1,12 @@
 import { defineConfig, devices } from '@playwright/test';
-import { MOCK_PORT, MOCK_TOKEN, REMOTE_MOCK_PORT, REMOTE_PAIRING_CODE, UI_PORT } from './env';
+import {
+  MOCK_PORT,
+  MOCK_TOKEN,
+  REMOTE_MOCK_PORT,
+  REMOTE_PAIRING_CODE,
+  FAKE_SWITCH_PORT,
+  UI_PORT,
+} from './env';
 
 /**
  * End-to-end and performance specs for the UI in a browser (Chromium) against
@@ -13,7 +20,8 @@ import { MOCK_PORT, MOCK_TOKEN, REMOTE_MOCK_PORT, REMOTE_PAIRING_CODE, UI_PORT }
  *
  * A second mock (`mock --remote`) is the other machine `machines.spec.ts`
  * pairs with: headless, its device listener on 127.0.0.1 (test-only) and a
- * fixed pairing code. The UI reaches it through the first mock's relay.
+ * fixed pairing code. The UI reaches it through the first mock's relay. With
+ * `--fake-tasmota` it also holds a fake Tasmota Zigbee bridge (`power.spec.ts`).
  */
 const UI_URL = `http://127.0.0.1:${UI_PORT}`;
 
@@ -47,7 +55,7 @@ export default defineConfig({
       stdout: 'pipe',
     },
     {
-      command: `pnpm --filter @threadgarden/service mock --remote --remote-port ${REMOTE_MOCK_PORT} --pairing-code ${REMOTE_PAIRING_CODE}`,
+      command: `pnpm --filter @threadgarden/service mock --remote --remote-port ${REMOTE_MOCK_PORT} --pairing-code ${REMOTE_PAIRING_CODE} --fake-tasmota --fake-tasmota-port ${FAKE_SWITCH_PORT}`,
       // Its own local port and token: never the first mock's.
       env: { THREADGARDEN_MOCK_PORT: '', THREADGARDEN_MOCK_TOKEN: '' },
       // The device listener speaks TLS; the port opening is the signal.

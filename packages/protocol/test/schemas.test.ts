@@ -51,8 +51,8 @@ const sampleItems = [
 
 describe('protocol schemas', () => {
   it('exposes the protocol version', () => {
-    expect(PROTOCOL_VERSION).toBe(5);
-    expect([3, 4, 5, 6, 7].map(acceptsRemoteProtocol)).toEqual([false, true, true, true, false]);
+    expect(PROTOCOL_VERSION).toBe(6);
+    expect([4, 5, 6, 7, 8].map(acceptsRemoteProtocol)).toEqual([false, true, true, true, false]);
   });
 
   it('accepts every ChatItem kind', () => {
@@ -85,6 +85,19 @@ describe('protocol schemas', () => {
     const expected = [
       'hello',
       'places.counts',
+      'power.adopt',
+      'power.configure',
+      'power.keepAwake',
+      'power.list',
+      'power.noteMeasurement',
+      'power.pairPlug',
+      'power.probe',
+      'power.reading',
+      'power.rename',
+      'power.shutdown',
+      'power.status',
+      'power.turnOn',
+      'power.unlock',
       'projects.list',
       'projects.update',
       'sessions.list',
@@ -181,6 +194,7 @@ describe('protocol schemas', () => {
         'scheduledSent',
         // v1.4: machines
         'machines.changed',
+        'power.changed',
       ].sort(),
     );
   });

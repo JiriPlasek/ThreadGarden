@@ -226,13 +226,16 @@ service and the UI; the service validates every request.
   `pairing.create`, `devices.list` and `devices.revoke` on the machine that
   is paired with; `pair.proof` and `pair.claim` for the device pairing; and
   `machines.list`, `.pair`, `.unlock`, `.update`, `.remove` for the machines
-  this one pairs with and relays to (event `machines.changed`).
+  this one pairs with and relays to (event `machines.changed`). Protocol 6
+  adds the `power.*` methods and the event `power.changed` ([Power](#power)).
 - **Local-only methods** (v1.4). Every request is dispatched with its
   origin, `local` (the loopback server) or `remote` (the TLS listener), and
   a method registered `localOnly` answers `FORBIDDEN` to a remote caller
   before its params are read. Local only: `machine.rename`,
-  `pairing.create`, `devices.list`, every `machines.*`, `auth.setApiKey` and
-  `service.shutdown`. `devices.revoke` runs remotely only for the caller's
+  `pairing.create`, `devices.list`, every `machines.*`, the client side of
+  power control (`power.probe`, `.pairPlug`, `.rename`, `.configure`,
+  `.unlock`, `.list`, `.reading`, `.turnOn`, `.noteMeasurement`),
+  `auth.setApiKey` and `service.shutdown`. `devices.revoke` runs remotely only for the caller's
   own device. Everything else (chats, lists, `work.stopAll`, …) is open to a
   paired device: every paired device has full control.
 - **Events** `{event, data}` are pushed to every client: `chat.items` and
@@ -571,9 +574,9 @@ fork is indexed at once so it can be opened.
 v1.4 lets the desktop run chats on another computer: a **machine** is one
 Threadgarden service. The design is
 [`2026-10-31-remote-machines-design.md`](superpowers/specs/2026-10-31-remote-machines-design.md);
-this release covers pairing, the connection and chats on a paired machine
-(not yet power control, projects created or cloned there, moving chats,
-offline copies, or analytics and usage across machines). The owner's setup
+this release covers pairing, the connection, chats on a paired machine and
+[power control](#power) (not yet projects created or cloned there, moving
+chats, offline copies, or analytics and usage across machines). The owner's setup
 steps are in [Remote machines](remote-machines.md).
 
 **Identity.** Every service has a machine id (random, made once, kept in
@@ -668,6 +671,66 @@ restarting or quitting the service acts on This PC only. A restart of the
 desktop or its service changes nothing on the machine: the relays reopen and
 the UI unlocks the machines again from the keychain. Analytics and the usage
 meter show This PC only in this release.
+
+### Power
+
+A machine with a Tasmota switch (protocol 6) can be turned on and shut down
+from the desktop. A headless service advertises the capability `power` in
+`hello`; the desktop offers the power methods only for such machines.
+
+**One interface.** `packages/service/src/power/` holds a `PowerSwitch`
+interface (switch on and off, read watts, arm and disarm the cut, arm and clear
+a wake, describe the switch) and its one implementation, `tasmota.ts` and
+`switch.ts`, which talks to Tasmota's HTTP API (`/cm?cmnd=…`, user `admin`) with
+Node's `fetch`, sending the `Referer` the device expects. It has two shapes: a
+Zigbee bridge driving a named plug (`ZbSend`), and a Wi-Fi plug (`Power`). Other
+kinds of switch would be new implementations; the machine logic does not change.
+
+**Who owns what.** The desktop's local service holds the **client hub**
+(`power/hub.ts`): the switch configuration per machine, probing and pairing a
+plug, installing the rule, reading watts and turning on. It never polls. The
+window polls the plug through it (`state/power.svelte.ts`), every 60 s while
+the window is visible, every 5 s while a machine is starting or shutting down,
+and not at all while hidden. The machine's own service keeps a copy of the
+configuration (`power-switch.json`, mode 0600; `power.adopt` hands it over),
+and owns **idle detection** (`power/idle.ts`, a minute tick; keep awake is
+persisted), the **push check** (`power/push-check.ts`) and the **shutdown
+sequence** (`power/shutdown.ts`): check, postpone or pause, arm the cut (and
+a wake) on the switch, stop chats, `systemctl poweroff` (the installer's polkit rule allows
+exactly that for the service's user). If the switch cannot be reached or
+refuses, the sequence stops before powering off: a machine that cannot be
+switched on again must stay on, and its power status says why. The UI derives
+the state (Off, Starting…, On, Shutting down, Unreachable) from the link status,
+the machine's `power.changed` status and the plug's reading; high watts after
+the link was lost never read as Starting…
+
+**The rule** (`power/rules.ts`). Threadgarden writes one rule, marked by its
+content, into a free rule slot, plus a few Tasmota resources (RuleTimer 6–8,
+Var14–15, Mem11–14, Timer16); the list is in
+[Remote machines](remote-machines.md#45-what-threadgarden-changes-on-your-switch)
+and nothing else on the switch is changed. Arming sets a counter and a 5 s
+timer that makes the plug report its watts; six readings in a row below the
+"off" line (about 30 s) switch the plug off, a reading at or above the line
+resets the count, and the arm expires after 900 s. Every reading the plug
+reports counts, not only the timer's: while the desktop also reads the plug
+during a shutdown (every 5 s), the cut can come after about 15 s, but still only
+after six readings under the line. The service also disarms at every start
+(retrying until the switch answers, since the network may come up after the
+service), so a machine started by hand while armed is never cut. A wake is
+Timer16 set to 5 minutes before a scheduled message, in the switch's own local
+time (read from the device), and cycles the plug when it is on but in standby;
+a cycle records its time like a cut, and a Turn on from the desktop clears a
+pending wake. Turn on cycles a plug in standby only on a fresh reading (the
+bridge's `LastSeen` within 5 s).
+
+**The password** is entered once in Settings and goes to the local service in
+the request; it is stored in the OS credential store (account
+`power:<machine-id>`, beside the device token) and handed back with
+`power.unlock` after each start. On the machine it is in `power-switch.json`,
+because that service arms the cut with every client closed. It is never logged,
+returned or shown. Tasmota has no TLS, so it crosses the LAN in clear text; the
+switch is reached from services only (the webview's CSP does not allow it) and
+should stay on the home network.
 
 ## Security model
 

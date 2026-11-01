@@ -23,6 +23,7 @@ It runs your own `claude` install, with your own login, through the official Age
 - An activity panel to see what subagents and background processes are up to, and stop them.
 - A usage meter for your plan limits, and "send when the limit resets" for that one message you'd otherwise forget.
 - Remote machines: pair another computer on your network (an always-on Ubuntu box, say) and run chats there from the same window. See [docs/remote-machines.md](docs/remote-machines.md).
+- Turns a remote machine on and off through a Tasmota smart plug.
 - Analytics, if you're curious where your tokens go.
 - A quick switcher (Ctrl+K), shortcuts for everything, themes.
 

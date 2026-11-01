@@ -38,7 +38,8 @@ import type { ChatStatus, ChatSummary } from '@threadgarden/protocol';
 import { baseName } from './components/layout/chat-info';
 import { notify as nativeNotify, setTrayNeedsYou as nativeSetTray } from './native';
 import { quietly } from './state/api';
-import { machineLabel, type MachinesState } from './state/machines.svelte';
+import { machineLabel, machineNameOf, type MachinesState } from './state/machines.svelte';
+import type { PowerState } from './state/power.svelte';
 import type { PlacesState } from './state/places.svelte';
 import { chatKey, type ChatRef } from './state/refs';
 import type { MachineScope, Scopes } from './state/scope';
@@ -62,6 +63,8 @@ export type AttentionDeps = {
   /** Names the machine of a notification from another machine. */
   machines: Pick<MachinesState, 'get' | 'several'>;
   settings: Pick<SettingsState, 'value'>;
+  /** Power control: a machine whose idle shutdown is paused by unpushed work notifies once (Task 15). */
+  power?: Pick<PowerState, 'onBlocked' | 'watchBlocked' | 'needsYouCount'>;
   /** The tabs (chat keys). */
   tabs: Pick<TabsState, 'active' | 'openTab'>;
   /**
@@ -142,10 +145,18 @@ export const startAttention = (deps: AttentionDeps): (() => void) => {
   doc.addEventListener('visibilitychange', onVisibility);
 
   const offScopes = scopes.observe((scope) => watch(scope, deps, shared));
-  const offTray = places.subscribeCounts((counts) => {
-    if (counts.needsYou === badge) return;
-    badge = counts.needsYou;
+  // The tray shows the Needs you count: chats waiting plus machines whose shutdown is paused.
+  let chatsWaiting = 0;
+  const showTray = (): void => {
+    const n = deps.power ? deps.power.needsYouCount(chatsWaiting) : chatsWaiting;
+    if (n === badge) return;
+    badge = n;
     quietly(setTray(badge));
+  };
+  const offBlocked = deps.power?.watchBlocked(showTray);
+  const offTray = places.subscribeCounts((counts) => {
+    chatsWaiting = counts.needsYou;
+    showTray();
   });
 
   return () => {
@@ -154,6 +165,7 @@ export const startAttention = (deps: AttentionDeps): (() => void) => {
     doc.removeEventListener('visibilitychange', onVisibility);
     offScopes();
     offTray();
+    offBlocked?.();
   };
 };
 
@@ -301,6 +313,17 @@ const watch = (scope: MachineScope, deps: AttentionDeps, shared: AttentionShared
   };
 
   const offs = [
+    // Unpushed work paused this machine's idle shutdown (once per transition into blocked).
+    ...(deps.power
+      ? [
+          deps.power.onBlocked((id) => {
+            if (id !== scope.machineId || !settings.value.notifications) return;
+            shared.notifiedAt = now();
+            const name = machineNameOf(machines, id);
+            quietly(notify(`Unpushed work on ${name} — shutdown is paused`, '', id));
+          }),
+        ]
+      : []),
     api.onOpen(() => report(true)),
     api.onOpen(() => serially(catchUp)),
     api.on('chatBackFromHold', (e) => {

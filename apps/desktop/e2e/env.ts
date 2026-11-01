@@ -9,3 +9,10 @@ export const UI_PORT = Number(process.env.THREADGARDEN_E2E_UI_PORT ?? 4317);
  */
 export const REMOTE_MOCK_PORT = Number(process.env.THREADGARDEN_E2E_REMOTE_PORT ?? 47358);
 export const REMOTE_PAIRING_CODE = 'TEST-TEST-TEST';
+/**
+ * The fake Tasmota Zigbee bridge the remote mock starts (`--fake-tasmota`,
+ * power.spec.ts): its address, web password and the plug it holds.
+ */
+export const FAKE_SWITCH_PORT = Number(process.env.THREADGARDEN_E2E_SWITCH_PORT ?? 47359);
+export const FAKE_SWITCH_PASSWORD = 'mock-switch';
+export const FAKE_PLUG = 'MockPlug';

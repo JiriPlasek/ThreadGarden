@@ -4,6 +4,7 @@
   import AddMachineDialog from '#lib/components/AddMachineDialog.svelte';
   import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
   import { machineState } from '#lib/components/layout/MachineHeading.svelte';
+  import PowerSettings from '#lib/components/PowerSettings.svelte';
   import { Button } from '#lib/components/ui/button/index.js';
   import { useApp } from '#lib/state/context.js';
   import type { MachineEntry } from '#lib/state/machines.svelte.js';
@@ -123,7 +124,7 @@
   <p class="text-sm">{THIS_PC}</p>
 
   {#each paired as m (m.id)}
-    {@const shown = machineState(m)}
+    {@const shown = machineState({ name: m.name, status: machines.shown(m) })}
     {@const d = draftOf(m)}
     <div class="grid gap-2 rounded-md border p-2" role="group" aria-label={m.name}>
       <div class="flex items-center justify-between gap-2 text-xs">
@@ -191,6 +192,7 @@
           }}>Remove</Button
         >
       </div>
+      <PowerSettings machine={m} />
     </div>
   {/each}
 

@@ -165,6 +165,8 @@ export const sanitizeFontFamily = (raw: string): string | null => {
 const settingsFields = {
   claudePath: z.string().nullable(),
   idleReclaimMinutes: z.number(),
+  /** v1.4 power: a headless machine shuts down after this many idle minutes; null is never. */
+  idleShutdownMinutes: z.number().int().min(5).max(1440).nullable(),
   notifications: z.boolean(),
   enterToSend: z.boolean(),
   theme: z.enum(['system', 'light', 'dark']),
@@ -199,6 +201,7 @@ const settingsFields = {
 export const SettingsSchema = z.object({
   claudePath: settingsFields.claudePath.default(null),
   idleReclaimMinutes: settingsFields.idleReclaimMinutes.default(15),
+  idleShutdownMinutes: settingsFields.idleShutdownMinutes.default(60),
   notifications: settingsFields.notifications.default(true),
   enterToSend: settingsFields.enterToSend.default(true),
   theme: settingsFields.theme.default('system'),

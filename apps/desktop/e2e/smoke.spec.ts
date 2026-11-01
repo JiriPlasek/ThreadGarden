@@ -11,7 +11,7 @@ test('open app, needs-you badge shows, open chat, answer permission', async ({ p
   await openApp(page);
   const places = page.getByRole('navigation', { name: 'Places' });
   const list = page.getByRole('region', { name: 'Chat list' });
-  const needsYou = places.locator('[title="Chats waiting for you"]');
+  const needsYou = places.locator('[title="Waiting for you"]');
   await expect(needsYou).toHaveCount(0);
 
   // Open a chat from the history and ask for something that needs a permission.

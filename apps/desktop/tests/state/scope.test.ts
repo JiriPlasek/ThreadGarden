@@ -266,7 +266,7 @@ describe('machine scopes', () => {
 
   it("without a machine in the local hello, This PC is '" + LOCAL_FALLBACK_ID + "'", async () => {
     const { app } = await setup((s) => {
-      s.handlers.hello = () => ({ serviceVersion: '0.1.0', protocolVersion: 5 });
+      s.handlers.hello = () => ({ serviceVersion: '0.1.0', protocolVersion: 6 });
     });
     expect(app.scopes.local().machineId).toBe('local');
     app.tabs.openTab('a');

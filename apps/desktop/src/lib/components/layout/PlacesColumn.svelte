@@ -45,7 +45,7 @@
    */
   let { onCollapse }: { onCollapse?: () => void } = $props();
 
-  const { places, interaction, tabs, scopes, machines } = useApp();
+  const { places, interaction, tabs, scopes, machines, power } = useApp();
   const local = scopes.local();
 
   type Group = { machine: MachineEntry | undefined; scope: MachineScope };
@@ -266,7 +266,7 @@
         >
           <StatusIcon status="needsYou" decorative class="mx-px" />
           <span class="truncate">Needs you</span>
-          {@render badge(places.counts.needsYou, 'amber', 'Chats waiting for you')}
+          {@render badge(power.needsYouCount(places.counts.needsYou), 'amber', 'Waiting for you')}
         </button>
       </li>
       <li>
@@ -321,7 +321,11 @@
             onToggle={() => machines.setCollapsed(id, !collapsed)}
           />
           {#if !collapsed}
-            {@render projects(group.scope)}
+            {#if machines.shown(group.machine) === 'off'}
+              <p class="text-muted-foreground px-2 text-xs">Its chats appear once it's on.</p>
+            {:else}
+              {@render projects(group.scope)}
+            {/if}
           {/if}
         </div>
       {:else}

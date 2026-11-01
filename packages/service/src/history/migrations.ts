@@ -227,6 +227,10 @@ const steps: string[] = [
     sort INTEGER NOT NULL DEFAULT 0
   );
   `,
+  // v1.4 power: each paired machine's switch configuration (JSON of PowerConfig); passwords stay in memory.
+  `
+    CREATE TABLE IF NOT EXISTS machine_power (machine_id TEXT PRIMARY KEY, config TEXT NOT NULL)
+  `,
 ];
 
 /** Runs the steps not run yet; `upTo` stops early (tests build older schemas with it). */

@@ -9,8 +9,22 @@ import { ServiceClient, type ClientOptions, type ClientStatus } from '../service
 import { quietly, type Api } from './api';
 import { LOCAL_FALLBACK_ID, THIS_PC } from './refs';
 
+/**
+ * A machine's state. `MachineEntry.status` is its link's (never the last
+ * three); `MachinesState.shown` refines it with power control into Off,
+ * Starting… and Shutting down.
+ */
 export type MachineStatus =
-  'connecting' | 'on' | 'unreachable' | 'locked' | 'incompatible' | 'mismatch' | 'refused';
+  | 'connecting'
+  | 'on'
+  | 'unreachable'
+  | 'locked'
+  | 'incompatible'
+  | 'mismatch'
+  | 'refused'
+  | 'off'
+  | 'starting'
+  | 'shuttingDown';
 
 export type MachineEntry = {
   id: string;
@@ -93,6 +107,10 @@ export class MachinesState {
   private readonly removedCbs = new Set<(id: string) => void>();
   private readonly listedCbs = new Set<() => void>();
   private everListed = false;
+  /** Refines a link status with power control (`PowerState.status`); the link status alone until set. */
+  private derive = $state.raw<(id: string, link: MachineStatus) => MachineStatus>(
+    (_, link) => link,
+  );
 
   /** This PC first, then the paired machines in the service's order. */
   get list(): MachineEntry[] {
@@ -112,6 +130,17 @@ export class MachinesState {
   }
 
   get = (id: string): MachineEntry | undefined => this.list.find((m) => m.id === id);
+
+  /**
+   * What the UI shows machine `m` as: its link status, refined by power
+   * control (Off, Starting…, Shutting down). Every heading and list uses this.
+   */
+  shown = (m: Pick<MachineEntry, 'id' | 'status'>): MachineStatus => this.derive(m.id, m.status);
+
+  /** Sets the derivation `shown` uses (the power state's, once it is wired). */
+  deriveWith = (f: (id: string, link: MachineStatus) => MachineStatus): void => {
+    this.derive = f;
+  };
 
   init = (localApi: Api, localClient: ServiceClient, opts: MachinesOptions): void => {
     this.localApi = localApi;

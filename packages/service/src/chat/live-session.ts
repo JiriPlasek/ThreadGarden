@@ -52,7 +52,7 @@ import { startupFailureMessage, type StartupFailureMessage } from '../sdk/startu
 import { ServiceError } from '../server/router.js';
 import { EventLog, type ChatEvent, type ChatEventDraft } from './event-log.js';
 import { Normalizer, deriveStatus } from './normalize.js';
-import { TaskTracker, runningCount, taskEnded } from './tasks.js';
+import { TaskTracker, runningCount, taskEnded, taskRunning } from './tasks.js';
 
 /** Threadgarden's record of which sessions have a live process (Task 6 backs it with the db). */
 export interface LiveRegistry {
@@ -393,6 +393,11 @@ export class LiveSession {
   /** How many published tasks are running (Ruling R29: such a chat counts as Running). */
   get runningTasks(): number {
     return this.publishedRunning;
+  }
+
+  /** Running tasks that are not background shells (dev servers, watchers): they do not keep a machine awake. */
+  get runningAgents(): number {
+    return this.tracker.list().filter((t) => taskRunning(t) && t.kind !== 'shell').length;
   }
 
   pendingRequests(): ChatItem[] {
