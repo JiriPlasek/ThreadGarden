@@ -150,7 +150,7 @@ const wire = (
   client: ServiceClient,
   impl: typeof WebSocket,
   tokens: Record<string, string>,
-  passwords: Record<string, string> = {},
+  passwords: ReturnType<typeof memoryTokens> = memoryTokens({}),
 ): AppState => {
   const tabs = new TabsState();
   const settings = new SettingsState();
@@ -203,7 +203,7 @@ const wire = (
   scopes.follow(app.machines, tabs, (m) =>
     createScope(m.id, m.client, { tabs, agents: app.agents, chats: chatOptions }),
   );
-  app.power.init(client, app.machines, { passwords: memoryTokens(passwords) });
+  app.power.init(client, app.machines, { passwords });
   app.machines.init(client, client, {
     relayUrl: (id) => `ws://fake:1/relay?machine=${id}`,
     localToken: () => 't',
@@ -257,7 +257,9 @@ export const setupTwoMachines = async (
   const impl = routedImpl((url) => (url.includes('/relay?machine=') ? remote : server));
   const client = new ServiceClient({ WebSocketImpl: impl });
   await client.connect('ws://fake:1', 't');
-  const app = wire(client, impl, { [M1]: 'device-token' }, o.powerPasswords);
+  // The fake keychain's power switch passwords (a test can read what is stored).
+  const passwords = memoryTokens(o.powerPasswords ?? {});
+  const app = wire(client, impl, { [M1]: 'device-token' }, passwords);
   if (o.waitForOn !== false)
     await vi.waitFor(() => expect(app.machines.get(M1)?.status).toBe('on'));
   const status = o.m1Status ?? 'on';
@@ -266,5 +268,5 @@ export const setupTwoMachines = async (
     await vi.waitFor(() => expect(app.machines.get(M1)?.status).toBe(status));
   }
   const context = new Map<unknown, unknown>([[APP_CONTEXT, app]]);
-  return { server, remote, client, app, context };
+  return { server, remote, client, app, context, passwords };
 };

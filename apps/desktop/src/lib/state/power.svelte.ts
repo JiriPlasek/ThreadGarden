@@ -58,6 +58,10 @@ const plainError = (e: unknown): string => {
   }
 };
 
+/** A running draw worth noting: none stored yet, or more than 5 % away from the stored one. */
+const movedMuch = (stored: number | null, watts: number): boolean =>
+  stored === null || Math.abs(watts - stored) > 0.05 * stored;
+
 const hasPower = (m: MachineEntry | undefined): boolean =>
   !!m?.info?.capabilities.includes(POWER_CAPABILITY);
 
@@ -77,7 +81,15 @@ export class PowerState {
   private isVisible = true;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private timerMs = 0;
+  /** The switch's wait before power comes back (`power.turnOn`'s `waitMs`), by machine. */
+  private waits = $state<Record<string, number>>({});
+  /** Bumped when a timed state (a start, the shutdown grace) runs out, so derivations rerun. */
+  private clock = $state(0);
   private lastRead = new Map<string, number>();
+  /** Machines that counted as starting or shutting down at the last tick. */
+  private wasActive = new Set<string>();
+  /** Whether each machine's link was open when its status last changed. */
+  private linkOpen = new Map<string, boolean>();
   /** Machines whose standby draw is still to be measured (after a `shuttingDown`). */
   private awaitingStandby = new Set<string>();
   /** Machines sent `power.adopt` since their link last opened. */
@@ -132,19 +144,38 @@ export class PowerState {
    * control, or without a reading, the link status stands.
    */
   status = (id: string, link: MachineStatus): MachineStatus => {
+    void this.clock;
     const config = this.configs[id];
     if (!config) return link;
     if (link === 'on') return this.statuses[id]?.phase === 'shuttingDown' ? 'shuttingDown' : 'on';
     // A machine that needs attention says so; the plug cannot fix that.
     if (link !== 'connecting' && link !== 'unreachable') return link;
+    // Pressed Turn on: Starting… even while the switch waits out the minimum off time.
+    if (this.turningOn(id)) return 'starting';
     const r = this.readings[id];
     if (!r) return link;
     if (r.on === false || (r.watts !== null && r.watts < config.offWatts)) return 'off';
     if (r.watts === null) return link;
     if (this.shuttingDownRecently(id)) return 'shuttingDown';
-    if (this.startingRecently(id)) return 'starting';
     return 'unreachable';
   };
+
+  /**
+   * A Turn on is pending: it began less than 5 min ago, the machine's link is
+   * not on yet and it is not shutting down.
+   */
+  turningOn = (id: string): boolean => {
+    void this.clock;
+    return (
+      this.startingRecently(id) &&
+      this.machines?.get(id)?.status !== 'on' &&
+      !this.shuttingDownRecently(id)
+    );
+  };
+
+  /** While a Turn on is pending: how long the switch said it waits before power comes back (ms). */
+  turnOnWait = (id: string): number | null =>
+    this.turningOn(id) ? (this.waits[id] ?? null) : null;
 
   /** Turns the machine on through its switch; false (and `error(id)` says why) when that failed. */
   turnOn = async (id: string): Promise<boolean> => {
@@ -152,11 +183,13 @@ export class PowerState {
     if (!api) return false;
     delete this.errors[id];
     delete this.shutSeenAt[id];
+    delete this.waits[id];
     this.awaitingStandby.delete(id);
     this.startedAt[id] = Date.now();
     this.schedule();
     try {
-      await api.request('power.turnOn', { machineId: id });
+      const { waitMs } = await api.request('power.turnOn', { machineId: id });
+      if (this.startedAt[id] !== undefined) this.waits[id] = waitMs;
     } catch (e) {
       delete this.startedAt[id];
       this.errors[id] = plainError(e);
@@ -186,22 +219,30 @@ export class PowerState {
   ): Promise<PowerConfig | null> => {
     const api = this.api;
     if (!api) throw new Error('Power control is not ready.');
-    const saved = await api.request('power.configure', {
-      machineId: id,
-      config,
-      ...(password === undefined ? {} : { password }),
-    });
+    // The keychain first: a configuration whose password could not be kept would not survive a restart.
+    let restore: (() => Promise<void>) | null = null;
+    if (config && password !== undefined) {
+      const previous = await this.passwords.get(id);
+      await this.passwords.set(id, password);
+      restore = () =>
+        previous === null ? this.passwords.clear(id) : this.passwords.set(id, previous);
+    }
+    let saved: PowerConfig | null;
+    try {
+      saved = await api.request('power.configure', {
+        machineId: id,
+        config,
+        ...(password === undefined ? {} : { password }),
+      });
+    } catch (e) {
+      await restore?.().catch(() => {});
+      throw e;
+    }
     if (saved) {
-      if (password !== undefined) await this.passwords.set(id, password);
       this.configs[id] = saved;
     } else {
       await this.passwords.clear(id).catch(() => {});
-      delete this.configs[id];
-      delete this.readings[id];
-      delete this.startedAt[id];
-      delete this.shutSeenAt[id];
-      this.lastRead.delete(id);
-      this.awaitingStandby.delete(id);
+      this.dropPlug(id);
     }
     delete this.errors[id];
     const m = this.machines?.get(id);
@@ -218,7 +259,11 @@ export class PowerState {
   visible = (v: boolean): void => {
     const was = this.isVisible;
     this.isVisible = v;
-    if (v && !was) void this.readAll();
+    if (v && !was) {
+      // Timed states may have run out while hidden.
+      this.clock++;
+      void this.readAll();
+    }
     this.schedule();
   };
 
@@ -232,40 +277,58 @@ export class PowerState {
         if (hasPower(this.machines?.get(id))) this.setMachine(id, s);
       }),
       m.client.onOpen(() => void this.onMachineOpen(id)),
-      m.client.onStatus(() => this.schedule()),
+      m.client.onStatus((s) => this.onLink(id, s === 'open')),
     ];
     this.perMachine.set(id, () => offs.forEach((off) => off()));
+    this.linkOpen.set(id, m.client.status === 'open');
     if (m.client.status === 'open') void this.onMachineOpen(id);
   };
 
+  private onLink = (id: string, open: boolean): void => {
+    const was = this.linkOpen.get(id) ?? false;
+    this.linkOpen.set(id, open);
+    // The link left on mid-shutdown: the grace for high watts counts from now.
+    if (was && !open && this.statuses[id]?.phase === 'shuttingDown') {
+      this.shutSeenAt[id] = Date.now();
+    }
+    this.schedule();
+  };
+
+  /** A paired machine was removed: so is its power control, here and in the keychain (best effort). */
   private forget = (id: string): void => {
     this.perMachine.get(id)?.();
     this.perMachine.delete(id);
-    for (const rec of [
-      this.configs,
-      this.readings,
-      this.statuses,
-      this.errors,
-      this.startedAt,
-      this.shutSeenAt,
-    ])
+    this.linkOpen.delete(id);
+    this.dropPlug(id);
+    delete this.statuses[id];
+    delete this.errors[id];
+    this.adopted.delete(id);
+    this.api?.request('power.configure', { machineId: id, config: null }).catch(() => {});
+    this.passwords.clear(id).catch(() => {});
+    this.schedule();
+  };
+
+  /** Forgets everything this PC knew about the machine's plug. */
+  private dropPlug = (id: string): void => {
+    for (const rec of [this.configs, this.readings, this.startedAt, this.shutSeenAt, this.waits])
       delete rec[id];
     this.lastRead.delete(id);
+    this.wasActive.delete(id);
     this.awaitingStandby.delete(id);
-    this.adopted.delete(id);
-    this.schedule();
   };
 
   private onMachineOpen = async (id: string): Promise<void> => {
     this.adopted.delete(id);
-    // It is on: a turn-on is over.
+    // It is on: a turn-on is over, and whatever it said before it went away is stale.
     delete this.startedAt[id];
+    delete this.waits[id];
+    delete this.statuses[id];
+    delete this.shutSeenAt[id];
+    this.awaitingStandby.delete(id);
+    this.schedule();
     const m = this.machines?.get(id);
-    if (!m || !hasPower(m)) {
-      delete this.statuses[id];
-      this.schedule();
-      return;
-    }
+    if (!m || !hasPower(m)) return;
+    this.maybeAdopt(id);
     if (this.configs[id]) void this.read(id);
     try {
       this.setMachine(id, await m.client.request('power.status', {}));
@@ -279,21 +342,24 @@ export class PowerState {
     if (s.phase === 'shuttingDown') {
       this.shutSeenAt[id] = Date.now();
       delete this.startedAt[id];
+      delete this.waits[id];
       this.awaitingStandby.add(id);
     } else {
       delete this.shutSeenAt[id];
       this.awaitingStandby.delete(id);
     }
-    if (!s.configured) this.maybeAdopt(id);
     this.schedule();
   };
 
-  /** A machine on, with power control, that lacks the configuration this PC has: hand it over (once per link). */
+  /**
+   * A machine on, with power control, while this PC has its configuration:
+   * hand it over once per link open, so a change made while it was off reaches it.
+   */
   private maybeAdopt = (id: string): void => {
     const m = this.machines?.get(id);
     const config = this.configs[id];
     if (!m || !config || !hasPower(m) || m.client.status !== 'open') return;
-    if (this.statuses[id]?.configured !== false || this.adopted.has(id)) return;
+    if (this.adopted.has(id)) return;
     this.adopted.add(id);
     void this.adopt(m, config);
   };
@@ -352,8 +418,12 @@ export class PowerState {
       return;
     }
     if (this.api !== api) return;
-    const next = Object.fromEntries(list.map((p) => [p.machineId, p.config]));
-    for (const id of Object.keys(this.readings)) if (!next[id]) delete this.readings[id];
+    // Only machines paired now: a row left behind for one removed is never polled.
+    const paired = new Set(machines.list.filter((m) => !m.local).map((m) => m.id));
+    const next = Object.fromEntries(
+      list.filter((p) => paired.has(p.machineId)).map((p) => [p.machineId, p.config]),
+    );
+    for (const id of Object.keys(this.configs)) if (!next[id]) this.dropPlug(id);
     this.configs = next;
     for (const id of Object.keys(next)) this.maybeAdopt(id);
     await this.readAll();
@@ -400,7 +470,7 @@ export class PowerState {
     } else if (
       link === 'on' &&
       this.statuses[id]?.phase !== 'shuttingDown' &&
-      r.watts !== config.measured.running
+      movedMuch(config.measured.running, r.watts)
     ) {
       kind = 'running';
     }
@@ -423,9 +493,7 @@ export class PowerState {
   };
 
   /** Starting or shutting down: worth a reading every few seconds. */
-  private active = (id: string): boolean =>
-    this.shuttingDownRecently(id) ||
-    (this.startingRecently(id) && this.machines?.get(id)?.status !== 'on');
+  private active = (id: string): boolean => this.shuttingDownRecently(id) || this.turningOn(id);
 
   private wantedMs = (): number => {
     const ids = Object.keys(this.configs);
@@ -447,8 +515,17 @@ export class PowerState {
     this.timer = undefined;
     this.timerMs = 0;
     const now = Date.now();
-    const due = Object.keys(this.configs).filter(
-      (id) => this.active(id) || now - (this.lastRead.get(id) ?? 0) >= SLOW_POLL_MS - FAST_POLL_MS,
+    const ids = Object.keys(this.configs);
+    const active = new Set(ids.filter((id) => this.active(id)));
+    // A start or a shutdown grace that just ran out: show what the machine is now, at once.
+    const expired = [...this.wasActive].filter((id) => !active.has(id) && this.configs[id]);
+    this.wasActive = active;
+    if (expired.length > 0) this.clock++;
+    const due = ids.filter(
+      (id) =>
+        active.has(id) ||
+        expired.includes(id) ||
+        now - (this.lastRead.get(id) ?? 0) >= SLOW_POLL_MS - FAST_POLL_MS,
     );
     await Promise.all(due.map((id) => this.read(id)));
     this.schedule();
