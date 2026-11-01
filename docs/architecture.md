@@ -695,8 +695,8 @@ and not at all while hidden. The machine's own service keeps a copy of the
 configuration (`power-switch.json`, mode 0600; `power.adopt` hands it over),
 and owns **idle detection** (`power/idle.ts`, a minute tick; keep awake is
 persisted), the **push check** (`power/push-check.ts`) and the **shutdown
-sequence** (`power/shutdown.ts`): check, postpone or pause, stop chats, arm the
-cut on the switch, `systemctl poweroff` (the installer's polkit rule allows
+sequence** (`power/shutdown.ts`): check, postpone or pause, arm the cut (and
+a wake) on the switch, stop chats, `systemctl poweroff` (the installer's polkit rule allows
 exactly that for the service's user). If the switch cannot be reached or
 refuses, the sequence stops before powering off: a machine that cannot be
 switched on again must stay on, and its power status says why. The UI derives

@@ -328,3 +328,40 @@ describe('mock service --remote (v1.4)', () => {
     ).rejects.toThrow(/Invalid pairing code/);
   });
 });
+
+describe('mock service --fake-tasmota', () => {
+  it('a shutdown reaches the mock power-off, never systemctl', async () => {
+    const written: string[] = [];
+    const write = process.stderr.write.bind(process.stderr);
+    process.stderr.write = ((chunk: string | Uint8Array, ...rest: unknown[]) => {
+      written.push(String(chunk));
+      return (write as (...a: unknown[]) => boolean)(chunk, ...rest);
+    }) as typeof process.stderr.write;
+    try {
+      mock = await startMockService({
+        remote: { port: 0, pairingCode: 'TEST-TEST-TEST' },
+        fakeTasmota: { port: 0 },
+        sessions: 3,
+        port: await freePort(),
+        token: 'mock-token',
+        installSignalHandlers: false,
+      });
+      const c = (client = await TestClient.connect(mock.svc.port, 'mock-token'));
+      await c.call('power.adopt', {
+        config: {
+          kind: 'tasmota-zigbee',
+          address: mock.fakeTasmota!.address,
+          device: 'MockPlug',
+          offWatts: 5,
+          minOffSeconds: 90,
+          measured: { running: null, standby: null },
+        },
+        password: 'mock-switch',
+      });
+      await c.call('power.shutdown', { force: true });
+      await eventually(async () => written.some((w) => w.includes('mock: would power off')));
+    } finally {
+      process.stderr.write = write;
+    }
+  });
+});

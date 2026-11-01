@@ -565,3 +565,33 @@ describe('power setup words', () => {
     expect(suggestOffWatts(3, 0)).toBe(2);
   });
 });
+
+describe('the power section and a stopped shutdown', () => {
+  it("shows the machine's problem, and clears it with the problem", async () => {
+    const { card, remote } = await start({ stored: CONFIG });
+    const note = "The switch didn't accept that password.";
+    const section = await within(card).findByRole('group', { name: 'Power control' });
+    remote.push('power.changed', {
+      configured: true,
+      busy: false,
+      idleSince: null,
+      shutsDownAt: null,
+      keepAwake: { mode: 'off', until: null },
+      phase: 'running',
+      unpushed: [],
+      problem: note,
+    });
+    await waitFor(() => expect(within(section).getByText(note)).toBeTruthy());
+    remote.push('power.changed', {
+      configured: true,
+      busy: false,
+      idleSince: null,
+      shutsDownAt: null,
+      keepAwake: { mode: 'off', until: null },
+      phase: 'running',
+      unpushed: [],
+      problem: null,
+    });
+    await waitFor(() => expect(within(section).queryByText(note)).toBeNull());
+  });
+});

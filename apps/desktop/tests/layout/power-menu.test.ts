@@ -296,4 +296,13 @@ describe('the power menu', () => {
       vi.useRealTimers();
     }
   });
+
+  it("shows the machine's problem under the heading, and clears it with the problem", async () => {
+    const { group, remote } = await start();
+    const note = "The switch didn't accept that password.";
+    remote.push('power.changed', status({ problem: note }));
+    await waitFor(() => expect(within(group).getByText(note)).toBeTruthy());
+    remote.push('power.changed', status());
+    await waitFor(() => expect(within(group).queryByText(note)).toBeNull());
+  });
 });

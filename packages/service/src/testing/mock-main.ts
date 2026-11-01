@@ -46,8 +46,9 @@
  * Power control (v1.4, plan 4): `--fake-tasmota [--fake-tasmota-port <port>]`
  * also starts a fake Tasmota Zigbee bridge on 127.0.0.1 (password
  * `FAKE_TASMOTA_PASSWORD`) with one plug, `MockPlug`, drawing 47 W, and prints
- * its address. It is meant for `--remote` (a headless machine, which offers
- * power control); the device listener's address is the switch to set up.
+ * the fake's own address (`127.0.0.1:<port>`) on stderr. It is meant for
+ * `--remote` (a headless machine, which offers power control). The mock never
+ * powers anything off: its shutdown sequence ends in `mockPoweroff`.
  */
 import { randomUUID } from 'node:crypto';
 import { appendFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -770,6 +771,11 @@ export type MockOptions = {
   fakeTasmota?: { port: number };
 };
 
+/** What the mock does where a machine would power off. */
+const mockPoweroff = async (): Promise<void> => {
+  process.stderr.write('mock: would power off\n');
+};
+
 /** The web password of the mock's fake Tasmota switch (user `admin`). */
 export const FAKE_TASMOTA_PASSWORD = 'mock-switch';
 
@@ -918,6 +924,8 @@ export const startMockService = async (o: MockOptions = {}): Promise<MockService
       ...(o.port === undefined ? {} : { port: o.port }),
       ...(o.token === undefined ? {} : { token: o.token }),
       installSignalHandlers: o.installSignalHandlers ?? true,
+      // Never the real `systemctl poweroff`: a mock must not power off a developer's machine.
+      poweroff: mockPoweroff,
       ...(remote
         ? {
             headless: true,
@@ -1027,8 +1035,7 @@ if (isEntry()) {
       const discovery = await readDiscovery(dataDir);
       if (switchHandle) {
         process.stderr.write(
-          `Fake Tasmota switch at ${switchHandle.address} (user admin, password ${FAKE_TASMOTA_PASSWORD}), plug MockPlug at 47 W
-`,
+          `Fake Tasmota switch at ${switchHandle.address} (user admin, password ${FAKE_TASMOTA_PASSWORD}), plug MockPlug at 47 W\n`,
         );
       }
       process.stdout.write(`${JSON.stringify({ ...discovery, dataDir, claudeDir })}\n`);

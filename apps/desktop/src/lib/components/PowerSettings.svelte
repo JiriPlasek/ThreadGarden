@@ -117,7 +117,7 @@
     {/if}
 
     <div aria-live="polite">
-      {#each [error, idleError, power.error(machine.id)] as message, i (i)}
+      {#each [error, idleError, power.error(machine.id), power.machine(machine.id)?.problem] as message, i (i)}
         {#if message}<p class="text-destructive text-xs" role="alert">{message}</p>{/if}
       {/each}
     </div>

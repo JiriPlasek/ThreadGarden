@@ -76,7 +76,8 @@
   const hasPower = $derived(!machine.local && power.config(machine.id) !== null);
   const awake = $derived(power.machine(machine.id)?.keepAwake);
   const starting = $derived(power.turningOn(machine.id));
-  const failure = $derived(power.error(machine.id));
+  // What failed when asked (turning on, shutting down), else why the machine stopped a shutdown.
+  const failure = $derived(power.error(machine.id) ?? power.machine(machine.id)?.problem ?? null);
 
   /** What the menu offers: Turn on whenever the plug reads off, else only what the state allows. */
   const plugOff = $derived.by((): boolean => {

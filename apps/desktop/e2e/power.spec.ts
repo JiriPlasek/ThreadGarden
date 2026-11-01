@@ -65,7 +65,7 @@ test('set up power control against a fake switch: the ⏻ button and the plug’
   await setup.getByLabel('Address').fill(`127.0.0.1:${FAKE_SWITCH_PORT}`);
   await setup.getByLabel('Password').fill('not-the-password');
   await setup.getByRole('button', { name: 'Connect' }).click();
-  await expect(setup.getByRole('alert')).toBeVisible();
+  await expect(setup.getByRole('alert')).toHaveText("The switch didn't accept that password.");
   await expect(setup.getByRole('heading', { name: 'Connect' })).toBeVisible();
 
   await setup.getByLabel('Password').fill(FAKE_SWITCH_PASSWORD);

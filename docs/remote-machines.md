@@ -212,7 +212,10 @@ install. The installer:
 - offers to write `/etc/polkit-1/rules.d/49-threadgarden-power.rules` with
   `sudo`, which lets your user power the machine off from the service (idle
   shutdown and Shut down now). Ctrl+C skips it; do that if you will not use
-  power control, everything else works without it;
+  power control, everything else works without it. If the installer warns
+  that there is "no polkit rules directory", the system is too old for the
+  rule: idle shutdown cannot power the machine off there, and everything else
+  works;
 - enables and starts the service, and prints what to do next.
 
 The service runs with `PATH=~/.local/bin:/usr/local/bin:/usr/bin:/bin`. If
@@ -319,17 +322,22 @@ The plug powers the PC, so the PC has to boot by itself whenever power returns
 
 The stock firmware only works through eWeLink's cloud, so the bridge is
 reflashed with Tasmota; every Zigbee device on it then leaves eWeLink. You need
-a USB-UART adapter set to **3.3 V logic** (FT232RL or CP2102), a few Dupont
-cables, a small screwdriver, and Python on your PC with `python -m pip install
-esptool`. Download `tasmota32-zbbrdgpro.factory.bin` from the
+a USB-UART adapter (FT232RL or CP2102), a few Dupont cables, a small
+screwdriver, and Python on your PC with `python -m pip install esptool`.
+Download `tasmota32-zbbrdgpro.factory.bin` from the
 [Tasmota releases](https://github.com/arendst/Tasmota/releases) and check it
-against the release's checksum.
+against the checksum on the release page (in PowerShell:
+`Get-FileHash -Algorithm SHA256 tasmota32-zbbrdgpro.factory.bin`). This route
+was done on a board with date code 2530 (ESP32-D0WD-V3, no flash encryption or
+secure boot); a different board revision may differ.
 
 1. **Open the case.** The board's pads are labelled 3V3, GND, TXD, RXD and
    GPIO0. Power the bridge from **its own USB port**, not from the adapter: an
-   FT232RL's 3.3 V output is too weak for the bridge's two chips. Connect only
-   GND, the bridge's TXD to the adapter's RX, its RXD to the adapter's TX, and
-   GPIO0 to GND while you plug the power in (then release it).
+   FT232RL's 3.3 V output is too weak for the bridge's two chips. Check the
+   adapter's jumper or switch is on **3.3 V** logic, never 5 V: the ESP32
+   does not tolerate 5 V. Connect only GND, the bridge's TXD to the adapter's
+   RX, its RXD to the adapter's TX, and GPIO0 to GND while you plug the power
+   in (then release it); leave the 3V3 pad unconnected.
 2. **Flash Tasmota.** Use esptool, not the browser installer (it wrote an HTML
    page instead of the firmware). Replace `COM5` with the adapter's port:
 
@@ -337,10 +345,11 @@ against the release's checksum.
    python -m esptool --port COM5 --baud 460800 --before no-reset --after no-reset write-flash --erase-all 0x0 tasmota32-zbbrdgpro.factory.bin
    ```
 
-   Then unplug the bridge's power and plug it in again, without GPIO0 held.
+   `--erase-all` wipes the stock firmware for good, and there is no way back
+   to eWeLink's cloud-only firmware from this guide. Then unplug the bridge's
+   power and plug it in again, without GPIO0 held.
 3. **Join your Wi-Fi over the serial line.** Tasmota 16 may offer no setup
-   access point. Open the adapter's port in a serial terminal (115200 baud) and
-   enter:
+   access point. Open the adapter's port in a serial terminal and enter:
 
    ```text
    Backlog SSID1 your-wifi-name; Password1 your-wifi-password
@@ -349,10 +358,13 @@ against the release's checksum.
    The bridge restarts and joins; its address is printed on the serial line
    (or look it up in your router). Open `http://<address>/` in a browser to
    check.
-4. **Update the Zigbee chip.** In the bridge's web page, Consoles → Manage File
-   System: upload the newest `SonoffZBPro_coord_*.hex` from the Tasmota project
-   (this guide was verified with `SonoffZBPro_coord_20240710.hex`). Then
-   Consoles → Berry Scripting console, and run, one line at a time:
+4. **Update the Zigbee chip.** Download the newest `SonoffZBPro_coord_*.hex`
+   from
+   [Tasmota's Zigbee bridge firmware folder](https://github.com/arendst/Tasmota/tree/development/tools/fw_SonoffZigbeeBridgePro_cc2652)
+   (this guide was verified with `SonoffZBPro_coord_20240710.hex`) and upload
+   it to the bridge's file system (its web page, Consoles → Manage File
+   System). Then open Consoles → Berry Scripting console, and run, one line at
+   a time:
 
    ```berry
    import sonoff_zb_pro_flasher as cc
@@ -361,7 +373,12 @@ against the release's checksum.
    cc.flash()
    ```
 
-   Use your file's name in `cc.load`, and wait for `cc.flash()` to finish.
+   Use your file's name in `cc.load`. `cc.check()` must print **Verification
+   of HEX file OK**; if it does not, do not flash. `cc.flash()` takes about 10
+   minutes: keep the bridge powered and do not interrupt it, since an
+   interrupted flash can leave the Zigbee chip unusable. It ends with
+   **Flashing completed: OK**. Then restart the bridge and check that its
+   console says **Started as coordinator**.
 5. **Set a web password** (Configuration → Configure Other → Web Admin
    Password). Threadgarden signs in as `admin` with it.
 6. **Reserve the bridge's address** in your router (a DHCP reservation, as for
@@ -414,7 +431,7 @@ down** and **Unreachable**; hover over the state to see "Shuts down in 42 min".
 
 **Shut down after idle** (Settings → Power: Never, 30 min, 1 hour, 2 hours or
 4 hours; default 1 hour) is kept on the machine itself, so it works with every
-window closed. A machine is busy while a chat on it is mid-turn, while a
+window closed. You can change it only while the machine is On. A machine is busy while a chat on it is mid-turn, while a
 background agent a chat started is still running, or while a Claude Code
 session Threadgarden did not start is working (the last one is only seen while
 the "external sessions" polling setting is on). A chat waiting for your answer
@@ -432,9 +449,9 @@ keep the machine awake.
    work on ‹machine›**, with **Ask Claude to push it** and **Shut down
    anyway**. Nothing is deleted either way.
 3. If a scheduled message is due within 15 minutes, the shutdown is postponed.
-4. Otherwise it stops the chats (they become resumable), arms the power cut on
-   the switch, and runs `systemctl poweroff`. If a scheduled message is due
-   within 7 days, it also sets a wake on the switch for 5 minutes before it.
+4. Otherwise it arms the power cut on the switch (and, if a scheduled message
+   is due within 7 days, a wake for 5 minutes before it), stops the chats (they
+   become resumable), and runs `systemctl poweroff`.
 5. The switch cuts the power once the plug has read below the off line for about
    30 seconds. It never cuts on a timer alone, so a PC that hangs while shutting
    down keeps its power.
@@ -445,7 +462,9 @@ would strand it.
 
 **Remove power control** (Settings → Power) takes Threadgarden's rule off the
 switch and forgets the switch. If the machine is off at that moment, it is told
-when it is next on.
+when it is next on. Removal is best effort: if the switch cannot be reached or
+its password has changed, Threadgarden's rule stays on it, inert, and setting up
+again reuses that slot. `SetOption83` stays on either way.
 
 ### 4.5 What Threadgarden changes on your switch
 
@@ -461,10 +480,12 @@ uses one of the above, setup stops with an explanation instead of taking it,
 and it says so if no rule slot is free. On a Zigbee bridge it also sets
 `SetOption83 1` (devices addressed by name), but only if none of your rules
 names a Zigbee device by its address. Remove power control and its rule and
-timer go away again.
+timer go away again (see 4.4 for what Remove leaves).
 
 Two more things. Wakes use Tasmota's timers, so Tasmota's global **Timers**
-switch must be on (Configuration → Configure Timer). And Threadgarden sends the
+switch must be on (Configuration → Configure Timer). With it off and a message
+scheduled within the next 7 days, shutdowns stop too, until you turn it back on
+(`Timers 1` on the console), since the wake could not happen. And Threadgarden sends the
 `Referer` header Tasmota 16 wants itself, so you do not need `SetOption128`; if
 a switch still refuses requests, enter `SetOption128 1` on its console.
 
@@ -495,7 +516,7 @@ under the heading's **Open settings** and in Settings → Machines.
 | **Starting…** then **Unreachable** | The plug came on but the service did not answer within 5 minutes. | Check the BIOS setting and the wait (see "Stays Off after Turn on" below), that Wi-Fi connects at boot without a login, and that the service starts (`systemctl --user status threadgarden`). A first headless boot can take a few minutes. Press **Turn on** again once it is up or has been reset. |
 | **Shutdown paused: unpushed work** | Needs you shows "Unpushed work on ‹machine›": a repository there has changes, commits or stashes that are on no remote branch, or it could not be checked. | **Ask Claude to push it**, or push over SSH, then shut down again. **Shut down anyway** leaves the work on the machine's disk. |
 | **The power switch refused the password** | The switch rejected `admin` with the saved password, so the machine stays on. | Set the password again in Settings → Power (remove power control and set it up again). On Tasmota 16, if requests are refused even with the right password, enter `SetOption128 1` on the switch's console. |
-| **Stays Off after Turn on** | The plug is on but the PC does not boot. | Check the BIOS "Restore on AC power loss" = On (4.3), and that **Wait before switching on** is long enough: a PC cut for less than about 10 s may not notice the power return. To change it, remove power control and set it up again with a longer wait (90 s is proven), then press Turn on. |
+| **Stays Off after Turn on** | The plug is on but the PC does not boot. | Check the BIOS "Restore on AC power loss" = On (4.3), and that **Wait before switching on** is long enough: a PC cut for less than about 10 s may not notice the power return. To change it, start the PC by hand (its power button) and wait until it shows On, then remove power control and set it up again with a longer wait (90 s is proven). |
 | **Needs attention:** Different Threadgarden version | The two versions are too far apart (more than one protocol version). | Install the matching release on the Ubuntu PC (see [Upgrading](#upgrading)) or update the desktop app. |
 
 ### When pairing fails
