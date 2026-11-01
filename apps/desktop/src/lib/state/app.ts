@@ -2,7 +2,7 @@
  * Wires the service client to every state module. The UI calls `startApp` once;
  * tests build their own instances and call `init` with a fake client instead.
  */
-import { serviceConnection, type ServiceConnection } from '../native';
+import { serviceConnection, updater, type ServiceConnection } from '../native';
 import { startAttention } from '../notifications';
 import { agents } from './agents.svelte';
 import { analytics } from './analytics.svelte';
@@ -13,6 +13,7 @@ import { places } from './places.svelte';
 import { client, createScope, scopes, wireScope } from './scope';
 import { settings } from './settings.svelte';
 import { tabs } from './tabs.svelte';
+import { updates } from './updates.svelte';
 import { usage } from './usage.svelte';
 
 export { client, scopes };
@@ -84,6 +85,13 @@ const connectTo = async (conn: ServiceConnection): Promise<void> => {
     tabs.restore(),
   ]);
   loaded = true;
+  // Self-update: checks GitHub shortly after start, then every 6 hours.
+  updates.init({
+    api: client,
+    updater,
+    appVersion: conn.appVersion,
+    stopLocalService: lifecycle.stopLocalService,
+  });
 };
 
 const run = async (): Promise<void> => {

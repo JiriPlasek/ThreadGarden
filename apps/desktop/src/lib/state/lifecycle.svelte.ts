@@ -68,10 +68,15 @@ export class LifecycleState {
     await this.agents?.stopAll();
   };
 
-  /** Stops all work, then the service, then exits the app. */
-  quitCompletely = async (): Promise<void> => {
+  /** Stops all work on This PC, then its service (asked over the socket when it can be, else by the shell). */
+  stopLocalService = async (): Promise<void> => {
     if (this.reachable) await this.api!.request('service.shutdown', { stopAll: true });
     else await stopService();
+  };
+
+  /** Stops all work, then the service, then exits the app. */
+  quitCompletely = async (): Promise<void> => {
+    await this.stopLocalService();
     await quitApp();
   };
 
