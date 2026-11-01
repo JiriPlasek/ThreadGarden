@@ -43,6 +43,9 @@ describe('update notice', () => {
     );
     await userEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
     expect(install).not.toHaveBeenCalled();
+    // The closing dialog blocks pointer events on the page until it is gone.
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    await waitFor(() => expect(document.body.style.pointerEvents).not.toBe('none'));
     await userEvent.click(screen.getByRole('button', { name: 'Restart to update' }));
     await userEvent.click(
       within(await screen.findByRole('alertdialog')).getByRole('button', {
