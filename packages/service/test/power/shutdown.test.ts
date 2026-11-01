@@ -49,6 +49,10 @@ type RigOptions = {
   sends?: { sendAt: number; state: string }[];
   poweroff?: () => Promise<void>;
   check?: (d: { cwd: string; sessionId: string | null }[]) => Promise<Unpushed[]>;
+  /** The idle monitor's sessions, given what has happened so far. */
+  sessions?: (order: string[]) => { live: boolean; status: 'idle' }[];
+  /** Every command of the first switch made (onStart's) waits this long before it is sent. */
+  slowFirstSwitchMs?: number;
 };
 
 async function rig(o: RigOptions = {}) {
@@ -61,14 +65,15 @@ async function rig(o: RigOptions = {}) {
   if (o.password !== null) store.save(config, o.password ?? 'pw');
 
   const clock = { now: 10_000_000 };
+  /** Event tga, Timer16 writes, stopAll and poweroff, in the order they happened. */
+  const order: string[] = [];
   const idle = new IdleMonitor({
-    sessions: () => [],
+    sessions: () => o.sessions?.(order) ?? [],
     external: () => [],
     minutes: () => 60,
     now: () => clock.now,
   });
-  /** Event tga, stopAll and poweroff, in the order they happened. */
-  const order: string[] = [];
+  let switches = 0;
   const emitted: MachinePowerStatus[] = [];
   const checked: { cwd: string; sessionId: string | null }[][] = [];
   const seq = new ShutdownSequence({
@@ -90,19 +95,33 @@ async function rig(o: RigOptions = {}) {
         checked.push(d);
         return o.found ?? [];
       }),
-    makeSwitch: (c, p) =>
-      createSwitch(c, p, {
+    makeSwitch: (c, p) => {
+      const delay = switches++ === 0 ? (o.slowFirstSwitchMs ?? 0) : 0;
+      return createSwitch(c, p, {
         readWaitMs: 0,
-        fetch: (input, init) => {
-          const cmnd = new URL(String(input)).searchParams.get('cmnd');
-          if (cmnd === 'Event tga') order.push(cmnd);
+        fetch: async (input, init) => {
+          if (delay > 0) await new Promise((res) => setTimeout(res, delay));
+          const cmnd = new URL(String(input)).searchParams.get('cmnd') ?? '';
+          if (cmnd === 'Event tga' || cmnd.startsWith('Timer16 ')) order.push(cmnd);
           return fetch(input, init);
         },
-      }),
+      });
+    },
     emit: (s) => emitted.push(s),
   });
   return { f, config, store, idle, clock, seq, order, emitted, checked };
 }
+
+/** A clean shutdown without a send waiting: the cut, no wake, then sessions and poweroff. */
+const CLEAN = ['Event tga', 'Timer16 {"Enable":0}', 'stopAll', 'poweroff'];
+
+/** A clean shutdown that wakes for a send at `at` (the fake switch is at UTC+1 by default). */
+const withWake = (at: number, offsetMinutes = 60) => [
+  'Event tga',
+  `Timer16 ${JSON.stringify({ Enable: 1, Mode: 0, Time: wakeTime(at, offsetMinutes), Window: 0, Days: wakeDays(at, offsetMinutes), Repeat: 0, Action: 3 })}`,
+  'stopAll',
+  'poweroff',
+];
 
 const installRule = (f: FakeTasmota, config: PowerConfig) => {
   f.rules[1] = { text: ruleText(config), on: true };
@@ -112,7 +131,7 @@ describe('ShutdownSequence.run', () => {
   it('clean machine: arms the cut, then stops sessions, then powers off', async () => {
     const r = await rig();
     const s = await r.seq.run({ force: false, reason: 'manual' });
-    expect(r.order).toEqual(['Event tga', 'stopAll', 'poweroff']);
+    expect(r.order).toEqual(CLEAN);
     expect(r.checked).toEqual([[{ cwd: '/w/app', sessionId: 's1' }]]);
     expect(s.phase).toBe('shuttingDown');
     expect(s.problem).toBeNull();
@@ -149,7 +168,7 @@ describe('ShutdownSequence.run', () => {
     const r = await rig({ found: [unpushed] });
     const s = await r.seq.run({ force: true, reason: 'manual' });
     expect(r.checked).toEqual([]);
-    expect(r.order).toEqual(['Event tga', 'stopAll', 'poweroff']);
+    expect(r.order).toEqual(CLEAN);
     expect(s).toMatchObject({ phase: 'shuttingDown', unpushed: [] });
   });
 
@@ -197,7 +216,7 @@ describe('ShutdownSequence.run', () => {
       ],
     });
     await r.seq.run({ force: false, reason: 'idle' });
-    expect(r.order).toEqual(['Event tga', 'stopAll', 'poweroff']);
+    expect(r.order).toEqual(withWake(at));
     expect(r.f.timers[16]).toMatchObject({ Enable: 1, Time: wakeTime(at, r.f.utcOffsetMinutes) });
   });
 
@@ -217,7 +236,7 @@ describe('ShutdownSequence.run', () => {
     const timer = r.f.commands.findIndex((c) => c.startsWith('Timer16 {"Enable":1'));
     expect(tga).toBeGreaterThanOrEqual(0);
     expect(timer).toBeGreaterThan(tga);
-    expect(r.order).toEqual(['Event tga', 'stopAll', 'poweroff']);
+    expect(r.order).toEqual(withWake(at, r.f.utcOffsetMinutes));
     expect(s.phase).toBe('shuttingDown');
   });
 
@@ -236,14 +255,14 @@ describe('ShutdownSequence.run', () => {
     };
     await r.seq.run({ force: false, reason: 'idle' });
     expect(r.f.timers[16]).toMatchObject({ Enable: 0 });
-    expect(r.order).toEqual(['Event tga', 'stopAll', 'poweroff']);
+    expect(r.order).toEqual(CLEAN);
   });
 
   it('timers switched off on the switch: no poweroff, the cut is disarmed again', async () => {
     const r = await rig({ sends: [{ sendAt: Date.now() + 3 * 60 * MIN, state: 'pending' }] });
     r.f.timersOn = false;
     const s = await r.seq.run({ force: false, reason: 'idle' });
-    expect(r.order).toEqual(['Event tga']);
+    expect(r.order).toEqual(['Event tga', 'Timer16 {"Enable":0}']);
     expect(s.phase).toBe('running');
     expect(s.problem).toMatch(/Timers are switched off/);
     expect(r.f.commands.lastIndexOf('Event tgo')).toBeGreaterThan(
@@ -268,6 +287,88 @@ describe('ShutdownSequence.run', () => {
     expect(r.emitted.at(-1)).toEqual(s);
   });
 
+  it('systemctl exiting non-zero is a refusal: disarmed, and stderr says why', async () => {
+    const r = await rig({
+      poweroff: async () => {
+        throw Object.assign(new Error('Command failed: systemctl poweroff'), {
+          code: 1,
+          signal: null,
+          killed: false,
+          stderr: 'Failed to power off system via logind: Access denied\n',
+        });
+      },
+    });
+    const s = await r.seq.run({ force: false, reason: 'manual' });
+    expect(s).toMatchObject({
+      phase: 'running',
+      problem:
+        'The machine refused to power off (Failed to power off system via logind: Access denied)',
+    });
+    expect(r.f.commands.lastIndexOf('Event tgo')).toBeGreaterThan(
+      r.f.commands.indexOf('Event tga'),
+    );
+  });
+
+  it('systemctl ended by a signal (the shutdown itself stops it): the cut stays armed', async () => {
+    for (const signalled of [
+      { code: null, signal: 'SIGTERM', killed: false },
+      { code: null, signal: 'SIGTERM', killed: true },
+    ]) {
+      const r = await rig({
+        poweroff: async () => {
+          throw Object.assign(new Error('Command failed: systemctl poweroff'), signalled);
+        },
+      });
+      const s = await r.seq.run({ force: false, reason: 'manual' });
+      expect(s).toMatchObject({ phase: 'shuttingDown', problem: null });
+      expect(r.f.commands).toContain('Event tga');
+      expect(r.f.commands).not.toContain('Event tgo');
+      expect(r.f.commands.filter((c) => c.startsWith('Timer16 '))).toEqual([
+        'Timer16 {"Enable":0}',
+      ]);
+    }
+  });
+
+  it('something unexpected after arming disarms again and never powers off', async () => {
+    let thrown = false;
+    const r = await rig({
+      // The first status read after the cut is armed fails.
+      sessions: (order) => {
+        if (order.includes('Event tga') && !thrown) {
+          thrown = true;
+          throw new Error('the session list is gone');
+        }
+        return [];
+      },
+    });
+    const s = await r.seq.run({ force: false, reason: 'idle' });
+    expect(thrown).toBe(true);
+    expect(s).toMatchObject({ phase: 'running', problem: 'The shutdown stopped unexpectedly.' });
+    expect(r.order).not.toContain('stopAll');
+    expect(r.order).not.toContain('poweroff');
+    expect(r.f.commands.lastIndexOf('Event tgo')).toBeGreaterThan(
+      r.f.commands.indexOf('Event tga'),
+    );
+  });
+
+  it('a run waits for the disarm at start: it never interleaves with a slow switch', async () => {
+    const at = Date.now() + 3 * 60 * MIN;
+    const r = await rig({ sends: [{ sendAt: at, state: 'pending' }], slowFirstSwitchMs: 60 });
+    installRule(r.f, r.config);
+    const starting = r.seq.onStart();
+    const s = await r.seq.run({ force: true, reason: 'manual' });
+    await starting;
+    expect(s.phase).toBe('shuttingDown');
+    const c = r.f.commands;
+    expect(c.indexOf('Event tgo')).toBeGreaterThanOrEqual(0);
+    expect(c.indexOf('Event tgo')).toBeLessThan(c.indexOf('Event tga'));
+    expect(c.indexOf('Timer16 {"Enable":0}')).toBeLessThan(
+      c.findIndex((x) => x.startsWith('Timer16 {"Enable":1')),
+    );
+    // The wake survives: onStart's clearing came first.
+    expect(r.f.timers[16]).toMatchObject({ Enable: 1 });
+  });
+
   it('runs one sequence at a time: a second call returns the current status', async () => {
     let release!: () => void;
     const gate = new Promise<void>((res) => (release = res));
@@ -286,7 +387,7 @@ describe('ShutdownSequence.run', () => {
     release();
     expect((await first).phase).toBe('shuttingDown');
     expect(checks).toBe(1);
-    expect(r.order).toEqual(['Event tga', 'stopAll', 'poweroff']);
+    expect(r.order).toEqual(CLEAN);
   });
 
   it('a new run clears an earlier problem and block', async () => {
@@ -303,7 +404,7 @@ describe('ShutdownSequence.run', () => {
     await r.seq.run({ force: false, reason: 'idle' });
     const again = await r.seq.run({ force: true, reason: 'manual' });
     expect(again.phase).toBe('shuttingDown');
-    expect(r.order).toEqual(['Event tga', 'stopAll', 'poweroff']);
+    expect(r.order).toEqual(CLEAN);
   });
 
   it('something unexpected never leaves it checking, and never powers off', async () => {
@@ -369,7 +470,7 @@ describe('ShutdownSequence.idleTick (the minute tick)', () => {
     expect(r.checked).toEqual([]);
     r.clock.now += 2 * MIN;
     await r.seq.idleTick();
-    expect(r.order).toEqual(['Event tga', 'stopAll', 'poweroff']);
+    expect(r.order).toEqual(CLEAN);
     // Shutting down: the tick never starts another sequence.
     await r.seq.idleTick();
     expect(r.checked.length).toBe(1);
@@ -396,7 +497,7 @@ describe('ShutdownSequence.idleTick (the minute tick)', () => {
     r.clock.now += 31 * MIN;
     await r.seq.idleTick();
     expect(checks).toBe(2);
-    expect(r.order).toEqual(['Event tga', 'stopAll', 'poweroff']);
+    expect(r.order).toEqual(CLEAN);
   });
 
   it('a problem waits a fresh idle period too, instead of retrying every minute', async () => {
@@ -443,7 +544,7 @@ describe('power.shutdown and power.status', () => {
 
     const forced = await call('power.shutdown', { force: true });
     expect(forced.result).toMatchObject({ phase: 'shuttingDown', unpushed: [] });
-    expect(r.order).toEqual(['Event tga', 'stopAll', 'poweroff']);
+    expect(r.order).toEqual(CLEAN);
     expect(JSON.stringify(events)).not.toMatch(/"pw"|password/i);
   });
 });
@@ -504,6 +605,12 @@ describe('the headless service', () => {
     }
   });
 });
+
+/** The device's weekday mask for a wake 5 min before `at`. */
+function wakeDays(at: number, offsetMinutes: number): string {
+  const local = new Date(at - 5 * MIN + offsetMinutes * MIN);
+  return Array.from({ length: 7 }, (_, i) => (i === local.getUTCDay() ? '1' : '0')).join('');
+}
 
 /** HH:MM on the device for a wake 5 min before `at`. */
 function wakeTime(at: number, offsetMinutes: number): string {

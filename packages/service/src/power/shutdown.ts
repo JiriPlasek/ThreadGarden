@@ -4,7 +4,7 @@ import type { MachinePowerStatus, Unpushed } from '@threadgarden/protocol';
 import type { IdleMonitor } from './idle.js';
 import { checkUnpushed } from './push-check.js';
 import type { PowerStore } from './store.js';
-import { createSwitch } from './switch.js';
+import { createSwitch, type PowerSwitch } from './switch.js';
 import { PowerError } from './tasmota.js';
 
 const MIN = 60_000;
@@ -68,6 +68,15 @@ const systemctlPoweroff = async (): Promise<void> => {
 const switchProblem = (err: unknown): string =>
   err instanceof PowerError ? err.message : 'The power switch could not be driven.';
 
+/**
+ * Whether `systemctl poweroff` was refused. One ended by a signal is not: systemd
+ * stops this service, and its children, once the shutdown is under way.
+ */
+const refused = (err: unknown): boolean => {
+  const e = err as { signal?: unknown; killed?: unknown } | null;
+  return !(e?.killed === true || (typeof e?.signal === 'string' && e.signal !== ''));
+};
+
 /** The first line of what went wrong (stderr first: `systemctl poweroff` explains itself there). */
 const firstLine = (err: unknown): string => {
   const e = err as { stderr?: unknown; message?: unknown } | null;
@@ -76,6 +85,12 @@ const firstLine = (err: unknown): string => {
     (typeof e?.message === 'string' && e.message.trim()) ||
     'unknown error';
   return text.split('\n')[0]!.trim();
+};
+
+/** Best effort: no cut and no wake on the switch; every error is ignored. */
+const disarmQuietly = async (sw: PowerSwitch): Promise<void> => {
+  await sw.disarm().catch(() => {});
+  await sw.armWake(null).catch(() => {});
 };
 
 /**
@@ -87,6 +102,10 @@ const firstLine = (err: unknown): string => {
 export class ShutdownSequence {
   private state: SequenceState = RUNNING;
   private inFlight: Promise<MachinePowerStatus> | null = null;
+  /** The disarm at start: a sequence never talks to the switch before it is done. */
+  private starting: Promise<void> = Promise.resolve();
+  /** The switch while a cut of this sequence is armed and the machine is not yet powering off. */
+  private armed: PowerSwitch | null = null;
   private readonly now: () => number;
   private readonly makeSwitch: typeof createSwitch;
   private readonly check: (dirs: Dir[]) => Promise<Unpushed[]>;
@@ -111,12 +130,17 @@ export class ShutdownSequence {
   run(r: { force: boolean; reason: 'idle' | 'manual' }): Promise<MachinePowerStatus> {
     if (this.inFlight || this.state.phase === 'shuttingDown') return Promise.resolve(this.status());
     this.inFlight = this.sequence(r)
-      .catch((err: unknown) => {
+      .catch(async (err: unknown) => {
         this.o.log?.warn(`power: the shutdown stopped: ${firstLine(err)}`);
+        // Never leave a cut armed on a machine that is not powering off.
+        const sw = this.armed;
+        this.armed = null;
+        if (sw) await disarmQuietly(sw);
         return this.settle({ ...RUNNING, problem: 'The shutdown stopped unexpectedly.' });
       })
       .finally(() => {
         this.inFlight = null;
+        this.armed = null;
       });
     return this.inFlight;
   }
@@ -138,7 +162,12 @@ export class ShutdownSequence {
    * At service start: a cut still armed must never fire on a running machine,
    * and a wake that brought it up is spent. Every error is ignored.
    */
-  async onStart(): Promise<void> {
+  onStart(): Promise<void> {
+    this.starting = this.disarmAtStart();
+    return this.starting;
+  }
+
+  private async disarmAtStart(): Promise<void> {
     const stored = this.o.store.load();
     if (!stored) return;
     const sw = this.makeSwitch(stored.config, stored.password);
@@ -206,19 +235,20 @@ export class ShutdownSequence {
     // 3. Arm the cut and the wake. Without both, the machine must not power off.
     const stored = this.o.store.load();
     if (!stored) return this.settle({ ...RUNNING, problem: NOT_CONFIGURED });
+    // The disarm at start must not land after this sequence's cut or wake.
+    await this.starting;
     const sw = this.makeSwitch(stored.config, stored.password);
-    const disarm = async (): Promise<void> => {
-      await sw.disarm().catch(() => {});
-      await sw.armWake(null).catch(() => {});
-    };
     try {
+      // From here a failure anywhere must disarm (see `run`).
+      this.armed = sw;
       await sw.armCut();
       await sw.armWake(wakeAt);
     } catch (err) {
+      this.armed = null;
       const problem = switchProblem(err);
       this.o.log?.warn(`power: ${r.reason} shutdown stopped, the switch was not armed: ${problem}`);
       // A cut armed before the wake failed must not stay armed on a running machine.
-      await disarm();
+      await disarmQuietly(sw);
       return this.settle({ ...RUNNING, problem });
     }
 
@@ -232,12 +262,20 @@ export class ShutdownSequence {
     } catch (err) {
       this.o.log?.warn(`power: stopping sessions failed: ${firstLine(err)}`);
     }
+    // Powering off: from here the cut must stay armed, whatever happens to this process.
+    this.armed = null;
     try {
       await this.poweroff();
     } catch (err) {
       const reason = firstLine(err);
+      if (!refused(err)) {
+        this.o.log?.info(
+          `power: systemctl poweroff ended by a signal (${reason}); the machine is going down`,
+        );
+        return this.status();
+      }
       this.o.log?.warn(`power: poweroff failed: ${reason}`);
-      await disarm();
+      await disarmQuietly(sw);
       return this.settle({ ...RUNNING, problem: `The machine refused to power off (${reason})` });
     }
     return this.status();
