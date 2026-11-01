@@ -1,4 +1,5 @@
-import type { PowerConfig } from '@threadgarden/protocol';
+import { POWER_ERRORS, type PowerConfig } from '@threadgarden/protocol';
+import { PowerError } from './tasmota.js';
 
 /** What Threadgarden claims on a Tasmota switch. Nothing else is ever touched. */
 export const RESOURCES = {
@@ -19,6 +20,12 @@ export function commandsFor(config: PowerConfig): {
 } {
   if (config.kind === 'tasmota-zigbee') {
     const d = config.device ?? '';
+    if (!/^[A-Za-z0-9_.-]{1,32}$/.test(d)) {
+      throw new PowerError(
+        POWER_ERRORS.notConfigured,
+        "The Zigbee plug's name can only use letters, digits, '.', '_' and '-'",
+      );
+    }
     return {
       off: `ZbSend {"Device":"${d}","Send":{"Power":0}}`,
       on: `ZbSend {"Device":"${d}","Send":{"Power":1}}`,
@@ -66,9 +73,17 @@ export function chooseSlot(rules: Rules): Slot | null {
 /** Names Tasmota commands are matched by, case-insensitively and as whole words. */
 const CLAIMED: string[] = [
   ...RESOURCES.ruleTimers.flatMap((n) => [`RuleTimer${n}`, `Rules#Timer=${n}`]),
-  ...RESOURCES.vars.map((n) => `Var${n}`),
+  // Add/Sub/Mult/Scale write Var<n> without naming it.
+  ...RESOURCES.vars.flatMap((n) => [
+    `Var${n}`,
+    `Add${n}`,
+    `Sub${n}`,
+    `Mult${n}`,
+    `Scale${n}`,
+  ]),
   ...RESOURCES.mems.map((n) => `Mem${n}`),
   `Clock#Timer=${RESOURCES.timer}`,
+  `Timer${RESOURCES.timer}`,
 ];
 
 function mentions(text: string, name: string): boolean {
@@ -97,10 +112,12 @@ export function conflicts(
     problems.push(`Timer ${RESOURCES.timer} is in use by another rule.`);
   }
   for (const n of RESOURCES.mems) {
+    // With our rule installed the Mems are ours: Mem11 holds the last cut's time,
+    // Mem12-14 may hold the commands of a previously chosen plug.
+    if (slotIsOurs) break;
     const v = mems[n] ?? '';
     if (v === '' || v === ourMems[n]) continue;
-    // Our own rule writes the time of the last cut into Mem11.
-    if (n === 11 && (v === '0' || slotIsOurs)) continue;
+    if (n === 11 && v === '0') continue;
     problems.push(`Mem${n} holds a value Threadgarden didn't write.`);
   }
   return problems;

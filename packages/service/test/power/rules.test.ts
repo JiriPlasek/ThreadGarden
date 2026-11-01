@@ -9,6 +9,7 @@ import {
   memsFor,
   ruleText,
 } from '../../src/power/rules.js';
+import { PowerError } from '../../src/power/tasmota.js';
 
 const cfg: PowerConfig = {
   kind: 'tasmota-zigbee',
@@ -68,6 +69,44 @@ describe('commandsFor and memsFor', () => {
   it('mems', () => {
     expect(memsFor(plug)).toEqual({ 11: '0', 12: 'Power 0', 13: 'Power 1', 14: 'Status 8' });
     expect(RESOURCES.timer).toBe(16);
+  });
+});
+
+describe('device name validation', () => {
+  it.each(['Ubuntu Plug', 'a;b', 'a#b', 'a"b', '', 'x'.repeat(33)])('rejects %j', (d) => {
+    expect(() => commandsFor({ ...cfg, device: d })).toThrow(PowerError);
+  });
+  it('rejects null on zigbee', () => {
+    expect(() => commandsFor({ ...cfg, device: null })).toThrow(
+      "The Zigbee plug's name can only use letters, digits, '.', '_' and '-'",
+    );
+  });
+  it('accepts ordinary names', () => {
+    expect(() => commandsFor({ ...cfg, device: 'UbuntuPlug' })).not.toThrow();
+    expect(() => commandsFor({ ...cfg, device: 'Ubuntu_PC-plug.1' })).not.toThrow();
+  });
+});
+
+describe('stricter claiming', () => {
+  const timers = { 16: { Enable: 0 } };
+  it.each(['Add14 1', 'sub15 2', 'Mult14 2', 'Scale15 3'])('%s writes a claimed Var', (cmd) => {
+    const r = { 1: '', 2: `on a do ${cmd} endon`, 3: '' };
+    expect(conflicts(r, 1, timers, {}, memsFor(cfg))).toHaveLength(1);
+  });
+  it('Add140 is fine', () => {
+    const r = { 1: '', 2: 'on a do Add140 1 endon', 3: '' };
+    expect(conflicts(r, 1, timers, {}, memsFor(cfg))).toEqual([]);
+  });
+  it('a foreign Timer16 command is a conflict', () => {
+    const r = { 1: '', 2: 'on a do Timer16 {"Enable":1} endon', 3: '' };
+    expect(conflicts(r, 1, timers, {}, memsFor(cfg))).toEqual([
+      'Rule 2 uses Timer16, which Threadgarden needs.',
+    ]);
+  });
+  it("our slot's old Mem values from another device are not a conflict", () => {
+    const old = { ...cfg, device: 'OldPlug' };
+    const rules = { 1: ruleText(old), 2: '', 3: '' };
+    expect(conflicts(rules, 1, timers, memsFor(old), memsFor(cfg))).toEqual([]);
   });
 });
 
