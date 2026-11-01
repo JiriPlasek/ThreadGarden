@@ -92,6 +92,7 @@ describe('RoutingSettingsCheck', () => {
     expect(await check.check(paths)).toMatch(/sets env/);
     expect(reads).toHaveBeenCalledTimes(2);
     // The file was only read: its time is the one set above.
-    expect((await stat(paths[0]!)).mtimeMs).toBe(later.getTime());
+    // (Within a millisecond: some file systems hand the time back as e.g. …980.999.)
+    expect((await stat(paths[0]!)).mtimeMs).toBeCloseTo(later.getTime(), 0);
   });
 });
