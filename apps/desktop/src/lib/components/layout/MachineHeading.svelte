@@ -78,6 +78,32 @@
   const starting = $derived(power.turningOn(machine.id));
   const failure = $derived(power.error(machine.id));
 
+  /** What the menu offers: Turn on whenever the plug reads off, else only what the state allows. */
+  const plugOff = $derived.by((): boolean => {
+    const r = power.reading(machine.id);
+    const line = power.config(machine.id)?.offWatts ?? 0;
+    return r !== null && (r.on === false || (r.watts !== null && r.watts < line));
+  });
+  const canTurnOn = $derived(
+    status === 'off' ||
+      status === 'unreachable' ||
+      (status !== 'on' && status !== 'shuttingDown' && status !== 'starting' && plugOff),
+  );
+
+  /** A clock that ticks (twice a minute) only while an idle-shutdown countdown is shown. */
+  let now = $state(Date.now());
+  const counting = $derived(
+    status === 'on' &&
+      power.machine(machine.id)?.keepAwake.mode === 'off' &&
+      power.machine(machine.id)?.shutsDownAt != null,
+  );
+  $effect(() => {
+    if (!counting) return;
+    now = Date.now();
+    const timer = setInterval(() => (now = Date.now()), 30_000);
+    return () => clearInterval(timer);
+  });
+
   /** The countdown to an idle shutdown, or how long the machine is kept awake. */
   const powerTitle = $derived.by((): string | undefined => {
     if (status !== 'on') return undefined;
@@ -87,7 +113,7 @@
     if (st.keepAwake.mode === 'until' && st.keepAwake.until !== null)
       return `Kept awake until ${clockTime(st.keepAwake.until)}`;
     if (st.shutsDownAt !== null)
-      return `Shuts down in ${spanText(Math.max(0, st.shutsDownAt - Date.now()))}`;
+      return `Shuts down in ${spanText(Math.max(0, st.shutsDownAt - now))}`;
     return undefined;
   });
 
@@ -157,13 +183,17 @@
         <DropdownMenu.Content align="end" class="min-w-40">
           {#if starting}
             <DropdownMenu.Item class="py-1 text-xs" disabled>Starting…</DropdownMenu.Item>
-          {:else if status === 'off' || status === 'unreachable'}
+          {:else if status === 'shuttingDown'}
+            <DropdownMenu.Item class="py-1 text-xs" disabled>Shutting down…</DropdownMenu.Item>
+          {:else if canTurnOn}
             <DropdownMenu.Item
               class="py-1 text-xs"
               onSelect={() => quiet(power.turnOn(machine.id))}
             >
               Turn on
             </DropdownMenu.Item>
+          {:else if status !== 'on'}
+            <DropdownMenu.Item class="py-1 text-xs" disabled>{shown.label}</DropdownMenu.Item>
           {/if}
           {#if status === 'on'}
             <DropdownMenu.Item
@@ -221,7 +251,8 @@
       <span id={reasonId} hidden>{shown.reason}</span>
     {/if}
   </div>
-  {#if failure}
-    <p class="px-2 pt-0.5 text-xs text-red-700 dark:text-red-400" role="status">{failure}</p>
-  {/if}
+  <!-- Always present, so assistive technology announces what is put in it. -->
+  <p class="px-2 text-xs text-red-700 empty:hidden dark:text-red-400" role="status">
+    {failure ?? ''}
+  </p>
 </div>

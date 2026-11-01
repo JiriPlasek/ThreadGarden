@@ -1,4 +1,4 @@
-﻿<script lang="ts">
+<script lang="ts">
   import { DropdownMenu as DropdownMenuPrimitive } from 'bits-ui';
   import { cn, type WithoutChildrenOrChild } from '#lib/utils.js';
   import DropdownMenuPortal from './dropdown-menu-portal.svelte';

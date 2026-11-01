@@ -1,14 +1,15 @@
-﻿import {
+import {
   POWER_CAPABILITY,
   POWER_ERRORS,
   type MachinePowerStatus,
   type PowerConfig,
 } from '@threadgarden/protocol';
-import { render, screen, waitFor, within } from '@testing-library/svelte';
+import { cleanup, render, screen, waitFor, within } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import PlacesColumn from '../../src/lib/components/layout/PlacesColumn.svelte';
 import type { AppState } from '../../src/lib/state/context';
+import { clockTime } from '../../src/lib/format/usage';
 import { RpcFail, type FakeServer } from '../service/fake-ws';
 import { M1, project, setupTwoMachines } from './harness';
 
@@ -42,18 +43,26 @@ afterEach(() => {
 });
 
 const start = async (
-  o: { power?: boolean; off?: boolean; status?: () => MachinePowerStatus } = {},
+  o: {
+    power?: boolean;
+    off?: boolean;
+    /** What the plug reads (default: the opposite of off). */
+    plugOn?: boolean;
+    link?: 'locked';
+    status?: () => MachinePowerStatus;
+  } = {},
 ) => {
   const withPower = o.power !== false;
   const env = await setupTwoMachines({
     m1Capabilities: withPower ? ['remote', POWER_CAPABILITY] : ['remote'],
     powerPasswords: { [M1]: 'pw' },
     waitForOn: !o.off,
+    m1Status: o.link,
     configure: (s: FakeServer) => {
       s.handlers['power.list'] = () => (withPower ? [{ machineId: M1, config: CONFIG }] : []);
       s.handlers['power.reading'] = () => ({
-        on: !o.off,
-        watts: o.off ? 0 : 60,
+        on: o.plugOn ?? !o.off,
+        watts: (o.plugOn ?? !o.off) ? 60 : 0,
         at: Date.now(),
       });
       s.handlers['power.turnOn'] = () => ({ cycled: false, waitMs: 0 });
@@ -156,21 +165,135 @@ describe('the power menu', () => {
     );
   });
 
-  it('shows why turning on failed', async () => {
+  it('shows why turning on failed, and clears it after a retry that works', async () => {
     const { group, server } = await start({ off: true });
+    let ok = false;
     server.handlers['power.turnOn'] = () => {
+      if (ok) return { cycled: false, waitMs: 0 };
       throw new RpcFail(POWER_ERRORS.unreachable, 'no answer');
     };
     await waitFor(() => expect(within(group).getByText('Off')).toBeTruthy());
     await openMenu(group);
     await userEvent.click(await screen.findByText('Turn on'));
-    await waitFor(() => expect(within(group).getByRole('status').textContent).not.toBe(''));
+    await waitFor(() =>
+      expect(within(group).getByRole('status').textContent).toBe(
+        "The power switch can't be reached.",
+      ),
+    );
+    ok = true;
+    await openMenu(group);
+    await userEvent.click(await screen.findByText('Turn on'));
+    await waitFor(() => expect(within(group).getByRole('status').textContent).toBe(''));
   });
 
-  it('no â» without power config', async () => {
+  it('no ⏻ without power config', async () => {
     const { group } = await start({ power: false });
     expect(within(group).getByText('On')).toBeTruthy();
     expect(within(group).queryByRole('button', { name: /^Power for/ })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Power for This PC' })).toBeNull();
+  });
+
+  it('Keep awake sends 4 hours, always and off', async () => {
+    const send = async (label: string, over: Partial<MachinePowerStatus> = {}) => {
+      const { group, remote } = await start({ status: () => status(over) });
+      await openMenu(group);
+      await openKeepAwake();
+      await userEvent.click(await screen.findByText(label));
+      await waitFor(() => expect(remote.calls('power.keepAwake')).toHaveLength(1));
+      const before = Date.now();
+      const p = remote.calls('power.keepAwake')[0]!.params as {
+        mode: string;
+        until: number | null;
+      };
+      cleanup();
+      return { p, before };
+    };
+    const four = await send('For 4 hours');
+    expect(four.p.mode).toBe('until');
+    expect(four.p.until).toBeGreaterThan(four.before + 14_400_000 - 5_000);
+    expect(four.p.until).toBeLessThanOrEqual(four.before + 14_400_000);
+    expect((await send('Until I turn it off')).p).toEqual({ mode: 'always', until: null });
+    expect(
+      (await send('Stop keeping awake', { keepAwake: { mode: 'always', until: null } })).p,
+    ).toEqual({ mode: 'off', until: null });
+  });
+
+  it('replaces Turn on with a disabled Starting… while the machine is being turned on', async () => {
+    const { group, server } = await start({ off: true });
+    await waitFor(() => expect(within(group).getByText('Off')).toBeTruthy());
+    await openMenu(group);
+    await userEvent.click(await screen.findByText('Turn on'));
+    await waitFor(() => expect(server.calls('power.turnOn')).toHaveLength(1));
+    await openMenu(group);
+    const item = await screen.findByText('Starting…', { selector: '[role=menuitem]' });
+    expect(item.getAttribute('aria-disabled')).toBe('true');
+    expect(screen.queryByText('Turn on')).toBeNull();
+  });
+
+  it('offers Turn on for an unreachable machine, but not Shut down', async () => {
+    const { group } = await start({ off: true, plugOn: true });
+    await waitFor(() => expect(within(group).getByText('Unreachable')).toBeTruthy());
+    await openMenu(group);
+    expect(await screen.findByText('Turn on')).toBeTruthy();
+    expect(screen.queryByText('Shut down now')).toBeNull();
+  });
+
+  it('offers Shut down and Keep awake, but not Turn on, while the machine is on', async () => {
+    const { group } = await start();
+    await openMenu(group);
+    expect(await screen.findByText('Shut down now')).toBeTruthy();
+    expect(screen.queryByText('Turn on')).toBeNull();
+  });
+
+  it('says Shutting down… while the machine shuts down', async () => {
+    const { group } = await start({ status: () => status({ phase: 'shuttingDown' }) });
+    await waitFor(() => expect(within(group).getByText('Shutting down')).toBeTruthy());
+    await openMenu(group);
+    const item = await screen.findByText('Shutting down…', { selector: '[role=menuitem]' });
+    expect(item.getAttribute('aria-disabled')).toBe('true');
+    expect(screen.queryByText('Turn on')).toBeNull();
+    expect(screen.queryByText('Shut down now')).toBeNull();
+  });
+
+  it('names the state when nothing else can be done (locked link, plug on)', async () => {
+    const { group } = await start({ link: 'locked' });
+    await waitFor(() => expect(within(group).getByText('Needs attention')).toBeTruthy());
+    await openMenu(group);
+    const item = await screen.findByText('Needs attention', { selector: '[role=menuitem]' });
+    expect(item.getAttribute('aria-disabled')).toBe('true');
+    expect(screen.queryByText('Turn on')).toBeNull();
+  });
+
+  it('offers Turn on for a locked link when the plug reads off', async () => {
+    const { group } = await start({ link: 'locked', plugOn: false });
+    await waitFor(() => expect(within(group).getByText('Needs attention')).toBeTruthy());
+    await openMenu(group);
+    expect(await screen.findByText('Turn on')).toBeTruthy();
+  });
+
+  it('title shows Kept awake until the time', async () => {
+    const until = Date.now() + 2 * 3_600_000;
+    const { group } = await start({
+      status: () => status({ keepAwake: { mode: 'until', until } }),
+    });
+    await waitFor(() =>
+      expect(within(group).getByText('On').getAttribute('title')).toBe(
+        `Kept awake until ${clockTime(until)}`,
+      ),
+    );
+  });
+
+  it('counts down while it is shown', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
+    try {
+      const at = Date.now() + 42 * 60_000 + 20_000;
+      const { group } = await start({ status: () => status({ shutsDownAt: at }) });
+      const label = () => within(group).getByText('On').getAttribute('title');
+      await waitFor(() => expect(label()).toBe('Shuts down in 42 min'));
+      vi.advanceTimersByTime(5 * 60_000);
+      await waitFor(() => expect(label()).toBe('Shuts down in 37 min'));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

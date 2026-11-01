@@ -26,4 +26,7 @@ export {
   Content as DropdownMenuContent,
   Item as DropdownMenuItem,
   Separator as DropdownMenuSeparator,
+  Sub as DropdownMenuSub,
+  SubContent as DropdownMenuSubContent,
+  SubTrigger as DropdownMenuSubTrigger,
 };
