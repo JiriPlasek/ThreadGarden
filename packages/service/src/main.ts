@@ -48,6 +48,7 @@ import {
   registerPowerMachineHandlers,
 } from './server/handlers/power.js';
 import { IdleMonitor } from './power/idle.js';
+import { ShutdownSequence } from './power/shutdown.js';
 import { PowerStore } from './power/store.js';
 import { registerUsageHandlers } from './server/handlers/usage.js';
 import { PowerHub } from './power/hub.js';
@@ -151,6 +152,8 @@ export type StartOptions = {
    * (devices live in the database). Default: neither, as on a desktop.
    */
   headless?: boolean;
+  /** Headless only: powers the machine off (default `systemctl poweroff`; tests replace it). */
+  poweroff?: () => Promise<void>;
   /**
    * Headless only: the remote listener's port (default `REMOTE_PORT`; 0 = any
    * free one) and where it listens. `addresses` fixes the addresses (tests:
@@ -272,6 +275,8 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       })
     : undefined;
   let powerMachine: ReturnType<typeof registerPowerMachineHandlers> | undefined;
+  /** Idle and manual shutdown (headless, with a database). */
+  let shutdown: ShutdownSequence | undefined;
   let buckets: Buckets | undefined;
   let titles: ChatTitles | undefined;
   let usage: UsageTracker | undefined;
@@ -457,12 +462,30 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       if (idle) {
         // Keep awake outlives a restart (an expired `until` comes back as off).
         idle.restoreKeepAwake(opened.getUiState(KEEP_AWAKE_KEY));
-        powerMachine = registerPowerMachineHandlers(router, {
-          store: new PowerStore(dataDir),
+        const store = new PowerStore(dataDir);
+        // Sessions and scheduled sends exist once history is set up below; read them lazily.
+        shutdown = new ShutdownSequence({
+          store,
           idle,
+          dirs: () => opened.recentCwds(),
+          scheduled: () => scheduled?.list() ?? [],
+          stopAll: async () => {
+            host?.stopAll();
+          },
+          ...(opts.poweroff ? { poweroff: opts.poweroff } : {}),
+          now: clock,
+          emit: (s) => powerMachine?.publish(s),
+          log,
+        });
+        powerMachine = registerPowerMachineHandlers(router, {
+          store,
+          idle,
+          shutdown,
           emit: (e) => broadcastRef.fn(e),
           persistKeepAwake: (k) => opened.setUiState(KEEP_AWAKE_KEY, k),
         });
+        // A cut still armed must never fire on this running machine (Review Focus 1).
+        shutdown.onStart().catch((err: unknown) => log.warn(`power: at start: ${errorText(err)}`));
       }
     }
     const found = claude.current;
@@ -919,6 +942,10 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       powerMachine?.notify();
     } catch (err) {
       log.error(`idle tracking: ${errorText(err)}`);
+    }
+    // Idle long enough, with a power switch set up: shut the machine down.
+    if (!closing) {
+      shutdown?.idleTick().catch((err: unknown) => log.error(`idle shutdown: ${errorText(err)}`));
     }
     if (liveCount() > 0 || localClients + remoteClients > 0 || sendsPending()) {
       lastActive = clock();

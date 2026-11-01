@@ -44,15 +44,15 @@ export class IdleMonitor {
         (s) =>
           (s.runningAgents ?? 0) > 0 ||
           (s.live && s.status !== 'needsYou' && IN_TURN.has(s.status)),
-      ) ||
-      this.o.external().some((e) => e.status === 'busy' || e.state === 'working');
+      ) || this.o.external().some((e) => e.status === 'busy' || e.state === 'working');
     if (this.busy) {
       this.idleSince = null;
       return;
     }
     // A turn that began and ended between two ticks still counts as activity.
     let since = this.idleSince ?? this.now();
-    for (const s of sessions) if (s.lastActivity !== undefined && s.lastActivity > since) since = s.lastActivity;
+    for (const s of sessions)
+      if (s.lastActivity !== undefined && s.lastActivity > since) since = s.lastActivity;
     this.idleSince = since;
   }
 
@@ -80,6 +80,11 @@ export class IdleMonitor {
     if (this.busy || this.idleSince === null || minutes === null) return null;
     if (this.keepAwake.mode !== 'off') return null;
     return Math.max(this.idleSince, this.keepEndedAt() ?? 0) + minutes * 60_000;
+  }
+
+  /** Starts a fresh idle period now (after a shutdown that did not happen); busy stays busy. */
+  restart(): void {
+    if (this.idleSince !== null) this.idleSince = this.now();
   }
 
   due(): boolean {

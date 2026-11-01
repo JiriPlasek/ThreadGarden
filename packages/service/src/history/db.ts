@@ -290,6 +290,23 @@ export class Db implements LiveRegistry {
     return new Map(rows.map((r) => [r.project_id as string, Number(r.m)]));
   }
 
+  /**
+   * Every directory sessions ran in, once, newest activity first, with its newest
+   * session (the push check before a shutdown). Sessions without a directory are left out.
+   */
+  recentCwds(): { cwd: string; sessionId: string }[] {
+    return this.raw
+      .prepare(
+        `SELECT cwd, session_id FROM (
+           SELECT cwd, session_id, last_modified, ROW_NUMBER() OVER (
+             PARTITION BY cwd ORDER BY last_modified DESC, session_id) AS n
+           FROM sessions WHERE cwd IS NOT NULL AND cwd <> '')
+         WHERE n = 1 ORDER BY last_modified DESC, cwd`,
+      )
+      .all()
+      .map((r) => ({ cwd: r.cwd as string, sessionId: r.session_id as string }));
+  }
+
   needsReindex(info: SDKSessionInfo): boolean {
     const r = this.raw
       .prepare('SELECT indexed_modified, indexed_size FROM sessions WHERE session_id = ?')

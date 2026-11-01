@@ -11,6 +11,7 @@ import {
 } from '@threadgarden/protocol';
 import type { PowerHub } from '../../power/hub.js';
 import type { IdleMonitor } from '../../power/idle.js';
+import { buildPowerStatus, type ShutdownSequence } from '../../power/shutdown.js';
 import type { PowerStore } from '../../power/store.js';
 import { PowerError } from '../../power/tasmota.js';
 import type { Router } from '../router.js';
@@ -29,7 +30,11 @@ export const registerPowerClientHandlers = (router: Router, deps: { hub: PowerHu
     },
     local,
   );
-  router.register('power.configure', async (p) => hub.configure(p.machineId, p.config, p.password), local);
+  router.register(
+    'power.configure',
+    async (p) => hub.configure(p.machineId, p.config, p.password),
+    local,
+  );
   router.register(
     'power.unlock',
     async (p) => {
@@ -58,38 +63,37 @@ export type PowerMachineDeps = {
   emit: (e: { event: 'power.changed'; data: MachinePowerStatus }) => void;
   /** Called with the keep awake setting after each change, to keep it across restarts. */
   persistKeepAwake?: (k: KeepAwake) => void;
+  /** The shutdown sequence: the source of phase, unpushed and problem, and `power.shutdown`. */
+  shutdown?: ShutdownSequence;
 };
 
 /**
- * `power.adopt`, `power.status` and `power.keepAwake` on a headless machine: open to
- * paired devices. Every change is announced as `power.changed`. The status never
- * carries the password. `notify` announces a change that happened on its own (the
- * minute tick: busy, idle since, a keep awake that ran out).
+ * `power.adopt`, `power.status`, `power.keepAwake` and (with a shutdown sequence)
+ * `power.shutdown` on a headless machine: open to paired devices. Every change is
+ * announced as `power.changed`. The status never carries the password. `notify`
+ * announces a change that happened on its own (the minute tick: busy, idle since, a
+ * keep awake that ran out); `publish` announces a status the sequence produced.
  */
 export const registerPowerMachineHandlers = (
   router: Router,
   deps: PowerMachineDeps,
-): { status: () => MachinePowerStatus; notify: () => void } => {
-  const { store, idle } = deps;
+): {
+  status: () => MachinePowerStatus;
+  notify: () => void;
+  publish: (s: MachinePowerStatus) => void;
+} => {
+  const { store, idle, shutdown } = deps;
 
-  const status = (): MachinePowerStatus => {
-    idle.tick();
-    return {
-      configured: store.load() !== null,
-      busy: idle.busy,
-      idleSince: idle.idleSince,
-      shutsDownAt: idle.shutsDownAt(),
-      keepAwake: idle.keepAwake,
-      phase: 'running',
-      unpushed: [],
-      problem: null,
-    };
-  };
+  const status = (): MachinePowerStatus =>
+    shutdown ? shutdown.status() : buildPowerStatus(store, idle);
   let last = JSON.stringify(status());
-  const announce = (): MachinePowerStatus => {
-    const s = status();
+  const publish = (s: MachinePowerStatus): void => {
     last = JSON.stringify(s);
     deps.emit({ event: 'power.changed', data: s });
+  };
+  const announce = (): MachinePowerStatus => {
+    const s = status();
+    publish(s);
     return s;
   };
   const notify = (): void => {
@@ -97,7 +101,9 @@ export const registerPowerMachineHandlers = (
   };
 
   // A read that finds a change announces it too: other clients must not miss it.
-  router.register('power.status', async () => (JSON.stringify(status()) === last ? status() : announce()));
+  router.register('power.status', async () =>
+    JSON.stringify(status()) === last ? status() : announce(),
+  );
   router.register('power.adopt', async (p) => {
     if (p.config === null) {
       store.save(null);
@@ -117,5 +123,11 @@ export const registerPowerMachineHandlers = (
     deps.persistKeepAwake?.(idle.keepAwake);
     return announce();
   });
-  return { status, notify };
+  // Machine side, open to paired devices: the sequence never powers off unless the switch is armed.
+  if (shutdown) {
+    router.register('power.shutdown', async (p) =>
+      shutdown.run({ force: p.force, reason: 'manual' }),
+    );
+  }
+  return { status, notify, publish };
 };
