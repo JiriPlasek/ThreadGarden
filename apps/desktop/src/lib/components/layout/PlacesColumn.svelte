@@ -321,7 +321,11 @@
             onToggle={() => machines.setCollapsed(id, !collapsed)}
           />
           {#if !collapsed}
-            {@render projects(group.scope)}
+            {#if machines.shown(group.machine) === 'off'}
+              <p class="text-muted-foreground px-2 text-xs">Its chats appear once it's on.</p>
+            {:else}
+              {@render projects(group.scope)}
+            {/if}
           {/if}
         </div>
       {:else}

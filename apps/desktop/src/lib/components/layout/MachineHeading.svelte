@@ -40,7 +40,11 @@
 
 <script lang="ts">
   import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
+  import PowerIcon from '@lucide/svelte/icons/power';
+  import { Button } from '#lib/components/ui/button/index.js';
+  import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
   import * as Tooltip from '#lib/components/ui/tooltip/index.js';
+  import { clockTime, spanText } from '#lib/format/usage.js';
   import { useApp } from '#lib/state/context.js';
   import { machineLabel } from '#lib/state/machines.svelte.js';
   import { cn } from '#lib/utils.js';
@@ -52,6 +56,11 @@
    * needs attention says why (on hover of the label, to assistive technology
    * in the heading) and offers "Open settings", where machines are managed;
    * that button carries the reason too, as its description and its tooltip.
+   *
+   * A machine with power control also gets a ⏻ menu (Turn on, Shut down now,
+   * Keep awake), its idle-shutdown countdown or keep-awake time in the state
+   * label's title, and, when turning it on failed, the reason in a line under
+   * the heading.
    */
   let {
     machine,
@@ -59,68 +68,160 @@
     onToggle,
   }: { machine: MachineEntry; collapsed: boolean; onToggle: () => void } = $props();
 
-  const { interaction, machines } = useApp();
+  const { interaction, machines, power } = useApp();
 
   const name = $derived(machineLabel(machine));
-  const shown = $derived(machineState({ name: machine.name, status: machines.shown(machine) }));
+  const status = $derived(machines.shown(machine));
+  const shown = $derived(machineState({ name: machine.name, status }));
+  const hasPower = $derived(!machine.local && power.config(machine.id) !== null);
+  const awake = $derived(power.machine(machine.id)?.keepAwake);
+  const starting = $derived(power.turningOn(machine.id));
+  const failure = $derived(power.error(machine.id));
+
+  /** The countdown to an idle shutdown, or how long the machine is kept awake. */
+  const powerTitle = $derived.by((): string | undefined => {
+    if (status !== 'on') return undefined;
+    const st = power.machine(machine.id);
+    if (!st) return undefined;
+    if (st.keepAwake.mode === 'always') return 'Kept awake';
+    if (st.keepAwake.mode === 'until' && st.keepAwake.until !== null)
+      return `Kept awake until ${clockTime(st.keepAwake.until)}`;
+    if (st.shutsDownAt !== null)
+      return `Shuts down in ${spanText(Math.max(0, st.shutsDownAt - Date.now()))}`;
+    return undefined;
+  });
+
+  const HOUR = 3_600_000;
+  const quiet = (p: Promise<unknown>): void => void p.catch(() => {});
+  const keepAwake = (mode: 'until' | 'always' | 'off', ms?: number): void =>
+    quiet(
+      power.keepAwake(machine.id, {
+        mode,
+        until: mode === 'until' && ms !== undefined ? Date.now() + ms : null,
+      }),
+    );
   const reasonId = $derived(`machine-reason-${machine.id}`);
 </script>
 
-<div class="flex min-w-0 items-center gap-1 pt-4 pr-1 pb-1">
-  <h3
-    class="text-muted-foreground flex min-w-0 flex-1 items-center gap-1.5 text-[0.6875rem] font-medium"
-  >
-    <button
-      type="button"
-      class="hover:text-foreground focus-visible:ring-ring/50 flex min-w-0 items-center gap-1 rounded-sm px-0.5 tracking-wide uppercase outline-none focus-visible:ring-2"
-      aria-expanded={!collapsed}
-      onclick={onToggle}
+<div class="pt-4 pr-1 pb-1">
+  <div class="flex min-w-0 items-center gap-1">
+    <h3
+      class="text-muted-foreground flex min-w-0 flex-1 items-center gap-1.5 text-[0.6875rem] font-medium"
     >
-      <ChevronRightIcon
-        class={cn('size-3.5 shrink-0 transition-transform', !collapsed && 'rotate-90')}
-        aria-hidden="true"
-      />
-      <span class="truncate">{name}</span>
-    </button>
-    <span class="flex shrink-0 items-center gap-1 font-normal">
-      <span
-        aria-hidden="true"
-        class={cn(
-          'size-1.5 rounded-full',
-          shown.tone === 'green' && 'bg-emerald-500',
-          shown.tone === 'amber' && 'bg-amber-500',
-          shown.tone === 'red' && 'bg-red-500',
-        )}
-      ></span>
-      <span
-        class={cn(shown.tone === 'red' && 'text-red-700 dark:text-red-400')}
-        title={shown.reason}>{shown.label}</span
+      <button
+        type="button"
+        class="hover:text-foreground focus-visible:ring-ring/50 flex min-w-0 items-center gap-1 rounded-sm px-0.5 tracking-wide uppercase outline-none focus-visible:ring-2"
+        aria-expanded={!collapsed}
+        onclick={onToggle}
       >
-      {#if shown.reason}
-        <span class="sr-only">({shown.reason})</span>
-      {/if}
-    </span>
-  </h3>
-  {#if shown.reason}
-    <Tooltip.Provider delayDuration={400}>
-      <Tooltip.Root>
-        <Tooltip.Trigger>
+        <ChevronRightIcon
+          class={cn('size-3.5 shrink-0 transition-transform', !collapsed && 'rotate-90')}
+          aria-hidden="true"
+        />
+        <span class="truncate">{name}</span>
+      </button>
+      <span class="flex shrink-0 items-center gap-1 font-normal">
+        <span
+          aria-hidden="true"
+          class={cn(
+            'size-1.5 rounded-full',
+            shown.tone === 'green' && 'bg-emerald-500',
+            shown.tone === 'amber' && 'bg-amber-500',
+            shown.tone === 'red' && 'bg-red-500',
+          )}
+        ></span>
+        <span
+          class={cn(shown.tone === 'red' && 'text-red-700 dark:text-red-400')}
+          title={shown.reason ?? powerTitle}>{shown.label}</span
+        >
+        {#if shown.reason}
+          <span class="sr-only">({shown.reason})</span>
+        {/if}
+      </span>
+    </h3>
+    {#if hasPower}
+      <DropdownMenu.Root>
+        <DropdownMenu.Trigger>
           {#snippet child({ props })}
-            <button
+            <Button
               {...props}
-              type="button"
-              class="text-muted-foreground hover:text-foreground focus-visible:ring-ring/50 shrink-0 rounded-sm px-1 text-[0.6875rem] underline underline-offset-2 outline-none focus-visible:ring-2"
-              aria-describedby={reasonId}
-              onclick={() => {
-                interaction.settingsSection = 'machines';
-                interaction.settingsOpen = true;
-              }}>Open settings</button
+              variant="ghost"
+              size="icon-xs"
+              class="text-muted-foreground hover:text-foreground shrink-0"
+              aria-label="Power for {name}"
             >
+              <PowerIcon />
+            </Button>
           {/snippet}
-        </Tooltip.Trigger>
-        <Tooltip.Content side="right" class="max-w-60 px-2 py-1">{shown.reason}</Tooltip.Content>
-      </Tooltip.Root>
-    </Tooltip.Provider>
-    <span id={reasonId} hidden>{shown.reason}</span>
+        </DropdownMenu.Trigger>
+        <DropdownMenu.Content align="end" class="min-w-40">
+          {#if starting}
+            <DropdownMenu.Item class="py-1 text-xs" disabled>Starting…</DropdownMenu.Item>
+          {:else if status === 'off' || status === 'unreachable'}
+            <DropdownMenu.Item
+              class="py-1 text-xs"
+              onSelect={() => quiet(power.turnOn(machine.id))}
+            >
+              Turn on
+            </DropdownMenu.Item>
+          {/if}
+          {#if status === 'on'}
+            <DropdownMenu.Item
+              class="py-1 text-xs"
+              onSelect={() => quiet(power.shutDown(machine.id, false))}
+            >
+              Shut down now
+            </DropdownMenu.Item>
+            <DropdownMenu.Sub>
+              <DropdownMenu.SubTrigger class="py-1 text-xs">Keep awake</DropdownMenu.SubTrigger>
+              <DropdownMenu.SubContent class="min-w-40">
+                <DropdownMenu.Item class="py-1 text-xs" onSelect={() => keepAwake('until', HOUR)}>
+                  For 1 hour
+                </DropdownMenu.Item>
+                <DropdownMenu.Item
+                  class="py-1 text-xs"
+                  onSelect={() => keepAwake('until', 4 * HOUR)}
+                >
+                  For 4 hours
+                </DropdownMenu.Item>
+                <DropdownMenu.Item class="py-1 text-xs" onSelect={() => keepAwake('always')}>
+                  Until I turn it off
+                </DropdownMenu.Item>
+                {#if awake && awake.mode !== 'off'}
+                  <DropdownMenu.Item class="py-1 text-xs" onSelect={() => keepAwake('off')}>
+                    Stop keeping awake
+                  </DropdownMenu.Item>
+                {/if}
+              </DropdownMenu.SubContent>
+            </DropdownMenu.Sub>
+          {/if}
+        </DropdownMenu.Content>
+      </DropdownMenu.Root>
+    {/if}
+    {#if shown.reason}
+      <Tooltip.Provider delayDuration={400}>
+        <Tooltip.Root>
+          <Tooltip.Trigger>
+            {#snippet child({ props })}
+              <button
+                {...props}
+                type="button"
+                class="text-muted-foreground hover:text-foreground focus-visible:ring-ring/50 shrink-0 rounded-sm px-1 text-[0.6875rem] underline underline-offset-2 outline-none focus-visible:ring-2"
+                aria-describedby={reasonId}
+                onclick={() => {
+                  interaction.settingsSection = 'machines';
+                  interaction.settingsOpen = true;
+                }}>Open settings</button
+              >
+            {/snippet}
+          </Tooltip.Trigger>
+          <Tooltip.Content side="right" class="max-w-60 px-2 py-1">{shown.reason}</Tooltip.Content>
+        </Tooltip.Root>
+      </Tooltip.Provider>
+      <span id={reasonId} hidden>{shown.reason}</span>
+    {/if}
+  </div>
+  {#if failure}
+    <p class="px-2 pt-0.5 text-xs text-red-700 dark:text-red-400" role="status">{failure}</p>
   {/if}
 </div>
