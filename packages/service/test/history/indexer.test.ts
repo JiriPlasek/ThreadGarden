@@ -67,6 +67,25 @@ describe('Indexer', () => {
     expect(projects.every((p) => p.displayName.length > 0)).toBe(true);
   });
 
+  it('a counted chat always has its project listed, batch by batch', async () => {
+    const { db, events, indexer } = setup();
+    const missing: string[] = [];
+    const check = (): void => {
+      const listed = new Set(db.listProjects().map((p) => p.projectId));
+      for (const s of db.listSessions({}, 1000, undefined).items) {
+        if (!listed.has(s.projectId)) missing.push(s.sessionId);
+      }
+    };
+    // Between batches the indexer yields: anyone may read the database then.
+    const push = events.push.bind(events);
+    events.push = (...e) => {
+      if (e.some((x) => x.event === 'index.progress')) check();
+      return push(...e);
+    };
+    await indexer.fullSync();
+    expect(missing).toEqual([]);
+  });
+
   it('refresh only reindexes changed sessions', async () => {
     const { adapter, db, indexer, events } = setup(5);
     await indexer.fullSync();
