@@ -69,12 +69,13 @@ const switchProblem = (err: unknown): string =>
   err instanceof PowerError ? err.message : 'The power switch could not be driven.';
 
 /**
- * Whether `systemctl poweroff` was refused. One ended by a signal is not: systemd
- * stops this service, and its children, once the shutdown is under way.
+ * Whether `systemctl poweroff` was refused. One ended by an outside signal is not:
+ * systemd stops this service, and its children, once the shutdown is under way.
+ * One killed by our own timeout (`killed`) is: the machine is not going down.
  */
 const refused = (err: unknown): boolean => {
   const e = err as { signal?: unknown; killed?: unknown } | null;
-  return !(e?.killed === true || (typeof e?.signal === 'string' && e.signal !== ''));
+  return e?.killed === true || !(typeof e?.signal === 'string' && e.signal !== '');
 };
 
 /** The first line of what went wrong (stderr first: `systemctl poweroff` explains itself there). */
@@ -86,6 +87,10 @@ const firstLine = (err: unknown): string => {
     'unknown error';
   return text.split('\n')[0]!.trim();
 };
+
+/** Why `systemctl poweroff` failed, in a few words. */
+const poweroffReason = (err: unknown): string =>
+  (err as { killed?: unknown } | null)?.killed === true ? 'systemctl timed out' : firstLine(err);
 
 /** Best effort: no cut and no wake on the switch; every error is ignored. */
 const disarmQuietly = async (sw: PowerSwitch): Promise<void> => {
@@ -267,7 +272,7 @@ export class ShutdownSequence {
     try {
       await this.poweroff();
     } catch (err) {
-      const reason = firstLine(err);
+      const reason = poweroffReason(err);
       if (!refused(err)) {
         this.o.log?.info(
           `power: systemctl poweroff ended by a signal (${reason}); the machine is going down`,

@@ -310,23 +310,56 @@ describe('ShutdownSequence.run', () => {
   });
 
   it('systemctl ended by a signal (the shutdown itself stops it): the cut stays armed', async () => {
-    for (const signalled of [
-      { code: null, signal: 'SIGTERM', killed: false },
-      { code: null, signal: 'SIGTERM', killed: true },
-    ]) {
-      const r = await rig({
-        poweroff: async () => {
-          throw Object.assign(new Error('Command failed: systemctl poweroff'), signalled);
-        },
-      });
-      const s = await r.seq.run({ force: false, reason: 'manual' });
-      expect(s).toMatchObject({ phase: 'shuttingDown', problem: null });
-      expect(r.f.commands).toContain('Event tga');
-      expect(r.f.commands).not.toContain('Event tgo');
-      expect(r.f.commands.filter((c) => c.startsWith('Timer16 '))).toEqual([
-        'Timer16 {"Enable":0}',
-      ]);
-    }
+    const r = await rig({
+      poweroff: async () => {
+        throw Object.assign(new Error('Command failed: systemctl poweroff'), {
+          code: null,
+          signal: 'SIGTERM',
+          killed: false,
+        });
+      },
+    });
+    const s = await r.seq.run({ force: false, reason: 'manual' });
+    expect(s).toMatchObject({ phase: 'shuttingDown', problem: null });
+    expect(r.f.commands).toContain('Event tga');
+    expect(r.f.commands).not.toContain('Event tgo');
+    expect(r.f.commands.filter((c) => c.startsWith('Timer16 '))).toEqual(['Timer16 {"Enable":0}']);
+  });
+
+  it('systemctl killed by our own timeout is a refusal: disarmed, running, and says so', async () => {
+    const r = await rig({
+      poweroff: async () => {
+        throw Object.assign(new Error('Command failed: systemctl poweroff'), {
+          code: null,
+          signal: 'SIGTERM',
+          killed: true,
+        });
+      },
+    });
+    const s = await r.seq.run({ force: false, reason: 'manual' });
+    expect(s).toMatchObject({
+      phase: 'running',
+      problem: 'The machine refused to power off (systemctl timed out)',
+    });
+    const tga = r.f.commands.indexOf('Event tga');
+    expect(r.f.commands.lastIndexOf('Event tgo')).toBeGreaterThan(tga);
+    expect(r.f.commands.lastIndexOf('Timer16 {"Enable":0}')).toBeGreaterThan(tga);
+  });
+
+  it('systemctl that cannot be started (ENOENT) is a refusal', async () => {
+    const r = await rig({
+      poweroff: async () => {
+        throw Object.assign(new Error('spawn systemctl ENOENT'), { code: 'ENOENT' });
+      },
+    });
+    const s = await r.seq.run({ force: false, reason: 'manual' });
+    expect(s).toMatchObject({
+      phase: 'running',
+      problem: 'The machine refused to power off (spawn systemctl ENOENT)',
+    });
+    expect(r.f.commands.lastIndexOf('Event tgo')).toBeGreaterThan(
+      r.f.commands.indexOf('Event tga'),
+    );
   });
 
   it('something unexpected after arming disarms again and never powers off', async () => {
