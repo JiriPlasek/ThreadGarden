@@ -1,6 +1,6 @@
 {
   "name": "threadgarden-workspace",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.2.0",
@@ -11,6 +11,7 @@
     "lint": "pnpm -r lint && eslint scripts",
     "format": "prettier --write . && pnpm -r format",
     "build:headless": "node scripts/build-headless.mjs",
+    "release:version": "node scripts/set-version.mjs",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm -r test && pnpm test:perf",
     "test:perf": "pnpm -r --workspace-concurrency=1 test:perf",

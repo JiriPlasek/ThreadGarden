@@ -7,6 +7,7 @@ pub mod navigation;
 pub mod secrets;
 pub mod service;
 pub mod tray;
+pub mod update;
 
 use std::sync::Once;
 
@@ -141,6 +142,15 @@ fn set_tray_needs_you(app: AppHandle, count: u32) -> Result<(), String> {
     tray::set_needs_you(&app, count).map_err(|e| e.to_string())
 }
 
+/// How this copy was installed (releases spec §6): whether it can update itself.
+#[tauri::command]
+fn install_kind() -> &'static str {
+    update::install_kind_for(
+        std::env::consts::OS,
+        std::env::var("APPIMAGE").ok().as_deref(),
+    )
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -160,6 +170,9 @@ pub fn run() {
         // Nothing navigates the window away from the app.
         .plugin(navigation::guard())
         .plugin(tauri_plugin_autostart::Builder::new().build())
+        // Self-update from GitHub Releases, verified against the bundled public key.
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .invoke_handler(tauri::generate_handler![
             service_connection,
             service_stop,
@@ -172,6 +185,7 @@ pub fn run() {
             app_quit,
             set_tray_needs_you,
             read_dropped_image,
+            install_kind,
         ])
         .setup(|app| {
             tray::create(app.handle())?;

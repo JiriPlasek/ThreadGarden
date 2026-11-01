@@ -4,7 +4,7 @@
 
 **A desktop home for your [Claude Code](https://code.claude.com/docs) work.** Threadgarden lists every Claude Code conversation on your machine, runs new and resumed chats in tabs through the official Agent SDK and your own installed `claude`, and gathers everything that waits for you in one place. Agents keep running when you close the window, and an old PC on your network can do the work while your main one is busy.
 
-> **Status:** experimental (v1.3). Windows, macOS and Linux. Threadgarden works with Claude Code; it is not affiliated with or endorsed by Anthropic.
+> **Status:** experimental (0.3). Windows, macOS and Linux. Threadgarden works with Claude Code; it is not affiliated with or endorsed by Anthropic.
 
 <!-- Screenshots will live in docs/images/. -->
 
@@ -39,9 +39,16 @@
 
 ## Install
 
-There are no published releases yet.
+Download the [latest release](https://github.com/JiriPlasek/ThreadGarden/releases/latest):
 
-**From CI.** Every push builds unsigned installers. Open a successful run of the [CI workflow](https://github.com/JiriPlasek/ThreadGarden/actions/workflows/ci.yml) and download the `threadgarden-<target>` artifact for your platform (kept 7 days): MSI or NSIS `setup.exe` on Windows, DMG on macOS, deb, rpm or AppImage on Linux. Builds are not code-signed, so SmartScreen and Gatekeeper warn on first launch.
+| Platform                    | File                                                                                             |
+| --------------------------- | ------------------------------------------------------------------------------------------------ |
+| Windows (x64)               | `Threadgarden_<version>_x64-setup.exe` (or the `.msi`)                                           |
+| macOS (Apple silicon)       | `Threadgarden_<version>_aarch64.dmg`                                                             |
+| Linux (x64)                 | `.AppImage` (updates itself), or the `.deb` / `.rpm`                                             |
+| A remote machine (headless) | `threadgarden-headless-linux-x64.tar.gz`, see [docs/remote-machines.md](docs/remote-machines.md) |
+
+Threadgarden then keeps itself up to date: it checks for a new release now and then, and installs it when you click **Restart to update** (deb and rpm installs get a download link instead). Builds are not code-signed, so SmartScreen and Gatekeeper warn on first launch; updates are signed, and the app installs only those. Every release has a `SHA256SUMS` file.
 
 **From source.** Node.js 22, pnpm 11, Rust (rustup picks the version in `rust-toolchain.toml`) and the [Tauri 2 prerequisites](https://v2.tauri.app/start/prerequisites/):
 
@@ -52,8 +59,6 @@ pnpm --filter desktop tauri build --config src-tauri/tauri.bundle.conf.json
 ```
 
 Installers land in `apps/desktop/src-tauri/target/release/bundle/`. Users need no Node.js: the app ships its own runtime.
-
-**A remote machine** (optional) runs only the headless service: `./install.sh` from the `threadgarden-headless` package, then `threadgarden pair`. Step by step in [docs/remote-machines.md](docs/remote-machines.md).
 
 <details>
 <summary><b>Upgrading from pahub</b></summary>
@@ -79,7 +84,7 @@ Threadgarden was called pahub before v1.3. Install Threadgarden and start it; no
 - **Claude Code's data is read-only to Threadgarden.** It never writes, renames, moves or deletes anything under `~/.claude`. History is read only through the Agent SDK; running sessions through `claude agents --json`. The only writes there are Claude Code's own (the transcripts of chats you run, and the new file of a fork).
 - **Threadgarden's own data** lives in `%APPDATA%\threadgarden`, `~/Library/Application Support/threadgarden` or `~/.local/share/threadgarden` (override with `THREADGARDEN_DATA_DIR`): a SQLite index of your conversations' text, your titles, buckets, drafts, settings and scheduled messages, plus logs without message content. Deleting the folder resets Threadgarden and touches nothing of Claude Code's. Treat it like `~/.claude` itself.
 - **Secrets** (an API key, remote-machine pairing tokens) stay in the OS credential store and in memory; never in the database, files or logs.
-- **Network:** the desktop service listens on `127.0.0.1` only, behind a random token. A headless remote machine also listens on its private network addresses (port 47380, TLS) for paired devices. Threadgarden contacts nothing else; the `claude` processes it starts talk to Anthropic exactly as in a terminal. Remote images in chats are not loaded.
+- **Network:** the desktop service listens on `127.0.0.1` only, behind a random token. A headless remote machine also listens on its private network addresses (port 47380, TLS) for paired devices. Threadgarden contacts nothing else but GitHub, to check for and download its own updates; the `claude` processes it starts talk to Anthropic exactly as in a terminal. Remote images in chats are not loaded.
 
 ## Authentication and terms
 
@@ -108,7 +113,7 @@ pnpm test:e2e                              # Playwright against the mock service
 - **Rust:** in `apps/desktop/src-tauri`, `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test` (build the UI first).
 - **Real Claude Code suite:** `pnpm --filter @threadgarden/service test:real`, opt-in, uses your login for a few tiny turns.
 
-Layout: `packages/protocol` (shared schemas), `packages/service` (the Node.js service), `apps/desktop` (Tauri shell and SvelteKit UI), `packaging/headless` (the remote-machine package), `scripts/` (release tooling). How it fits together: [docs/architecture.md](docs/architecture.md). Workflow and rules: [CONTRIBUTING.md](CONTRIBUTING.md).
+Layout: `packages/protocol` (shared schemas), `packages/service` (the Node.js service), `apps/desktop` (Tauri shell and SvelteKit UI), `packaging/headless` (the remote-machine package), `scripts/` (release tooling). How it fits together: [docs/architecture.md](docs/architecture.md). Workflow and rules: [CONTRIBUTING.md](CONTRIBUTING.md). Releasing: [docs/releasing.md](docs/releasing.md).
 
 ## Keyboard shortcuts
 

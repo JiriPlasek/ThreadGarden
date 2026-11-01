@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Threadgarden",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "identifier": "dev.threadgarden.desktop",
   "build": {
     "frontendDist": "../build",
@@ -34,5 +34,16 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDA2ODhGQTdCNTY1MTk4OTEKUldTUm1GRldlL3FJQml6M3FES25XZUZKREtkVzlSZVYrbytJalhabEQ1WVpwSUh1bFlOQTNhaEsK",
+      "endpoints": [
+        "https://github.com/JiriPlasek/ThreadGarden/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

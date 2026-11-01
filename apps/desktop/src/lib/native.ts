@@ -25,6 +25,9 @@ export type TrayEvent = 'stop-all' | 'quit-all';
 
 export const isTauri: boolean = detectTauri();
 
+/** This build's version (the app and its bundled service share it). */
+export const appVersion: string = pkg.version;
+
 const mockConnection = (): ServiceConnection => {
   const url = import.meta.env.VITE_THREADGARDEN_MOCK_URL as string | undefined;
   const token = import.meta.env.VITE_THREADGARDEN_MOCK_TOKEN as string | undefined;
@@ -217,4 +220,56 @@ export const setAutostart = async (on: boolean): Promise<void> => {
   const autostart = await import('@tauri-apps/plugin-autostart');
   if (on) await autostart.enable();
   else await autostart.disable();
+};
+
+/** How this app was installed, which decides whether it can update itself. */
+export type InstallKind = 'windows' | 'macos' | 'appimage' | 'linux-package' | 'unsupported';
+
+/** A newer release found by `updater.check`. */
+export type UpdateHandle = {
+  version: string;
+  notes: string | null;
+  /** Downloads and verifies the update against the bundled public key; rejects when either fails. */
+  download(onProgress: (done: number, total: number | null) => void): Promise<void>;
+  /** Installs a downloaded update (on Windows the installer then exits the app). */
+  install(): Promise<void>;
+};
+
+export type Updater = {
+  check(): Promise<UpdateHandle | null>;
+  relaunch(): Promise<void>;
+  installKind(): Promise<InstallKind>;
+};
+
+/**
+ * Self-update from GitHub Releases (the updater and process plugins). Outside
+ * the desktop app nothing is ever found.
+ */
+export const updater: Updater = {
+  check: async () => {
+    if (!isTauri) return null;
+    const { check } = await import('@tauri-apps/plugin-updater');
+    const update = await check();
+    if (!update) return null;
+    return {
+      version: update.version,
+      notes: update.body ?? null,
+      download: async (onProgress) => {
+        let done = 0;
+        let total: number | null = null;
+        await update.download((e) => {
+          if (e.event === 'Started') total = e.data.contentLength ?? null;
+          if (e.event === 'Progress') done += e.data.chunkLength;
+          onProgress(done, total);
+        });
+      },
+      install: () => update.install(),
+    };
+  },
+  relaunch: async () => {
+    if (!isTauri) return;
+    const { relaunch } = await import('@tauri-apps/plugin-process');
+    await relaunch();
+  },
+  installKind: async () => (isTauri ? invoke<InstallKind>('install_kind') : 'unsupported'),
 };

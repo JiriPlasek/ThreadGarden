@@ -25,6 +25,7 @@ import { createScope, makeScope, Scopes, wireScope } from '../../src/lib/state/s
 import { SessionsState } from '../../src/lib/state/sessions.svelte';
 import { SettingsState } from '../../src/lib/state/settings.svelte';
 import { TabsState } from '../../src/lib/state/tabs.svelte';
+import { UpdatesState } from '../../src/lib/state/updates.svelte';
 import { UsageStore } from '../../src/lib/state/usage.svelte';
 import { YourTurnState } from '../../src/lib/state/your-turn.svelte';
 import { FakeServer, routedImpl } from '../service/fake-ws';
@@ -170,6 +171,7 @@ const wire = (
     usage: new UsageStore(),
     scheduled: local.scheduled,
     analytics: new AnalyticsState(),
+    updates: new UpdatesState(),
     machines: new MachinesState(),
     scopes,
   };

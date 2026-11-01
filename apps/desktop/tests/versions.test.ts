@@ -11,7 +11,7 @@ const read = (path: string): string => readFileSync(new URL(path, import.meta.ur
 const json = (path: string): { version: string } => JSON.parse(read(path)) as { version: string };
 
 describe('release versions', () => {
-  it('the app, the service, the protocol and the Tauri shell carry one version (v1.2 = 0.2.0)', () => {
+  it('the app, the service, the protocol and the Tauri shell carry one version', () => {
     const cargo = /^\[package\][^[]*?^version\s*=\s*"([^"]+)"/m.exec(
       read('../src-tauri/Cargo.toml'),
     );
@@ -27,14 +27,15 @@ describe('release versions', () => {
       service: json('../../../packages/service/package.json').version,
       protocol: json('../../../packages/protocol/package.json').version,
     };
+    const root = versions.root;
     expect(versions).toEqual({
-      root: '0.2.0',
-      desktop: '0.2.0',
-      tauri: '0.2.0',
-      cargo: '0.2.0',
-      cargoLock: '0.2.0',
-      service: '0.2.0',
-      protocol: '0.2.0',
+      root,
+      desktop: root,
+      tauri: root,
+      cargo: root,
+      cargoLock: root,
+      service: root,
+      protocol: root,
     });
   });
 });

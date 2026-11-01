@@ -68,6 +68,21 @@ export class LifecycleState {
     await this.agents?.stopAll();
   };
 
+  /**
+   * Before an update: stops all work on This PC and its service, and waits
+   * until the process has exited (the installer replaces its runtime). Asked
+   * over the socket when it can be; the shell then waits for the pid.
+   */
+  stopLocalService = async (): Promise<void> => {
+    if (this.reachable) await this.api!.request('service.shutdown', { stopAll: true });
+    await stopService();
+  };
+
+  /** After a failed update: starts (or finds) This PC's service again and reconnects to it. */
+  startLocalService = async (): Promise<void> => {
+    await this.reconnect(await serviceConnection());
+  };
+
   /** Stops all work, then the service, then exits the app. */
   quitCompletely = async (): Promise<void> => {
     if (this.reachable) await this.api!.request('service.shutdown', { stopAll: true });

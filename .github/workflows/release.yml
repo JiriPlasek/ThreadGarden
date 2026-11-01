@@ -1,0 +1,212 @@
+name: Release
+
+# Pushing a tag vX.Y.Z publishes Threadgarden X.Y.Z (docs/releasing.md):
+# CI's checks, then signed builds for every platform and the headless package
+# into a draft release, then the update manifest and checksums, and only when
+# all of that succeeded, publishing. A failure leaves a draft, never a half release.
+#
+# "Run workflow" (dry_run), or pushing a commit to the branch
+# `release-rehearsal`, rehearses everything and deletes the draft at the end
+# instead of publishing.
+
+on:
+  push:
+    tags: ['v*']
+    branches: [release-rehearsal]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Rehearse without publishing (the draft is deleted at the end)
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      tag: ${{ steps.v.outputs.tag }}
+      publish: ${{ steps.v.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        name: The tag must match the version in the repository
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if grep -q 'REPLACE_WITH' apps/desktop/src-tauri/tauri.conf.json; then
+            echo "::error::The updater's public key is still a placeholder (docs/releasing.md, 'Once: the signing key')."
+            exit 1
+          fi
+          if [ "$GITHUB_EVENT_NAME" = "push" ] && [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+              echo "::error::Tag $GITHUB_REF_NAME does not match the repository version $version (run pnpm release:version first)."
+              exit 1
+            fi
+            tag="v$version"; publish=true
+          else
+            tag="v$version-dryrun-${GITHUB_SHA::7}"
+            publish=$([ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "${{ inputs.dry_run }}" = "false" ] && echo true || echo false)
+            if [ "$publish" = "true" ]; then
+              echo "::error::Publish only by pushing a tag; manual runs are rehearsals."
+              exit 1
+            fi
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+
+  ci:
+    needs: version
+    uses: ./.github/workflows/ci.yml
+
+  draft:
+    needs: [version, ci]
+    runs-on: ubuntu-22.04
+    outputs:
+      release_id: ${{ steps.create.outputs.release_id }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: create
+        name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.version.outputs.tag }}
+          VERSION: ${{ needs.version.outputs.version }}
+        # Created through the API, which answers with the new release's id: the
+        # bundle jobs upload to exactly this draft (a lookup by tag can miss a draft).
+        run: |
+          id=$(gh api "repos/$GITHUB_REPOSITORY/releases" \
+            -f tag_name="$TAG" -f target_commitish="$GITHUB_SHA" \
+            -f name="Threadgarden $VERSION" -F draft=true -F generate_release_notes=true \
+            --jq .id)
+          if [ -z "$id" ]; then
+            echo "::error::The draft release was not created."
+            exit 1
+          fi
+          echo "Draft release $id for $TAG"
+          echo "release_id=$id" >> "$GITHUB_OUTPUT"
+
+  bundle:
+    needs: [version, draft]
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Tauri system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+          shared-key: bundle-${{ matrix.target }}
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - uses: actions/cache@v4
+        with:
+          path: apps/desktop/src-tauri/binaries
+          key: node-sidecar-${{ matrix.target }}-${{ hashFiles('scripts/fetch-node-sidecar.mjs') }}
+      - run: node scripts/fetch-node-sidecar.mjs --target ${{ matrix.target }}
+      - name: The draft to upload to
+        run: test -n "${{ needs.draft.outputs.release_id }}" || { echo "::error::No draft release id"; exit 1; }
+      # Signed builds with updater files, uploaded to the draft; the manifest is made later, once.
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: apps/desktop
+          tauriScript: pnpm tauri
+          args: --config src-tauri/tauri.bundle.conf.json --config src-tauri/tauri.release.conf.json
+          releaseId: ${{ needs.draft.outputs.release_id }}
+          includeUpdaterJson: false
+
+  headless:
+    needs: [version, draft]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build:headless
+      - name: Upload the headless package, also under a fixed name for the latest-release link
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.version.outputs.tag }}
+          VERSION: ${{ needs.version.outputs.version }}
+        working-directory: dist-headless
+        run: |
+          sha256sum -c "threadgarden-headless-$VERSION-linux-x64.tar.gz.sha256"
+          cp "threadgarden-headless-$VERSION-linux-x64.tar.gz" threadgarden-headless-linux-x64.tar.gz
+          sha256sum threadgarden-headless-linux-x64.tar.gz > threadgarden-headless-linux-x64.tar.gz.sha256
+          gh release upload "$TAG" --clobber \
+            "threadgarden-headless-$VERSION-linux-x64.tar.gz" \
+            "threadgarden-headless-$VERSION-linux-x64.tar.gz.sha256" \
+            threadgarden-headless-linux-x64.tar.gz \
+            threadgarden-headless-linux-x64.tar.gz.sha256
+
+  publish:
+    needs: [version, bundle, headless]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Signatures, manifest, checks and checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.version.outputs.tag }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          mkdir assets
+          gh release download "$TAG" --dir assets
+          # Every update must be signed with the key the app ships, or installed copies could never verify it.
+          node scripts/verify-signatures.mjs assets apps/desktop/src-tauri/tauri.conf.json
+          base="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG"
+          node scripts/make-manifest.mjs assets "$VERSION" "$base"
+          node scripts/check-manifest.mjs assets/latest.json "$VERSION" $(ls assets)
+          node scripts/release-sums.mjs assets
+          (cd assets && sha256sum -c SHA256SUMS)
+          gh release upload "$TAG" --clobber assets/latest.json assets/SHA256SUMS
+          echo "Release assets:"; ls -la assets
+      - name: Publish
+        if: needs.version.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.version.outputs.tag }}
+        run: gh release edit "$TAG" --draft=false --latest
+      - name: Delete the rehearsal draft
+        if: needs.version.outputs.publish != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.version.outputs.tag }}
+        run: gh release delete "$TAG" --yes

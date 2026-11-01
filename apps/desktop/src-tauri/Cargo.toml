@@ -1,6 +1,6 @@
 [package]
 name = "threadgarden"
-version = "0.2.0"
+version = "0.3.0"
 description = "Threadgarden desktop shell"
 edition = "2024"
 rust-version = "1.90"
@@ -32,6 +32,8 @@ tokio = { version = "1", features = ["net", "sync", "time"] }
 tokio-tungstenite = "0.30"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 tauri-plugin-opener = "2.7.2"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
