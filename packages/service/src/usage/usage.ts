@@ -1,8 +1,10 @@
 /**
  * The account's plan usage (v1.3 B, spec §3). Sources, never scraped:
  * - `rate_limit_event`s streamed by every live session (`windowsFromEvent`);
- * - on demand, the SDK's experimental usage reading of a running session
- *   (`readingFromUsage`), at most once a minute, never by starting a process.
+ * - the SDK's experimental usage reading of a running session
+ *   (`readingFromUsage`): on demand, after every turn and every few minutes
+ *   while a chat runs (`autoRefresh`), at most once a minute, never by
+ *   starting a process.
  *
  * Both are parsed leniently: unknown fields are ignored, missing ones
  * tolerated, and a reading that does not look like one is dropped. The latest
@@ -202,6 +204,8 @@ const ACCOUNT_KEY = '@account';
 export const USAGE_READ_INTERVAL_MS = 60_000;
 /** How long a reading may take before it counts as failed. */
 export const USAGE_READ_TIMEOUT_MS = 10_000;
+/** How often a running chat is asked for a reading by itself, so the meter keeps up. */
+export const USAGE_AUTO_READ_MS = 5 * 60_000;
 
 export type UsageTrackerDeps = {
   /** `threadgarden.db` (the `usage_limits` table); without it nothing is persisted. */
@@ -209,7 +213,7 @@ export type UsageTrackerDeps = {
   now: () => number;
   /** The state changed (the `usage.changed` event). */
   emit: (state: UsageState) => void;
-  timers: Pick<Timers, 'setTimeout' | 'clearTimeout'>;
+  timers: Timers;
   /** A contained failure; also where failed usage readings are logged. */
   onError: (err: unknown, context: string) => void;
 };
@@ -224,6 +228,9 @@ export class UsageTracker {
   private readonly refusedThisTurn = new Set<string>();
   private lastRead = Number.NEGATIVE_INFINITY;
   private reading: Promise<void> | null = null;
+  /** The usage reading of a running chat, once `autoRefresh` has started. */
+  private reader: (() => (() => Promise<unknown>) | undefined) | null = null;
+  private autoTimer: unknown;
 
   constructor(private readonly deps: UsageTrackerDeps) {
     this.load();
@@ -282,7 +289,40 @@ export class UsageTracker {
   turnEnded(sessionId: string): boolean {
     const refused = this.refusedThisTurn.delete(sessionId);
     if (!refused && this.refused.delete(sessionId)) this.publish();
+    // A turn used some of the plan: the meter shows how much.
+    this.autoRead();
     return refused;
+  }
+
+  /**
+   * Keeps the reading fresh without the Usage dialog: after every turn and
+   * every `USAGE_AUTO_READ_MS`, through `reader` (a running chat's reading;
+   * undefined while none runs). `refresh`'s once-a-minute limit holds.
+   */
+  autoRefresh(reader: () => (() => Promise<unknown>) | undefined): void {
+    this.dispose();
+    this.reader = reader;
+    this.autoTimer = this.deps.timers.setInterval(() => this.autoRead(), USAGE_AUTO_READ_MS);
+  }
+
+  /** Stops `autoRefresh`. */
+  dispose(): void {
+    if (this.autoTimer !== undefined) this.deps.timers.clearInterval(this.autoTimer);
+    this.autoTimer = undefined;
+    this.reader = null;
+  }
+
+  private autoRead(): void {
+    if (!this.reader) return;
+    let read: (() => Promise<unknown>) | undefined;
+    try {
+      read = this.reader();
+    } catch (err) {
+      this.deps.onError(err, 'usage reader');
+      return;
+    }
+    // `refresh` logs its own failures and never rejects.
+    void this.refresh(read);
   }
 
   /** Whether a usage limit refused the last turn of `sessionId`. */
