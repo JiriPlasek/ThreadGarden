@@ -4,7 +4,14 @@
   import { RequestError } from '#lib/service/client.js';
   import { Button } from '#lib/components/ui/button/index.js';
   import * as Dialog from '#lib/components/ui/dialog/index.js';
-  import { plugNameFor, powerFailure, wattsText, type PowerFailure } from '#lib/power-setup.js';
+  import {
+    isZigbeeName,
+    plugNameFor,
+    powerFailure,
+    suggestedName,
+    wattsText,
+    type PowerFailure,
+  } from '#lib/power-setup.js';
   import { useApp } from '#lib/state/context.js';
   import type { MachineEntry } from '#lib/state/machines.svelte.js';
 
@@ -41,6 +48,8 @@
   let chosen = $state<string | null>(null);
   let pairNotice = $state<string | null>(null);
   let pairLeft = $state<number | null>(null);
+  /** Said to assistive technology once when pairing starts; the countdown itself is not announced. */
+  let pairAnnounce = $state('');
   let offWatts = $state('5');
   let minOffSeconds = $state('90');
   let refreshLocked = $state(false);
@@ -66,6 +75,7 @@
     chosen = null;
     pairNotice = null;
     pairLeft = null;
+    pairAnnounce = '';
     offWatts = '5';
     minOffSeconds = '90';
     refreshLocked = false;
@@ -85,7 +95,9 @@
 
   const metered = (list: SwitchDevice[]): SwitchDevice[] => list.filter((d) => d.metering);
   const label = (d: SwitchDevice): string => `${d.name ?? d.id} — ${wattsText(d.watts)}`;
-  const device = $derived(devices.find((d) => d.id === chosen) ?? null);
+  /** A plug can be used when the service accepts its name. */
+  const usable = (d: SwitchDevice): boolean => isZigbeeName(d.name ?? d.id);
+  const device = $derived(devices.find((d) => d.id === chosen && usable(d)) ?? null);
   const isPlug = $derived(probed?.kind === 'tasmota-plug');
 
   const probe = async (): Promise<ProbeResult | null> => {
@@ -124,6 +136,7 @@
     failure = null;
     pairNotice = null;
     pairLeft = PAIR_SECONDS;
+    pairAnnounce = 'Waiting for a new plug, up to a minute.';
     pairTimer = setInterval(() => {
       if (pairLeft !== null && pairLeft > 0) pairLeft--;
     }, 1000);
@@ -145,17 +158,26 @@
       }
       if (my !== run) return;
       if (!named.metering) {
-        failure = powerFailure(new RequestError(POWER_ERRORS.noMetering, ''), used.address);
+        failure = {
+          text: "This plug can't measure power, so Threadgarden can't tell when the machine is off.",
+        };
         return;
       }
       devices = [...devices.filter((d) => d.id !== named.id), named];
       chosen = named.id;
     } catch (e) {
-      if (my === run) failure = powerFailure(e, used.address);
+      if (my === run) {
+        // Pairing may still be open on the switch: its own message says so.
+        failure =
+          e instanceof RequestError && e.code === POWER_ERRORS.unreachable && e.message
+            ? { text: e.message }
+            : powerFailure(e, used.address);
+      }
     } finally {
       if (my === run) {
         clearInterval(pairTimer);
         pairLeft = null;
+        pairAnnounce = '';
         busy = false;
       }
     }
@@ -176,6 +198,7 @@
     if (!r) return;
     probed = r;
     devices = metered(r.devices);
+    if (!isPlug && chosen && !devices.some((d) => d.id === chosen && usable(d))) chosen = null;
   };
 
   const num = (text: string): number => (text.trim() === '' ? NaN : Number(text));
@@ -271,10 +294,25 @@
         <fieldset class="grid gap-1.5" disabled={busy}>
           <legend class="sr-only">Plugs that measure power</legend>
           {#each devices as d (d.id)}
-            <label class="flex items-center gap-2 text-sm">
-              <input type="radio" name="power-plug" value={d.id} bind:group={chosen} />
-              {label(d)}
-            </label>
+            <div class="grid gap-0.5">
+              <label class="flex items-center gap-2 text-sm">
+                <input
+                  type="radio"
+                  name="power-plug"
+                  value={d.id}
+                  bind:group={chosen}
+                  disabled={!usable(d)}
+                  aria-describedby={usable(d) ? undefined : `power-name-${d.id}`}
+                />
+                {label(d)}
+              </label>
+              {#if !usable(d)}
+                <p id="power-name-{d.id}" class="text-muted-foreground pl-6 text-xs">
+                  Its name has characters Threadgarden can't use. Rename it on the switch's console
+                  with ZbName {d.id},{suggestedName(d.name ?? d.id)}, then Refresh.
+                </p>
+              {/if}
+            </div>
           {:else}
             <p class="text-muted-foreground text-xs">
               No plug that measures power is paired with this switch yet.
@@ -296,8 +334,9 @@
             a minute, and pairing can't be cancelled, only waited out.
           </p>
           {#if pairLeft !== null}
-            <p class="text-xs" role="status">Waiting for a new plug… {pairLeft} s</p>
+            <p class="text-xs" aria-hidden="true">Waiting for a new plug… {pairLeft} s</p>
           {/if}
+          <p class="sr-only" role="status">{pairAnnounce}</p>
           {#if pairNotice}<p class="text-xs" role="status">{pairNotice}</p>{/if}
         </div>
         {@render problem()}
@@ -342,6 +381,11 @@
             onclick={() => void refresh()}>Refresh</Button
           >
         </div>
+        {#if !isPlug && !device}
+          <p class="text-xs" role="status">
+            The plug you chose isn't listed any more. Go back and choose it again.
+          </p>
+        {/if}
         <p class="text-muted-foreground text-xs">
           Turn the machine on and let it run, then off, and see that the number falls.
         </p>
@@ -382,7 +426,11 @@
             disabled={busy}
             onclick={() => void goto(isPlug ? 'connect' : 'choose')}>Back</Button
           >
-          <Button type="submit" size="sm" disabled={busy || !offOk || !waitOk}>Save</Button>
+          <Button
+            type="submit"
+            size="sm"
+            disabled={busy || !offOk || !waitOk || (!isPlug && !device)}>Save</Button
+          >
         </Dialog.Footer>
       </form>
     {/if}

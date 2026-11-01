@@ -4,7 +4,7 @@
   import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
   import PowerSetupDialog from '#lib/components/PowerSetupDialog.svelte';
   import { Button } from '#lib/components/ui/button/index.js';
-  import { suggestOffWatts, wattsText } from '#lib/power-setup.js';
+  import { failureText, offLineSuggestion, powerFailure, wattsText } from '#lib/power-setup.js';
   import { useApp } from '#lib/state/context.js';
   import type { MachineEntry } from '#lib/state/machines.svelte.js';
 
@@ -19,16 +19,22 @@
 
   const { power } = useApp();
 
-  const capable = $derived(!!machine.info?.capabilities.includes(POWER_CAPABILITY));
   const config = $derived(power.config(machine.id));
+  // Before the machine has answered this session its capabilities are not known: a stored
+  // configuration shows it has them (as the ⏻ menu assumes).
+  const capable = $derived(
+    machine.info
+      ? machine.info.capabilities.includes(POWER_CAPABILITY)
+      : config !== null || power.pendingRemoval(machine.id),
+  );
   const reading = $derived(power.reading(machine.id));
   const isOn = $derived(machine.status === 'on');
 
   const suggestion = $derived.by(() => {
     const m = config?.measured;
     if (!config || !m || m.running === null || m.standby === null) return null;
-    const watts = suggestOffWatts(m.running, m.standby);
-    return watts === config.offWatts ? null : watts;
+    const watts = offLineSuggestion(m.running, m.standby);
+    return watts === null || watts === config.offWatts ? null : watts;
   });
 
   let setupOpen = $state(false);
@@ -41,7 +47,7 @@
     try {
       await power.configure(machine.id, { ...config, offWatts: watts });
     } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
+      error = failureText(powerFailure(e, config.address));
     }
   };
 
@@ -75,7 +81,9 @@
         .then((s) => {
           if (current) idle = s.idleShutdownMinutes;
         })
-        .catch(() => {});
+        .catch((e: unknown) => {
+          if (current) idleError = failureText(powerFailure(e, config.address));
+        });
     });
     return () => {
       current = false;
@@ -92,7 +100,7 @@
       idle = s.idleShutdownMinutes;
     } catch (e) {
       idle = before;
-      idleError = e instanceof Error ? e.message : String(e);
+      idleError = failureText(powerFailure(e, config?.address ?? ''));
     }
   };
 
@@ -102,6 +110,17 @@
 {#if capable}
   <div class="grid gap-2 border-t pt-2" role="group" aria-label="Power control">
     <h4 class="text-muted-foreground text-xs font-medium">Power</h4>
+    {#if power.pendingRemoval(machine.id)}
+      <p class="text-muted-foreground text-xs" role="status">
+        {machine.name} will be told when it's next on.
+      </p>
+    {/if}
+
+    <div aria-live="polite">
+      {#each [error, idleError, power.error(machine.id)] as message, i (i)}
+        {#if message}<p class="text-destructive text-xs" role="alert">{message}</p>{/if}
+      {/each}
+    </div>
 
     {#if !config}
       {#if isOn}
@@ -170,12 +189,6 @@
         </select>
         {#if !isOn}
           <p class="text-muted-foreground text-xs">Changed while {machine.name} is on.</p>
-        {/if}
-      </div>
-
-      <div aria-live="polite">
-        {#if error ?? idleError}
-          <p class="text-destructive text-xs" role="alert">{error ?? idleError}</p>
         {/if}
       </div>
 

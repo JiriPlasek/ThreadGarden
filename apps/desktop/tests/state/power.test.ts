@@ -8,6 +8,7 @@ import { render, screen } from '@testing-library/svelte';
 import { flushSync } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import MachineHeading from '../../src/lib/components/layout/MachineHeading.svelte';
+import { PENDING_REMOVALS_KEY, PowerState } from '../../src/lib/state/power.svelte';
 import type { AppState } from '../../src/lib/state/context';
 import { M1, setupTwoMachines } from '../layout/harness';
 import { RpcFail, type FakeServer } from '../service/fake-ws';
@@ -82,6 +83,7 @@ const start = async (
 const settle = () => vi.advanceTimersByTimeAsync(0);
 
 beforeEach(() => {
+  localStorage.clear();
   vi.useFakeTimers();
   plug = { on: true, watts: 0 };
 });
@@ -252,6 +254,72 @@ describe('PowerState', () => {
     expect(reads()).toBe(n + 1);
     await vi.advanceTimersByTimeAsync(55_000);
     expect(reads()).toBe(n + 2);
+  });
+
+  describe('removing power control while the machine is off', () => {
+    const adoptNulls = (remote: FakeServer) =>
+      remote.calls('power.adopt').filter((c) => (c.params as { config: unknown }).config === null);
+
+    it('tells the machine at its next open, then forgets the entry', async () => {
+      const { app, remote } = await start({ down: true });
+      await app.power.configure(M1, null);
+      await settle();
+      expect(remote.calls('power.adopt')).toHaveLength(0);
+      expect(app.power.pendingRemoval(M1)).toBe(true);
+      expect(JSON.parse(localStorage.getItem(PENDING_REMOVALS_KEY) ?? '[]')).toEqual([M1]);
+
+      remote.refuse = false;
+      await vi.waitFor(() => expect(adoptNulls(remote)).toHaveLength(1));
+      expect(adoptNulls(remote)[0]!.params).toEqual({ config: null });
+      await vi.waitFor(() => expect(app.power.pendingRemoval(M1)).toBe(false));
+      expect(JSON.parse(localStorage.getItem(PENDING_REMOVALS_KEY) ?? '[]')).toEqual([]);
+    });
+
+    it('survives a restart of the app', async () => {
+      const env = await start({ down: true });
+      await env.app.power.configure(M1, null);
+      const next = new PowerState();
+      apps.push({ power: next } as AppState);
+      next.init(env.client, env.app.machines, { passwords: env.passwords });
+      expect(next.pendingRemoval(M1)).toBe(true);
+    });
+
+    it('is tried again at the next open after a failure', async () => {
+      let fail = true;
+      const { app, remote } = await start({
+        down: true,
+        configureRemote: (s) => {
+          s.handlers['power.adopt'] = () => {
+            if (fail) throw new RpcFail('INTERNAL', 'busy');
+            return {};
+          };
+        },
+      });
+      await app.power.configure(M1, null);
+      remote.refuse = false;
+      await vi.waitFor(() => expect(adoptNulls(remote)).toHaveLength(1));
+      await settle();
+      expect(app.power.pendingRemoval(M1)).toBe(true);
+      fail = false;
+      remote.drop();
+      await vi.waitFor(() => expect(adoptNulls(remote)).toHaveLength(2));
+      await vi.waitFor(() => expect(app.power.pendingRemoval(M1)).toBe(false));
+    });
+
+    it('is not kept for a machine that is unpaired', async () => {
+      const { app } = await start({ down: true });
+      await app.power.configure(M1, null);
+      expect(app.power.pendingRemoval(M1)).toBe(true);
+      await app.machines.remove(M1);
+      expect(app.power.pendingRemoval(M1)).toBe(false);
+    });
+
+    it('a machine that is on is told at once and keeps no entry', async () => {
+      const { app, remote } = await start();
+      await app.power.configure(M1, null);
+      await vi.waitFor(() => expect(adoptNulls(remote)).toHaveLength(1));
+      expect(app.power.pendingRemoval(M1)).toBe(false);
+    });
   });
 
   it('stops polling when no machine has power configured', async () => {

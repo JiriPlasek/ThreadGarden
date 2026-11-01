@@ -52,13 +52,32 @@ export const powerFailure = (e: unknown, address: string): PowerFailure => {
   }
 };
 
-/** The Zigbee name for a plug paired for `machine`: "Ubuntu PC" → "Ubuntu_PC_plug". */
-export const plugNameFor = (machine: string): string => {
-  const base = machine
+/** What the service accepts as a Zigbee device name (`isZigbeeName`). */
+export const isZigbeeName = (name: string): boolean => /^[A-Za-z0-9_.-]{1,32}$/.test(name);
+
+const tidy = (text: string): string =>
+  text
     .replace(/[^A-Za-z0-9_.-]/g, '_')
     .replace(/_{2,}/g, '_')
-    .replace(/^_+|_+$/g, '');
-  return base ? `${base.slice(0, 27)}_plug` : 'plug';
+    .replace(/^[_.-]+|[_.-]+$/g, '');
+
+/** `name` made into one the service accepts ("Desk lamp plug" → "Desk_lamp_plug"). */
+export const suggestedName = (name: string): string => tidy(tidy(name).slice(0, 32)) || 'plug';
+
+/** The Zigbee name for a plug paired for `machine`: "Ubuntu PC" → "Ubuntu_PC_plug". */
+export const plugNameFor = (machine: string): string => {
+  // Cut first, then tidy again: no doubled or dangling separator before "_plug".
+  const base = tidy(tidy(machine).slice(0, 27));
+  return base ? `${base}_plug` : 'plug';
+};
+
+/** The plain sentence of a failure, a list joined into one. */
+export const failureText = (f: PowerFailure): string => ('list' in f ? f.list.join(' ') : f.text);
+
+/** A suggested "off" line, or null when it would be out of the 0.5 to 100 W range. */
+export const offLineSuggestion = (running: number, standby: number): number | null => {
+  const watts = suggestOffWatts(running, standby);
+  return watts > 100 ? null : watts;
 };
 
 /** The "off" line between a PC's standby and running draw, a quarter of the way up (spec §10). */

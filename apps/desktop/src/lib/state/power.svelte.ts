@@ -34,8 +34,15 @@ type Machines = Pick<
 > &
   Partial<Pick<MachinesState, 'deriveWith'>>;
 
+/** `localStorage` key: the machines still to be told that power control was removed (their ids). */
+export const PENDING_REMOVALS_KEY = 'threadgarden.power.pendingRemovals';
+
+type Store = Pick<Storage, 'getItem' | 'setItem'>;
+
 export type PowerOptions = {
   passwords?: Passwords;
+  /** Where pending removals are kept across restarts (default `localStorage`; null: nowhere). */
+  storage?: Store | null;
   /** Whose `visibilitychange` decides whether to poll (default `document`; null: only `visible()`). */
   doc?: Document | null;
 };
@@ -94,6 +101,9 @@ export class PowerState {
   private awaitingStandby = new Set<string>();
   /** Machines sent `power.adopt` since their link last opened. */
   private adopted = new Set<string>();
+  /** Machines removed here whose own copy of the configuration is still to be cleared. */
+  private pending = $state<Record<string, true>>({});
+  private storage: Store | null = null;
   private perMachine = new Map<string, () => void>();
   private offs: (() => void)[] = [];
 
@@ -102,6 +112,13 @@ export class PowerState {
     this.api = localApi;
     this.machines = machines;
     if (opts.passwords) this.passwords = opts.passwords;
+    this.storage =
+      opts.storage === undefined
+        ? typeof localStorage === 'undefined'
+          ? null
+          : localStorage
+        : opts.storage;
+    this.pending = this.loadPending();
     machines.deriveWith?.(this.status);
     const doc = opts.doc === undefined ? (globalThis.document ?? null) : opts.doc;
     if (doc) {
@@ -135,6 +152,8 @@ export class PowerState {
   config = (id: string): PowerConfig | null => this.configs[id] ?? null;
   reading = (id: string): PlugReading | null => this.readings[id] ?? null;
   machine = (id: string): MachinePowerStatus | null => this.statuses[id] ?? null;
+  /** Power control was removed here but `machine` has not been told yet (it is off, or unreachable). */
+  pendingRemoval = (id: string): boolean => this.pending[id] === true;
   /** The last power request for the machine that failed, in plain words (null: none since). */
   error = (id: string): string | null => this.errors[id] ?? null;
 
@@ -227,6 +246,7 @@ export class PowerState {
       restore = () =>
         previous === null ? this.passwords.clear(id) : this.passwords.set(id, previous);
     }
+    const had = this.configs[id] !== undefined;
     let saved: PowerConfig | null;
     try {
       saved = await api.request('power.configure', {
@@ -240,6 +260,7 @@ export class PowerState {
     }
     if (saved) {
       this.configs[id] = saved;
+      this.setPending(id, false);
     } else {
       await this.passwords.clear(id).catch(() => {});
       this.dropPlug(id);
@@ -248,7 +269,11 @@ export class PowerState {
     const m = this.machines?.get(id);
     if (m && hasPower(m) && m.client.status === 'open') {
       this.adopted.add(id);
-      void this.adopt(m, saved);
+      if (saved) void this.adopt(m, saved);
+      else if (!(await this.adopt(m, null)) && had) this.setPending(id, true);
+    } else if (!saved && m && had) {
+      // Not reachable now: it is told the next time its link opens.
+      this.setPending(id, true);
     }
     if (saved) void this.read(id);
     this.schedule();
@@ -303,6 +328,8 @@ export class PowerState {
     delete this.statuses[id];
     delete this.errors[id];
     this.adopted.delete(id);
+    // Unpaired: there is no machine left to tell.
+    this.setPending(id, false);
     this.api?.request('power.configure', { machineId: id, config: null }).catch(() => {});
     this.passwords.clear(id).catch(() => {});
     this.schedule();
@@ -328,7 +355,8 @@ export class PowerState {
     this.schedule();
     const m = this.machines?.get(id);
     if (!m || !hasPower(m)) return;
-    this.maybeAdopt(id);
+    if (this.pending[id]) void this.sendRemoval(m);
+    else this.maybeAdopt(id);
     if (this.configs[id]) void this.read(id);
     try {
       this.setMachine(id, await m.client.request('power.status', {}));
@@ -364,17 +392,46 @@ export class PowerState {
     void this.adopt(m, config);
   };
 
-  private adopt = async (m: MachineEntry, config: PowerConfig | null): Promise<void> => {
+  /** Tells a machine to forget its configuration; the entry stays until it did, and is tried again at the next open. */
+  private sendRemoval = async (m: MachineEntry): Promise<void> => {
+    if (await this.adopt(m, null)) this.setPending(m.id, false);
+  };
+
+  private loadPending = (): Record<string, true> => {
+    try {
+      const ids: unknown = JSON.parse(this.storage?.getItem(PENDING_REMOVALS_KEY) ?? '[]');
+      return Array.isArray(ids)
+        ? Object.fromEntries(ids.filter((i) => typeof i === 'string').map((i) => [i, true]))
+        : {};
+    } catch {
+      return {};
+    }
+  };
+
+  private setPending = (id: string, on: boolean): void => {
+    if ((this.pending[id] === true) === on) return;
+    if (on) this.pending[id] = true;
+    else delete this.pending[id];
+    try {
+      this.storage?.setItem(PENDING_REMOVALS_KEY, JSON.stringify(Object.keys(this.pending)));
+    } catch {
+      // Kept for this run only.
+    }
+  };
+
+  private adopt = async (m: MachineEntry, config: PowerConfig | null): Promise<boolean> => {
     try {
       const password = config ? await this.passwords.get(m.id) : null;
       await m.client.request('power.adopt', {
         config,
         ...(password ? { password } : {}),
       });
+      return true;
     } catch (e) {
       // The next time its link opens it is tried again.
       this.adopted.delete(m.id);
       this.errors[m.id] = plainError(e);
+      return false;
     }
   };
 
