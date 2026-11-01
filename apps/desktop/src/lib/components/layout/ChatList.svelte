@@ -236,6 +236,10 @@
     if (p.kind === 'archived') return 'No archived chats.';
     return 'No chats yet.';
   });
+  /** Needs you leads with a machine's unpushed-work notice; then the list isn't empty. */
+  const showsNotice = $derived(
+    places.selected.kind === 'needsYou' && !sessions.query && power.blockedIds().length > 0,
+  );
   const isProject = $derived(places.selected.kind === 'project');
   /** The Older section's tidy action applies to Active and to a project (not to a search). */
   const canArchiveOlder = $derived(
@@ -537,7 +541,7 @@
     </p>
   {/if}
 
-  {#if places.selected.kind === 'needsYou' && !sessions.query}
+  {#if showsNotice}
     {#each power.blockedIds() as id (id)}
       <UnpushedNotice machineId={id} />
     {/each}
@@ -657,7 +661,7 @@
     {/snippet}
   </VirtualList>
 
-  {#if items.length === 0 && !loading}
+  {#if items.length === 0 && !loading && !showsNotice}
     <p
       class="text-muted-foreground pointer-events-none absolute inset-x-0 top-28 px-4 text-center text-xs"
     >
