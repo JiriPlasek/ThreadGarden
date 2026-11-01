@@ -20,7 +20,13 @@ export type FakeTasmota = {
   /** The global `Timers` flag (default on). */
   timersOn: boolean;
   /** The next `ZbPermitJoin 1` pairs this device. */
-  joinNext(dev: { id: string; name?: string | null; on?: boolean; watts?: number; metering?: boolean }): void;
+  joinNext(dev: {
+    id: string;
+    name?: string | null;
+    on?: boolean;
+    watts?: number;
+    metering?: boolean;
+  }): void;
 };
 
 export type FakeTasmotaOptions = {
@@ -91,8 +97,15 @@ const iso = (d: Date) =>
 
 export async function startFakeTasmota(o: FakeTasmotaOptions = {}): Promise<FakeTasmota> {
   const kind = o.kind ?? 'zigbee';
-  const version = o.version ?? (kind === 'zigbee' ? '16.0.0(release-zbbrdgpro)' : '16.0.0(tasmota)');
-  const pending: { id: string; name: string | null; on: boolean; watts: number; metering: boolean }[] = [];
+  const version =
+    o.version ?? (kind === 'zigbee' ? '16.0.0(release-zbbrdgpro)' : '16.0.0(tasmota)');
+  const pending: {
+    id: string;
+    name: string | null;
+    on: boolean;
+    watts: number;
+    metering: boolean;
+  }[] = [];
   let setOption83 = true;
 
   const devices = new Map<string, FakeDevice>();
@@ -170,7 +183,10 @@ export async function startFakeTasmota(o: FakeTasmotaOptions = {}): Promise<Fake
       if (kind !== 'zigbee') return unknown(input);
       if (name === 'zbstatus1') {
         return {
-          ZbStatus1: [...devices].map(([id, d]) => ({ Device: id, ...(d.name ? { Name: d.name } : {}) })),
+          ZbStatus1: [...devices].map(([id, d]) => ({
+            Device: id,
+            ...(d.name ? { Name: d.name } : {}),
+          })),
         };
       }
       if (name === 'zbstatus3') {
@@ -202,7 +218,8 @@ export async function startFakeTasmota(o: FakeTasmotaOptions = {}): Promise<Fake
         const hit = typeof j?.device === 'string' ? find(j.device) : undefined;
         if (!hit) return { ZbSend: 'Error' };
         const power = j?.send?.power;
-        if (power === 0 || power === 1 || power === '0' || power === '1') hit[1].on = Number(power) === 1;
+        if (power === 0 || power === 1 || power === '0' || power === '1')
+          hit[1].on = Number(power) === 1;
         return { ZbSend: 'Done' };
       }
       if (name === 'zbname') {
@@ -226,8 +243,10 @@ export async function startFakeTasmota(o: FakeTasmotaOptions = {}): Promise<Fake
       const n = Number(m[1]) as 1 | 2 | 3;
       const r = state.rules[n];
       if (arg === '0' || arg === '1') r.on = arg === '1';
-      else if (arg === '"' || arg === '""') r.text = ''; // Tasmota's way to clear a rule
-      else if (arg !== '') r.text = o.maxRuleLength === undefined ? arg : arg.slice(0, o.maxRuleLength);
+      else if (arg === '"' || arg === '""')
+        r.text = ''; // Tasmota's way to clear a rule
+      else if (arg !== '')
+        r.text = o.maxRuleLength === undefined ? arg : arg.slice(0, o.maxRuleLength);
       return {
         [`Rule${n}`]: {
           State: r.on ? 'ON' : 'OFF',

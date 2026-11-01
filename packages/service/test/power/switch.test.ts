@@ -34,8 +34,24 @@ async function setup(o: { kind?: 'zigbee' | 'plug' } = {}) {
 
 function withGrowLight(f: FakeTasmota) {
   f.rules[2] = { text: growLight, on: true };
-  f.timers[1] = { Enable: 1, Mode: 0, Time: '06:00', Window: 0, Days: '1111111', Repeat: 1, Action: 1 };
-  f.timers[2] = { Enable: 1, Mode: 0, Time: '22:00', Window: 0, Days: '1111111', Repeat: 1, Action: 0 };
+  f.timers[1] = {
+    Enable: 1,
+    Mode: 0,
+    Time: '06:00',
+    Window: 0,
+    Days: '1111111',
+    Repeat: 1,
+    Action: 1,
+  };
+  f.timers[2] = {
+    Enable: 1,
+    Mode: 0,
+    Time: '22:00',
+    Window: 0,
+    Days: '1111111',
+    Repeat: 1,
+    Action: 0,
+  };
   f.vars[1] = 'x';
 }
 
@@ -60,7 +76,9 @@ describe('Tasmota switch', () => {
     await sw.ensureInstalled();
     f.commands.length = 0;
     await sw.ensureInstalled();
-    expect(f.commands.filter((c) => /^(rule\d|mem\d|setoption)/i.test(c) && / /.test(c))).toEqual([]);
+    expect(f.commands.filter((c) => /^(rule\d|mem\d|setoption)/i.test(c) && / /.test(c))).toEqual(
+      [],
+    );
   });
 
   it('never overwrites a recorded cut time', async () => {
@@ -90,7 +108,9 @@ describe('Tasmota switch', () => {
     const { f, sw } = await setup();
     f.rules[3] = { text: 'on Event#x do Var15 1 endon', on: true };
     await expect(sw.ensureInstalled()).rejects.toMatchObject({ code: 'POWER_CONFLICT' });
-    expect(f.commands.filter((c) => /^(rule\d|mem\d+|setoption\d+|timer\d+) /i.test(c))).toEqual([]);
+    expect(f.commands.filter((c) => /^(rule\d|mem\d+|setoption\d+|timer\d+) /i.test(c))).toEqual(
+      [],
+    );
     expect(f.rules[1].text).toBe('');
     expect(f.mems[11]).toBeUndefined();
   });
@@ -237,7 +257,15 @@ describe('Tasmota switch', () => {
       vi.useFakeTimers({ toFake: ['Date'] });
       vi.setSystemTime(NOW);
       const { f, sw } = await setup();
-      f.timers[16] = { Enable: 1, Mode: 0, Time: '05:00', Window: 0, Days: '1111111', Repeat: 1, Action: 1 };
+      f.timers[16] = {
+        Enable: 1,
+        Mode: 0,
+        Time: '05:00',
+        Window: 0,
+        Days: '1111111',
+        Repeat: 1,
+        Action: 1,
+      };
       const before = structuredClone(f.timers);
       for (const at of [DUE, null]) {
         await expect(sw.armWake(at)).rejects.toMatchObject({ code: 'POWER_NOT_CONFIGURED' });
@@ -262,7 +290,15 @@ describe('Tasmota switch', () => {
 
   it('uninstall with no rule of ours writes nothing', async () => {
     const { f, sw } = await setup();
-    f.timers[16] = { Enable: 1, Mode: 0, Time: '05:00', Window: 0, Days: '1111111', Repeat: 1, Action: 1 };
+    f.timers[16] = {
+      Enable: 1,
+      Mode: 0,
+      Time: '05:00',
+      Window: 0,
+      Days: '1111111',
+      Repeat: 1,
+      Action: 1,
+    };
     f.mems[12] = 'foreign';
     f.commands.length = 0;
     await sw.uninstall();
@@ -284,7 +320,8 @@ describe('Tasmota switch', () => {
     const sw = createSwitch({ ...cfg, address: f.address }, 'pw', { readWaitMs: 0 });
     await expect(sw.ensureInstalled()).rejects.toMatchObject({
       code: 'POWER_CONFLICT',
-      message: "The switch didn't store Threadgarden's rule intact (it may be too long for this firmware).",
+      message:
+        "The switch didn't store Threadgarden's rule intact (it may be too long for this firmware).",
     });
     expect(f.rules[1].on).toBe(false);
   });
@@ -295,7 +332,6 @@ describe('Tasmota switch', () => {
     });
     await expect(odd.lastCut()).rejects.toMatchObject({ code: 'POWER_NOT_TASMOTA' });
   });
-
 
   it('lastCut reads Mem11 as seconds', async () => {
     const { f, sw } = await setup();

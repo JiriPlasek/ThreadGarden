@@ -1,4 +1,9 @@
-import { POWER_CAPABILITY, type MachinePowerStatus, type Unpushed } from '@threadgarden/protocol';
+import {
+  POWER_CAPABILITY,
+  RELAY_CLOSE,
+  type MachinePowerStatus,
+  type Unpushed,
+} from '@threadgarden/protocol';
 import { cleanup, render, screen, waitFor, within } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -155,6 +160,53 @@ describe('unpushed work in Needs you', () => {
     await waitFor(() => expect(env.app.power.machine(M1)?.phase).toBe('running'));
     env.remote.push('power.changed', blocked());
     await waitFor(() => expect(notify).toHaveBeenCalledTimes(2));
+  });
+});
+
+describe('the Needs you count', () => {
+  it('ignores a blocked status while the machine link is closed', async () => {
+    const env = await start();
+    await screen.findByRole('region', { name: 'Unpushed work on Ubuntu PC' });
+    env.remote.drop(RELAY_CLOSE.locked);
+    await waitFor(() => expect(env.app.machines.get(M1)?.status).toBe('locked'));
+    await waitFor(() => expect(screen.queryByRole('region', { name: /Unpushed work/ })).toBeNull());
+    expect(env.app.power.blockedIds()).toEqual([]);
+    expect(env.app.power.needsYouCount(0)).toBe(0);
+  });
+
+  it('the tray count includes a blocked machine', async () => {
+    const env = await setupTwoMachines({
+      m1Capabilities: ['remote', POWER_CAPABILITY],
+      powerPasswords: { [M1]: 'pw' },
+      configure: (s) => {
+        s.handlers['power.list'] = () => [];
+        s.handlers['power.unlock'] = () => ({});
+      },
+      configureRemote: (s) => {
+        s.handlers['projects.list'] = () => [];
+        s.handlers['power.status'] = () => status();
+        s.handlers['power.adopt'] = () => ({});
+      },
+    });
+    apps.push(env.app);
+    const setTray = vi.fn(async (n: number) => void n);
+    stops.push(
+      startAttention({
+        scopes: env.app.scopes,
+        machines: env.app.machines,
+        settings: env.app.settings,
+        tabs: env.app.tabs,
+        places: env.app.places,
+        power: env.app.power,
+        notify: vi.fn(async () => {}),
+        setTrayNeedsYou: setTray,
+      }),
+    );
+    await waitFor(() => expect(env.app.power.machine(M1)?.phase).toBe('running'));
+    env.remote.push('power.changed', blocked());
+    await waitFor(() => expect(setTray).toHaveBeenLastCalledWith(1));
+    env.remote.push('power.changed', status());
+    await waitFor(() => expect(setTray).toHaveBeenLastCalledWith(0));
   });
 });
 

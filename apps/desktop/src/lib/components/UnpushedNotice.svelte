@@ -5,7 +5,10 @@
 
   /** The last segment of a repo's path (either separator). */
   export const repoName = (repo: string): string =>
-    repo.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || repo;
+    repo
+      .replace(/[\\/]+$/, '')
+      .split(/[\\/]/)
+      .pop() || repo;
 
   /** One unpushed item as a sentence (spec §10). */
   export const describeUnpushed = (u: Unpushed): string => {

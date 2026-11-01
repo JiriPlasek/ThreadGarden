@@ -1,5 +1,13 @@
 import { POWER_ERRORS, type PlugReading, type PowerConfig } from '@threadgarden/protocol';
-import { RESOURCES, chooseSlot, commandsFor, conflicts, isOurs, memsFor, ruleText } from './rules.js';
+import {
+  RESOURCES,
+  chooseSlot,
+  commandsFor,
+  conflicts,
+  isOurs,
+  memsFor,
+  ruleText,
+} from './rules.js';
 import { PowerError, TasmotaClient } from './tasmota.js';
 
 export interface PowerSwitch {
@@ -50,14 +58,17 @@ export function createSwitch(
 
   const readRule = async (n: Slot): Promise<{ text: string; on: boolean }> => {
     const v = field(await client.command(`Rule${n}`), `Rule${n}`) as
-      | { State?: unknown; Rules?: unknown }
-      | undefined;
+      { State?: unknown; Rules?: unknown } | undefined;
     if (!v || typeof v !== 'object') throw notTasmota(config.address);
-    return { text: typeof v.Rules === 'string' ? v.Rules : '', on: String(v.State).toUpperCase() === 'ON' };
+    return {
+      text: typeof v.Rules === 'string' ? v.Rules : '',
+      on: String(v.State).toUpperCase() === 'ON',
+    };
   };
 
   const readTimer = async (n: number): Promise<{ Enable: number }> => {
-    const v = field(await client.command(`Timer${n}`), `Timer${n}`) as { Enable?: unknown } | undefined;
+    const v = field(await client.command(`Timer${n}`), `Timer${n}`) as
+      { Enable?: unknown } | undefined;
     return { Enable: v && typeof v === 'object' && Number(v.Enable) === 1 ? 1 : 0 };
   };
 
@@ -69,8 +80,7 @@ export function createSwitch(
   /** The device's clock: UTC instant and local offset. Tasmota's UTC/Local are bare date-times. */
   const deviceClock = async (): Promise<{ utcMs: number; offsetMs: number }> => {
     const tim = field(await client.command('Status 7'), 'StatusTIM') as
-      | { UTC?: unknown; Local?: unknown }
-      | undefined;
+      { UTC?: unknown; Local?: unknown } | undefined;
     // Read both as if UTC, whatever zone the host is in; a trailing Z or offset is dropped.
     const asUtc = (s: unknown) =>
       typeof s === 'string' ? Date.parse(`${s.replace(/(Z|[+-]\d\d:?\d\d)$/i, '')}Z`) : NaN;
@@ -87,7 +97,10 @@ export function createSwitch(
   };
 
   const notInstalled = () =>
-    new PowerError(POWER_ERRORS.notConfigured, "Threadgarden's rule isn't installed on this switch");
+    new PowerError(
+      POWER_ERRORS.notConfigured,
+      "Threadgarden's rule isn't installed on this switch",
+    );
 
   const ourSlot = async (): Promise<Slot | null> => {
     for (const s of SLOTS) if (isOurs((await readRule(s)).text)) return s;
@@ -103,15 +116,16 @@ export function createSwitch(
       let watts: number | null = null;
       if (isZigbee) {
         const st = field(await client.command(`ZbStatus3 ${config.device}`), 'ZbStatus3');
-        const d = Array.isArray(st) ? (st[0] as { Power?: unknown; ActivePower?: unknown } | undefined) : undefined;
+        const d = Array.isArray(st)
+          ? (st[0] as { Power?: unknown; ActivePower?: unknown } | undefined)
+          : undefined;
         if (d && typeof d === 'object') {
           if (typeof d.Power === 'number') on = d.Power === 1;
           if (typeof d.ActivePower === 'number') watts = d.ActivePower;
         }
       } else {
         const sns = field(await client.command('Status 8'), 'StatusSNS') as
-          | { ENERGY?: { Power?: unknown } }
-          | undefined;
+          { ENERGY?: { Power?: unknown } } | undefined;
         const p = sns?.ENERGY?.Power;
         if (typeof p === 'number') watts = p;
         const power = field(await client.command('Power'), 'POWER');
@@ -215,7 +229,9 @@ export function createSwitch(
       const local = new Date(armAt + clock.offsetMs);
       const pad = (v: number) => String(v).padStart(2, '0');
       const time = `${pad(local.getUTCHours())}:${pad(local.getUTCMinutes())}`;
-      const days = Array.from({ length: 7 }, (_, i) => (i === local.getUTCDay() ? '1' : '0')).join('');
+      const days = Array.from({ length: 7 }, (_, i) => (i === local.getUTCDay() ? '1' : '0')).join(
+        '',
+      );
       await client.command(
         `Timer${n} ${JSON.stringify({ Enable: 1, Mode: 0, Time: time, Window: 0, Days: days, Repeat: 0, Action: 3 })}`,
       );

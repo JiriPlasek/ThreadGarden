@@ -155,12 +155,21 @@ export class PowerState {
   config = (id: string): PowerConfig | null => this.configs[id] ?? null;
   reading = (id: string): PlugReading | null => this.readings[id] ?? null;
   machine = (id: string): MachinePowerStatus | null => this.statuses[id] ?? null;
-  /** Power control was removed here but `machine` has not been told yet (it is off, or unreachable). */
   /** The machines whose idle shutdown is paused by unpushed work (spec §10): each wants an answer in Needs you. */
   blockedIds = (): string[] =>
     Object.entries(this.statuses)
-      .filter(([, s]) => s.phase === 'blocked')
+      // A closed link says nothing: the notice returns with the link, if the status still holds.
+      .filter(([id, s]) => s.phase === 'blocked' && this.machines?.get(id)?.status === 'on')
       .map(([id]) => id);
+
+  /** The Needs you count: the chats waiting for you plus one per blocked machine (the one place that adds them). */
+  needsYouCount = (chats: number): number => chats + this.blockedIds().length;
+
+  /** Calls `cb` with the number of blocked machines now and whenever it changes; returns a stop function. */
+  watchBlocked = (cb: (n: number) => void): (() => void) =>
+    $effect.root(() => {
+      $effect(() => cb(this.blockedIds().length));
+    });
 
   /** Calls `cb` with a machine's id each time it goes into `blocked` (not again while it stays there). */
   onBlocked = (cb: (id: string) => void): (() => void) => {
@@ -168,6 +177,7 @@ export class PowerState {
     return () => this.blockedWatchers.delete(cb);
   };
 
+  /** Power control was removed here but `machine` has not been told yet (it is off, or unreachable). */
   pendingRemoval = (id: string): boolean => this.pending[id] === true;
   /** The last power request for the machine that failed, in plain words (null: none since). */
   error = (id: string): string | null => this.errors[id] ?? null;

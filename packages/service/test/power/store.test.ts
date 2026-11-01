@@ -14,7 +14,11 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-const config = PowerConfigSchema.parse({ kind: 'tasmota-zigbee', address: '192.168.1.5', device: 'plug' });
+const config = PowerConfigSchema.parse({
+  kind: 'tasmota-zigbee',
+  address: '192.168.1.5',
+  device: 'plug',
+});
 
 describe('PowerStore', () => {
   it('loads nothing before a save', () => {

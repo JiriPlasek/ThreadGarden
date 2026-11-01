@@ -145,7 +145,8 @@ export class PowerHub {
 
   /** Renames only a plug that was just paired here: the bridge's other devices are not ours. */
   async rename(address: string, password: string, id: string, name: string): Promise<void> {
-    if (!this.paired.has(id)) throw notConfigured('Threadgarden only renames a plug it just paired.');
+    if (!this.paired.has(id))
+      throw notConfigured('Threadgarden only renames a plug it just paired.');
     await renameDevice(address, password, id, name, { fetch: this.o.fetch });
   }
 
@@ -219,7 +220,10 @@ export class PowerHub {
     const gen = this.generation(machineId);
     // Power control may be removed, changed or shut down while a request waits on the switch.
     const stale = () =>
-      new PowerError(POWER_ERRORS.notConfigured, 'Power control for this machine changed meanwhile.');
+      new PowerError(
+        POWER_ERRORS.notConfigured,
+        'Power control for this machine changed meanwhile.',
+      );
     const check = () => {
       if (this.closed || this.generation(machineId) !== gen) throw stale();
     };
@@ -229,7 +233,10 @@ export class PowerHub {
     const reading = await sw.reading();
     check();
     if (reading.on === null) {
-      throw new PowerError(POWER_ERRORS.unreachable, "The switch didn't report whether the plug is on.");
+      throw new PowerError(
+        POWER_ERRORS.unreachable,
+        "The switch didn't report whether the plug is on.",
+      );
     }
 
     if (reading.on) {

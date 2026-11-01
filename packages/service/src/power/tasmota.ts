@@ -58,14 +58,22 @@ export class TasmotaClient {
         headers: { Referer: `http://${this.address}/` },
         signal: AbortSignal.timeout(this.timeoutMs),
       });
-      if (res.status === 401) throw new PowerError(POWER_ERRORS.auth, 'The switch refused the password.');
+      if (res.status === 401)
+        throw new PowerError(POWER_ERRORS.auth, 'The switch refused the password.');
       text = await res.text();
     } catch (err) {
       if (err instanceof PowerError) throw err;
       const name = (err as { name?: string } | null)?.name;
       const code = causeCode(err);
-      if (name === 'TimeoutError' || name === 'AbortError' || (code && UNREACHABLE_CODES.has(code))) {
-        throw new PowerError(POWER_ERRORS.unreachable, `The switch at ${this.address} did not answer.`);
+      if (
+        name === 'TimeoutError' ||
+        name === 'AbortError' ||
+        (code && UNREACHABLE_CODES.has(code))
+      ) {
+        throw new PowerError(
+          POWER_ERRORS.unreachable,
+          `The switch at ${this.address} did not answer.`,
+        );
       }
       if (code === 'UND_ERR_SOCKET' || code === 'ECONNRESET' || code === 'ECONNABORTED') {
         throw new PowerError(
@@ -73,7 +81,10 @@ export class TasmotaClient {
           `The switch at ${this.address} closed the connection without answering.`,
         );
       }
-      throw new PowerError(POWER_ERRORS.unreachable, `The switch at ${this.address} could not be reached.`);
+      throw new PowerError(
+        POWER_ERRORS.unreachable,
+        `The switch at ${this.address} could not be reached.`,
+      );
     }
     if (text.trim() === '') {
       throw new PowerError(
@@ -85,10 +96,16 @@ export class TasmotaClient {
     try {
       body = JSON.parse(text);
     } catch {
-      throw new PowerError(POWER_ERRORS.notTasmota, `${this.address} did not answer like a Tasmota device.`);
+      throw new PowerError(
+        POWER_ERRORS.notTasmota,
+        `${this.address} did not answer like a Tasmota device.`,
+      );
     }
     if (typeof body !== 'object' || body === null || Array.isArray(body)) {
-      throw new PowerError(POWER_ERRORS.notTasmota, `${this.address} did not answer like a Tasmota device.`);
+      throw new PowerError(
+        POWER_ERRORS.notTasmota,
+        `${this.address} did not answer like a Tasmota device.`,
+      );
     }
     const record = body as Record<string, unknown>;
     if (typeof record.WARNING === 'string' && record.WARNING.startsWith('Need user=')) {

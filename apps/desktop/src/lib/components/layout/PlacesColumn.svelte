@@ -266,11 +266,7 @@
         >
           <StatusIcon status="needsYou" decorative class="mx-px" />
           <span class="truncate">Needs you</span>
-          {@render badge(
-            places.counts.needsYou + power.blockedIds().length,
-            'amber',
-            'Chats waiting for you',
-          )}
+          {@render badge(power.needsYouCount(places.counts.needsYou), 'amber', 'Waiting for you')}
         </button>
       </li>
       <li>

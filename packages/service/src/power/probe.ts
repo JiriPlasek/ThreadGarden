@@ -1,4 +1,9 @@
-import { MIN_TASMOTA, POWER_ERRORS, type ProbeResult, type SwitchDevice } from '@threadgarden/protocol';
+import {
+  MIN_TASMOTA,
+  POWER_ERRORS,
+  type ProbeResult,
+  type SwitchDevice,
+} from '@threadgarden/protocol';
 import { isZigbeeName } from './rules.js';
 import { PowerError, TasmotaClient } from './tasmota.js';
 
@@ -42,7 +47,8 @@ async function zigbeeDevices(client: TasmotaClient): Promise<RawDevice[] | null>
     if (!d || typeof d !== 'object') continue;
     const id = field(d as Record<string, unknown>, 'Device');
     const name = field(d as Record<string, unknown>, 'Name');
-    if (typeof id === 'string') out.push({ id, name: typeof name === 'string' && name !== '' ? name : null });
+    if (typeof id === 'string')
+      out.push({ id, name: typeof name === 'string' && name !== '' ? name : null });
   }
   return out;
 }
@@ -80,7 +86,8 @@ export async function probeSwitch(
   o: Options = {},
 ): Promise<ProbeResult> {
   const client = new TasmotaClient({ address, password, fetch: o.fetch });
-  const fwr = field(await client.command('Status 2'), 'StatusFWR') as { Version?: unknown } | undefined;
+  const fwr = field(await client.command('Status 2'), 'StatusFWR') as
+    { Version?: unknown } | undefined;
   const version = fwr && typeof fwr === 'object' ? fwr.Version : undefined;
   if (typeof version !== 'string') throw notTasmota(address);
   if (!atLeastMinimum(version)) {
@@ -96,7 +103,8 @@ export async function probeSwitch(
     return { version, kind: 'tasmota-zigbee', devices, plug: null };
   }
 
-  const sns = field(await client.command('Status 8'), 'StatusSNS') as { ENERGY?: { Power?: unknown } } | undefined;
+  const sns = field(await client.command('Status 8'), 'StatusSNS') as
+    { ENERGY?: { Power?: unknown } } | undefined;
   const watts = sns && typeof sns === 'object' ? sns.ENERGY?.Power : undefined;
   if (typeof watts !== 'number') {
     throw new PowerError(
@@ -109,7 +117,11 @@ export async function probeSwitch(
     version,
     kind: 'tasmota-plug',
     devices: [],
-    plug: { on: typeof power === 'string' ? power.toUpperCase() === 'ON' : null, watts, at: Date.now() },
+    plug: {
+      on: typeof power === 'string' ? power.toUpperCase() === 'ON' : null,
+      watts,
+      at: Date.now(),
+    },
   };
 }
 

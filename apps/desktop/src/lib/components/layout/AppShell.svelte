@@ -39,7 +39,7 @@
    */
   const { settings, connection, places, interaction, power } = useApp();
   /** Chats waiting for you, plus one per machine whose shutdown is paused by unpushed work. */
-  const needsYouCount = $derived(places.counts.needsYou + power.blockedIds().length);
+  const needsYouCount = $derived(power.needsYouCount(places.counts.needsYou));
 
   let checking = $state(false);
   const checkAgain = (): void => {

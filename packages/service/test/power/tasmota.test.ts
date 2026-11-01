@@ -163,7 +163,8 @@ describe('fake Tasmota', () => {
   it('Status 7 reports bare UTC and Local, and Timers a global flag', async () => {
     const f = await fake();
     const c = new TasmotaClient({ address: f.address, password: 'pw' });
-    const tim = ((await c.command('Status 7')) as { StatusTIM: { UTC: string; Local: string } }).StatusTIM;
+    const tim = ((await c.command('Status 7')) as { StatusTIM: { UTC: string; Local: string } })
+      .StatusTIM;
     expect(tim.UTC).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d$/);
     expect(tim.Local).toMatch(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d$/);
     expect(await c.command('Timers')).toEqual({ Timers: 'ON' });

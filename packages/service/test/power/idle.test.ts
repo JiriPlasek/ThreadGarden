@@ -2,7 +2,12 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { PROTOCOL_VERSION, PowerConfigSchema, type ChatStatus, type EventMsg } from '@threadgarden/protocol';
+import {
+  PROTOCOL_VERSION,
+  PowerConfigSchema,
+  type ChatStatus,
+  type EventMsg,
+} from '@threadgarden/protocol';
 import { IdleMonitor } from '../../src/power/idle.js';
 import { PowerStore } from '../../src/power/store.js';
 import { registerPowerMachineHandlers } from '../../src/server/handlers/power.js';
@@ -250,7 +255,11 @@ describe('machine power handlers', () => {
   afterEach(async () => {
     await rm(dir, { recursive: true, force: true });
   });
-  const config = PowerConfigSchema.parse({ kind: 'tasmota-plug', address: '192.168.1.9', device: null });
+  const config = PowerConfigSchema.parse({
+    kind: 'tasmota-plug',
+    address: '192.168.1.9',
+    device: null,
+  });
 
   it('adopts, reports status without the password, and emits power.changed on every change', async () => {
     const { m } = rig();
@@ -263,9 +272,16 @@ describe('machine power handlers', () => {
     });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- loosely typed results in tests
     const call = async (method: string, params: unknown): Promise<any> =>
-      router.dispatch({ id: 1, method, params } as never, { clientId: 'p', origin: 'remote', deviceId: 'd' } as never);
+      router.dispatch(
+        { id: 1, method, params } as never,
+        { clientId: 'p', origin: 'remote', deviceId: 'd' } as never,
+      );
 
-    expect((await call('power.status', {})).result).toMatchObject({ configured: false, busy: false, phase: 'running' });
+    expect((await call('power.status', {})).result).toMatchObject({
+      configured: false,
+      busy: false,
+      phase: 'running',
+    });
     // No password given and none stored.
     expect((await call('power.adopt', { config })).error?.code).toBe('POWER_NOT_CONFIGURED');
     expect(events).toEqual([]);
@@ -318,21 +334,34 @@ describe('power on a service', () => {
     });
 
   it('keep awake survives a service restart', async () => {
-    const status = async (svc: Awaited<ReturnType<typeof start>>, method: string, params: unknown) =>
-      (await svc.router.dispatch({ id: 1, method, params } as never, { clientId: 't', origin: 'local' })) as {
+    const status = async (
+      svc: Awaited<ReturnType<typeof start>>,
+      method: string,
+      params: unknown,
+    ) =>
+      (await svc.router.dispatch({ id: 1, method, params } as never, {
+        clientId: 't',
+        origin: 'local',
+      })) as {
         result: { keepAwake: unknown };
       };
     const a = await start(true);
     await status(a, 'power.keepAwake', { mode: 'always', until: null });
     await a.close();
     const b = await start(true);
-    expect((await status(b, 'power.status', {})).result.keepAwake).toEqual({ mode: 'always', until: null });
+    expect((await status(b, 'power.status', {})).result.keepAwake).toEqual({
+      mode: 'always',
+      until: null,
+    });
     await b.close();
   });
 
   it('capabilities include power only when headless', async () => {
     const hello = async (svc: Awaited<ReturnType<typeof start>>) =>
-      (await svc.router.dispatch({ id: 1, method: 'hello', params: { protocolVersion: PROTOCOL_VERSION, client: 't' } }, { clientId: 't', origin: 'local' })) as {
+      (await svc.router.dispatch(
+        { id: 1, method: 'hello', params: { protocolVersion: PROTOCOL_VERSION, client: 't' } },
+        { clientId: 't', origin: 'local' },
+      )) as {
         result: { machine: { capabilities: string[] } };
       };
     const h = await start(true);

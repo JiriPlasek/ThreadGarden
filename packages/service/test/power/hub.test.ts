@@ -66,7 +66,8 @@ async function setup(nowMs = 1_000_000_000_000) {
 
 const powerOn = (f: FakeTasmota) =>
   f.commands.some((c) => c.startsWith('ZbSend') && c.includes('"Power":1'));
-const count = (f: FakeTasmota, prefix: string) => f.commands.filter((c) => c.startsWith(prefix)).length;
+const count = (f: FakeTasmota, prefix: string) =>
+  f.commands.filter((c) => c.startsWith(prefix)).length;
 
 describe('PowerHub', () => {
   it('turnOn from standby cycles', async () => {
@@ -83,7 +84,11 @@ describe('PowerHub', () => {
     await hub.configure('m1', config, 'pw');
     const before = f.commands.length;
     expect(await hub.turnOn('m1')).toEqual({ cycled: false, waitMs: 0 });
-    expect(f.commands.slice(before).some((c) => c.startsWith('ZbSend') && c.includes('"Send"') || c.startsWith('Event'))).toBe(false);
+    expect(
+      f.commands
+        .slice(before)
+        .some((c) => (c.startsWith('ZbSend') && c.includes('"Send"')) || c.startsWith('Event')),
+    ).toBe(false);
   });
 
   it('turnOn soon after a cut waits out the minimum off time', async () => {
@@ -102,7 +107,12 @@ describe('PowerHub', () => {
     await vi.waitFor(() => expect(powerOn(f)).toBe(true));
   });
 
-  async function recentCut(hub: PowerHub, f: FakeTasmota, config: PowerConfig, clock: { t: number }) {
+  async function recentCut(
+    hub: PowerHub,
+    f: FakeTasmota,
+    config: PowerConfig,
+    clock: { t: number },
+  ) {
     f.devices.get('0x863B')!.on = false;
     await hub.configure('m1', config, 'pw');
     f.mems[11] = String(Math.floor((clock.t - 30_000) / 1000));
@@ -234,7 +244,9 @@ describe('PowerHub', () => {
 
   it('configure without any password is POWER_NOT_CONFIGURED and stores nothing', async () => {
     const { hub, config } = await setup();
-    await expect(hub.configure('m1', config)).rejects.toMatchObject({ code: 'POWER_NOT_CONFIGURED' });
+    await expect(hub.configure('m1', config)).rejects.toMatchObject({
+      code: 'POWER_NOT_CONFIGURED',
+    });
     expect(hub.list()).toEqual([]);
   });
 
@@ -243,7 +255,9 @@ describe('PowerHub', () => {
     f.rules[1] = { text: 'on x do y endon', on: true };
     f.rules[2] = { text: 'on x do y endon', on: true };
     f.rules[3] = { text: 'on x do y endon', on: true };
-    await expect(hub.configure('m1', config, 'pw')).rejects.toMatchObject({ code: 'POWER_CONFLICT' });
+    await expect(hub.configure('m1', config, 'pw')).rejects.toMatchObject({
+      code: 'POWER_CONFLICT',
+    });
     expect(hub.list()).toEqual([]);
   });
 

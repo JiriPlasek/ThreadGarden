@@ -77,13 +77,7 @@ export function chooseSlot(rules: Rules): Slot | null {
 const CLAIMED: string[] = [
   ...RESOURCES.ruleTimers.flatMap((n) => [`RuleTimer${n}`, `Rules#Timer=${n}`]),
   // Add/Sub/Mult/Scale write Var<n> without naming it.
-  ...RESOURCES.vars.flatMap((n) => [
-    `Var${n}`,
-    `Add${n}`,
-    `Sub${n}`,
-    `Mult${n}`,
-    `Scale${n}`,
-  ]),
+  ...RESOURCES.vars.flatMap((n) => [`Var${n}`, `Add${n}`, `Sub${n}`, `Mult${n}`, `Scale${n}`]),
   ...RESOURCES.mems.map((n) => `Mem${n}`),
   `Clock#Timer=${RESOURCES.timer}`,
   `Timer${RESOURCES.timer}`,

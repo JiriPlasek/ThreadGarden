@@ -134,7 +134,9 @@ describe.skipIf(!hasGit)('checkUnpushed', () => {
   });
 
   it('a directory where git fails for another reason is unchecked, not skipped', async () => {
-    const r = await checkUnpushed([{ cwd: repo, sessionId: null }], { git: failing('--show-toplevel') });
+    const r = await checkUnpushed([{ cwd: repo, sessionId: null }], {
+      git: failing('--show-toplevel'),
+    });
     expect(r).toMatchObject([{ repo, kind: 'unchecked' }]);
   });
 
@@ -162,7 +164,14 @@ describe.skipIf(!hasGit)('checkUnpushed', () => {
     git(repo, 'stash');
     const r = await check(repo);
     expect(r).toEqual([
-      { repo, branch: null, kind: 'uncommitted', count: 1, sessionId: 's0', reason: 'stashed changes' },
+      {
+        repo,
+        branch: null,
+        kind: 'uncommitted',
+        count: 1,
+        sessionId: 's0',
+        reason: 'stashed changes',
+      },
     ]);
   });
 

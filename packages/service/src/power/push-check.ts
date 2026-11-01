@@ -40,10 +40,13 @@ const defaultGit: Git = (args, cwd) =>
         if (!err) return res(stdout);
         const e = err as NodeJS.ErrnoException & { killed?: boolean; code?: string | number };
         const text = String(stderr ?? '');
-        if (/not a git repository/i.test(text)) return rej(new GitFailure('not a git repository', true));
-        if (/dubious ownership/i.test(text)) return rej(new GitFailure('git refused: dubious ownership', false));
+        if (/not a git repository/i.test(text))
+          return rej(new GitFailure('not a git repository', true));
+        if (/dubious ownership/i.test(text))
+          return rej(new GitFailure('git refused: dubious ownership', false));
         if (e.killed) return rej(new GitFailure('git timed out', false));
-        if (e.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER') return rej(new GitFailure('git output too large', false));
+        if (e.code === 'ERR_CHILD_PROCESS_STDIO_MAXBUFFER')
+          return rej(new GitFailure('git output too large', false));
         if (e.code === 'ENOENT') return rej(new GitFailure('git is not installed', false));
         rej(new GitFailure('git failed', false));
       },
@@ -90,13 +93,18 @@ const checkRepo = async (
   try {
     remotes = await git(['remote'], top);
   } catch (e) {
-    return [{ repo: top, branch: null, kind: 'unchecked', count: 0, sessionId, reason: reasonOf(e) }];
+    return [
+      { repo: top, branch: null, kind: 'unchecked', count: 0, sessionId, reason: reasonOf(e) },
+    ];
   }
   if (!remotes.trim()) return found; // local only: plan 2 handles it
 
   await attempt(async () => {
     const entries = countStatusEntries(
-      await git(['--no-optional-locks', 'status', '--porcelain=v1', '-z', '--untracked-files=normal'], top),
+      await git(
+        ['--no-optional-locks', 'status', '--porcelain=v1', '-z', '--untracked-files=normal'],
+        top,
+      ),
     );
     if (entries > 0) add({ branch: null, kind: 'uncommitted', count: entries });
   });
@@ -110,7 +118,10 @@ const checkRepo = async (
       detached = true;
     }
     if (!detached) return;
-    const count = Number.parseInt((await git(['rev-list', '--count', 'HEAD', '--not', '--remotes'], top)).trim(), 10);
+    const count = Number.parseInt(
+      (await git(['rev-list', '--count', 'HEAD', '--not', '--remotes'], top)).trim(),
+      10,
+    );
     if (Number.isNaN(count)) throw new GitFailure('git failed', false);
     if (count > 0) add({ branch: null, kind: 'unpushed', count });
   });
@@ -132,15 +143,21 @@ const checkRepo = async (
         .filter((b) => b.startsWith(HEADS));
       for (const ref of branches) {
         await attempt(async () => {
-          const count = Number.parseInt((await git(['rev-list', '--count', ref, '--not', '--remotes'], top)).trim(), 10);
+          const count = Number.parseInt(
+            (await git(['rev-list', '--count', ref, '--not', '--remotes'], top)).trim(),
+            10,
+          );
           if (Number.isNaN(count)) throw new GitFailure('git failed', false);
           if (count > 0) add({ branch: ref.slice(HEADS.length), kind: 'unpushed', count });
         });
       }
     });
     await attempt(async () => {
-      const stashes = (await git(['stash', 'list'], top)).split('\n').filter((l) => l.trim()).length;
-      if (stashes > 0) add({ branch: null, kind: 'uncommitted', count: stashes, reason: 'stashed changes' });
+      const stashes = (await git(['stash', 'list'], top))
+        .split('\n')
+        .filter((l) => l.trim()).length;
+      if (stashes > 0)
+        add({ branch: null, kind: 'uncommitted', count: stashes, reason: 'stashed changes' });
     });
   }
 
@@ -171,7 +188,14 @@ export const checkUnpushed = async (
       const key = resolve(cwd);
       if (!failed.has(key)) {
         failed.add(key);
-        result.push({ repo: key, branch: null, kind: 'unchecked', count: 0, sessionId, reason: reasonOf(e) });
+        result.push({
+          repo: key,
+          branch: null,
+          kind: 'unchecked',
+          count: 0,
+          sessionId,
+          reason: reasonOf(e),
+        });
       }
     }
   }

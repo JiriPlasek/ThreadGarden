@@ -62,7 +62,7 @@ export type AttentionDeps = {
   machines: Pick<MachinesState, 'get' | 'several'>;
   settings: Pick<SettingsState, 'value'>;
   /** Power control: a machine whose idle shutdown is paused by unpushed work notifies once (Task 15). */
-  power?: Pick<PowerState, 'onBlocked'>;
+  power?: Pick<PowerState, 'onBlocked' | 'watchBlocked' | 'needsYouCount'>;
   /** The tabs (chat keys). */
   tabs: Pick<TabsState, 'active' | 'openTab'>;
   /**
@@ -138,10 +138,18 @@ export const startAttention = (deps: AttentionDeps): (() => void) => {
   doc.addEventListener('visibilitychange', onVisibility);
 
   const offScopes = scopes.observe((scope) => watch(scope, deps, shared));
-  const offTray = places.subscribeCounts((counts) => {
-    if (counts.needsYou === badge) return;
-    badge = counts.needsYou;
+  // The tray shows the Needs you count: chats waiting plus machines whose shutdown is paused.
+  let chatsWaiting = 0;
+  const showTray = (): void => {
+    const n = deps.power ? deps.power.needsYouCount(chatsWaiting) : chatsWaiting;
+    if (n === badge) return;
+    badge = n;
     quietly(setTray(badge));
+  };
+  const offBlocked = deps.power?.watchBlocked(showTray);
+  const offTray = places.subscribeCounts((counts) => {
+    chatsWaiting = counts.needsYou;
+    showTray();
   });
 
   return () => {
@@ -150,6 +158,7 @@ export const startAttention = (deps: AttentionDeps): (() => void) => {
     doc.removeEventListener('visibilitychange', onVisibility);
     offScopes();
     offTray();
+    offBlocked?.();
   };
 };
 

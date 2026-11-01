@@ -30,16 +30,28 @@ describe('probeSwitch', () => {
     // each device is asked for ActivePower once, before ZbStatus3
     const asks = f.commands.filter((c) => c.startsWith('ZbSend'));
     expect(asks).toHaveLength(2);
-    expect(f.commands.indexOf(asks[1]!)).toBeLessThan(f.commands.findIndex((c) => c.startsWith('ZbStatus3')));
+    expect(f.commands.indexOf(asks[1]!)).toBeLessThan(
+      f.commands.findIndex((c) => c.startsWith('ZbStatus3')),
+    );
   });
 
   it('only sends read-only commands', async () => {
-    const allowed = [/^Status \d$/, /^ZbStatus1$/, /^ZbStatus3 \S+$/, /^ZbSend .*"Read"/, /^Power$/];
+    const allowed = [
+      /^Status \d$/,
+      /^ZbStatus1$/,
+      /^ZbStatus3 \S+$/,
+      /^ZbSend .*"Read"/,
+      /^Power$/,
+    ];
     for (const kind of ['zigbee', 'plug'] as const) {
       const f = await fake({ kind });
       await probeSwitch(f.address, 'pw', fast);
       expect(f.commands.length).toBeGreaterThan(0);
-      for (const c of f.commands) expect(allowed.some((re) => re.test(c)), c).toBe(true);
+      for (const c of f.commands)
+        expect(
+          allowed.some((re) => re.test(c)),
+          c,
+        ).toBe(true);
     }
   });
 
@@ -54,7 +66,9 @@ describe('probeSwitch', () => {
 
   it('too old', async () => {
     const f = await fake({ version: '12.5.0' });
-    await expect(probeSwitch(f.address, 'pw', fast)).rejects.toMatchObject({ code: POWER_ERRORS.tooOld });
+    await expect(probeSwitch(f.address, 'pw', fast)).rejects.toMatchObject({
+      code: POWER_ERRORS.tooOld,
+    });
   });
 
   it('accepts a four-part version at the minimum', async () => {
@@ -78,7 +92,9 @@ describe('probeSwitch', () => {
 
   it('a wrong password → POWER_AUTH', async () => {
     const f = await fake({ password: 'right' });
-    await expect(probeSwitch(f.address, 'wrong', fast)).rejects.toMatchObject({ code: POWER_ERRORS.auth });
+    await expect(probeSwitch(f.address, 'wrong', fast)).rejects.toMatchObject({
+      code: POWER_ERRORS.auth,
+    });
   });
 });
 
@@ -103,7 +119,12 @@ describe('pairPlug', () => {
       }
       return real(url, init);
     };
-    const dev = await pairPlug(f.address, 'pw', { fetch: hooked, pollMs: 5, timeoutMs: 5000, ...fast });
+    const dev = await pairPlug(f.address, 'pw', {
+      fetch: hooked,
+      pollMs: 5,
+      timeoutMs: 5000,
+      ...fast,
+    });
     expect(dev?.id).toBe('0xBEEF');
     expect(polls).toBeGreaterThanOrEqual(3);
     expect(permits(f).at(-1)).toBe('ZbPermitJoin 0');
@@ -132,7 +153,9 @@ describe('pairPlug', () => {
 
   it('a Wi-Fi plug has nothing to pair and pairing is never opened', async () => {
     const f = await fake({ kind: 'plug' });
-    await expect(pairPlug(f.address, 'pw', { timeoutMs: 100, pollMs: 10, ...fast })).rejects.toMatchObject({
+    await expect(
+      pairPlug(f.address, 'pw', { timeoutMs: 100, pollMs: 10, ...fast }),
+    ).rejects.toMatchObject({
       code: POWER_ERRORS.notConfigured,
       message: 'This switch has no Zigbee radio, so there is nothing to pair.',
     });
@@ -146,7 +169,8 @@ describe('pairPlug', () => {
     return {
       attempts: () => attempts,
       fetch: async (url, init) => {
-        if (String(url).includes('ZbPermitJoin%200') && ++attempts <= n) throw new TypeError('fetch failed');
+        if (String(url).includes('ZbPermitJoin%200') && ++attempts <= n)
+          throw new TypeError('fetch failed');
         return real(url, init);
       },
     };
@@ -166,10 +190,12 @@ describe('pairPlug', () => {
     const f = await fake();
     f.joinNext({ id: '0xBEEF', watts: 9 });
     const d = dropClose(99);
-    await expect(pairPlug(f.address, 'pw', { fetch: d.fetch, ...closeOpts })).rejects.toMatchObject({
-      code: POWER_ERRORS.unreachable,
-      message: expect.stringContaining("Couldn't close pairing"),
-    });
+    await expect(pairPlug(f.address, 'pw', { fetch: d.fetch, ...closeOpts })).rejects.toMatchObject(
+      {
+        code: POWER_ERRORS.unreachable,
+        message: expect.stringContaining("Couldn't close pairing"),
+      },
+    );
     expect(d.attempts()).toBe(3);
   });
 
@@ -183,9 +209,9 @@ describe('pairPlug', () => {
       return real(url, init);
     };
     // the poll failure surfaces as POWER_UNREACHABLE from the client with its own message
-    await expect(
-      pairPlug(f.address, 'right', { fetch: both, ...closeOpts }),
-    ).rejects.toMatchObject({ message: expect.stringContaining('could not be reached') });
+    await expect(pairPlug(f.address, 'right', { fetch: both, ...closeOpts })).rejects.toMatchObject(
+      { message: expect.stringContaining('could not be reached') },
+    );
     expect(d.attempts()).toBe(3);
   });
 
