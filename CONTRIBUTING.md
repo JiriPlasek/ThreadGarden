@@ -42,7 +42,19 @@ pnpm --filter desktop tauri dev                 # the app, against your real his
 pnpm --filter @threadgarden/service mock        # or: the service over a synthetic history
 ```
 
-The root [README](README.md#development) shows how to run the UI in a browser against the mock service, and how to build release installers.
+The mock service serves a synthetic history (1,000 chats) with a scripted fake Claude Code; messages containing "perm", "ask", "plan" or "limit" trigger those flows. To run the UI in a browser against it, set `VITE_THREADGARDEN_MOCK_URL` and `VITE_THREADGARDEN_MOCK_TOKEN`.
+
+To build the release installers:
+
+```sh
+pnpm install
+node scripts/fetch-node-sidecar.mjs   # the Node.js runtime bundled into the app, hash-checked
+pnpm --filter desktop tauri build --config src-tauri/tauri.bundle.conf.json
+```
+
+They land in `apps/desktop/src-tauri/target/release/bundle/`. Users need no Node.js: the app ships its own runtime. Releasing is in [docs/releasing.md](docs/releasing.md).
+
+The code is laid out as `packages/protocol` (shared schemas), `packages/service` (the Node.js service), `apps/desktop` (Tauri shell and SvelteKit UI), `packaging/headless` (the remote-machine package) and `scripts/` (release tooling).
 
 ## Tests
 
