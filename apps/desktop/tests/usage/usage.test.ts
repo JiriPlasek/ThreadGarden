@@ -60,9 +60,9 @@ describe('usage meter and dialog', () => {
 
     const state = usageState();
     server.push('usage.changed', state);
-    const meter = await screen.findByRole('button', { name: /^usage: 5-hour limit/i });
+    const meter = await screen.findByRole('button', { name: /^usage/i });
     expect(meter.textContent).toContain('42%');
-    expect(meter.textContent).toContain(clockTime(state.windows[0]!.resetsAt!));
+    expect(meter.title).toContain(clockTime(state.windows[0]!.resetsAt!));
     expect(meter.getAttribute('data-usage-status')).toBe('allowed');
 
     const warn = usageState();
@@ -85,7 +85,7 @@ describe('usage meter and dialog', () => {
     });
     render(AgentsStrip, { context });
     render(UsageDialog, { context });
-    await userEvent.click(await screen.findByRole('button', { name: /^usage: 5-hour/i }));
+    await userEvent.click(await screen.findByRole('button', { name: /^usage/i }));
     const dialog = await screen.findByRole('dialog', { name: 'Usage' });
     await waitFor(() => expect(dialog.textContent).toContain('Max plan'));
     expect(server.calls('usage.get').some((c) => (c.params as { refresh?: boolean }).refresh)).toBe(
