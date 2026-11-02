@@ -432,6 +432,22 @@ describe('UsageTracker', () => {
       expect(t.state().account).toMatchObject({ kind: 'login', plan: 'max' });
     });
 
+    it('the same login answered without a plan keeps the known plan', () => {
+      const t = tracker();
+      t.noteAccount(login('me@example.com', 'max'));
+      emitted = [];
+      t.noteAccount({ kind: 'login', email: 'me@example.com' });
+      expect(t.state().account).toEqual(login('me@example.com', 'max'));
+      expect(emitted).toEqual([]);
+      expect(tracker().state().account).toEqual(login('me@example.com', 'max'));
+    });
+
+    it('a new login without a plan has no plan key at all', () => {
+      const t = tracker();
+      t.noteAccount({ kind: 'login', email: 'me@example.com' });
+      expect('plan' in t.state().account!).toBe(false);
+    });
+
     it('the account survives a restart', () => {
       tracker().noteAccount(login('me@example.com'));
       expect(tracker().state().account).toEqual(login('me@example.com'));

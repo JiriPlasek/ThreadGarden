@@ -323,14 +323,17 @@ export class UsageTracker {
       }
       windowsOf = email;
     }
-    if (known && sameAccount(known, account) && known.plan === account.plan && !dropped) {
+    const same = known !== undefined && sameAccount(known, account);
+    // An answer without a plan says nothing about it: the known plan stays.
+    const plan = account.plan ?? (same ? known.plan : undefined);
+    if (same && known.plan === plan && !dropped) {
       if (windowsOf === this.account.windowsOf) return;
     }
-    const base = known && sameAccount(known, account) ? known : account;
+    const base = same ? known : account;
     this.account = {
       ...this.account,
       ...(windowsOf ? { windowsOf } : {}),
-      account: { ...base, plan: account.plan },
+      account: { ...base, ...(plan ? { plan } : {}) },
     };
     this.store(ACCOUNT_KEY, this.account);
     this.publish();
