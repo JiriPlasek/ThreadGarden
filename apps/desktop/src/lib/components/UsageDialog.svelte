@@ -14,11 +14,11 @@
    * strip's meter or "Usage" in Ctrl/Cmd+K; opening asks a running chat for a
    * fresh reading (the service never starts one for it).
    */
-  const { usage } = useApp();
+  const { usage, usageAccounts } = useApp();
 
   let now = $state(Date.now());
   $effect(() => {
-    if (!usage.dialogOpen) return;
+    if (!usageAccounts.dialogOpen) return;
     now = Date.now();
     const t = setInterval(() => (now = Date.now()), 30_000);
     return () => clearInterval(t);
@@ -57,7 +57,10 @@
   };
 </script>
 
-<Dialog.Root open={usage.dialogOpen} onOpenChange={(open) => (usage.dialogOpen = open)}>
+<Dialog.Root
+  open={usageAccounts.dialogOpen}
+  onOpenChange={(open) => (usageAccounts.dialogOpen = open)}
+>
   <Dialog.Content class="max-h-[85vh] gap-4 overflow-y-auto p-5 sm:max-w-md">
     <Dialog.Header>
       <Dialog.Title class="text-base">Usage</Dialog.Title>
@@ -138,13 +141,13 @@
 
     <div class="text-muted-foreground flex items-center gap-2 text-xs">
       <span class="flex-1" role="status">
-        {usage.refreshing ? 'Asking a running chat for the latest usage…' : ''}
+        {usageAccounts.refreshing ? 'Asking a running chat for the latest usage…' : ''}
       </span>
       <button
         type="button"
         class="hover:bg-muted hover:text-foreground inline-flex h-7 items-center gap-1 rounded-md border px-2"
-        disabled={usage.refreshing}
-        onclick={() => void usage.refresh().catch(() => {})}
+        disabled={usageAccounts.refreshing}
+        onclick={() => void usageAccounts.refresh()}
       >
         <RefreshCwIcon class="size-3.5" aria-hidden="true" /> Refresh
       </button>

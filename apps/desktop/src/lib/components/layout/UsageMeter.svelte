@@ -10,7 +10,7 @@
    * reset time; amber at a warning, red while the limit refuses. Hidden while
    * nothing is known. Opens the Usage dialog.
    */
-  const { usage } = useApp();
+  const { usage, usageAccounts } = useApp();
 
   const w = $derived(usage.meter);
   const status = $derived(w ? windowStatus(w, usage.now) : undefined);
@@ -48,7 +48,7 @@
     aria-label={label}
     title="{label} · open Usage"
     data-usage-status={status ?? 'unknown'}
-    onclick={() => usage.open()}
+    onclick={() => usageAccounts.open()}
   >
     <GaugeIcon class="size-3.5" aria-hidden="true" />
     <span>{text}</span>

@@ -42,7 +42,7 @@
    */
   let { ref }: { ref: ChatRef } = $props();
 
-  const { tabs, settings, usage, scopes } = useApp();
+  const { tabs, settings, usage, usageAccounts, scopes } = useApp();
   /** The chat's machine (`ChatPane` shows it inside that machine's scope). */
   const scope = useScope();
   const { chats, interaction, scheduled } = scope;
@@ -537,7 +537,7 @@
               <button
                 type="button"
                 class="font-medium underline-offset-2 hover:underline"
-                onclick={() => usage.open()}>Usage</button
+                onclick={() => usageAccounts.open()}>Usage</button
               >
             </div>
           {/if}

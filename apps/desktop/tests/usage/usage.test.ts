@@ -1,15 +1,16 @@
-import type { ScheduledSend, UsageState } from '@threadgarden/protocol';
+import { RELAY_CLOSE, type ScheduledSend, type UsageState } from '@threadgarden/protocol';
 import { render, screen, waitFor, within } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import AgentsStrip from '../../src/lib/components/layout/AgentsStrip.svelte';
 import ChatList from '../../src/lib/components/layout/ChatList.svelte';
 import TabsBar from '../../src/lib/components/layout/TabsBar.svelte';
 import QuickSwitcher from '../../src/lib/components/QuickSwitcher.svelte';
 import UsageDialog from '../../src/lib/components/UsageDialog.svelte';
 import { clockTime } from '../../src/lib/format/usage';
+import { UsageStore } from '../../src/lib/state/usage.svelte';
 import { SID, fill, renderChat } from '../interaction/helpers';
-import { setup, summary } from '../layout/harness';
+import { M1, setup, setupTwoMachines, summary } from '../layout/harness';
 
 const HOUR = 3_600_000;
 
@@ -105,7 +106,7 @@ describe('usage meter and dialog', () => {
       s.handlers['usage.get'] = () => ({ windows: [], refused: [], rateLimitsAvailable: false });
     });
     render(UsageDialog, { context });
-    app.usage.open();
+    app.usageAccounts.open();
     const dialog = await screen.findByRole('dialog', { name: 'Usage' });
     await waitFor(() => expect(dialog.textContent).toMatch(/do not apply/));
   });
@@ -118,7 +119,61 @@ describe('usage meter and dialog', () => {
     await userEvent.keyboard('{Control>}k{/Control}');
     await screen.findByRole('combobox', { name: /search chats/i });
     await userEvent.keyboard('usage{Enter}');
-    expect(app.usage.dialogOpen).toBe(true);
+    expect(app.usageAccounts.dialogOpen).toBe(true);
+  });
+});
+
+describe('usage per machine', () => {
+  const KEY = `threadgarden.usage.${M1}`;
+  afterEach(() => localStorage.removeItem(KEY));
+
+  it('a remote store restores its last state from localStorage and keeps it after disconnect', async () => {
+    const saved = usageState({ account: { email: 'me@x.cz', kind: 'login' } });
+    localStorage.setItem(KEY, JSON.stringify(saved));
+    expect(new UsageStore({ remember: M1 }).value).toEqual(saved);
+
+    const fresh = usageState({ account: { email: 'me@x.cz', plan: 'max', kind: 'login' } });
+    fresh.windows[0]!.utilization = 77;
+    const { app, remote } = await setupTwoMachines({
+      configureRemote: (s) => {
+        s.handlers['usage.get'] = () => fresh;
+      },
+    });
+    const store = app.scopes.get(M1)!.usage;
+    await vi.waitFor(() => expect(store.value).toEqual(fresh));
+    expect(store.connected).toBe(true);
+    expect(JSON.parse(localStorage.getItem(KEY)!)).toEqual(fresh);
+
+    remote.drop(RELAY_CLOSE.unreachable);
+    await vi.waitFor(() => expect(store.connected).toBe(false));
+    expect(store.value).toEqual(fresh);
+    // The next start begins from it.
+    expect(new UsageStore({ remember: M1 }).value).toEqual(fresh);
+  });
+
+  it('the account entries follow every machine, named as the app names them', async () => {
+    const me = usageState({ account: { email: 'me@x.cz', kind: 'login' } });
+    const { app, remote } = await setupTwoMachines({
+      configure: (s) => {
+        s.handlers['usage.get'] = () => me;
+      },
+      configureRemote: (s) => {
+        s.handlers['usage.get'] = () => me;
+      },
+    });
+    await vi.waitFor(() =>
+      expect(app.usageAccounts.entries.map((e) => [e.key, e.machines.map((m) => m.name)])).toEqual([
+        ['email:me@x.cz', ['This PC', 'Ubuntu PC']],
+      ]),
+    );
+
+    remote.push('usage.changed', usageState({ account: { email: 'work@y.cz', kind: 'login' } }));
+    await vi.waitFor(() =>
+      expect(app.usageAccounts.entries.map((e) => [e.key, e.machines.map((m) => m.name)])).toEqual([
+        ['email:me@x.cz', ['This PC']],
+        ['email:work@y.cz', ['Ubuntu PC']],
+      ]),
+    );
   });
 });
 
