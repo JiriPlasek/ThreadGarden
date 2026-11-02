@@ -40,6 +40,12 @@ const message = (
 });
 
 const DAY_MS = 86_400_000;
+/**
+ * History ends this long before `now`: a transcript changed in the last 2 minutes
+ * is taken for one in use in a terminal, and resuming it asks first (e2e flaked
+ * whenever the time-weighted dates put a session there).
+ */
+const HISTORY_GAP_MS = 10 * 60_000;
 const MODELS = ['claude-sonnet-4-5', 'claude-opus-4-1', 'claude-haiku-4-5'];
 const TOOLS = ['Read', 'Read', 'Read', 'Edit', 'Edit', 'Bash', 'Bash', 'Grep', 'Glob', 'Write'];
 const TOOLS_RARE = ['TodoWrite', 'WebFetch', 'MultiEdit', 'NotebookEdit'];
@@ -159,7 +165,10 @@ export const generateCorpus = (o: {
       const start = starts[i] as number;
       const end = enrich(sessionId, messages, richNext, start);
       // Strictly increasing, so lists keep the plain corpus's order (UI tests rely on it).
-      lastModified = Math.max(Math.min(end, o.recent.now - (o.sessions - i)), lastModified + 1);
+      lastModified = Math.max(
+        Math.min(end, o.recent.now - HISTORY_GAP_MS - (o.sessions - i)),
+        lastModified + 1,
+      );
       info.createdAt = start;
       info.lastModified = lastModified;
     }
