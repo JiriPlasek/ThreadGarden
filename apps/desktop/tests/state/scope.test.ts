@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { PROTOCOL_VERSION } from '@threadgarden/protocol';
 import { relayUrl } from '../../src/lib/state/machines.svelte';
 import { samePlace, wirePlace } from '../../src/lib/state/places.svelte';
 import { chatKey, LOCAL_FALLBACK_ID, parseChatKey } from '../../src/lib/state/refs';
@@ -266,7 +267,7 @@ describe('machine scopes', () => {
 
   it("without a machine in the local hello, This PC is '" + LOCAL_FALLBACK_ID + "'", async () => {
     const { app } = await setup((s) => {
-      s.handlers.hello = () => ({ serviceVersion: '0.1.0', protocolVersion: 7 });
+      s.handlers.hello = () => ({ serviceVersion: '0.1.0', protocolVersion: PROTOCOL_VERSION });
     });
     expect(app.scopes.local().machineId).toBe('local');
     app.tabs.openTab('a');

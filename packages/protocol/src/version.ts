@@ -11,5 +11,6 @@
  * 5 — machines: machine identity in hello, devices, pairing, relay.
  * 6 — power: switching a machine on and off through a Tasmota switch.
  * 7 — projects: folders, New project, Clone.
+ * 8 — usage per account: the signed-in account on the usage state.
  */
-export const PROTOCOL_VERSION = 7;
+export const PROTOCOL_VERSION = 8;

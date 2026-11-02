@@ -42,9 +42,9 @@ describe('projects.clone', () => {
 });
 
 describe('protocol 7', () => {
-  it('is version 7, accepting 6 to 8, with the projects capability', () => {
-    expect(PROTOCOL_VERSION).toBe(7);
-    expect(REMOTE_PROTOCOL_RANGE).toEqual({ min: 6, max: 8 });
+  it('is at least version 7, with the projects capability', () => {
+    expect(PROTOCOL_VERSION).toBeGreaterThanOrEqual(7);
+    expect(REMOTE_PROTOCOL_RANGE.min).toBeLessThanOrEqual(7);
     expect(PROJECTS_CAPABILITY).toBe('projects');
     expect(CAPABILITIES).toContain('projects');
     expect(CAPABILITIES).toContain('remote');

@@ -45,6 +45,18 @@ export const RefusedChatSchema = z.object({
 });
 export type RefusedChat = z.infer<typeof RefusedChatSchema>;
 
+/** The account a usage reading belongs to, as the service last saw it sign in. */
+export const UsageAccountSchema = z.object({
+  email: z.string().optional(),
+  /** claude.ai plan (`pro`, `max`, …) when known. */
+  plan: z.string().optional(),
+  /** Unknown kinds from a newer service read as `login`. */
+  kind: z.enum(['login', 'apiKey', 'provider']).catch('login'),
+  /** The provider (`bedrock`, `vertex`, …) when `kind` is `provider`. */
+  provider: z.string().optional(),
+});
+export type UsageAccount = z.infer<typeof UsageAccountSchema>;
+
 export const UsageStateSchema = z.object({
   windows: z.array(UsageWindowSchema).default([]),
   /** claude.ai plan (`pro`, `max`, …) when the usage reading reported one. */
@@ -52,6 +64,8 @@ export const UsageStateSchema = z.object({
   /** False: plan limits do not apply (API key, Bedrock, Vertex). Absent: not known. */
   rateLimitsAvailable: z.boolean().optional(),
   refused: z.array(RefusedChatSchema).default([]),
+  /** Whose usage this is. Absent when not known (an older service). */
+  account: UsageAccountSchema.optional(),
 });
 export type UsageState = z.infer<typeof UsageStateSchema>;
 
