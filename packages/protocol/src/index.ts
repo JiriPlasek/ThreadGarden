@@ -8,5 +8,6 @@ export * from './usage.js';
 export * from './analytics.js';
 export * from './machines.js';
 export * from './power.js';
+export * from './projects.js';
 export * from './methods.js';
 export * from './envelope.js';

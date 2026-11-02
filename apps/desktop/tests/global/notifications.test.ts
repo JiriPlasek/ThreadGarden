@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { FOCUS_OPENS_WITHIN_MS, startAttention } from '../../src/lib/notifications';
+import { startAttention } from '../../src/lib/notifications';
 import { here, M1, setup, setupTwoMachines, summary } from '../layout/harness';
-import { RpcFail } from '../service/fake-ws';
 
 type ListParams = { place: { kind: string } };
 
@@ -26,7 +25,6 @@ const start = async (configure?: Parameters<typeof setup>[0]) => {
     void [title, body, chatKey];
   });
   const setTrayNeedsYou = vi.fn(async (n: number) => void n);
-  let now = 1_000_000;
   const stop = startAttention({
     scopes: env.app.scopes,
     machines: env.app.machines,
@@ -35,10 +33,9 @@ const start = async (configure?: Parameters<typeof setup>[0]) => {
     places: env.app.places,
     notify,
     setTrayNeedsYou,
-    now: () => now,
   });
   stops.push(stop);
-  return { ...env, notify, setTrayNeedsYou, advance: (ms: number) => (now += ms) };
+  return { ...env, notify, setTrayNeedsYou };
 };
 
 const stops: (() => void)[] = [];
@@ -81,42 +78,28 @@ describe('notifications', () => {
     expect(env.notify).toHaveBeenCalledTimes(2);
   });
 
-  it('focus soon after a notification selects Needs you and opens the only waiting chat', async () => {
+  it('focus after a notification keeps the place and the open tab', async () => {
+    const listed: string[] = [];
     const env = await start((server) => {
-      server.handlers['sessions.list'] = (p) =>
-        (p as ListParams).place.kind === 'needsYou'
-          ? { items: [summary('s2', { status: 'needsYou', live: true })] }
-          : { items: [] };
+      server.handlers['sessions.list'] = (p) => {
+        listed.push((p as ListParams).place.kind);
+        return { items: [summary('s2', { status: 'needsYou', live: true })] };
+      };
     });
+    env.app.places.select({ kind: 'active' });
+    env.app.tabs.openTab('s9');
     window.dispatchEvent(new Event('blur'));
     env.server.push('needsYou', needsYou('s2'));
     await flush();
     expect(env.notify).toHaveBeenCalledTimes(1);
 
-    env.advance(5_000);
+    listed.length = 0;
     window.dispatchEvent(new Event('focus'));
-    await vi.waitFor(() => expect(env.app.tabs.active).toBe(here('s2')));
-    expect(env.app.places.selected).toEqual({ kind: 'needsYou' });
-  });
-
-  it('focus soon after a notification about the open chat keeps the place', async () => {
-    const env = await start((server) => {
-      server.handlers['sessions.list'] = (p) =>
-        (p as ListParams).place.kind === 'needsYou'
-          ? { items: [summary('s2', { status: 'needsYou', live: true })] }
-          : { items: [] };
-    });
-    env.app.tabs.openTab('s2');
-    window.dispatchEvent(new Event('blur'));
-    env.server.push('needsYou', needsYou('s2'));
     await flush();
-    expect(env.notify).toHaveBeenCalledTimes(1);
-
-    env.advance(5_000);
-    window.dispatchEvent(new Event('focus'));
     await flush();
     expect(env.app.places.selected).toEqual({ kind: 'active' });
-    expect(env.app.tabs.active).toBe(here('s2'));
+    expect(env.app.tabs.active).toBe(here('s9'));
+    expect(listed).not.toContain('needsYou');
   });
 
   it('focus long after a notification changes nothing', async () => {
@@ -124,32 +107,38 @@ describe('notifications', () => {
     window.dispatchEvent(new Event('blur'));
     env.server.push('needsYou', needsYou('s2'));
     await flush();
-    env.advance(FOCUS_OPENS_WITHIN_MS + 1);
     window.dispatchEvent(new Event('focus'));
     await flush();
     expect(env.app.places.selected).toEqual({ kind: 'active' });
     expect(env.app.tabs.active).toBeNull();
   });
 
-  it('several chats waiting: focus selects Needs you without opening one', async () => {
+  it('several chats waiting: focus keeps the place and the open tab', async () => {
+    const listed: string[] = [];
     const env = await start((server) => {
-      server.handlers['sessions.list'] = (p) =>
-        (p as ListParams).place.kind === 'needsYou'
-          ? {
-              items: [
-                summary('s2', { status: 'needsYou', live: true }),
-                summary('s3', { status: 'needsYou', live: true }),
-              ],
-            }
-          : { items: [] };
+      server.handlers['sessions.list'] = (p) => {
+        listed.push((p as ListParams).place.kind);
+        return {
+          items: [
+            summary('s2', { status: 'needsYou', live: true }),
+            summary('s3', { status: 'needsYou', live: true }),
+          ],
+        };
+      };
     });
+    env.app.places.select({ kind: 'active' });
+    env.app.tabs.openTab('s9');
     window.dispatchEvent(new Event('blur'));
     env.server.push('needsYou', needsYou('s2'));
+    env.server.push('needsYou', needsYou('s3'));
     await flush();
+    listed.length = 0;
     window.dispatchEvent(new Event('focus'));
-    await vi.waitFor(() => expect(env.app.places.selected).toEqual({ kind: 'needsYou' }));
     await flush();
-    expect(env.app.tabs.active).toBeNull();
+    await flush();
+    expect(env.app.places.selected).toEqual({ kind: 'active' });
+    expect(env.app.tabs.active).toBe(here('s9'));
+    expect(listed).not.toContain('needsYou');
   });
 
   it('chatFinished notifies only when the chat is not visible and the setting is on', async () => {
@@ -184,22 +173,28 @@ describe('notifications', () => {
     expect(env.notify).toHaveBeenCalledTimes(3);
   });
 
-  it('focus soon after a finish notification opens the chat when it is the only one waiting', async () => {
+  it('focus after a finish notification keeps the place and the open tab', async () => {
+    const listed: string[] = [];
     const env = await start((server) => {
-      server.handlers['sessions.list'] = (p) =>
-        (p as ListParams).place.kind === 'needsYou'
-          ? { items: [summary('s2', { status: 'idle', live: true, unread: true })] }
-          : { items: [] };
+      server.handlers['sessions.list'] = (p) => {
+        listed.push((p as ListParams).place.kind);
+        return { items: [summary('s2', { status: 'idle', live: true, unread: true })] };
+      };
     });
+    env.app.places.select({ kind: 'active' });
+    env.app.tabs.openTab('s9');
     window.dispatchEvent(new Event('blur'));
     env.server.push('chatFinished', finished('s2'));
     await flush();
     expect(env.notify).toHaveBeenCalledTimes(1);
 
-    env.advance(5_000);
+    listed.length = 0;
     window.dispatchEvent(new Event('focus'));
-    await vi.waitFor(() => expect(env.app.tabs.active).toBe(here('s2')));
-    expect(env.app.places.selected).toEqual({ kind: 'needsYou' });
+    await flush();
+    await flush();
+    expect(env.app.places.selected).toEqual({ kind: 'active' });
+    expect(env.app.tabs.active).toBe(here('s9'));
+    expect(listed).not.toContain('needsYou');
   });
 
   it('tray badge follows the needs-you count', async () => {
@@ -326,43 +321,28 @@ describe('notifications across machines', () => {
     expect(notify).toHaveBeenCalledTimes(1);
   });
 
-  it('focus soon after a notification opens the only waiting chat on its machine', async () => {
+  it('focus after a notification keeps the place and the open tab', async () => {
+    const listed: string[] = [];
     const { app, remote, notify } = await startTwo({
       configureRemote: (s) => {
-        s.handlers['sessions.list'] = (p) =>
-          (p as ListParams).place.kind === 'needsYou'
-            ? { items: [summary('s1', { status: 'needsYou', live: true })] }
-            : { items: [] };
-      },
-    });
-    window.dispatchEvent(new Event('blur'));
-    remote.push('needsYou', needsYou('s1'));
-    await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
-    window.dispatchEvent(new Event('focus'));
-    await vi.waitFor(() => expect(app.tabs.active).toBe(`${M1}/s1`));
-    expect(app.places.selected).toEqual({ kind: 'needsYou' });
-  });
-
-  it('a machine failing to list Needs you does not stop the click opening This PC’s chat', async () => {
-    const { app, server, notify } = await startTwo({
-      configure: (s) => {
-        s.handlers['sessions.list'] = (p) =>
-          (p as ListParams).place.kind === 'needsYou'
-            ? { items: [summary('s2', { status: 'needsYou', live: true })] }
-            : { items: [] };
-      },
-      configureRemote: (s) => {
         s.handlers['sessions.list'] = (p) => {
-          if ((p as ListParams).place.kind === 'needsYou') throw new RpcFail('INTERNAL', 'boom');
-          return { items: [] };
+          listed.push((p as ListParams).place.kind);
+          return { items: [summary('s1', { status: 'needsYou', live: true })] };
         };
       },
     });
+    app.places.select({ kind: 'active' });
+    app.tabs.openTab('s9');
     window.dispatchEvent(new Event('blur'));
-    server.push('needsYou', needsYou('s2'));
+    remote.push('needsYou', needsYou('s1'));
     await vi.waitFor(() => expect(notify).toHaveBeenCalledTimes(1));
+    listed.length = 0;
     window.dispatchEvent(new Event('focus'));
-    await vi.waitFor(() => expect(app.tabs.active).toBe(here('s2')));
+    await flush();
+    await flush();
+    expect(app.places.selected).toEqual({ kind: 'active' });
+    expect(app.tabs.active).toBe(here('s9'));
+    expect(listed).not.toContain('needsYou');
   });
 
   it('a removed machine no longer notifies', async () => {

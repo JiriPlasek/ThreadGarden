@@ -6,6 +6,7 @@ import { WebSocket } from 'ws';
 import { methods } from '@threadgarden/protocol';
 import { startService, type ServiceHandle } from '../../src/main.js';
 import { generateCorpus } from '../../src/testing/corpus.js';
+import { fakeTools } from '../projects/fake-tools.js';
 
 /**
  * Ruling R14: a paired device has full control of the chats, but never of the
@@ -37,6 +38,7 @@ describe('methods a paired device may not call', () => {
       adapter: generateCorpus({ sessions: 1, projects: 1, bigSessionMessages: 0 }),
       installSignalHandlers: false,
       headless: true,
+      projectTools: fakeTools(),
       remote: { addresses: ['127.0.0.1'], port: 0 },
       logger: { debug() {}, info() {}, warn() {}, error() {}, flush: async () => {} },
     });
@@ -89,6 +91,25 @@ describe('methods a paired device may not call', () => {
       const res = await call(ws, method, {});
       expect(res).toMatchObject({ error: { code: 'FORBIDDEN' } });
       expect(res).not.toHaveProperty('result');
+    } finally {
+      ws.close();
+    }
+  });
+
+  const projectMethods = Object.keys(methods).filter((m) =>
+    /^(folders|github)\.|^projects\.(createIn|create|clone|job|cancel|origins)$/.test(m),
+  );
+
+  it('covers all 11 projects, folders and github methods', () => {
+    expect(projectMethods).toHaveLength(11);
+  });
+
+  it.each(projectMethods)('does not forbid %s to a paired device', async (method) => {
+    const ws = await open(svc.remote!.port, device.token);
+    try {
+      const res = await call(ws, method, {});
+      expect(res).not.toMatchObject({ error: { code: 'FORBIDDEN' } });
+      expect(res).not.toMatchObject({ error: { code: 'METHOD_NOT_FOUND' } });
     } finally {
       ws.close();
     }

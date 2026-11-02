@@ -28,6 +28,13 @@ import {
   ProbeResultSchema,
   SwitchDeviceSchema,
 } from './power.js';
+import {
+  CloneJobSchema,
+  FolderListingSchema,
+  GithubStatusSchema,
+  ProjectNameSchema,
+  RepoSchema,
+} from './projects.js';
 import { ChatTaskSchema } from './tasks.js';
 import { ScheduledSendSchema, UsageStateSchema } from './usage.js';
 
@@ -470,6 +477,61 @@ export const methods = {
   'power.status': def(empty, MachinePowerStatusSchema),
   'power.keepAwake': def(KeepAwakeSchema, MachinePowerStatusSchema),
   'power.shutdown': def(z.object({ force: z.boolean() }), MachinePowerStatusSchema),
+  // ── projects (protocol 7) ──────────────────────────────────────────────────
+  // All run on the machine the project lives on, open to paired devices.
+  /** Lists the sub-folders of `path` (`~` allowed). Errors: `NOT_FOUND`, `NOT_A_FOLDER`, `PERMISSION`. */
+  'folders.list': def(z.object({ path: z.string().min(1).max(4096) }), FolderListingSchema),
+  /** Completes a partly typed path to the folders that continue it (at most 50). */
+  'folders.complete': def(
+    z.object({ partial: z.string().min(1).max(4096) }),
+    z.object({ matches: z.array(z.string()).max(50) }),
+  ),
+  /** Makes the folder `name` in `parent`. Errors: `INVALID_NAME`, `NOT_FOUND`, `EXISTS`, `PERMISSION`. */
+  'folders.create': def(
+    z.object({ parent: z.string().min(1).max(4096), name: ProjectNameSchema }),
+    z.object({ path: z.string() }),
+  ),
+  /** Where new projects go: the one used last, else the default. */
+  'projects.createIn': def(empty, z.object({ path: z.string() })),
+  /**
+   * Creates the project folder `name` in `createIn`, runs `git init`, and with
+   * `github` also a private GitHub repository. `repo` is its full name; `problem`
+   * says why the GitHub part was skipped or failed while the folder stays.
+   * Errors: `INVALID_NAME`, `NOT_FOUND`, `EXISTS`, `PERMISSION`, `GIT_FAILED`, `GH_NOT_READY`.
+   */
+  'projects.create': def(
+    z.object({
+      createIn: z.string().min(1).max(4096),
+      name: ProjectNameSchema,
+      github: z.boolean(),
+    }),
+    z.object({ path: z.string(), repo: z.string().nullable(), problem: z.string().nullable() }),
+  ),
+  /**
+   * Starts cloning `repo` (`owner/name`) into `createIn`; poll `projects.job`.
+   * `existing`: the machine already has it, at `path`.
+   * Errors: `GH_NOT_READY`, `NOT_FOUND`, `PERMISSION`, `REPO_EXISTS`, `GH_FAILED`.
+   */
+  'projects.clone': def(
+    z.object({
+      createIn: z.string().min(1).max(4096),
+      repo: z.string().regex(/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/),
+    }),
+    z.discriminatedUnion('status', [
+      z.object({ status: z.literal('started'), job: CloneJobSchema }),
+      z.object({ status: z.literal('existing'), path: z.string() }),
+    ]),
+  ),
+  /** A clone job's state; `failed` carries `error` (a git or `gh` failure, `GIT_FAILED`/`GH_FAILED`). */
+  'projects.job': def(z.object({ jobId: z.string() }), CloneJobSchema),
+  /** Stops a running clone and removes what it had fetched. */
+  'projects.cancel': def(z.object({ jobId: z.string() }), empty),
+  /** Lower-case `owner/name` of the GitHub origins of this machine's projects. */
+  'projects.origins': def(empty, z.object({ repos: z.array(z.string()) })),
+  /** Whether `gh` is installed and signed in on this machine. */
+  'github.status': def(empty, GithubStatusSchema),
+  /** The signed-in account's repositories, most recently updated first. Errors: `GH_NOT_READY`, `GH_FAILED`. */
+  'github.repos': def(empty, z.object({ repos: z.array(RepoSchema) })),
 } as const;
 
 export type MethodName = keyof typeof methods;

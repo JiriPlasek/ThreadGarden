@@ -302,6 +302,9 @@
 </script>
 
 <div class="relative flex min-h-0 flex-1 flex-col">
+  <!-- Never a horizontal scrollbar: a row wider than the list would show one only while
+       it is rendered, and the scrollbar moves the bottom, so following the bottom could
+       render and unrender that row forever (effect_update_depth_exceeded). -->
   <div
     bind:this={viewport}
     bind:clientHeight={measuredHeight}
@@ -311,7 +314,7 @@
     role="region"
     aria-label="Messages"
     tabindex="-1"
-    class="min-h-0 flex-1 overflow-y-auto outline-none [overflow-anchor:none]"
+    class="min-h-0 flex-1 overflow-x-hidden overflow-y-auto outline-none [overflow-anchor:none]"
   >
     <div class="relative" style:height="{total}px">
       <div

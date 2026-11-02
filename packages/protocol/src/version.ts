@@ -10,5 +10,6 @@
  *   one copies pahub's data over as it starts.
  * 5 — machines: machine identity in hello, devices, pairing, relay.
  * 6 — power: switching a machine on and off through a Tasmota switch.
+ * 7 — projects: folders, New project, Clone.
  */
-export const PROTOCOL_VERSION = 6;
+export const PROTOCOL_VERSION = 7;

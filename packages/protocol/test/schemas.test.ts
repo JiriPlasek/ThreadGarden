@@ -51,8 +51,8 @@ const sampleItems = [
 
 describe('protocol schemas', () => {
   it('exposes the protocol version', () => {
-    expect(PROTOCOL_VERSION).toBe(6);
-    expect([4, 5, 6, 7, 8].map(acceptsRemoteProtocol)).toEqual([false, true, true, true, false]);
+    expect(PROTOCOL_VERSION).toBe(7);
+    expect([5, 6, 7, 8, 9].map(acceptsRemoteProtocol)).toEqual([false, true, true, true, false]);
   });
 
   it('accepts every ChatItem kind', () => {
@@ -85,6 +85,17 @@ describe('protocol schemas', () => {
     const expected = [
       'hello',
       'places.counts',
+      'folders.complete',
+      'folders.create',
+      'folders.list',
+      'github.repos',
+      'github.status',
+      'projects.cancel',
+      'projects.clone',
+      'projects.create',
+      'projects.createIn',
+      'projects.job',
+      'projects.origins',
       'power.adopt',
       'power.configure',
       'power.keepAwake',

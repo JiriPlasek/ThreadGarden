@@ -19,20 +19,17 @@
  *
  * Marking a finished chat seen is `YourTurnState`'s job.
  *
- * The notification plugin cannot report clicks (ruling R26). Clicking a
- * notification focuses Threadgarden, so when the window gains focus within
- * `FOCUS_OPENS_WITHIN_MS` of a notification, Threadgarden selects "Needs you" and
- * opens the waiting chat if it is the only one (on any machine), unless every
- * notification was about the open chat: that one is in front already, so the
- * place stays.
+ * The notification plugin cannot report clicks (ruling R26), and the window
+ * gaining focus is not taken for one: coming back to Threadgarden changes
+ * neither the selected place nor the open tab.
  *
  * Remote machines: every machine's scope gets a watcher of its own (started
  * when the machine appears, stopped when it goes), so every machine's chats
  * notify; a notification is known by its chat key (`machineId/sessionId`), and
  * with more than one machine one from another machine names it first
- * ("Ubuntu PC · tg-cli · needs permission"). The window's focus, the
- * notification click and the tray badge are watched once: the badge shows This
- * PC's Needs you count, which already adds up every machine's.
+ * ("Ubuntu PC · tg-cli · needs permission"). The window's focus and the tray
+ * badge are watched once: the badge shows This PC's Needs you count, which
+ * already adds up every machine's.
  */
 import type { ChatStatus, ChatSummary } from '@threadgarden/protocol';
 import { baseName } from './components/layout/chat-info';
@@ -41,12 +38,10 @@ import { quietly } from './state/api';
 import { machineLabel, machineNameOf, type MachinesState } from './state/machines.svelte';
 import type { PowerState } from './state/power.svelte';
 import type { PlacesState } from './state/places.svelte';
-import { chatKey, type ChatRef } from './state/refs';
+import { chatKey } from './state/refs';
 import type { MachineScope, Scopes } from './state/scope';
 import type { SettingsState } from './state/settings.svelte';
 import type { TabsState } from './state/tabs.svelte';
-
-export const FOCUS_OPENS_WITHIN_MS = 30_000;
 
 /** `uiState` key: the chats whose return from hold was announced (v1.2 §3). */
 export const HOLDS_ANNOUNCED_KEY = 'holds.announced';
@@ -65,16 +60,12 @@ export type AttentionDeps = {
   settings: Pick<SettingsState, 'value'>;
   /** Power control: a machine whose idle shutdown is paused by unpushed work notifies once (Task 15). */
   power?: Pick<PowerState, 'onBlocked' | 'watchBlocked' | 'needsYouCount'>;
-  /** The tabs (chat keys). */
-  tabs: Pick<TabsState, 'active' | 'openTab'>;
-  /**
-   * This PC's places: where a notification click selects Needs you, and the
-   * tray count (Needs you summed across machines).
-   */
-  places: Pick<PlacesState, 'select' | 'subscribeCounts'>;
+  /** The tabs (chat keys): the active one is the chat in front of the user. */
+  tabs: Pick<TabsState, 'active'>;
+  /** This PC's places: the tray count (Needs you summed across machines). */
+  places: Pick<PlacesState, 'subscribeCounts'>;
   notify?: typeof nativeNotify;
   setTrayNeedsYou?: typeof nativeSetTray;
-  now?: () => number;
   win?: Window;
   /** How long live returns from hold are gathered into one notification (tests shorten it). */
   backFromHoldBatchMs?: number;
@@ -82,47 +73,16 @@ export type AttentionDeps = {
 
 /** Starts watching every machine; returns a function that stops. */
 export const startAttention = (deps: AttentionDeps): (() => void) => {
-  const { scopes, tabs, places } = deps;
+  const { scopes, places } = deps;
   const setTray = deps.setTrayNeedsYou ?? nativeSetTray;
-  const now = deps.now ?? Date.now;
   const win = deps.win ?? window;
   const doc = win.document;
 
   const shared: AttentionShared = {
     focused: doc.visibilityState !== 'hidden' && doc.hasFocus(),
-    notifiedAt: null,
-    notified: new Set(),
     reporters: new Set(),
   };
   let badge = -1;
-
-  /** The user came back soon after a notification: show what is waiting, on every machine. */
-  const openNotified = async (): Promise<void> => {
-    const at = shared.notifiedAt;
-    const about = shared.notified;
-    shared.notifiedAt = null;
-    shared.notified = new Set();
-    if (at === null || now() - at > FOCUS_OPENS_WITHIN_MS) return;
-    // Every notification was about the open chat: it is in front now, so the place stays.
-    if (tabs.active !== null && [...about].every((key) => key === tabs.active)) return;
-    // Finished chats are listed there too, below the ones waiting on an answer.
-    places.select({ kind: 'needsYou' });
-    // A machine that cannot answer is left out; the others still count.
-    const lists = await Promise.allSettled(
-      scopes
-        .all()
-        .filter((s) => s.api.status === 'open')
-        .map(async (s): Promise<ChatRef[]> => {
-          const { items } = await s.api.request('sessions.list', {
-            place: { kind: 'needsYou' },
-            limit: 2,
-          });
-          return items.map((c) => ({ machineId: s.machineId, sessionId: c.sessionId }));
-        }),
-    );
-    const waiting = lists.flatMap((r) => (r.status === 'fulfilled' ? r.value : []));
-    if (waiting.length === 1) tabs.openTab(waiting[0]!);
-  };
 
   const reportAll = (): void => {
     for (const report of shared.reporters) report();
@@ -130,7 +90,6 @@ export const startAttention = (deps: AttentionDeps): (() => void) => {
   const onFocus = (): void => {
     shared.focused = true;
     reportAll();
-    quietly(openNotified());
   };
   const onBlur = (): void => {
     shared.focused = false;
@@ -169,13 +128,9 @@ export const startAttention = (deps: AttentionDeps): (() => void) => {
   };
 };
 
-/** What the watchers of every machine share: the window's focus and the last notification. */
+/** What the watchers of every machine share: the window's focus. */
 type AttentionShared = {
   focused: boolean;
-  /** When the last notification went out (any machine's), until the window is focused. */
-  notifiedAt: number | null;
-  /** The chats (keys) notified about since the window was last focused. */
-  notified: Set<string>;
   /** Each machine's `ui.visibility` reporter, run when the focus changes. */
   reporters: Set<(force?: boolean) => void>;
 };
@@ -185,7 +140,6 @@ const watch = (scope: MachineScope, deps: AttentionDeps, shared: AttentionShared
   const { api, places } = scope;
   const { settings, tabs, machines } = deps;
   const notify = deps.notify ?? nativeNotify;
-  const now = deps.now ?? Date.now;
   const local = scope === deps.scopes.local();
 
   let reported: boolean | null = null;
@@ -208,8 +162,6 @@ const watch = (scope: MachineScope, deps: AttentionDeps, shared: AttentionShared
     return text ? `${machineLabel(m)} · ${text}` : machineLabel(m);
   };
   const say = (title: string, text: string, sessionId: string): void => {
-    shared.notifiedAt = now();
-    shared.notified.add(keyOf(sessionId));
     quietly(notify(title, body(text), keyOf(sessionId)));
   };
 
@@ -318,7 +270,6 @@ const watch = (scope: MachineScope, deps: AttentionDeps, shared: AttentionShared
       ? [
           deps.power.onBlocked((id) => {
             if (id !== scope.machineId || !settings.value.notifications) return;
-            shared.notifiedAt = now();
             const name = machineNameOf(machines, id);
             quietly(notify(`Unpushed work on ${name} — shutdown is paused`, '', id));
           }),

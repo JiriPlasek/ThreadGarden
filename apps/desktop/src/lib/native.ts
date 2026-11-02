@@ -112,8 +112,8 @@ export const powerPasswords = {
 /**
  * Shows an OS notification. The notification plugin cannot report clicks back
  * (ruling R26): the chat's key (`machineId/sessionId`, see `chatKey`) rides
- * along in `extra` for platforms that might, and `notifications.ts` opens the
- * chat when the window gains focus soon after.
+ * along in `extra` for platforms that might. The window gaining focus is not
+ * taken for a click: coming back to the window changes nothing.
  */
 export const notify = async (title: string, body: string, chatKey: string): Promise<void> => {
   if (!isTauri) return;

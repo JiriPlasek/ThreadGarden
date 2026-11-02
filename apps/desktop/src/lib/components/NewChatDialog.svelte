@@ -1,13 +1,25 @@
 <script lang="ts">
-  import type { ImageRef, Project } from '@threadgarden/protocol';
-  import FolderOpenIcon from '@lucide/svelte/icons/folder-open';
+  import type { ImageRef, Project, Result } from '@threadgarden/protocol';
   import { untrack } from 'svelte';
   import { buildFlags } from '#lib/build-flags.js';
   import Composer from '#lib/components/composer/Composer.svelte';
   import InScope from '#lib/components/InScope.svelte';
+  import CloneTab from '#lib/components/new-chat/CloneTab.svelte';
+  import ExistingFolderTab from '#lib/components/new-chat/ExistingFolderTab.svelte';
+  import NewProjectTab from '#lib/components/new-chat/NewProjectTab.svelte';
+  import {
+    errorText,
+    moveDraft,
+    noteMissingClaude,
+    notStartedText,
+    sendOf,
+    startInMade,
+    type MadeFolder,
+    type NotStarted,
+    type Send,
+  } from '#lib/components/new-chat/start.js';
   import * as Dialog from '#lib/components/ui/dialog/index.js';
-  import { isTauri, pickFolder } from '#lib/native.js';
-  import { RequestError } from '#lib/service/client.js';
+  import { nameProblem, projectsApi, supportsProjects } from '#lib/projects.js';
   import { useApp } from '#lib/state/context.js';
   import { machineLabel, machineNameOf } from '#lib/state/machines.svelte.js';
   import { newChatDraftKey, type ModelChoice } from '#lib/state/interaction.svelte.js';
@@ -22,8 +34,14 @@
    * With more than one machine, a Machine select comes first (the machines
    * that are on; the selected project's machine, else This PC, by default):
    * the folders are that machine's projects plus its home folder, the chat
-   * starts there and the composer talks to it. The folder picker is This
-   * PC's only.
+   * starts there and the composer talks to it.
+   *
+   * Tabs under it say what is starting: an Existing folder, a New project
+   * (made first, then the chat starts in it) or a Clone (the Clone tab
+   * clones and follows the job, then the chat starts in the clone). Model,
+   * Permission mode and the composer are shared by all three; this dialog
+   * keeps the tab and sends by it. A machine whose service predates projects offers
+   * only Existing folder, without Browse….
    */
   const { interaction, places, tabs, settings, scopes, machines, power } = useApp();
 
@@ -39,6 +57,13 @@
     Number(b.pinned) - Number(a.pinned) ||
     b.lastActivity - a.lastActivity ||
     a.displayName.localeCompare(b.displayName);
+
+  type Tab = 'existing' | 'new' | 'clone';
+  const TABS: { id: Tab; label: string }[] = [
+    { id: 'existing', label: 'Existing folder' },
+    { id: 'new', label: 'New project' },
+    { id: 'clone', label: 'Clone' },
+  ];
 
   const local = scopes.local();
   /** The chosen machine (This PC's id until the dialog opens). */
@@ -74,8 +99,26 @@
   /** Another machine's home folder (its service reports it). */
   const home = $derived(onThisPc ? null : (machines.get(scope.machineId)?.info?.home ?? null));
 
+  let tab = $state<Tab>('existing');
+  /** This PC always can (its service is the app's own version). */
+  const supported = $derived(onThisPc || supportsProjects(machines.get(scope.machineId)));
+  const machineName = $derived(machineNameOf(machines, scope.machineId));
+  const updateHint = $derived(supported ? null : `Update ${machineName} to use this`);
+  const projectsOf = $derived(projectsApi(scope.api));
+  /** This PC's, for the Clone tab's "on This PC" marks. */
+  const localProjects = projectsApi(local.api);
+  let cloneTab = $state<ReturnType<typeof CloneTab>>();
+
   let cwd = $state('');
-  let picked = $state<string | null>(null);
+  /** A folder chosen with Browse…, on the machine it was chosen on. */
+  let picked = $state<{ machineId: string; path: string } | null>(null);
+  let name = $state('');
+  let createIn = $state('');
+  let github = $state(false);
+  /** A clone is running: the machine and the tab stay as they are until it ends (Ruling P11). */
+  let cloning = $state(false);
+  /** A folder made whose chat did not start (Start there). */
+  let made = $state<NotStarted | null>(null);
   let model = $state('');
   let mode = $state('default');
   let models = $state.raw<ModelChoice[]>([]);
@@ -93,9 +136,8 @@
   const folders = $derived.by(() => {
     const list = projects.map((p) => ({ path: p.path, label: p.displayName }));
     if (home && !list.some((f) => f.path === home)) list.push({ path: home, label: 'Home folder' });
-    const extra = [onThisPc ? picked : null, given].filter(
-      (p): p is string => !!p && !list.some((f) => f.path === p),
-    );
+    const mine = picked?.machineId === scope.machineId ? picked.path : null;
+    const extra = [mine, given].filter((p): p is string => !!p && !list.some((f) => f.path === p));
     return [...new Set(extra)].map((p) => ({ path: p, label: p })).concat(list);
   });
 
@@ -113,7 +155,14 @@
         machineId = next;
         cwd = firstFolder();
       });
+      tab = 'existing';
+      name = '';
+      // Create in is asked again from the machine each time the dialog opens.
+      createIn = '';
+      github = false;
+      cloning = false;
       error = null;
+      made = null;
       created = false;
     }
     wasOpen = open;
@@ -126,9 +175,17 @@
   const chooseMachine = (id: string): void => {
     machineId = id;
     cwd = firstFolder();
+    createIn = '';
+    github = false;
+    made = null;
     models = [];
     model = '';
   };
+
+  // A machine that can't make projects offers only Existing folder.
+  $effect(() => {
+    if (!supported && tab !== 'existing') tab = 'existing';
+  });
 
   // The chosen machine was removed while the dialog is open: back to This PC, with its folder.
   $effect(() => {
@@ -136,60 +193,128 @@
     untrack(() => chooseMachine(local.machineId));
   });
 
+  /** The folder the models are asked for: the chosen one, else where a new project goes. */
+  const modelsAt = $derived(cwd || createIn);
   let modelsFor = '';
   $effect(() => {
-    if (!interaction.newChat.open || !cwd) return;
+    if (!interaction.newChat.open || !modelsAt) return;
     const ask = scope.interaction;
-    const at = cwd;
+    const at = modelsAt;
     const key = `${scope.machineId}\n${at}`;
     if (modelsFor === key) return;
     modelsFor = key;
     ask
       .models(at)
       .then((list) => {
-        if (cwd === at && scope.interaction === ask) models = list;
+        if (modelsAt === at && scope.interaction === ask) models = list;
       })
       .catch(() => {});
   });
 
   const modelOptions = $derived(models.filter((m) => m.value !== 'default'));
 
-  const chooseFolder = async (): Promise<void> => {
-    const path = await pickFolder();
-    if (path) {
-      picked = path;
-      cwd = path;
-    }
+  /** A folder chosen with Browse… (or a made one) joins its machine's list, selected. */
+  const pickFolder = (path: string, on = scope.machineId): void => {
+    picked = { machineId: on, path };
+    cwd = path;
   };
 
-  const create = async (text: string, images: ImageRef[]): Promise<boolean> => {
-    error = null;
-    if (!cwd) {
+  /** New project's and Clone's drafts (their folder does not exist yet). */
+  const draftKey = $derived(
+    tab === 'existing'
+      ? newChatDraftKey(cwd)
+      : `new:${tab === 'new' ? 'project' : 'clone'}:${scope.machineId}`,
+  );
+  const composerCwd = $derived(tab === 'existing' ? cwd : createIn);
+
+  /** Starts the chat in `at` and opens it; throws what `chats.create` throws. */
+  const startChat = async ({ target, chat }: Send, at: string): Promise<void> => {
+    const id = await target.chats.create({ cwd: at, ...chat }).catch((err: unknown) => {
+      noteMissingClaude(target, err);
+      throw err;
+    });
+    created = true;
+    target.interaction.focusComposer(id);
+    tabs.openTab({ machineId: target.machineId, sessionId: id });
+    interaction.closeNewChat();
+  };
+
+  const startInFolder = async (send: Send, at = cwd): Promise<boolean> => {
+    if (!at) {
       error = 'Choose a folder for the chat first.';
       return false;
     }
-    const target = scope;
     try {
-      const id = await target.chats.create({
-        cwd,
-        text,
-        images,
-        ...(model ? { model } : {}),
-        ...(mode !== 'default' ? { permissionMode: mode } : {}),
-      });
-      created = true;
-      target.interaction.focusComposer(id);
-      tabs.openTab({ machineId: target.machineId, sessionId: id });
-      interaction.closeNewChat();
+      await startChat(send, at);
       return true;
     } catch (err) {
-      error = err instanceof Error ? err.message : String(err);
-      // Claude Code went missing: the status refresh brings up the setup screen.
-      if (err instanceof RequestError && err.code === 'CLAUDE_MISSING') {
-        target.interaction.loadStatus().catch(() => {});
-      }
+      error = errorText(err);
       return false;
     }
+  };
+
+  /** Makes the project, then starts the chat in it (`startInMade`). */
+  const startProject = async (send: Send): Promise<boolean> => {
+    if (!name || !createIn) {
+      error = name ? 'Choose where to create the project first.' : 'Name the project first.';
+      return false;
+    }
+    // The hint under the name already says what is wrong with it.
+    if (nameProblem(name)) return false;
+    const { target } = send;
+    const called = name;
+    let result: Result<'projects.create'>;
+    try {
+      result = await projectsApi(target.api).create({ createIn, name: called, github });
+    } catch (err) {
+      noteMissingClaude(target, err);
+      error = errorText(err);
+      return false;
+    }
+    return startInFolderMade(send, { name: called, ...result });
+  };
+
+  /** Clones the repo chosen in the Clone tab (which shows the progress), then starts the chat in it. */
+  const startClone = async (send: Send): Promise<boolean> => {
+    let cloned: MadeFolder | null;
+    try {
+      cloned = (await cloneTab?.submit(send)) ?? null;
+    } catch (err) {
+      noteMissingClaude(send.target, err);
+      error = errorText(err);
+      return false;
+    }
+    return cloned ? startInFolderMade(send, cloned) : false;
+  };
+
+  /** Starts the chat in a folder just made; when it doesn't start, the alert offers Start there. */
+  const startInFolderMade = async (send: Send, folder: MadeFolder): Promise<boolean> => {
+    made = await startInMade(send, folder, (at) => startChat(send, at));
+    if (made) error = notStartedText(made);
+    return !made;
+  };
+
+  /** Start there: back on the folder's machine, the folder selected in Existing folder. */
+  const startThere = (): void => {
+    const left = made;
+    const target = left && scopes.get(left.machineId);
+    if (!left || !target) return;
+    moveDraft(target.interaction, left);
+    if (left.machineId !== scope.machineId) chooseMachine(left.machineId);
+    pickFolder(left.path, left.machineId);
+    tab = 'existing';
+    made = null;
+    error = null;
+  };
+
+  /** Sends the first message the way the open tab starts a chat. */
+  const create = async (text: string, images: ImageRef[]): Promise<boolean> => {
+    error = null;
+    made = null;
+    const send = sendOf({ target: scope, draftKey, text, images, model, mode });
+    if (tab === 'new') return startProject(send);
+    if (tab === 'clone') return startClone(send);
+    return startInFolder(send);
   };
 
   /** `/model` and `/permissions` in the first message open this dialog's pickers (R25). */
@@ -224,11 +349,12 @@
       >
     </Dialog.Header>
 
-    <div class="grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-2 text-xs">
-      {#if machines.several}
+    {#if machines.several}
+      <div class="grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-2 text-xs">
         <label for="new-chat-machine" class="text-muted-foreground">Machine</label>
         <select
           id="new-chat-machine"
+          disabled={cloning}
           class={selectClass}
           value={scope.machineId}
           onchange={(e) => chooseMachine(e.currentTarget.value)}
@@ -240,33 +366,75 @@
             <option value={m.id}>{m.label}</option>
           {/each}
         </select>
-      {/if}
+      </div>
+    {/if}
 
-      <label for="new-chat-folder" class="text-muted-foreground">Folder</label>
-      <div class="flex min-w-0 gap-1.5">
-        <select id="new-chat-folder" class={selectClass} bind:value={cwd}>
-          {#if folders.length === 0}
-            <option value="">No projects yet: choose a folder</option>
-          {/if}
-          {#each folders as f (f.path)}
-            <option value={f.path} title={f.path}>{f.label}</option>
-          {/each}
-        </select>
+    <div role="tablist" aria-label="Start from" class="-mb-2 flex gap-1 border-b text-xs">
+      {#each TABS as t (t.id)}
         <button
           type="button"
-          class="hover:bg-muted flex h-8 shrink-0 items-center gap-1 rounded-md border px-2 disabled:opacity-50"
-          disabled={!isTauri || !onThisPc}
-          title={!onThisPc
-            ? 'Only for This PC'
-            : isTauri
-              ? 'Choose any folder'
-              : 'The folder picker needs the desktop app'}
-          onclick={() => void chooseFolder()}
+          role="tab"
+          id="new-chat-tab-{t.id}"
+          aria-selected={tab === t.id}
+          aria-controls="new-chat-panel"
+          disabled={(t.id !== 'existing' && !supported) || (cloning && t.id !== tab)}
+          title={t.id === 'existing' ? undefined : (updateHint ?? undefined)}
+          class="-mb-px border-b-2 px-2.5 py-1.5 disabled:opacity-50 {tab === t.id
+            ? 'border-primary text-foreground'
+            : 'text-muted-foreground hover:text-foreground border-transparent'}"
+          onclick={() => (tab = t.id)}>{t.label}</button
         >
-          <FolderOpenIcon class="size-4" aria-hidden="true" /> Choose folder…
-        </button>
-      </div>
+      {/each}
+    </div>
 
+    <div
+      id="new-chat-panel"
+      role="tabpanel"
+      aria-labelledby="new-chat-tab-{tab}"
+      class="grid gap-2"
+    >
+      {#if tab === 'existing'}
+        <ExistingFolderTab
+          {folders}
+          bind:cwd
+          {onThisPc}
+          api={projectsOf}
+          {machineName}
+          {home}
+          blocked={updateHint}
+          onPick={pickFolder}
+        />
+      {:else if tab === 'new'}
+        {#key scope.machineId}
+          <NewProjectTab
+            bind:name
+            bind:createIn
+            bind:github
+            api={projectsOf}
+            {onThisPc}
+            {machineName}
+            platform={machines.get(scope.machineId)?.info?.platform}
+            {home}
+          />
+        {/key}
+      {:else}
+        {#key scope.machineId}
+          <CloneTab
+            bind:this={cloneTab}
+            bind:busy={cloning}
+            bind:createIn
+            api={projectsOf}
+            thisPc={localProjects}
+            {onThisPc}
+            {machineName}
+            {home}
+            startIn={startInFolder}
+          />
+        {/key}
+      {/if}
+    </div>
+
+    <div class="grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-2 text-xs">
       <label for="new-chat-model" class="text-muted-foreground">Model</label>
       <select id="new-chat-model" class={selectClass} bind:value={model}>
         <option value="">Default</option>
@@ -283,12 +451,6 @@
       </select>
     </div>
 
-    {#if cwd}
-      <p class="text-muted-foreground -mt-1 truncate font-mono text-[0.6875rem]" title={cwd}>
-        {cwd}
-      </p>
-    {/if}
-
     {#if buildFlags.apiKeyOnly && !settings.hasApiKey}
       <p role="note" class="rounded-md bg-amber-500/15 px-2 py-1.5 text-xs">
         This build of Threadgarden runs chats only on an Anthropic API key. Add your key first.
@@ -301,15 +463,22 @@
     {/if}
 
     {#if error}
-      <p class="text-destructive text-xs" role="alert">{error}</p>
+      <p class="text-destructive text-xs" role="alert">
+        {error}
+        {#if made}
+          <button type="button" class="underline underline-offset-2" onclick={startThere}
+            >Start there</button
+          >
+        {/if}
+      </p>
     {/if}
 
-    {#key `${scope.machineId}\n${cwd}`}
+    {#key `${scope.machineId}\n${draftKey}`}
       <InScope {scope}>
         <Composer
-          draftKey={newChatDraftKey(cwd)}
-          {cwd}
-          commandScope={{ cwd }}
+          {draftKey}
+          cwd={composerCwd}
+          commandScope={{ cwd: composerCwd }}
           label="First message"
           placeholder="What should Claude do?"
           autofocus
