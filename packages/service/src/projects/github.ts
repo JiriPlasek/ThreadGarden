@@ -1,4 +1,4 @@
-import { execFile, spawn as spawnProcess } from 'node:child_process';
+import { execFile, spawn as spawnProcess, type ChildProcess } from 'node:child_process';
 import type { GithubStatus, Repo } from '@threadgarden/protocol';
 import { cleanEnv } from '../power/push-check.js';
 import { ServiceError } from '../server/router.js';
@@ -21,77 +21,100 @@ export type Tools = {
 };
 
 /** gh and git never ask anything on a headless machine, and speak English whatever the locale. */
-export const toolEnv = (base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv => ({
-  ...cleanEnv(base),
-  GH_PROMPT_DISABLED: '1',
-  GIT_TERMINAL_PROMPT: '0',
-  LC_ALL: 'C',
-});
+export const toolEnv = (base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv => {
+  const env: NodeJS.ProcessEnv = {
+    ...cleanEnv(base),
+    GH_PROMPT_DISABLED: '1',
+    GIT_TERMINAL_PROMPT: '0',
+    GCM_INTERACTIVE: 'never',
+    LC_ALL: 'C',
+  };
+  for (const k of ['GIT_ASKPASS', 'SSH_ASKPASS']) delete env[k];
+  return env;
+};
 
 const NOT_FOUND: RunResult = { code: 127, stdout: '', stderr: 'command not found' };
+
+/**
+ * Kills a process and everything it started. On Windows git.exe is a launcher and the real work
+ * runs in children, so killing the launcher alone leaves them running (and holding the pipes).
+ */
+const killTree = (child: ChildProcess): void => {
+  const pid = child.pid;
+  if (pid === undefined) return;
+  if (process.platform === 'win32') {
+    execFile('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true }, () => {});
+    return;
+  }
+  try {
+    process.kill(-pid, 'SIGTERM');
+  } catch {
+    child.kill('SIGTERM');
+  }
+};
+
+/**
+ * Starts a program. `done` never rejects and settles at once when `cancel` kills the process
+ * tree, without waiting on grandchildren that may still hold the output pipes.
+ */
+export const spawnTool = (
+  executable: string,
+  args: string[],
+  opts: { cwd?: string; env?: NodeJS.ProcessEnv },
+): { done: Promise<RunResult>; cancel(reason?: string): void } => {
+  let child: ChildProcess | null = null;
+  let settle: (r: RunResult) => void = () => {};
+  let stdout = '';
+  let stderr = '';
+  const done = new Promise<RunResult>((resolve) => {
+    settle = resolve;
+    try {
+      child = spawnProcess(executable, args, {
+        cwd: opts.cwd,
+        env: opts.env ?? toolEnv(),
+        windowsHide: true,
+        detached: process.platform !== 'win32',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    } catch {
+      return resolve(NOT_FOUND);
+    }
+    child.stdout?.setEncoding('utf8').on('data', (d: string) => (stdout += d));
+    child.stderr?.setEncoding('utf8').on('data', (d: string) => (stderr += d));
+    child.on('error', (e: NodeJS.ErrnoException) =>
+      resolve(e.code === 'ENOENT' ? NOT_FOUND : { code: 1, stdout, stderr: e.message }),
+    );
+    child.on('close', (code, signal) =>
+      resolve({ code: code ?? (signal ? -1 : 1), stdout, stderr }),
+    );
+  });
+  return {
+    done,
+    cancel: (reason = 'cancelled') => {
+      if (child) {
+        killTree(child);
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+      }
+      settle({ code: -1, stdout, stderr: reason });
+    },
+  };
+};
 
 /** Runs a program to completion. Never rejects: a process failure is a RunResult. */
 export const runTool = (
   executable: string,
   args: string[],
   opts: { cwd?: string; timeoutMs: number; env?: NodeJS.ProcessEnv },
-): Promise<RunResult> =>
-  new Promise((resolve) => {
-    execFile(
-      executable,
-      args,
-      {
-        cwd: opts.cwd,
-        timeout: opts.timeoutMs,
-        windowsHide: true,
-        encoding: 'utf8',
-        maxBuffer: 64 * 1024 * 1024,
-        env: opts.env ?? toolEnv(),
-      },
-      (err, stdout, stderr) => {
-        const out = String(stdout ?? '');
-        const errText = String(stderr ?? '');
-        if (!err) return resolve({ code: 0, stdout: out, stderr: errText });
-        const e = err as NodeJS.ErrnoException & { killed?: boolean };
-        if (e.code === 'ENOENT') return resolve(NOT_FOUND);
-        if (e.killed) return resolve({ code: -1, stdout: out, stderr: 'timed out' });
-        resolve({
-          code: typeof e.code === 'number' ? e.code : 1,
-          stdout: out,
-          stderr: errText || e.message,
-        });
-      },
-    );
-  });
+): Promise<RunResult> => {
+  const job = spawnTool(executable, args, opts);
+  const timer = setTimeout(() => job.cancel('timed out'), opts.timeoutMs);
+  return job.done.finally(() => clearTimeout(timer));
+};
 
 export const systemTools: Tools = {
   run: (cmd, args, opts) => runTool(cmd, args, { ...opts, env: toolEnv() }),
-  spawn: (cmd, args, opts) => {
-    let child: ReturnType<typeof spawnProcess> | null = null;
-    const done = new Promise<RunResult>((resolve) => {
-      let stdout = '';
-      let stderr = '';
-      try {
-        child = spawnProcess(cmd, args, {
-          cwd: opts.cwd,
-          env: toolEnv(),
-          windowsHide: true,
-          stdio: ['ignore', 'pipe', 'pipe'],
-        });
-      } catch {
-        return resolve(NOT_FOUND);
-      }
-      child.stdout?.setEncoding('utf8').on('data', (d: string) => (stdout += d));
-      child.stderr?.setEncoding('utf8').on('data', (d: string) => (stderr += d));
-      child.on('error', (e: NodeJS.ErrnoException) =>
-        resolve(e.code === 'ENOENT' ? NOT_FOUND : { code: 1, stdout, stderr: e.message }),
-      );
-      child.on('close', (code, signal) =>
-        resolve({ code: code ?? (signal ? -1 : 1), stdout, stderr }),
-      );
-    });
-    return { done, cancel: () => void child?.kill() };
-  },
+  spawn: (cmd, args, opts) => spawnTool(cmd, args, { cwd: opts.cwd, env: toolEnv() }),
 };
 
 const firstLine = (s: string): string =>
@@ -182,20 +205,25 @@ export const listRepos = async (t: Tools): Promise<Repo[]> => {
 };
 
 export const repoExists = async (t: Tools, fullNameOrName: string): Promise<boolean> =>
-  (await t.run('gh', ['repo', 'view', fullNameOrName, '--json', 'name'], { timeoutMs: 30000 }))
-    .code === 0;
+  (
+    await t.run('gh', ['repo', 'view', '--json', 'name', '--', fullNameOrName], {
+      timeoutMs: 30000,
+    })
+  ).code === 0;
 
 export const createRepo = async (
   t: Tools,
   name: string,
 ): Promise<{ fullName: string; url: string }> => {
-  const created = await t.run('gh', ['repo', 'create', name, '--private'], { timeoutMs: 30000 });
+  const created = await t.run('gh', ['repo', 'create', '--private', '--', name], {
+    timeoutMs: 30000,
+  });
   if (created.code !== 0) {
     if (/already exists/i.test(created.stderr))
       throw new ServiceError('REPO_EXISTS', `${name} already exists on GitHub`);
     throw await ghFailure(t, created);
   }
-  const view = await t.run('gh', ['repo', 'view', name, '--json', 'nameWithOwner,url'], {
+  const view = await t.run('gh', ['repo', 'view', '--json', 'nameWithOwner,url', '--', name], {
     timeoutMs: 30000,
   });
   if (view.code !== 0) throw await ghFailure(t, view);
@@ -213,7 +241,11 @@ export const startClone = (
   fullName: string,
   target: string,
 ): { done: Promise<RunResult>; cancel(): void } =>
-  t.spawn('git', ['clone', '--origin', 'origin', `https://github.com/${fullName}.git`, target], {});
+  t.spawn(
+    'git',
+    ['clone', '--origin', 'origin', '--', `https://github.com/${fullName}.git`, target],
+    {},
+  );
 
 /** Lower-case owner/name of a github.com origin (https or ssh), else null. */
 export const originOf = async (t: Tools, dir: string): Promise<string | null> => {

@@ -1,3 +1,6 @@
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   createRepo,
@@ -7,6 +10,7 @@ import {
   repoExists,
   runTool,
   startClone,
+  spawnTool,
   toolEnv,
 } from '../../src/projects/github.js';
 import { fakeTools } from './fake-tools.js';
@@ -25,6 +29,13 @@ describe('toolEnv', () => {
     expect(env.GIT_DIR).toBeUndefined();
     expect(env.GIT_WORK_TREE).toBeUndefined();
     expect(env.GIT_INDEX_FILE).toBeUndefined();
+  });
+
+  it('never waits on a credential prompt', () => {
+    const env = toolEnv({ GIT_ASKPASS: 'a', SSH_ASKPASS: 'b', PATH: 'p' });
+    expect(env.GIT_ASKPASS).toBeUndefined();
+    expect(env.SSH_ASKPASS).toBeUndefined();
+    expect(env.GCM_INTERACTIVE).toBe('never');
   });
 });
 
@@ -47,6 +58,50 @@ describe('runTool', () => {
     const missing = await runTool('threadgarden-no-such-tool', [], { timeoutMs: 5000 });
     expect(missing).toEqual({ code: 127, stdout: '', stderr: 'command not found' });
   });
+});
+
+describe('stopping a process tree', () => {
+  // A child that starts a grandchild holding the same pipes; the grandchild would write a marker
+  // after 2 s. Killing only the launcher would leave it alive (the way git.exe behaves on Windows).
+  const scenario = (marker: string): string[] => {
+    const grandchild = `require('fs').writeFileSync(${JSON.stringify(marker + '.up')},'x');setTimeout(()=>require('fs').writeFileSync(${JSON.stringify(marker)},'x'),2000);setTimeout(()=>{},10000)`;
+    const parent = `require('child_process').spawn(process.execPath,['-e',${JSON.stringify(grandchild)}],{stdio:'inherit'});setTimeout(()=>{},10000)`;
+    return ['-e', parent];
+  };
+  const withDir = async (fn: (marker: string) => Promise<void>) => {
+    const dir = mkdtempSync(join(tmpdir(), 'tg-tree-'));
+    try {
+      await fn(join(dir, 'marker'));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+  const until = async (cond: () => boolean) => {
+    for (let i = 0; i < 100 && !cond(); i++) await sleep(50);
+  };
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  it('cancel settles done and kills the grandchild too', async () => {
+    await withDir(async (marker) => {
+      const job = spawnTool(process.execPath, scenario(marker), {});
+      await until(() => existsSync(marker + '.up'));
+      const t0 = Date.now();
+      job.cancel();
+      expect((await job.done).code).toBe(-1);
+      expect(Date.now() - t0).toBeLessThan(3000);
+      await sleep(2500);
+      expect(existsSync(marker)).toBe(false);
+    });
+  }, 15000);
+
+  it('a timeout kills the grandchild too', async () => {
+    await withDir(async (marker) => {
+      const r = await runTool(process.execPath, scenario(marker), { timeoutMs: 1000 });
+      expect(r).toMatchObject({ code: -1, stderr: 'timed out' });
+      await sleep(2500);
+      expect(existsSync(marker)).toBe(false);
+    });
+  }, 15000);
 });
 
 describe('githubStatus', () => {
@@ -152,7 +207,7 @@ describe('createRepo and repoExists', () => {
       fullName: 'me/thing',
       url: 'https://github.com/me/thing',
     });
-    expect(t.calls[0]!.args).toEqual(['repo', 'create', 'thing', '--private']);
+    expect(t.calls[0]!.args).toEqual(['repo', 'create', '--private', '--', 'thing']);
     expect(t.calls[0]!.timeoutMs).toBe(30000);
 
     const taken = fakeTools([
@@ -174,7 +229,7 @@ describe('createRepo and repoExists', () => {
   it('repoExists follows the exit code', async () => {
     const yes = fakeTools([{ cmd: 'gh', match: /^repo view/, result: {} }]);
     expect(await repoExists(yes, 'me/x')).toBe(true);
-    expect(yes.calls[0]!.args).toEqual(['repo', 'view', 'me/x', '--json', 'name']);
+    expect(yes.calls[0]!.args).toEqual(['repo', 'view', '--json', 'name', '--', 'me/x']);
     const no = fakeTools([{ cmd: 'gh', match: /^repo view/, result: { code: 1 } }]);
     expect(await repoExists(no, 'me/x')).toBe(false);
   });
@@ -186,7 +241,14 @@ describe('startClone', () => {
     const job = startClone(t, 'me/thing', '/home/me/thing');
     expect(t.calls[0]).toMatchObject({
       cmd: 'git',
-      args: ['clone', '--origin', 'origin', 'https://github.com/me/thing.git', '/home/me/thing'],
+      args: [
+        'clone',
+        '--origin',
+        'origin',
+        '--',
+        'https://github.com/me/thing.git',
+        '/home/me/thing',
+      ],
     });
     job.cancel();
     expect(t.spawned[0]!.cancelled).toBe(true);
