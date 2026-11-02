@@ -1,4 +1,10 @@
-import { RELAY_CLOSE, type ScheduledSend, type UsageState } from '@threadgarden/protocol';
+import {
+  RELAY_CLOSE,
+  type ScheduledSend,
+  type UsageAccount,
+  type UsageState,
+  type UsageWindow,
+} from '@threadgarden/protocol';
 import { render, screen, waitFor, within } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -8,7 +14,9 @@ import TabsBar from '../../src/lib/components/layout/TabsBar.svelte';
 import QuickSwitcher from '../../src/lib/components/QuickSwitcher.svelte';
 import UsageDialog from '../../src/lib/components/UsageDialog.svelte';
 import { clockTime } from '../../src/lib/format/usage';
+import { APP_CONTEXT } from '../../src/lib/state/context';
 import { UsageStore } from '../../src/lib/state/usage.svelte';
+import { groupUsage, type UsageMachine } from '../../src/lib/usage/accounts';
 import { SID, fill, renderChat } from '../interaction/helpers';
 import { M1, setup, setupTwoMachines, summary } from '../layout/harness';
 
@@ -321,5 +329,106 @@ describe('clock badges', () => {
     await waitFor(() =>
       expect(screen.queryAllByRole('img', { name: /scheduled/i })).toHaveLength(0),
     );
+  });
+});
+
+describe('usage dialog per account', () => {
+  const win = (key: string, utilization: number): UsageWindow => ({
+    key,
+    utilization,
+    resetsAt: Date.now() + HOUR,
+    observedAt: Date.now() - 60_000,
+    source: 'usage',
+  });
+  const machine = (
+    machineId: string,
+    name: string,
+    account: UsageAccount | undefined,
+    windows: UsageWindow[],
+    extra: Partial<UsageState> = {},
+  ): UsageMachine => ({
+    machineId,
+    name,
+    connected: true,
+    state: { windows, refused: [], ...(account ? { account } : {}), ...extra },
+  });
+  const renderDialog = (machines: UsageMachine[]) => {
+    const refresh = vi.fn(async () => {});
+    const context = new Map<unknown, unknown>([
+      [
+        APP_CONTEXT,
+        {
+          usageAccounts: {
+            entries: groupUsage(machines),
+            dialogOpen: true,
+            refreshing: false,
+            refresh,
+          },
+        },
+      ],
+    ]);
+    render(UsageDialog, { context });
+    return { refresh };
+  };
+  const text = (el: HTMLElement): string => el.textContent?.replace(/\s+/g, ' ').trim() ?? '';
+  const labels = (el: HTMLElement): (string | null)[] =>
+    within(el)
+      .getAllByRole('meter')
+      .map((m) => m.getAttribute('aria-label'));
+
+  it('two accounts: two sections headed by email · plan with their machines, each with its own windows', async () => {
+    const me: UsageAccount = { email: 'me@x.cz', plan: 'max', kind: 'login' };
+    renderDialog([
+      machine('pc', 'This PC', me, [win('five_hour', 42)]),
+      machine('m1', 'Ubuntu PC', me, [win('five_hour', 40)]),
+      machine('m2', 'Laptop', { email: 'work@y.cz', plan: 'pro', kind: 'login' }, [
+        win('seven_day', 9),
+      ]),
+    ]);
+    const dialog = await screen.findByRole('dialog', { name: 'Usage' });
+    const mine = within(dialog).getByRole('region', { name: 'me@x.cz' });
+    expect(text(within(mine).getByRole('heading'))).toBe('me@x.cz · Max plan');
+    expect(mine.textContent).toContain('This PC, Ubuntu PC');
+    expect(labels(mine)).toEqual(['5-hour limit used']);
+    const work = within(dialog).getByRole('region', { name: 'work@y.cz' });
+    expect(text(within(work).getByRole('heading'))).toBe('work@y.cz · Pro plan');
+    expect(work.textContent).toContain('Laptop');
+    expect(labels(work)).toEqual(['Weekly limit used']);
+  });
+
+  it("an unknown account's section is headed by the machine name", async () => {
+    renderDialog([machine('m1', 'Ubuntu PC', undefined, [win('five_hour', 5)])]);
+    const dialog = await screen.findByRole('dialog', { name: 'Usage' });
+    expect(text(within(dialog).getByRole('heading', { level: 3 }))).toBe('Ubuntu PC');
+  });
+
+  it('an API-key machine shows "‹machine› · API key" and the limits-don\'t-apply line', async () => {
+    renderDialog([
+      machine('m1', 'Ubuntu PC', { kind: 'apiKey' }, [], { rateLimitsAvailable: false }),
+    ]);
+    const dialog = await screen.findByRole('dialog', { name: 'Usage' });
+    expect(text(within(dialog).getByRole('heading', { level: 3 }))).toBe('Ubuntu PC · API key');
+    expect(dialog.textContent).toMatch(/do not apply/);
+  });
+
+  it('an account without windows shows "No reading yet"', async () => {
+    renderDialog([machine('pc', 'This PC', { email: 'me@x.cz', kind: 'login' }, [])]);
+    const dialog = await screen.findByRole('dialog', { name: 'Usage' });
+    expect(dialog.textContent).toContain('No reading yet');
+  });
+
+  it('an off account says when it was last seen', async () => {
+    const m = machine('m1', 'Ubuntu PC', { email: 'me@x.cz', kind: 'login' }, [
+      win('five_hour', 5),
+    ]);
+    renderDialog([{ ...m, connected: false }]);
+    const dialog = await screen.findByRole('dialog', { name: 'Usage' });
+    expect(dialog.textContent).toMatch(/as of \d\d:\d\d/);
+  });
+
+  it('Refresh asks every connected machine', async () => {
+    const { refresh } = renderDialog([machine('pc', 'This PC', undefined, [win('five_hour', 5)])]);
+    await userEvent.click(await screen.findByRole('button', { name: /refresh/i }));
+    expect(refresh).toHaveBeenCalledTimes(1);
   });
 });
