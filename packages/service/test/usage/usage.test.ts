@@ -6,6 +6,7 @@ import {
   USAGE_READ_INTERVAL_MS,
   USAGE_READ_TIMEOUT_MS,
   UsageTracker,
+  accountOf,
   readingFromUsage,
   refusesTurn,
   toEpochMs,
@@ -146,6 +147,37 @@ describe('readingFromUsage', () => {
     expect(readingFromUsage(undefined, T0)).toBeUndefined();
     expect(readingFromUsage({ hello: 1 }, T0)).toBeUndefined();
     expect(readingFromUsage([1, 2], T0)).toBeUndefined();
+  });
+});
+
+describe('accountOf', () => {
+  it('reads a claude.ai login with its email and plan', () => {
+    expect(
+      accountOf({
+        email: 'Me@Example.com',
+        subscriptionType: 'max',
+        tokenSource: 'claude.ai',
+        apiProvider: 'firstParty',
+      }),
+    ).toEqual({ kind: 'login', email: 'Me@Example.com', plan: 'max' });
+  });
+
+  it('an API key wins over a stored login', () => {
+    expect(
+      accountOf({
+        email: 'me@example.com',
+        subscriptionType: 'max',
+        tokenSource: 'claude.ai',
+        apiKeySource: 'ANTHROPIC_API_KEY',
+      }),
+    ).toEqual({ kind: 'apiKey' });
+  });
+
+  it('a third-party provider is named', () => {
+    expect(accountOf({ apiProvider: 'bedrock' })).toEqual({
+      kind: 'provider',
+      provider: 'bedrock',
+    });
   });
 });
 
@@ -362,5 +394,47 @@ describe('UsageTracker', () => {
     });
     t.observeEvent('a', { status: 'allowed', rateLimitType: 'five_hour' });
     expect(t.state().windows).toHaveLength(1);
+  });
+
+  describe('account', () => {
+    const login = (email: string, plan = 'max') => ({ kind: 'login' as const, email, plan });
+
+    it('the first account keeps the windows and is reported in state()', () => {
+      const t = tracker();
+      t.observeEvent('a', { status: 'allowed', rateLimitType: 'five_hour', utilization: 0.4 });
+      emitted = [];
+      t.noteAccount(login('me@example.com'));
+      expect(t.state().account).toEqual(login('me@example.com'));
+      expect(t.state().windows).toHaveLength(1);
+      expect(emitted).toHaveLength(1);
+    });
+
+    it('a different email drops the windows but keeps refusals', () => {
+      const t = tracker();
+      t.noteAccount(login('me@example.com'));
+      t.observeEvent('a', { status: 'rejected', rateLimitType: 'five_hour' });
+      expect(t.state().windows).toHaveLength(1);
+      emitted = [];
+      t.noteAccount(login('other@example.com'));
+      expect(t.state().windows).toEqual([]);
+      expect(t.state().refused.map((r) => r.sessionId)).toEqual(['a']);
+      expect(t.state().account?.email).toBe('other@example.com');
+      expect(emitted).toHaveLength(1);
+      expect(tracker().state().windows).toEqual([]); // the stored rows are gone too
+    });
+
+    it('the same email in another case keeps everything and only moves the plan', () => {
+      const t = tracker();
+      t.noteAccount(login('Me@Example.com', 'pro'));
+      t.observeEvent('a', { status: 'allowed', rateLimitType: 'five_hour' });
+      t.noteAccount(login('me@example.com', 'max'));
+      expect(t.state().windows).toHaveLength(1);
+      expect(t.state().account).toMatchObject({ kind: 'login', plan: 'max' });
+    });
+
+    it('the account survives a restart', () => {
+      tracker().noteAccount(login('me@example.com'));
+      expect(tracker().state().account).toEqual(login('me@example.com'));
+    });
   });
 });

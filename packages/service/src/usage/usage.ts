@@ -14,12 +14,15 @@
  */
 import type { DatabaseSync } from 'node:sqlite';
 import {
+  UsageAccountSchema,
   UsageWindowSchema,
   type RefusedChat,
+  type UsageAccount,
   type UsageState,
   type UsageWindow,
 } from '@threadgarden/protocol';
 import type { Timers } from '../chat/live-session.js';
+import type { AccountInfo } from '../sdk/adapter.js';
 
 type Rec = Record<string, unknown>;
 const isRec = (v: unknown): v is Rec => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -197,6 +200,29 @@ const sameView = (a: UsageWindow | undefined, b: UsageWindow): boolean =>
   a.label === b.label &&
   JSON.stringify(a.credits) === JSON.stringify(b.credits);
 
+/**
+ * The account a session runs on, from `accountInfo()`; the same precedence as
+ * the header's `authLabel`: an API key first, then a claude.ai login (email,
+ * plan), then a third-party provider.
+ */
+export const accountOf = (info: AccountInfo): UsageAccount => {
+  const keySource = str(info.apiKeySource);
+  if (keySource && keySource !== 'none') return { kind: 'apiKey' };
+  const plan = str(info.subscriptionType)?.trim();
+  const email = str(info.email)?.trim();
+  if (plan || str(info.tokenSource) === 'claude.ai') {
+    return { kind: 'login', ...(email ? { email } : {}), ...(plan ? { plan } : {}) };
+  }
+  const provider = str(info.apiProvider);
+  if (provider && provider !== 'firstParty') return { kind: 'provider', provider };
+  return { kind: 'login', ...(email ? { email } : {}) };
+};
+
+const sameAccount = (a: UsageAccount, b: UsageAccount): boolean =>
+  a.kind === b.kind &&
+  a.provider === b.provider &&
+  a.email?.trim().toLowerCase() === b.email?.trim().toLowerCase();
+
 /** `usage_limits` row of the account-level fields. */
 const ACCOUNT_KEY = '@account';
 
@@ -218,7 +244,12 @@ export type UsageTrackerDeps = {
   onError: (err: unknown, context: string) => void;
 };
 
-type Account = { subscriptionType?: string; rateLimitsAvailable?: boolean };
+type Account = {
+  subscriptionType?: string;
+  rateLimitsAvailable?: boolean;
+  /** Who the readings belong to; unknown until a session has said. */
+  account?: UsageAccount;
+};
 
 export class UsageTracker {
   private readonly windows = new Map<string, UsageWindow>();
@@ -247,6 +278,7 @@ export class UsageTracker {
       ...(this.account.rateLimitsAvailable === undefined
         ? {}
         : { rateLimitsAvailable: this.account.rateLimitsAvailable }),
+      ...(this.account.account ? { account: this.account.account } : {}),
       refused: [...this.refused.values()].map((r) =>
         r.resetsAt === undefined && reset !== undefined ? { ...r, resetsAt: reset } : r,
       ),
@@ -266,6 +298,40 @@ export class UsageTracker {
       if (latest === undefined || w.resetsAt > latest) latest = w.resetsAt;
     }
     return latest;
+  }
+
+  /**
+   * A session told which account it runs on. Another email than the known one
+   * starts fresh: the windows (stored ones too) were the old account's, and
+   * the refused chats stay. The first account learned (after an upgrade) keeps
+   * the windows, they were this machine's own readings. Nothing is announced
+   * when nothing changed.
+   */
+  noteAccount(account: UsageAccount): void {
+    const known = this.account.account;
+    if (known && sameAccount(known, account)) {
+      if (known.plan === account.plan) return;
+      this.setAccount({ ...known, ...(account.plan ? { plan: account.plan } : {}) });
+      if (!account.plan) delete this.account.account!.plan;
+    } else {
+      if (known?.email && account.email) this.dropWindows();
+      this.setAccount(account);
+    }
+    this.store(ACCOUNT_KEY, this.account);
+    this.publish();
+  }
+
+  private setAccount(account: UsageAccount): void {
+    this.account = { ...this.account, account };
+  }
+
+  private dropWindows(): void {
+    this.windows.clear();
+    try {
+      this.deps.raw?.prepare('DELETE FROM usage_limits WHERE key != ?').run(ACCOUNT_KEY);
+    } catch (err) {
+      this.deps.onError(err, 'usage store');
+    }
   }
 
   /** A `rate_limit_event` of `sessionId`. */
@@ -433,9 +499,11 @@ export class UsageTracker {
           if (!isRec(value)) continue;
           const plan = str(value.subscriptionType);
           const available = bool(value.rateLimitsAvailable);
+          const who = UsageAccountSchema.safeParse(value.account);
           this.account = {
             ...(plan ? { subscriptionType: plan } : {}),
             ...(available === undefined ? {} : { rateLimitsAvailable: available }),
+            ...(who.success ? { account: who.data } : {}),
           };
           continue;
         }

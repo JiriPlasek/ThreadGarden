@@ -60,7 +60,7 @@ import { Router } from './server/router.js';
 import { createRelay, type Relay } from './server/relay.js';
 import { startWsServer } from './server/ws-server.js';
 import { ScheduledSends } from './usage/scheduled.js';
-import { UsageTracker } from './usage/usage.js';
+import { UsageTracker, accountOf } from './usage/usage.js';
 
 export const IDLE_EXIT_MS = 30 * 60_000;
 /**
@@ -618,6 +618,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         onRunningTasks: (id) => emitChat({ event: 'sessions.changed', data: { sessionIds: [id] } }),
         // v1.3 B: usage limits, and the scheduled send whose turn this was.
         onRateLimit: (id, info) => usageTracker.observeEvent(id, info),
+        onAccount: (info) => usageTracker.noteAccount(accountOf(info)),
         onLimitError: (id) => usageTracker.noteRefusal(id),
         onTurnResult: (id) => {
           const refused = usageTracker.turnEnded(id);

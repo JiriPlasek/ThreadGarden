@@ -816,6 +816,17 @@ describe('LiveSession', () => {
     expect(last?.data).toMatchObject({ header: { auth: { kind: 'subscription' } } });
   });
 
+  it('onAccount is called with the accountInfo answer', async () => {
+    const seen: unknown[] = [];
+    const { adapter, opts } = setup({ onAccount: (info) => seen.push(info) });
+    const s = LiveSession.create('/p', { text: 'go' }, opts);
+    const fake = adapter.lastSession();
+    fake.account = { email: 'me@example.com', subscriptionType: 'max', apiProvider: 'firstParty' };
+    fake.emit(init(s.sessionId));
+    await settle();
+    expect(seen).toEqual([fake.account]);
+  });
+
   it('reports a failing accountInfo without an auth label', async () => {
     const errors: string[] = [];
     const { adapter, opts } = setup({ onError: (_e, ctx) => errors.push(ctx) });
