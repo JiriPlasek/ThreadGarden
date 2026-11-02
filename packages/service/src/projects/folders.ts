@@ -16,9 +16,23 @@ export const expandHome = (p: string, home: string = homedir()): string => {
 /** Windows device names: `nul` or `con.txt` there is the device, not a folder. */
 const WINDOWS_DEVICE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
 
-/** The protocol's name rule, and on Windows no device names. `platform` is a seam for tests. */
+/**
+ * Why `name` can't be a folder Threadgarden makes, null when it can: the protocol's name rule,
+ * and on Windows no device names. `platform` is a seam for tests.
+ */
+export const nameRefusal = (
+  name: string,
+  platform: NodeJS.Platform = process.platform,
+): string | null => {
+  if (!ProjectNameSchema.safeParse(name).success) {
+    return 'Use letters, digits, dots, dashes and underscores only';
+  }
+  if (platform === 'win32' && WINDOWS_DEVICE.test(name)) return `${name} is reserved on Windows`;
+  return null;
+};
+
 export const validName = (name: string, platform: NodeJS.Platform = process.platform): boolean =>
-  ProjectNameSchema.safeParse(name).success && !(platform === 'win32' && WINDOWS_DEVICE.test(name));
+  nameRefusal(name, platform) === null;
 
 const absolute = (p: string, home?: string): string => {
   const expanded = expandHome(p, home);
@@ -85,12 +99,8 @@ export const completeFolder = async (partial: string, home?: string): Promise<st
 };
 
 export const makeFolder = async (parent: string, name: string, home?: string): Promise<string> => {
-  if (!validName(name)) {
-    throw new ServiceError(
-      'INVALID_NAME',
-      'Use letters, digits, dots, dashes and underscores only',
-    );
-  }
+  const refused = nameRefusal(name);
+  if (refused) throw new ServiceError('INVALID_NAME', refused);
   const target = path.join(absolute(parent, home), name);
   try {
     await mkdir(target);

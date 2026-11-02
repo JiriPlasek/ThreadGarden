@@ -175,6 +175,14 @@ describe('create', () => {
       expect(existsSync(path.join(home, 'x'))).toBe(false);
     });
 
+    it.runIf(process.platform === 'win32')('a Windows device name, saying so', async () => {
+      await refuses(
+        { replies: [gitInit] },
+        { name: 'aux' },
+        { code: 'INVALID_NAME', message: 'aux is reserved on Windows' },
+      );
+    });
+
     // Windows drops a trailing dot: `plant.` would run git in the owner's `plant`, `...` in Create in.
     it.each(['plant.', '...'])('a name ending in a dot (%s)', async (name) => {
       mkdirSync(path.join(code, 'plant'));

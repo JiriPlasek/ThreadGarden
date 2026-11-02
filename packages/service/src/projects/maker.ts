@@ -3,7 +3,7 @@ import { lstat, mkdir, rm, stat } from 'node:fs/promises';
 import path from 'node:path';
 import type { CloneJob } from '@threadgarden/protocol';
 import { ServiceError } from '../server/router.js';
-import { expandHome, validName } from './folders.js';
+import { expandHome, nameRefusal, validName } from './folders.js';
 import {
   createRepo,
   firstLine,
@@ -104,12 +104,8 @@ export class ProjectMaker {
   }): Promise<{ path: string; repo: string | null; problem: string | null }> {
     const t = this.deps.tools;
     // Checks: everything that can be checked runs before anything is made.
-    if (!validName(p.name)) {
-      throw new ServiceError(
-        'INVALID_NAME',
-        'Use letters, digits, dots, dashes and underscores only',
-      );
-    }
+    const refused = nameRefusal(p.name);
+    if (refused) throw new ServiceError('INVALID_NAME', refused);
     await this.deps.requireRunnable();
     const place = await this.place(p.createIn);
     const target = path.join(place.dir, p.name);

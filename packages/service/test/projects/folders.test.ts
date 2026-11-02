@@ -2,7 +2,13 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { completeFolder, listFolders, makeFolder, validName } from '../../src/projects/folders.js';
+import {
+  completeFolder,
+  listFolders,
+  makeFolder,
+  nameRefusal,
+  validName,
+} from '../../src/projects/folders.js';
 
 let tmp: string;
 let code: string;
@@ -113,5 +119,22 @@ describe('validName', () => {
     for (const name of ['console', 'com10', 'lpt0', 'nul-x', 'auxiliary.md']) {
       expect(validName(name, 'win32')).toBe(true);
     }
+  });
+
+  it('says a Windows device name is reserved there, and the rule for any other bad name', () => {
+    expect(nameRefusal('con', 'win32')).toBe('con is reserved on Windows');
+    expect(nameRefusal('NUL.txt', 'win32')).toBe('NUL.txt is reserved on Windows');
+    expect(nameRefusal('con', 'linux')).toBeNull();
+    expect(nameRefusal('my folder', 'win32')).toBe(
+      'Use letters, digits, dots, dashes and underscores only',
+    );
+    expect(nameRefusal('plant', 'win32')).toBeNull();
+  });
+
+  it.runIf(process.platform === 'win32')('makeFolder says so for a device name', async () => {
+    await expect(makeFolder(code, 'com1')).rejects.toMatchObject({
+      code: 'INVALID_NAME',
+      message: 'com1 is reserved on Windows',
+    });
   });
 });
