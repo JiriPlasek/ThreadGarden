@@ -94,6 +94,28 @@ describe('stopping a process tree', () => {
     });
   }, 15000);
 
+  it('cancel after the process finished kills nothing, and cancelling twice kills once', async () => {
+    let kills = 0;
+    const kill = async () => {
+      kills++;
+    };
+    const finished = spawnTool(process.execPath, ['-e', '0'], { kill });
+    await finished.done;
+    finished.cancel();
+    expect(kills).toBe(0);
+
+    const running = spawnTool(process.execPath, ['-e', 'setTimeout(()=>{},5000)'], {
+      kill: async (c) => {
+        kills++;
+        c.kill();
+      },
+    });
+    running.cancel();
+    running.cancel();
+    await running.done;
+    expect(kills).toBe(1);
+  });
+
   it('a timeout kills the grandchild too', async () => {
     await withDir(async (marker) => {
       const r = await runTool(process.execPath, scenario(marker), { timeoutMs: 1000 });

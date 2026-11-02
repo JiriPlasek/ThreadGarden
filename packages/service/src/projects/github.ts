@@ -39,33 +39,42 @@ const NOT_FOUND: RunResult = { code: 127, stdout: '', stderr: 'command not found
  * Kills a process and everything it started. On Windows git.exe is a launcher and the real work
  * runs in children, so killing the launcher alone leaves them running (and holding the pipes).
  */
-const killTree = (child: ChildProcess): void => {
-  const pid = child.pid;
-  if (pid === undefined) return;
-  if (process.platform === 'win32') {
-    execFile('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true }, () => {});
-    return;
-  }
-  try {
-    process.kill(-pid, 'SIGTERM');
-  } catch {
-    child.kill('SIGTERM');
-  }
-};
+const killTree = (child: ChildProcess): Promise<void> =>
+  new Promise((resolve) => {
+    const pid = child.pid;
+    if (pid === undefined) return resolve();
+    if (process.platform === 'win32') {
+      // The callback fires once taskkill is done, so files git held are released by then.
+      execFile('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true }, () =>
+        resolve(),
+      );
+      return;
+    }
+    try {
+      process.kill(-pid, 'SIGTERM');
+    } catch {
+      child.kill('SIGTERM');
+    }
+    resolve();
+  });
 
 /**
- * Starts a program. `done` never rejects and settles at once when `cancel` kills the process
- * tree, without waiting on grandchildren that may still hold the output pipes.
+ * Starts a program. `done` never rejects. `cancel` kills the process tree and settles `done`
+ * once the kill has completed, without waiting on grandchildren that may still hold the output
+ * pipes. After the process has exited `cancel` does nothing (its pid may belong to someone else).
+ * `kill` is a seam for tests.
  */
 export const spawnTool = (
   executable: string,
   args: string[],
-  opts: { cwd?: string; env?: NodeJS.ProcessEnv },
+  opts: { cwd?: string; env?: NodeJS.ProcessEnv; kill?: (child: ChildProcess) => Promise<void> },
 ): { done: Promise<RunResult>; cancel(reason?: string): void } => {
   let child: ChildProcess | null = null;
   let settle: (r: RunResult) => void = () => {};
   let stdout = '';
   let stderr = '';
+  let finished = false;
+  let cancelling = false;
   const done = new Promise<RunResult>((resolve) => {
     settle = resolve;
     try {
@@ -77,26 +86,35 @@ export const spawnTool = (
         stdio: ['ignore', 'pipe', 'pipe'],
       });
     } catch {
+      finished = true;
       return resolve(NOT_FOUND);
     }
     child.stdout?.setEncoding('utf8').on('data', (d: string) => (stdout += d));
     child.stderr?.setEncoding('utf8').on('data', (d: string) => (stderr += d));
-    child.on('error', (e: NodeJS.ErrnoException) =>
-      resolve(e.code === 'ENOENT' ? NOT_FOUND : { code: 1, stdout, stderr: e.message }),
-    );
-    child.on('close', (code, signal) =>
-      resolve({ code: code ?? (signal ? -1 : 1), stdout, stderr }),
-    );
+    child.on('error', (e: NodeJS.ErrnoException) => {
+      finished = true;
+      resolve(e.code === 'ENOENT' ? NOT_FOUND : { code: 1, stdout, stderr: e.message });
+    });
+    child.on('exit', () => {
+      finished = true;
+    });
+    child.on('close', (code, signal) => {
+      finished = true;
+      if (cancelling) return; // the killed process reports its own code; cancel settles with its reason
+      resolve({ code: code ?? (signal ? -1 : 1), stdout, stderr });
+    });
   });
   return {
     done,
     cancel: (reason = 'cancelled') => {
-      if (child) {
-        killTree(child);
-        child.stdout?.destroy();
-        child.stderr?.destroy();
-      }
-      settle({ code: -1, stdout, stderr: reason });
+      if (finished || cancelling || !child) return;
+      cancelling = true;
+      const c: ChildProcess = child;
+      void (opts.kill ?? killTree)(c).then(() => {
+        c.stdout?.destroy();
+        c.stderr?.destroy();
+        settle({ code: -1, stdout, stderr: reason });
+      });
     },
   };
 };
