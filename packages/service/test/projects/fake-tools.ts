@@ -1,8 +1,13 @@
 import type { RunResult, Tools } from '../../src/projects/github.js';
 
 export type Matcher = string | RegExp | ((args: string[]) => boolean);
-export type Reply = { cmd: 'gh' | 'git'; match: Matcher; result: Partial<RunResult> };
 export type Call = { cmd: 'gh' | 'git'; args: string[]; cwd?: string; timeoutMs?: number };
+/** A fixed result, or a function that can first act like the tool would (make `.git`, say). */
+export type Reply = {
+  cmd: 'gh' | 'git';
+  match: Matcher;
+  result: Partial<RunResult> | ((call: Call) => Partial<RunResult> | Promise<Partial<RunResult>>);
+};
 
 export type FakeSpawn = {
   call: Call;
@@ -36,11 +41,11 @@ export const fakeTools = (
     spawned,
     replies,
     run: async (cmd, args, opts) => {
-      calls.push({ cmd, args, cwd: opts.cwd, timeoutMs: opts.timeoutMs });
+      const call: Call = { cmd, args, cwd: opts.cwd, timeoutMs: opts.timeoutMs };
+      calls.push(call);
       const r = replies.find((x) => x.cmd === cmd && matches(x.match, args));
-      return r
-        ? full(r.result)
-        : { code: 1, stdout: '', stderr: `unexpected: ${cmd} ${args.join(' ')}` };
+      if (!r) return { code: 1, stdout: '', stderr: `unexpected: ${cmd} ${args.join(' ')}` };
+      return full(typeof r.result === 'function' ? await r.result(call) : r.result);
     },
     spawn: (cmd, args, opts) => {
       const call: Call = { cmd, args, cwd: opts.cwd };

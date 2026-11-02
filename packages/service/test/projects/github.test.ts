@@ -248,6 +248,26 @@ describe('createRepo and repoExists', () => {
     });
   });
 
+  it('a created repo whose address cannot be read is REPO_CREATED', async () => {
+    const t = fakeTools([
+      { cmd: 'gh', match: /^repo view/, result: { code: 1, stderr: 'HTTP 502\nmore' } },
+      { cmd: 'gh', match: /^repo create/, result: {} },
+    ]);
+    await expect(createRepo(t, 'thing')).rejects.toMatchObject({
+      code: 'REPO_CREATED',
+      message: 'the GitHub repo was created, but reading its address failed: HTTP 502',
+    });
+    const unreadable = fakeTools([
+      { cmd: 'gh', match: /^repo view/, result: { stdout: 'not json' } },
+      { cmd: 'gh', match: /^repo create/, result: {} },
+    ]);
+    await expect(createRepo(unreadable, 'thing')).rejects.toMatchObject({
+      code: 'REPO_CREATED',
+      message:
+        'the GitHub repo was created, but reading its address failed: gh returned something unreadable',
+    });
+  });
+
   it('repoExists follows the exit code', async () => {
     const yes = fakeTools([{ cmd: 'gh', match: /^repo view/, result: {} }]);
     expect(await repoExists(yes, 'me/x')).toBe(true);

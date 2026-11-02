@@ -135,7 +135,7 @@ export const systemTools: Tools = {
   spawn: (cmd, args, opts) => spawnTool(cmd, args, { cwd: opts.cwd, env: toolEnv() }),
 };
 
-const firstLine = (s: string): string =>
+export const firstLine = (s: string): string =>
   s
     .split('\n')
     .find((l) => l.trim())
@@ -244,12 +244,18 @@ export const createRepo = async (
   const view = await t.run('gh', ['repo', 'view', '--json', 'nameWithOwner,url', '--', name], {
     timeoutMs: 30000,
   });
-  if (view.code !== 0) throw await ghFailure(t, view);
+  // The repo exists from here on: a failure says so, so the caller keeps what it made.
+  const createdBut = (why: string): ServiceError =>
+    new ServiceError(
+      'REPO_CREATED',
+      `the GitHub repo was created, but reading its address failed: ${why}`,
+    );
+  if (view.code !== 0) throw createdBut(firstLine(view.stderr) || 'gh failed');
   try {
     const parsed = JSON.parse(view.stdout) as { nameWithOwner: string; url: string };
     return { fullName: parsed.nameWithOwner, url: parsed.url };
   } catch {
-    throw new ServiceError('GH_FAILED', 'gh returned something unreadable');
+    throw createdBut('gh returned something unreadable');
   }
 };
 
