@@ -66,6 +66,8 @@ export type SessionHostDeps = {
   // ── v1.3 B: usage limits ──
   /** Handed to every session (see `LiveSessionDeps.onRateLimit`). */
   onRateLimit?: LiveSessionDeps['onRateLimit'];
+  /** Handed to every session (see `LiveSessionDeps.onAccount`). */
+  onAccount?: LiveSessionDeps['onAccount'];
   /** Handed to every session (see `LiveSessionDeps.onLimitError`). */
   onLimitError?: LiveSessionDeps['onLimitError'];
   /** Handed to every session (see `LiveSessionDeps.onTurnResult`). */
@@ -312,6 +314,7 @@ export class SessionHost {
       onActivity,
       onRunningTasks,
       onRateLimit,
+      onAccount,
       onLimitError,
       onTurnResult,
     } = this.deps;
@@ -329,6 +332,7 @@ export class SessionHost {
       ...(onActivity ? { onActivity } : {}),
       ...(onRunningTasks ? { onRunningTasks } : {}),
       ...(onRateLimit ? { onRateLimit } : {}),
+      ...(onAccount ? { onAccount } : {}),
       ...(onLimitError ? { onLimitError } : {}),
       ...(onTurnResult ? { onTurnResult } : {}),
       ...extra,

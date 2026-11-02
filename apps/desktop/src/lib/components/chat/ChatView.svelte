@@ -42,7 +42,7 @@
    */
   let { ref }: { ref: ChatRef } = $props();
 
-  const { tabs, settings, usage, scopes } = useApp();
+  const { tabs, settings, usageAccounts } = useApp();
   /** The chat's machine (`ChatPane` shows it inside that machine's scope). */
   const scope = useScope();
   const { chats, interaction, scheduled } = scope;
@@ -180,11 +180,11 @@
 
   /**
    * A usage limit refused this chat's last turn (until a turn goes through or
-   * it resets). Usage is This PC's only for now, so another machine's chat has none.
+   * it resets). The chat's own machine knows, with its own account's limits.
    */
-  const refusal = $derived(scope === scopes.local() ? usage.refusal(sessionId) : undefined);
+  const refusal = $derived(scope.usage.refusal(sessionId));
   /** The reset the "When the limit resets" preset uses. */
-  const resetAt = $derived(usage.limitResetAt ?? refusal?.resetsAt);
+  const resetAt = $derived(scope.usage.limitResetAt ?? refusal?.resetsAt);
 
   const schedule = async (text: string, images: ImageRef[], when: SendWhen): Promise<boolean> => {
     sendError = null;
@@ -219,7 +219,7 @@
   const editing = $derived(
     editingSend
       ? {
-          label: `Editing the message scheduled for ${sendTimeText(editingSend.sendAt, usage.now)}`,
+          label: `Editing the message scheduled for ${sendTimeText(editingSend.sendAt, scope.usage.now)}`,
           onSave: async (text: string, images: ImageRef[]): Promise<boolean> => {
             const id = editingSend?.id;
             if (!id) return false;
@@ -537,7 +537,7 @@
               <button
                 type="button"
                 class="font-medium underline-offset-2 hover:underline"
-                onclick={() => usage.open()}>Usage</button
+                onclick={() => usageAccounts.open()}>Usage</button
               >
             </div>
           {/if}

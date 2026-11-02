@@ -19,6 +19,7 @@ import { sessions, type SessionsState } from './sessions.svelte';
 import { settings, type SettingsState } from './settings.svelte';
 import { tabs, type TabsState } from './tabs.svelte';
 import { updates, type UpdatesState } from './updates.svelte';
+import { usageAccounts, type UsageAccounts } from './usage-accounts.svelte';
 import { usage, type UsageStore } from './usage.svelte';
 
 export type AppState = {
@@ -32,8 +33,10 @@ export type AppState = {
   interaction: InteractionState;
   lifecycle: LifecycleState;
   buckets: BucketsState;
-  /** v1.3 B: plan usage and scheduled sends. */
+  /** v1.3 B: This PC's plan usage (its scope's `usage`). */
   usage: UsageStore;
+  /** Every machine's usage grouped by account, and the Usage dialog's state. */
+  usageAccounts: UsageAccounts;
   scheduled: ScheduledState;
   /** v1.3: the Analytics view. */
   analytics: AnalyticsState;
@@ -64,6 +67,7 @@ const singletons: AppState = {
   lifecycle,
   buckets,
   usage,
+  usageAccounts,
   scheduled,
   analytics,
   updates,

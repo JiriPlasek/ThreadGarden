@@ -42,7 +42,7 @@
    * a hit opens on its machine, and carries a machine chip while more than one
    * machine is paired.
    */
-  const { interaction, tabs, lifecycle, places, usage, scopes, machines } = useApp();
+  const { interaction, tabs, lifecycle, places, usageAccounts, scopes, machines } = useApp();
 
   type Command = {
     id: string;
@@ -74,7 +74,7 @@
       icon: CircleStopIcon,
       run: () => (lifecycle.dialog = 'stopAll'),
     },
-    { id: 'usage', label: 'Usage', icon: GaugeIcon, run: () => usage.open() },
+    { id: 'usage', label: 'Usage', icon: GaugeIcon, run: () => usageAccounts.open() },
     { id: 'analytics', label: 'Analytics', icon: ChartColumnIcon, run: () => tabs.showAnalytics() },
     {
       id: 'settings',

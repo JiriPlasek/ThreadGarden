@@ -17,6 +17,7 @@ import { machineIdOf } from './refs';
 import { scheduled, ScheduledState } from './scheduled.svelte';
 import { sessions, SessionsState } from './sessions.svelte';
 import { tabs, type MachineTabs, type TabsState } from './tabs.svelte';
+import { usage, UsageStore } from './usage.svelte';
 import { yourTurn, YourTurnState } from './your-turn.svelte';
 
 export type MachineScope = {
@@ -29,6 +30,8 @@ export type MachineScope = {
   scheduled: ScheduledState;
   interaction: InteractionState;
   yourTurn: YourTurnState;
+  /** The machine's plan usage and the chats a usage limit refused. */
+  usage: UsageStore;
   /** The tabs as this machine sees them (session ids of its own tabs). */
   tabs: MachineTabs;
 };
@@ -138,9 +141,17 @@ export const createScope = (
     scheduled: new ScheduledState(),
     interaction: new InteractionState(),
     yourTurn: new YourTurnState(),
+    // Its last usage is kept, so the machine's account still shows while it is off.
+    usage: new UsageStore({ remember: machineId }),
   });
   // Its `sessions` lists its projects; the other places are listed across machines.
-  const stop = wireScope(scope, deps, { projectsOnly: true });
+  const unwire = wireScope(scope, deps, { projectsOnly: true });
+  // This PC's usage is initialised by `app.ts`, as it always was.
+  scope.usage.init(api);
+  const stop = (): void => {
+    unwire();
+    scope.usage.stop();
+  };
   return Object.assign(scope, { stop });
 };
 
@@ -245,6 +256,8 @@ export class Scopes {
       const scope = this.others.get(id);
       this.others.delete(id);
       scope?.stop?.();
+      // Its kept usage goes too: pairing it again must not show the old windows.
+      scope?.usage.forget();
       if (scope) this.gone(scope);
     });
   };
@@ -263,5 +276,6 @@ export const scopes = new Scopes(
     scheduled,
     interaction,
     yourTurn,
+    usage,
   }),
 );

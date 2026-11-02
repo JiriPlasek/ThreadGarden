@@ -6,6 +6,7 @@ import {
   USAGE_READ_INTERVAL_MS,
   USAGE_READ_TIMEOUT_MS,
   UsageTracker,
+  accountOf,
   readingFromUsage,
   refusesTurn,
   toEpochMs,
@@ -146,6 +147,37 @@ describe('readingFromUsage', () => {
     expect(readingFromUsage(undefined, T0)).toBeUndefined();
     expect(readingFromUsage({ hello: 1 }, T0)).toBeUndefined();
     expect(readingFromUsage([1, 2], T0)).toBeUndefined();
+  });
+});
+
+describe('accountOf', () => {
+  it('reads a claude.ai login with its email and plan', () => {
+    expect(
+      accountOf({
+        email: 'Me@Example.com',
+        subscriptionType: 'max',
+        tokenSource: 'claude.ai',
+        apiProvider: 'firstParty',
+      }),
+    ).toEqual({ kind: 'login', email: 'Me@Example.com', plan: 'max' });
+  });
+
+  it('an API key wins over a stored login', () => {
+    expect(
+      accountOf({
+        email: 'me@example.com',
+        subscriptionType: 'max',
+        tokenSource: 'claude.ai',
+        apiKeySource: 'ANTHROPIC_API_KEY',
+      }),
+    ).toEqual({ kind: 'apiKey' });
+  });
+
+  it('a third-party provider is named', () => {
+    expect(accountOf({ apiProvider: 'bedrock' })).toEqual({
+      kind: 'provider',
+      provider: 'bedrock',
+    });
   });
 });
 
@@ -362,5 +394,119 @@ describe('UsageTracker', () => {
     });
     t.observeEvent('a', { status: 'allowed', rateLimitType: 'five_hour' });
     expect(t.state().windows).toHaveLength(1);
+  });
+
+  describe('account', () => {
+    const login = (email: string, plan = 'max') => ({ kind: 'login' as const, email, plan });
+
+    it('the first account keeps the windows and is reported in state()', () => {
+      const t = tracker();
+      t.observeEvent('a', { status: 'allowed', rateLimitType: 'five_hour', utilization: 0.4 });
+      emitted = [];
+      t.noteAccount(login('me@example.com'));
+      expect(t.state().account).toEqual(login('me@example.com'));
+      expect(t.state().windows).toHaveLength(1);
+      expect(emitted).toHaveLength(1);
+    });
+
+    it('a different email drops the windows but keeps refusals', () => {
+      const t = tracker();
+      t.noteAccount(login('me@example.com'));
+      t.observeEvent('a', { status: 'rejected', rateLimitType: 'five_hour' });
+      expect(t.state().windows).toHaveLength(1);
+      emitted = [];
+      t.noteAccount(login('other@example.com'));
+      expect(t.state().windows).toEqual([]);
+      expect(t.state().refused.map((r) => r.sessionId)).toEqual(['a']);
+      expect(t.state().account?.email).toBe('other@example.com');
+      expect(emitted).toHaveLength(1);
+      expect(tracker().state().windows).toEqual([]); // the stored rows are gone too
+    });
+
+    it('the same email in another case keeps everything and only moves the plan', () => {
+      const t = tracker();
+      t.noteAccount(login('Me@Example.com', 'pro'));
+      t.observeEvent('a', { status: 'allowed', rateLimitType: 'five_hour' });
+      t.noteAccount(login('me@example.com', 'max'));
+      expect(t.state().windows).toHaveLength(1);
+      expect(t.state().account).toMatchObject({ kind: 'login', plan: 'max' });
+    });
+
+    it('the same login answered without a plan keeps the known plan', () => {
+      const t = tracker();
+      t.noteAccount(login('me@example.com', 'max'));
+      emitted = [];
+      t.noteAccount({ kind: 'login', email: 'me@example.com' });
+      expect(t.state().account).toEqual(login('me@example.com', 'max'));
+      expect(emitted).toEqual([]);
+      expect(tracker().state().account).toEqual(login('me@example.com', 'max'));
+    });
+
+    it('a new login without a plan has no plan key at all', () => {
+      const t = tracker();
+      t.noteAccount({ kind: 'login', email: 'me@example.com' });
+      expect('plan' in t.state().account!).toBe(false);
+    });
+
+    it('the account survives a restart', () => {
+      tracker().noteAccount(login('me@example.com'));
+      expect(tracker().state().account).toEqual(login('me@example.com'));
+    });
+
+    it('coming back as another email drops the windows even after an email-less step', () => {
+      for (const between of [{ kind: 'apiKey' as const }, { kind: 'login' as const }]) {
+        db.close();
+        db = openDb(':memory:');
+        const t = tracker();
+        t.noteAccount(login('a@example.com'));
+        t.observeEvent('x', { status: 'allowed', rateLimitType: 'five_hour' });
+        t.noteAccount(between);
+        expect(t.state().windows).toHaveLength(1);
+        t.noteAccount(login('b@example.com'));
+        expect(t.state().windows).toEqual([]);
+        expect(tracker().state().windows).toEqual([]);
+      }
+    });
+
+    it('coming back as the same email after an API key keeps the windows', () => {
+      const t = tracker();
+      t.noteAccount(login('a@example.com'));
+      t.observeEvent('x', { status: 'allowed', rateLimitType: 'five_hour' });
+      t.noteAccount({ kind: 'apiKey' });
+      t.noteAccount(login('A@example.com'));
+      expect(t.state().windows).toHaveLength(1);
+    });
+
+    it('remembers whose windows they are across a restart', () => {
+      const t = tracker();
+      t.noteAccount(login('a@example.com'));
+      t.observeEvent('x', { status: 'allowed', rateLimitType: 'five_hour' });
+      t.noteAccount({ kind: 'apiKey' });
+      const again = tracker();
+      again.noteAccount(login('b@example.com'));
+      expect(again.state().windows).toEqual([]);
+    });
+
+    it('a new email forgets the old plan facts', async () => {
+      const t = tracker();
+      t.noteAccount(login('a@example.com'));
+      await t.refresh(async () => ({
+        subscription_type: 'max',
+        rate_limits_available: true,
+        rate_limits: { five_hour: { utilization: 3, resets_at: '2026-10-31T15:00:00Z' } },
+      }));
+      expect(t.state().subscriptionType).toBe('max');
+      t.noteAccount(login('b@example.com', 'pro'));
+      expect(t.state().subscriptionType).toBeUndefined();
+      expect(t.state().rateLimitsAvailable).toBeUndefined();
+    });
+
+    it('the same account and plan publishes nothing', () => {
+      const t = tracker();
+      t.noteAccount(login('a@example.com'));
+      emitted = [];
+      t.noteAccount(login('A@example.com'));
+      expect(emitted).toEqual([]);
+    });
   });
 });

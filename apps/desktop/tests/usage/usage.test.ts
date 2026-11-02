@@ -1,15 +1,24 @@
-import type { ScheduledSend, UsageState } from '@threadgarden/protocol';
+import {
+  RELAY_CLOSE,
+  type ScheduledSend,
+  type UsageAccount,
+  type UsageState,
+  type UsageWindow,
+} from '@threadgarden/protocol';
 import { render, screen, waitFor, within } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import AgentsStrip from '../../src/lib/components/layout/AgentsStrip.svelte';
 import ChatList from '../../src/lib/components/layout/ChatList.svelte';
 import TabsBar from '../../src/lib/components/layout/TabsBar.svelte';
 import QuickSwitcher from '../../src/lib/components/QuickSwitcher.svelte';
 import UsageDialog from '../../src/lib/components/UsageDialog.svelte';
 import { clockTime } from '../../src/lib/format/usage';
+import { APP_CONTEXT } from '../../src/lib/state/context';
+import { UsageStore } from '../../src/lib/state/usage.svelte';
+import { groupUsage, type UsageMachine } from '../../src/lib/usage/accounts';
 import { SID, fill, renderChat } from '../interaction/helpers';
-import { setup, summary } from '../layout/harness';
+import { M1, setup, setupTwoMachines, summary } from '../layout/harness';
 
 const HOUR = 3_600_000;
 
@@ -59,9 +68,9 @@ describe('usage meter and dialog', () => {
 
     const state = usageState();
     server.push('usage.changed', state);
-    const meter = await screen.findByRole('button', { name: /^usage: 5-hour limit/i });
+    const meter = await screen.findByRole('button', { name: /^usage/i });
     expect(meter.textContent).toContain('42%');
-    expect(meter.textContent).toContain(clockTime(state.windows[0]!.resetsAt!));
+    expect(meter.title).toContain(clockTime(state.windows[0]!.resetsAt!));
     expect(meter.getAttribute('data-usage-status')).toBe('allowed');
 
     const warn = usageState();
@@ -84,7 +93,7 @@ describe('usage meter and dialog', () => {
     });
     render(AgentsStrip, { context });
     render(UsageDialog, { context });
-    await userEvent.click(await screen.findByRole('button', { name: /^usage: 5-hour/i }));
+    await userEvent.click(await screen.findByRole('button', { name: /^usage/i }));
     const dialog = await screen.findByRole('dialog', { name: 'Usage' });
     await waitFor(() => expect(dialog.textContent).toContain('Max plan'));
     expect(server.calls('usage.get').some((c) => (c.params as { refresh?: boolean }).refresh)).toBe(
@@ -105,7 +114,7 @@ describe('usage meter and dialog', () => {
       s.handlers['usage.get'] = () => ({ windows: [], refused: [], rateLimitsAvailable: false });
     });
     render(UsageDialog, { context });
-    app.usage.open();
+    app.usageAccounts.open();
     const dialog = await screen.findByRole('dialog', { name: 'Usage' });
     await waitFor(() => expect(dialog.textContent).toMatch(/do not apply/));
   });
@@ -118,7 +127,74 @@ describe('usage meter and dialog', () => {
     await userEvent.keyboard('{Control>}k{/Control}');
     await screen.findByRole('combobox', { name: /search chats/i });
     await userEvent.keyboard('usage{Enter}');
-    expect(app.usage.dialogOpen).toBe(true);
+    expect(app.usageAccounts.dialogOpen).toBe(true);
+  });
+});
+
+describe('usage per machine', () => {
+  const KEY = `threadgarden.usage.${M1}`;
+
+  it('forget() stops the reset timer and removes the kept copy', () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    try {
+      localStorage.setItem(KEY, JSON.stringify(usageState()));
+      const store = new UsageStore({ remember: M1 });
+      expect(vi.getTimerCount()).toBe(1);
+      store.forget();
+      expect(vi.getTimerCount()).toBe(0);
+      expect(localStorage.getItem(KEY)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a remote store restores its last state from localStorage and keeps it after disconnect', async () => {
+    const saved = usageState({ account: { email: 'me@x.cz', kind: 'login' } });
+    localStorage.setItem(KEY, JSON.stringify(saved));
+    expect(new UsageStore({ remember: M1 }).value).toEqual(saved);
+
+    const fresh = usageState({ account: { email: 'me@x.cz', plan: 'max', kind: 'login' } });
+    fresh.windows[0]!.utilization = 77;
+    const { app, remote } = await setupTwoMachines({
+      configureRemote: (s) => {
+        s.handlers['usage.get'] = () => fresh;
+      },
+    });
+    const store = app.scopes.get(M1)!.usage;
+    await vi.waitFor(() => expect(store.value).toEqual(fresh));
+    expect(store.connected).toBe(true);
+    expect(JSON.parse(localStorage.getItem(KEY)!)).toEqual(fresh);
+
+    remote.drop(RELAY_CLOSE.unreachable);
+    await vi.waitFor(() => expect(store.connected).toBe(false));
+    expect(store.value).toEqual(fresh);
+    // The next start begins from it.
+    expect(new UsageStore({ remember: M1 }).value).toEqual(fresh);
+  });
+
+  it('the account entries follow every machine, named as the app names them', async () => {
+    const me = usageState({ account: { email: 'me@x.cz', kind: 'login' } });
+    const { app, remote } = await setupTwoMachines({
+      configure: (s) => {
+        s.handlers['usage.get'] = () => me;
+      },
+      configureRemote: (s) => {
+        s.handlers['usage.get'] = () => me;
+      },
+    });
+    await vi.waitFor(() =>
+      expect(app.usageAccounts.entries.map((e) => [e.key, e.machines.map((m) => m.name)])).toEqual([
+        ['email:me@x.cz', ['This PC', 'Ubuntu PC']],
+      ]),
+    );
+
+    remote.push('usage.changed', usageState({ account: { email: 'work@y.cz', kind: 'login' } }));
+    await vi.waitFor(() =>
+      expect(app.usageAccounts.entries.map((e) => [e.key, e.machines.map((m) => m.name)])).toEqual([
+        ['email:me@x.cz', ['This PC']],
+        ['email:work@y.cz', ['Ubuntu PC']],
+      ]),
+    );
   });
 });
 
@@ -266,5 +342,106 @@ describe('clock badges', () => {
     await waitFor(() =>
       expect(screen.queryAllByRole('img', { name: /scheduled/i })).toHaveLength(0),
     );
+  });
+});
+
+describe('usage dialog per account', () => {
+  const win = (key: string, utilization: number): UsageWindow => ({
+    key,
+    utilization,
+    resetsAt: Date.now() + HOUR,
+    observedAt: Date.now() - 60_000,
+    source: 'usage',
+  });
+  const machine = (
+    machineId: string,
+    name: string,
+    account: UsageAccount | undefined,
+    windows: UsageWindow[],
+    extra: Partial<UsageState> = {},
+  ): UsageMachine => ({
+    machineId,
+    name,
+    connected: true,
+    state: { windows, refused: [], ...(account ? { account } : {}), ...extra },
+  });
+  const renderDialog = (machines: UsageMachine[]) => {
+    const refresh = vi.fn(async () => {});
+    const context = new Map<unknown, unknown>([
+      [
+        APP_CONTEXT,
+        {
+          usageAccounts: {
+            entries: groupUsage(machines),
+            dialogOpen: true,
+            refreshing: false,
+            refresh,
+          },
+        },
+      ],
+    ]);
+    render(UsageDialog, { context });
+    return { refresh };
+  };
+  const text = (el: HTMLElement): string => el.textContent?.replace(/\s+/g, ' ').trim() ?? '';
+  const labels = (el: HTMLElement): (string | null)[] =>
+    within(el)
+      .getAllByRole('meter')
+      .map((m) => m.getAttribute('aria-label'));
+
+  it('two accounts: two sections headed by email · plan with their machines, each with its own windows', async () => {
+    const me: UsageAccount = { email: 'me@x.cz', plan: 'max', kind: 'login' };
+    renderDialog([
+      machine('pc', 'This PC', me, [win('five_hour', 42)]),
+      machine('m1', 'Ubuntu PC', me, [win('five_hour', 40)]),
+      machine('m2', 'Laptop', { email: 'work@y.cz', plan: 'pro', kind: 'login' }, [
+        win('seven_day', 9),
+      ]),
+    ]);
+    const dialog = await screen.findByRole('dialog', { name: 'Usage' });
+    const mine = within(dialog).getByRole('region', { name: 'me@x.cz' });
+    expect(text(within(mine).getByRole('heading'))).toBe('me@x.cz · Max plan');
+    expect(mine.textContent).toContain('This PC, Ubuntu PC');
+    expect(labels(mine)).toEqual(['5-hour limit used']);
+    const work = within(dialog).getByRole('region', { name: 'work@y.cz' });
+    expect(text(within(work).getByRole('heading'))).toBe('work@y.cz · Pro plan');
+    expect(work.textContent).toContain('Laptop');
+    expect(labels(work)).toEqual(['Weekly limit used']);
+  });
+
+  it("an unknown account's section is headed by the machine name", async () => {
+    renderDialog([machine('m1', 'Ubuntu PC', undefined, [win('five_hour', 5)])]);
+    const dialog = await screen.findByRole('dialog', { name: 'Usage' });
+    expect(text(within(dialog).getByRole('heading', { level: 3 }))).toBe('Ubuntu PC');
+  });
+
+  it('an API-key machine shows "‹machine› · API key" and the limits-don\'t-apply line', async () => {
+    renderDialog([
+      machine('m1', 'Ubuntu PC', { kind: 'apiKey' }, [], { rateLimitsAvailable: false }),
+    ]);
+    const dialog = await screen.findByRole('dialog', { name: 'Usage' });
+    expect(text(within(dialog).getByRole('heading', { level: 3 }))).toBe('Ubuntu PC · API key');
+    expect(dialog.textContent).toMatch(/do not apply/);
+  });
+
+  it('an account without windows shows "No reading yet"', async () => {
+    renderDialog([machine('pc', 'This PC', { email: 'me@x.cz', kind: 'login' }, [])]);
+    const dialog = await screen.findByRole('dialog', { name: 'Usage' });
+    expect(dialog.textContent).toContain('No reading yet');
+  });
+
+  it('an off account says when it was last seen', async () => {
+    const m = machine('m1', 'Ubuntu PC', { email: 'me@x.cz', kind: 'login' }, [
+      win('five_hour', 5),
+    ]);
+    renderDialog([{ ...m, connected: false }]);
+    const dialog = await screen.findByRole('dialog', { name: 'Usage' });
+    expect(dialog.textContent).toMatch(/as of \d\d:\d\d/);
+  });
+
+  it('Refresh asks every connected machine', async () => {
+    const { refresh } = renderDialog([machine('pc', 'This PC', undefined, [win('five_hour', 5)])]);
+    await userEvent.click(await screen.findByRole('button', { name: /refresh/i }));
+    expect(refresh).toHaveBeenCalledTimes(1);
   });
 });

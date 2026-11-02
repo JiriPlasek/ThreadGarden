@@ -136,6 +136,8 @@ export type LiveSessionDeps = {
   // ── v1.3 B: usage limits ──
   /** A `rate_limit_event` arrived (its `rate_limit_info`, unparsed). A throw is reported. */
   onRateLimit?: (sessionId: string, info: unknown) => void;
+  /** The session's `accountInfo()` answer (the current session only). A throw is reported. */
+  onAccount?: (info: AccountInfo) => void;
   /** An assistant message carried the API error `rate_limit` (the turn was refused). */
   onLimitError?: (sessionId: string) => void;
   /** A `result` arrived (every turn end, before `onTurnEnded`). A throw is reported. */
@@ -826,7 +828,13 @@ export class LiveSession {
     }
     asked.then(
       (info) => {
-        if (this.session === session) this.setAuth(authLabel(info));
+        if (this.session !== session) return;
+        this.setAuth(authLabel(info));
+        try {
+          this.deps.onAccount?.(info);
+        } catch (err) {
+          this.report(err, `onAccount (session ${this.id})`);
+        }
       },
       (err: unknown) => this.report(err, `accountInfo (session ${this.id})`),
     );

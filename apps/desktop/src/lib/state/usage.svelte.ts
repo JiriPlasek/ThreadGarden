@@ -1,14 +1,16 @@
 /**
- * v1.3 B: the account's plan usage (spec §3) — the bottom strip's meter, the
- * Usage dialog, and which chats a usage limit refused (their limit notice and
- * "Send when the limit resets"). The service keeps the state; this mirrors it
- * (`usage.get`, then every `usage.changed`).
+ * v1.3 B: one machine's plan usage (spec §3) — what the bottom strip's chips
+ * and the Usage dialog show (grouped by account in `usage-accounts`), and
+ * which chats a usage limit refused (their limit notice and "Send when the
+ * limit resets"). The machine's service keeps the state; this mirrors it
+ * (`usage.get`, then every `usage.changed`). Every machine scope has one.
  *
  * Time matters here: a refusal ends at its reset, so `now` moves on by itself
  * at the next known reset time (one timer, no polling).
  */
 import {
   usageEmpty,
+  UsageStateSchema,
   type RefusedChat,
   type UsageState,
   type UsageWindow,
@@ -61,12 +63,27 @@ export const sortWindows = (ws: readonly UsageWindow[]): UsageWindow[] => {
   return [...ws].sort((a, b) => rank(a.key) - rank(b.key) || a.key.localeCompare(b.key));
 };
 
+/** `localStorage` key of a paired machine's last usage state. */
+const rememberKey = (machineId: string): string => `threadgarden.usage.${machineId}`;
+
+const storage = (): Storage | null => (typeof localStorage === 'undefined' ? null : localStorage);
+
+/** The usage state kept for `machineId`, if any (a broken copy reads as none). */
+const recall = (machineId: string): UsageState | undefined => {
+  try {
+    const raw = storage()?.getItem(rememberKey(machineId));
+    if (!raw) return undefined;
+    const parsed = UsageStateSchema.safeParse(JSON.parse(raw));
+    return parsed.success ? parsed.data : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
 export class UsageStore {
   value = $state.raw<UsageState>(usageEmpty);
-  /** The Usage dialog is open. */
-  dialogOpen = $state(false);
-  /** A fresh reading is on its way (the dialog shows it). */
-  refreshing = $state(false);
+  /** Its service answers now; otherwise `value` is the last state it sent. */
+  connected = $state(false);
   /** Moves on at the next known reset, so refusals and warnings lapse on time. */
   now = $state(Date.now());
 
@@ -74,6 +91,18 @@ export class UsageStore {
   private timer: ReturnType<typeof setTimeout> | undefined;
   /** Bumped by every state that arrives: an answer overtaken by a newer state is dropped. */
   private version = 0;
+  /** A paired machine's id: its last state is kept, so an off machine still shows it. */
+  private readonly remember: string | undefined;
+  /** Its scope is gone: no timer runs and nothing more is kept. */
+  private stopped = false;
+
+  constructor(opts: { remember?: string } = {}) {
+    this.remember = opts.remember;
+    const kept = opts.remember === undefined ? undefined : recall(opts.remember);
+    if (!kept) return;
+    this.value = kept;
+    this.wake();
+  }
 
   /** The meter's window, when known. */
   meter = $derived.by((): UsageWindow | undefined => {
@@ -99,6 +128,8 @@ export class UsageStore {
 
   init = (api: Api): void => {
     this.api = api;
+    this.connected = api.status === 'open';
+    api.onStatus((s) => (this.connected = s === 'open'));
     api.on('usage.changed', (state) => this.set(state));
     api.onOpen(() => this.load());
     if (api.status === 'open') quietly(this.load());
@@ -114,21 +145,29 @@ export class UsageStore {
     return r.resetsAt !== undefined && r.resetsAt <= this.now ? undefined : r;
   };
 
-  /** Opens the Usage dialog, asking a running chat for a fresh reading. */
-  open = (): void => {
-    this.dialogOpen = true;
-    quietly(this.refresh());
-  };
-
+  /** Asks a running chat on the machine for a fresh reading. */
   refresh = async (): Promise<void> => {
     const api = this.api;
     if (!api) return;
-    this.refreshing = true;
+    // The service's state after the reading: as new as any event before it.
+    this.set(await api.request('usage.get', { refresh: true }));
+  };
+
+  /** Its scope is gone: stops the reset timer and keeps no later state. */
+  stop = (): void => {
+    this.stopped = true;
+    clearTimeout(this.timer);
+    this.timer = undefined;
+  };
+
+  /** Its machine was removed: stops, and removes the kept copy (a re-pairing starts empty). */
+  forget = (): void => {
+    this.stop();
+    if (this.remember === undefined) return;
     try {
-      // The service's state after the reading: as new as any event before it.
-      this.set(await api.request('usage.get', { refresh: true }));
-    } finally {
-      this.refreshing = false;
+      storage()?.removeItem(rememberKey(this.remember));
+    } catch {
+      // Storage unavailable: nothing was kept either.
     }
   };
 
@@ -144,12 +183,20 @@ export class UsageStore {
     this.value = state;
     this.now = Date.now();
     this.wake();
+    if (this.remember !== undefined && !this.stopped) {
+      try {
+        storage()?.setItem(rememberKey(this.remember), JSON.stringify(state));
+      } catch {
+        // Not kept (storage full or unavailable): the machine shows it while it is on.
+      }
+    }
   };
 
   /** One timer for the next reset ahead (refusal or window), capped at a day. */
   private wake = (): void => {
     clearTimeout(this.timer);
     this.timer = undefined;
+    if (this.stopped) return;
     const now = Date.now();
     const times = [
       ...this.value.windows.map((w) => w.resetsAt),
@@ -164,4 +211,5 @@ export class UsageStore {
   };
 }
 
+/** This PC's (its scope's `usage`; paired machines' scopes have their own). */
 export const usage = new UsageStore();

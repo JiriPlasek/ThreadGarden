@@ -51,8 +51,8 @@ const sampleItems = [
 
 describe('protocol schemas', () => {
   it('exposes the protocol version', () => {
-    expect(PROTOCOL_VERSION).toBe(7);
-    expect([5, 6, 7, 8, 9].map(acceptsRemoteProtocol)).toEqual([false, true, true, true, false]);
+    expect(PROTOCOL_VERSION).toBe(8);
+    expect([6, 7, 8, 9, 10].map(acceptsRemoteProtocol)).toEqual([false, true, true, true, false]);
   });
 
   it('accepts every ChatItem kind', () => {

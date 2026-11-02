@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { PROTOCOL_VERSION } from '@threadgarden/protocol';
 import { relayUrl } from '../../src/lib/state/machines.svelte';
 import { samePlace, wirePlace } from '../../src/lib/state/places.svelte';
 import { chatKey, LOCAL_FALLBACK_ID, parseChatKey } from '../../src/lib/state/refs';
@@ -266,7 +267,7 @@ describe('machine scopes', () => {
 
   it("without a machine in the local hello, This PC is '" + LOCAL_FALLBACK_ID + "'", async () => {
     const { app } = await setup((s) => {
-      s.handlers.hello = () => ({ serviceVersion: '0.1.0', protocolVersion: 7 });
+      s.handlers.hello = () => ({ serviceVersion: '0.1.0', protocolVersion: PROTOCOL_VERSION });
     });
     expect(app.scopes.local().machineId).toBe('local');
     app.tabs.openTab('a');
@@ -283,6 +284,29 @@ describe('machine scopes', () => {
     expect(app.tabs.active).toBe(`${LOCAL}/s1`);
     expect(app.scopes.get(M1)).toBeUndefined();
     expect(app.scopes.all()).toHaveLength(1);
+  });
+
+  it("a removed machine's kept usage is forgotten", async () => {
+    const key = `threadgarden.usage.${M1}`;
+    const { app } = await setupTwoMachines({
+      configureRemote: (s) => {
+        s.handlers['usage.get'] = () => ({
+          windows: [
+            {
+              key: 'five_hour',
+              utilization: 5,
+              resetsAt: Date.now() + 3_600_000,
+              observedAt: Date.now(),
+              source: 'usage',
+            },
+          ],
+          refused: [],
+        });
+      },
+    });
+    await vi.waitFor(() => expect(localStorage.getItem(key)).not.toBeNull());
+    await app.machines.remove(M1);
+    expect(localStorage.getItem(key)).toBeNull();
   });
 
   it('a project place names its machine; the service never sees it', async () => {

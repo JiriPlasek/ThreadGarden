@@ -99,7 +99,8 @@ them to the service it starts (`THREADGARDEN_DATA_DIR`,
 `THREADGARDEN_LEGACY_DATA_DIR`), so the two never disagree. It looks for
 `service.json` in the new dir first, then in the old one: a pahub service
 still running there is reached (both subprotocols are offered), its `hello`
-reports protocol 3, and **Restart service** stops it (the shell stops a
+reports an older protocol than the app's (8), so the UI shows the
+incompatible screen, and **Restart service** stops it (the shell stops a
 service recorded in either dir). At start, before it takes its own lock, the
 service migrates once (`src/migrate-data-dir.ts`): when the new dir has no
 `threadgarden.db` and the old one has a `pahub.db`, it takes the old dir's
@@ -123,8 +124,11 @@ a burst of more than 10 uncaught exceptions in a minute ends the process.
 Shutdown runs every step even if one fails, and always releases the lock.
 
 **Versions.** `hello` exchanges the protocol version and the service version.
-A different protocol version is incompatible: the UI shows a blocking screen
-that offers to restart the service. The same protocol with a different
+The local service must speak exactly the app's protocol (8); any other
+version is incompatible: the UI shows a blocking screen that offers to
+restart the service. A paired machine's service is accepted one version
+either way (7–9, `REMOTE_PROTOCOL_RANGE`; see Versions across machines
+under [Protocol](#protocol)). The same protocol with a different
 service version (an app update while the old service still runs) shows a thin
 "older version" bar instead; Threadgarden never restarts the service on its own,
 because that would end running agents. **Restart service** confirms (listing
@@ -201,10 +205,11 @@ service and the UI; the service validates every request.
   `chat.since`); **1001** when the local service stops. The UI also checks
   that the relayed `hello` names the paired machine's id: another id counts
   as a mismatch, like 4409, and the client stops.
-- **Versions across machines.** The protocol is 7 (v1.4 was 5; 6 added power
-  control, 7 projects). The desktop and its local service still need the
-  exact version; a remote service is accepted one version either way (6, 7
-  or 8 for a desktop on 7). What a machine can do is read from the
+- **Versions across machines.** The protocol is 8 (v1.4 was 5; 6 added power
+  control, 7 projects, 8 the usage state's account). The desktop and its
+  local service still need the exact version; a remote service is accepted
+  one version either way (7, 8 or 9 for a desktop on 8,
+  `REMOTE_PROTOCOL_RANGE`). What a machine can do is read from the
   capabilities in its `hello`, not from its version: the desktop offers power
   control only with `power`, and New project, Clone and Browse… only with
   `projects`. On an older machine the New project and Clone tabs and Browse…
@@ -234,7 +239,7 @@ service and the UI; the service validates every request.
   adds the `power.*` methods and the event `power.changed` ([Power](#power)).
   Protocol 7 adds `folders.list`, `.complete`, `.create`, `projects.createIn`,
   `.create`, `.clone`, `.job`, `.cancel`, `.origins` and `github.status`,
-  `.repos` ([Projects](#projects)).
+  `.repos` ([Projects](#projects)). Protocol 8 adds `account` to the usage state.
 - **Local-only methods** (v1.4). Every request is dispatched with its
   origin, `local` (the loopback server) or `remote` (the TLS listener), and
   a method registered `localOnly` answers `FORBIDDEN` to a remote caller
@@ -535,9 +540,31 @@ was 4.34:1 on the muted grey.)
 **Usage limits** (v1.3, `src/usage/usage.ts`). Every live session streams
 `rate_limit_event`s (`rate_limit_info`: `status`, `resetsAt`,
 `rateLimitType`, `utilization`, overage fields); the normalizer renders none
-of them. The service keeps the latest value per window, account-wide (every
-chat is the same account), in `threadgarden.db` (`usage_limits`, with the time it
-was observed), and broadcasts `usage.changed` when what the UI shows changes.
+of them. The service keeps the latest value per window, account-wide on that
+machine (every chat of a service is the same account), in `threadgarden.db`
+(`usage_limits`, with the time it was observed), and broadcasts `usage.changed`
+when what the UI shows changes. Usage is per machine, grouped by account
+(protocol 8, usage-per-account design): each session reports its account
+(`accountInfo()`), the state carries it (`account`: kind, email, provider, plan), and a
+service that learns another email than the one its windows were read for
+forgets those windows (`windowsOf`, the normalised email they belong to; the
+refused chats stay). The desktop gives every machine scope its own `UsageStore`
+(This PC's is the singleton `usage`; a paired machine's is fed by that
+machine's `usage.get` and `usage.changed`), and `UsageAccounts`
+(`src/lib/state/usage-accounts.svelte.ts`) and `groupUsage`
+(`src/lib/usage/accounts.ts`) merge the machines into one entry
+per account: the same claude.ai email is one entry with the newest reading per
+window, while a machine with no known account, an API key or a provider is an
+entry of its own (never guessed onto an account). The meter shows a chip per
+entry and the Usage dialog a section per entry; a machine that is off shows
+its last state "as of" the time it was seen. A chat reads its refusal and the
+reset behind "When the limit resets" from its own machine's store, never
+This PC's. Accepted limitations of an account switch: a usage reading or
+`rate_limit_event` from a process still on the old login can arrive after
+the switch dropped the old windows (and is kept as the new account's), and
+the new account's first event can land before its `accountInfo()` answer and
+be dropped with the old windows (the next reading repopulates it within
+seconds).
 Claude Code 2.1.314 sends `resetsAt` in epoch seconds and `utilization` as a
 fraction (read from its bundle: the reset is `Math.floor(Date.now()/1000)+…`
 and its own usage answer multiplies by 100); Threadgarden stores epoch ms and
@@ -676,8 +703,8 @@ machine picker. Notifications come from every connected machine and name it.
 **Stop all work** stops every connected machine's work (Ruling R17);
 restarting or quitting the service acts on This PC only. A restart of the
 desktop or its service changes nothing on the machine: the relays reopen and
-the UI unlocks the machines again from the keychain. Analytics and the usage
-meter show This PC only in this release.
+the UI unlocks the machines again from the keychain. Analytics shows
+This PC only in this release.
 
 ### Power
 

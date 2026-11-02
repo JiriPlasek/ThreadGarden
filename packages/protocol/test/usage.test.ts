@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+  PROTOCOL_VERSION,
+  REMOTE_PROTOCOL_RANGE,
   ScheduledSendSchema,
+  UsageAccountSchema,
   UsageStateSchema,
   UsageWindowSchema,
   events,
@@ -114,5 +117,29 @@ describe('v1.3 scheduled sends', () => {
       dueAt: 10,
     };
     expect(events.scheduledSent.parse(sent)).toEqual(sent);
+  });
+});
+
+describe('usage per account (protocol 8)', () => {
+  it('a state carries the signed-in account', () => {
+    const account = { email: 'a@b.c', plan: 'max', kind: 'login' };
+    expect(UsageStateSchema.parse({ account }).account).toEqual(account);
+    expect(UsageAccountSchema.parse({ kind: 'provider', provider: 'bedrock' })).toEqual({
+      kind: 'provider',
+      provider: 'bedrock',
+    });
+  });
+
+  it('a state without an account parses with it undefined', () => {
+    expect(UsageStateSchema.parse({}).account).toBeUndefined();
+  });
+
+  it('an unknown account kind reads as login', () => {
+    expect(UsageAccountSchema.parse({ kind: 'sso' }).kind).toBe('login');
+  });
+
+  it('is protocol 8, accepting remotes at 7 to 9', () => {
+    expect(PROTOCOL_VERSION).toBe(8);
+    expect(REMOTE_PROTOCOL_RANGE).toEqual({ min: 7, max: 9 });
   });
 });

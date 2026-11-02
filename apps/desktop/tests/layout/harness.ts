@@ -17,7 +17,7 @@ import { ConnectionState } from '../../src/lib/state/connection.svelte';
 import { InteractionState } from '../../src/lib/state/interaction.svelte';
 import { LifecycleState } from '../../src/lib/state/lifecycle.svelte';
 import { APP_CONTEXT, type AppState } from '../../src/lib/state/context';
-import { MachinesState } from '../../src/lib/state/machines.svelte';
+import { machineNameOf, MachinesState } from '../../src/lib/state/machines.svelte';
 import { PlacesState } from '../../src/lib/state/places.svelte';
 import { PowerState } from '../../src/lib/state/power.svelte';
 import { machineIdOf } from '../../src/lib/state/refs';
@@ -27,6 +27,7 @@ import { SessionsState } from '../../src/lib/state/sessions.svelte';
 import { SettingsState } from '../../src/lib/state/settings.svelte';
 import { TabsState } from '../../src/lib/state/tabs.svelte';
 import { UpdatesState } from '../../src/lib/state/updates.svelte';
+import { UsageAccounts } from '../../src/lib/state/usage-accounts.svelte';
 import { UsageStore } from '../../src/lib/state/usage.svelte';
 import { YourTurnState } from '../../src/lib/state/your-turn.svelte';
 import { FakeServer, routedImpl } from '../service/fake-ws';
@@ -163,8 +164,10 @@ const wire = (
     interaction: new InteractionState(),
     // Started like the app's; a test that needs another debounce re-inits it (init stops it first).
     yourTurn: new YourTurnState(),
+    usage: new UsageStore(),
   });
   const scopes = new Scopes(local);
+  const machines = new MachinesState();
   const app: AppState = {
     connection: new ConnectionState(),
     places: local.places,
@@ -176,11 +179,12 @@ const wire = (
     interaction: local.interaction,
     lifecycle: new LifecycleState(),
     buckets: local.buckets,
-    usage: new UsageStore(),
+    usage: local.usage,
+    usageAccounts: new UsageAccounts(scopes, (id) => machineNameOf(machines, id)),
     scheduled: local.scheduled,
     analytics: new AnalyticsState(),
     updates: new UpdatesState(),
-    machines: new MachinesState(),
+    machines,
     power: new PowerState(),
     scopes,
   };
