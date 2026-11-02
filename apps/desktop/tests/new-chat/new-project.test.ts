@@ -1,7 +1,7 @@
 import { render, screen, waitFor, within } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import { PROJECTS_CAPABILITY, type GithubStatus } from '@threadgarden/protocol';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import NewChatDialog from '../../src/lib/components/NewChatDialog.svelte';
 import { LOCAL, M1, machineInfo, project, setupTwoMachines } from '../layout/harness';
 import { RpcFail, type FakeServer } from '../service/fake-ws';
@@ -312,8 +312,15 @@ describe('New chat tabs', () => {
     await waitFor(() => expect(env.server.calls('projects.createIn')).toHaveLength(1));
     await userEvent.selectOptions(within(dialog).getByRole('combobox', { name: /machine/i }), M1);
     await waitFor(() => expect(env.remote.calls('projects.createIn')).toHaveLength(1));
+    // This PC's answer reaches its client first (what follows on it is microtasks, done
+    // before waitFor looks again).
+    const delivered = vi.spyOn(env.server.live!, 'deliver');
     answerHere({ path: '/work' });
-    await new Promise((r) => setTimeout(r, 20));
+    await waitFor(() =>
+      expect(delivered).toHaveBeenCalledWith(
+        expect.objectContaining({ result: { path: '/work' } }),
+      ),
+    );
     answerThere({ path: '/home/jiri/threadgarden/projects' });
     const where = within(dialog).getByRole('textbox', { name: 'Create in' }) as HTMLInputElement;
     await waitFor(() => expect(where.value).toBe('/home/jiri/threadgarden/projects'));
