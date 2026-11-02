@@ -301,6 +301,25 @@ describe('New chat: Clone', () => {
     expect(env.server.calls('chat.create')).toHaveLength(0);
   });
 
+  it('a clone ended by the machine no longer offering Clone cancels it and frees the dialog', async () => {
+    const env = await twoMachines((s) => {
+      s.handlers['projects.job'] = () => job();
+    });
+    const dialog = await openClone(env);
+    const machine = within(dialog).getByRole('combobox', { name: /machine/i }) as HTMLSelectElement;
+    await clonePlant(dialog);
+    await within(dialog).findByText('Cloning Jiri/Plant…');
+    expect(machine.disabled).toBe(true);
+
+    // What the machine can do is no longer known (its link dropped, say).
+    env.app.machines.get(M1)!.info = null;
+    await waitFor(() => expect(env.remote.calls('projects.cancel')).toHaveLength(1));
+    const existing = within(dialog).getByRole('tab', { name: 'Existing folder' });
+    expect(existing.getAttribute('aria-selected')).toBe('true');
+    await waitFor(() => expect(machine.disabled).toBe(false));
+    expect(machine.value).toBe(M1);
+  });
+
   it('a search that hides the chosen repo clears the choice', async () => {
     const env = await twoMachines();
     const dialog = await openClone(env);

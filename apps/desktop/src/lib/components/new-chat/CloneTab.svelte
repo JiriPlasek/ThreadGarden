@@ -98,7 +98,12 @@
       });
     return () => {
       live = false;
-      run?.cancel();
+      if (run) {
+        run.cancel();
+        // Gone mid-clone (closed, or the machine can't clone any more): the dialog's lock
+        // goes with it, as no effect of this tab runs again to release it.
+        busy = false;
+      }
     };
   });
 
