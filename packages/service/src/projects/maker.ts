@@ -169,6 +169,14 @@ export class ProjectMaker {
     // half-made folder (origin already set) would read as this repo, cloned.
     const earlier = this.finishing.get(target);
     if (earlier?.job.state === 'cancelled') await earlier.finished.catch(() => {});
+    // The same repo still cloning there: its half-fetched folder is not a clone yet, so the
+    // caller follows that job instead.
+    if (
+      earlier?.job.state === 'running' &&
+      earlier.job.repo.toLowerCase() === p.repo.toLowerCase()
+    ) {
+      return { status: 'started', job: { ...earlier.job } };
+    }
     if (await this.exists(target)) {
       if ((await originOf(t, target)) === p.repo.toLowerCase()) {
         return { status: 'existing', path: target };

@@ -525,6 +525,25 @@ describe('clone', () => {
       expect(readdirSync(target())).toEqual([]);
     });
 
+    it('a clone retried while the first still runs answers that job, not its half-made folder', async () => {
+      const s = setup({ replies: [ghReady, originIs('https://github.com/me/thing')] });
+      await s.maker.clone({ createIn: code, repo: 'me/thing' });
+      // git wrote origin early and is still fetching.
+      mkdirSync(path.join(target(), '.git', 'objects'), { recursive: true });
+
+      expect(await s.maker.clone({ createIn: code, repo: 'me/thing' })).toEqual({
+        status: 'started',
+        job: { jobId: 'job-1', state: 'running', repo: 'me/thing', path: target(), error: null },
+      });
+      expect(s.tools.spawned).toHaveLength(1);
+
+      // Another repo of the same name still finds the place taken.
+      expect(
+        await failure(() => s.maker.clone({ createIn: code, repo: 'other/thing' })),
+      ).toMatchObject({ code: 'EXISTS' });
+      expect(s.tools.spawned).toHaveLength(1);
+    });
+
     it('cancel after done keeps it', async () => {
       const { maker, tools } = await start();
       tools.spawned[0]!.finish({ code: 0 });
