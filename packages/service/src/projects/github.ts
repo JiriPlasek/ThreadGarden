@@ -271,8 +271,14 @@ export const startClone = (
     {},
   );
 
-/** Lower-case owner/name of a github.com origin (https or ssh), else null. */
+/**
+ * Lower-case owner/name of a github.com origin (https or ssh), else null. Only `dir`'s own:
+ * git walks up to a repo above, so a plain folder inside one has none. `--show-prefix` is
+ * empty only at the top of a work tree, and needs no path comparing (case, slashes, links).
+ */
 export const originOf = async (t: Tools, dir: string): Promise<string | null> => {
+  const top = await t.run('git', ['rev-parse', '--show-prefix'], { cwd: dir, timeoutMs: 10000 });
+  if (top.code !== 0 || top.stdout.trim() !== '') return null;
   const r = await t.run('git', ['remote', 'get-url', 'origin'], { cwd: dir, timeoutMs: 10000 });
   if (r.code !== 0) return null;
   const m =

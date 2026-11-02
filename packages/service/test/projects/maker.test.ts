@@ -54,6 +54,9 @@ const originIs = (url: string): Reply => ({
   result: { stdout: url + '\n' },
 });
 
+/** Every folder git is asked about is the top of its own repo (originOf checks). */
+const atRepoTop: Reply = { cmd: 'git', match: /^rev-parse --show-prefix$/, result: {} };
+
 const setup = (
   o: {
     replies?: Reply[];
@@ -62,7 +65,7 @@ const setup = (
     stored?: Record<string, unknown>;
   } = {},
 ) => {
-  const tools = fakeTools(o.replies ?? []);
+  const tools = fakeTools([...(o.replies ?? []), atRepoTop]);
   const values = new Map<string, unknown>(Object.entries(o.stored ?? {}));
   const store = {
     get: (k: string) => values.get(k),

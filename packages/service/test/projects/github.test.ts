@@ -13,7 +13,7 @@ import {
   spawnTool,
   toolEnv,
 } from '../../src/projects/github.js';
-import { fakeTools } from './fake-tools.js';
+import { fakeTools, type Reply } from './fake-tools.js';
 
 const AUTH = /^auth status/;
 
@@ -299,9 +299,11 @@ describe('startClone', () => {
 });
 
 describe('originOf', () => {
+  const atTop: Reply = { cmd: 'git', match: /^rev-parse --show-prefix$/, result: { stdout: '\n' } };
   const origin = async (url: string | null) =>
     originOf(
       fakeTools([
+        atTop,
         {
           cmd: 'git',
           match: /^remote get-url origin/,
@@ -319,5 +321,31 @@ describe('originOf', () => {
     expect(await origin('https://gitlab.com/x/y')).toBeNull();
     expect(await origin('https://notgithub.com/x/y')).toBeNull();
     expect(await origin(null)).toBeNull();
+  });
+
+  it('a plain folder inside a bigger repo has no origin of its own, nor does a non-repo', async () => {
+    const bigOrigin: Reply = {
+      cmd: 'git',
+      match: /^remote get-url origin/,
+      result: { stdout: 'https://github.com/me/big\n' },
+    };
+    const inside = fakeTools([
+      { cmd: 'git', match: /^rev-parse --show-prefix$/, result: { stdout: 'sub/\n' } },
+      bigOrigin,
+    ]);
+    expect(await originOf(inside, '/big/sub')).toBeNull();
+    expect(inside.calls.map((c) => [c.args.join(' '), c.cwd])).toEqual([
+      ['rev-parse --show-prefix', '/big/sub'],
+    ]);
+
+    const plain = fakeTools([
+      {
+        cmd: 'git',
+        match: /^rev-parse --show-prefix$/,
+        result: { code: 128, stderr: 'fatal: not a git repository' },
+      },
+      bigOrigin,
+    ]);
+    expect(await originOf(plain, '/plain')).toBeNull();
   });
 });
