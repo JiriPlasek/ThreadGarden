@@ -94,6 +94,25 @@ describe('methods a paired device may not call', () => {
     }
   });
 
+  const projectMethods = Object.keys(methods).filter((m) =>
+    /^(folders|github)\.|^projects\.(createIn|create|clone|job|cancel|origins)$/.test(m),
+  );
+
+  it('covers all 11 projects, folders and github methods', () => {
+    expect(projectMethods).toHaveLength(11);
+  });
+
+  it.each(projectMethods)('does not forbid %s to a paired device', async (method) => {
+    const ws = await open(svc.remote!.port, device.token);
+    try {
+      const res = await call(ws, method, {});
+      expect(res).not.toMatchObject({ error: { code: 'FORBIDDEN' } });
+      expect(res).not.toMatchObject({ error: { code: 'METHOD_NOT_FOUND' } });
+    } finally {
+      ws.close();
+    }
+  });
+
   it('lets a device revoke itself, never another device', async () => {
     const ws = await open(svc.remote!.port, device.token);
     expect(await call(ws, 'devices.revoke', { deviceId: other.id })).toMatchObject({

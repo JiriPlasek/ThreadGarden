@@ -189,6 +189,8 @@ export type ChatHandlers = {
     text: string;
     images?: ImageRef[] | undefined;
   }) => Promise<{ queued: boolean }>;
+  /** Throws `CLAUDE_MISSING` and the like when a Claude Code process may not be started. */
+  requireRunnable: () => Promise<void>;
 };
 
 export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): ChatHandlers => {
@@ -574,5 +576,5 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
     return lastModels ?? [];
   });
 
-  return { send };
+  return { send, requireRunnable };
 };

@@ -41,6 +41,9 @@ import { buildSessionEnv } from './sdk/real-adapter.js';
 import { registerChatHandlers } from './server/handlers/chat.js';
 import { makeResumeChecker, registerExternalHandlers } from './server/handlers/external.js';
 import { registerFileHandlers } from './server/handlers/files.js';
+import { registerProjectHandlers } from './server/handlers/projects.js';
+import { systemTools, type Tools } from './projects/github.js';
+import { ProjectMaker } from './projects/maker.js';
 import { machineFor, registerMachineHandlers } from './server/handlers/machines.js';
 import { registerHistoryHandlers } from './server/handlers/history.js';
 import {
@@ -126,6 +129,8 @@ export type StartOptions = {
   claudeRunner?: (claudePath: string) => (args: string[]) => Promise<string>;
   /** Approximate size budget (characters) of the chat history cache; see `registerChatHandlers`. */
   historyCacheChars?: number;
+  /** Runs `git` and `gh` for New project and Clone (default: the real ones); tests inject a fake. */
+  projectTools?: Tools;
   /** Base environment of session processes (default `process.env`); the API key is added on top. */
   sessionEnv?: NodeJS.ProcessEnv;
   /**
@@ -750,6 +755,19 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         now: clock,
         timers: opts.sessionTimers ?? realTimers,
         titles: chatTitles,
+      });
+      const projectTools = opts.projectTools ?? systemTools;
+      registerProjectHandlers(router, {
+        maker: new ProjectMaker({
+          tools: projectTools,
+          store: { get: (k) => opened.getUiState(k), set: (k, v) => opened.setUiState(k, v) },
+          headless,
+          home: os.homedir(),
+          recentCwds: () => opened.recentCwds().map((r) => r.cwd),
+          requireRunnable: chatHandlers.requireRunnable,
+        }),
+        tools: projectTools,
+        home: os.homedir(),
       });
       const scheduledSends = new ScheduledSends({
         raw: opened.raw,
