@@ -86,9 +86,10 @@ describe('usage chips', () => {
     renderMeter([machine('pc', login('me@x.cz'), mine)]);
     const lines = screen.getByRole('button', { name: /^usage/i }).title.split('\n');
     expect(lines[0]).toBe('me@x.cz');
-    expect(lines[1]).toBe('5-hour limit: 42%, resets in 2 h, at ' + clockTime(NOW + 2 * HOUR));
-    expect(lines).toHaveLength(1 + mine.length);
-    expect(lines[3]).toMatch(/^Weekly limit · Fable: 30%, resets /);
+    expect(lines[1]).toBe('Machines: This PC');
+    expect(lines[2]).toBe('5-hour limit: 42%, resets in 2 h, at ' + clockTime(NOW + 2 * HOUR));
+    expect(lines).toHaveLength(2 + mine.length);
+    expect(lines[4]).toMatch(/^Weekly limit · Fable: 30%, resets /);
   });
 
   it('says when the account is not known yet', () => {
@@ -123,9 +124,53 @@ describe('usage chips', () => {
     expect(text(chip)).toContain('Limit reached');
   });
 
-  it('compact shows only the 5h figure', () => {
-    renderMeter([machine('pc', login('me@x.cz'), mine)], false, true);
-    expect(text(screen.getByRole('button', { name: /^usage/i }))).toBe('5h 42%');
+  it('compact keeps machine names and as-of, dropping only the breakdown', () => {
+    renderMeter(
+      [
+        machine('pc', login('me@x.cz'), mine),
+        machine('m2', login('work@y.cz'), [win('five_hour', 7)], false),
+      ],
+      true,
+      true,
+    );
+    const chips = screen.getAllByRole('button', { name: /^usage/i });
+    expect(text(chips[0]!)).toBe('This PC · 5h 42%');
+    expect(text(chips[1]!)).toBe('m2 · 5h 7% · as of ' + clockTime(NOW - 60_000));
+  });
+
+  it('unknown-account chips from different machines are told apart', () => {
+    renderMeter([machine('m1', undefined, mine), machine('m2', undefined, mine)], true);
+    const chips = screen.getAllByRole('button', { name: /^usage/i });
+    expect(chips).toHaveLength(2);
+    expect(chips[0]!.title).not.toBe(chips[1]!.title);
+    expect(chips[0]!.title.split('\n').slice(0, 2)).toEqual([
+      'Account not known yet',
+      'Machines: m1',
+    ]);
+    expect(chips[0]!.getAttribute('aria-label')).toContain('m1');
+    expect(chips[1]!.getAttribute('aria-label')).toContain('m2');
+  });
+
+  it('the accessible name carries the as-of marker', () => {
+    renderMeter([machine('m1', login('me@x.cz'), mine, false)], true);
+    const label = screen.getByRole('button', { name: /^usage/i }).getAttribute('aria-label');
+    expect(label).toContain('As of ' + clockTime(NOW - 60_000));
+  });
+
+  it('renders nothing without chips', () => {
+    const { container } = render(UsageMeter, {
+      context: new Map<unknown, unknown>([
+        [
+          APP_CONTEXT,
+          {
+            usage: { now: NOW },
+            usageAccounts: { entries: [], open: vi.fn() },
+            machines: { several: false },
+          },
+        ],
+      ]),
+    });
+    expect(container.querySelector('div')).toBeNull();
   });
 
   it('no chip for an API-key entry or an entry without a 5-hour window', () => {

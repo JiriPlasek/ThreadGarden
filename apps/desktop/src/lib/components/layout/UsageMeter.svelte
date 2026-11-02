@@ -84,6 +84,7 @@
     where: string;
     asOf: string | undefined;
     title: string;
+    label: string;
   };
 
   /** The chips: an entry shows when it is a login with a 5-hour reading. */
@@ -94,43 +95,49 @@
       const windows = chipWindows(e);
       if (!windows.some(isFiveHour)) continue;
       const asOf = e.asOf === undefined ? undefined : clockTime(e.asOf);
+      const names = e.machines.map((m) => m.name).join(', ');
+      const lines = [
+        e.account?.email ?? 'Account not known yet',
+        `Machines: ${names}`,
+        ...e.windows.map(line),
+        ...(asOf ? [`As of ${asOf}`] : []),
+      ];
       out.push({
         key: e.key,
         windows,
-        where: machines.several ? e.machines.map((m) => m.name).join(', ') : '',
+        where: machines.several ? names : '',
         asOf,
-        title: [
-          e.account?.email ?? 'Account not known yet',
-          ...e.windows.map(line),
-          ...(asOf ? [`As of ${asOf}`] : []),
-        ].join('\n'),
+        title: lines.join('\n'),
+        label: `Usage: ${lines.join('; ')}`,
       });
     }
     return out;
   });
 </script>
 
-<div bind:this={root} class="flex shrink-0 items-center gap-1 whitespace-nowrap">
-  {#each chips as chip (chip.key)}
-    {@const shown = isCompact ? chip.windows.filter(isFiveHour).slice(0, 1) : chip.windows}
-    <button
-      type="button"
-      class="hover:bg-accent focus-visible:ring-ring/50 text-muted-foreground flex h-6 shrink-0 items-center gap-1 rounded px-1.5 tabular-nums outline-none focus-visible:ring-2"
-      aria-label="Usage: {chip.title.replaceAll('\n', '; ')}"
-      title={chip.title}
-      data-usage-status={windowStatus(chip.windows[0]!, now) ?? 'unknown'}
-      onclick={() => usageAccounts.open()}
-    >
-      <GaugeIcon class="size-3.5" aria-hidden="true" />
-      {#if chip.where && !isCompact}
-        <span>{chip.where} ·</span>
-      {/if}
-      {#each shown as w, i (w.key)}
-        <span class={cn(tone(w))}>{i > 0 ? ' · ' : ''}{figure(w)}</span>
-      {/each}
-      {#if chip.asOf && !isCompact}
-        <span class="opacity-70">· as of {chip.asOf}</span>
-      {/if}
-    </button>
-  {/each}
-</div>
+{#if chips.length > 0}
+  <div bind:this={root} class="flex shrink-0 items-center gap-1 whitespace-nowrap">
+    {#each chips as chip (chip.key)}
+      {@const shown = isCompact ? chip.windows.filter(isFiveHour).slice(0, 1) : chip.windows}
+      <button
+        type="button"
+        class="hover:bg-accent focus-visible:ring-ring/50 text-muted-foreground flex h-6 shrink-0 items-center gap-1 rounded px-1.5 tabular-nums outline-none focus-visible:ring-2"
+        aria-label={chip.label}
+        title={chip.title}
+        data-usage-status={windowStatus(chip.windows[0]!, now) ?? 'unknown'}
+        onclick={() => usageAccounts.open()}
+      >
+        <GaugeIcon class="size-3.5" aria-hidden="true" />
+        {#if chip.where}
+          <span>{chip.where} ·</span>
+        {/if}
+        {#each shown as w, i (w.key)}
+          <span class={cn(tone(w))}>{i > 0 ? ' · ' : ''}{figure(w)}</span>
+        {/each}
+        {#if chip.asOf}
+          <span class="opacity-70">· as of {chip.asOf}</span>
+        {/if}
+      </button>
+    {/each}
+  </div>
+{/if}
