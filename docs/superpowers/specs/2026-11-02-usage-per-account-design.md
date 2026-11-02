@@ -21,7 +21,7 @@ The owner now signs in to a different Claude account on the Ubuntu PC (`kumbal-m
   - Format: `This PC · 5h 42% · Week 18% · Fable 30%` *(designer's call)*.
   - Each chip lists only the windows that account reports. Each figure has its own warning colour, from that window's status and utilisation.
   - Reset times move to the hover, one line per window, for example "5-hour limit: 42%, resets 13:22". The email is on the first line of the hover.
-  - When the bar is too narrow for all chips at full length, each chip falls back to its 5-hour figure alone; the bar never wraps. *(designer's call)*
+  - When the bar is too narrow for all chips at full length, each chip drops the breakdown and keeps its machine names and its 5-hour figure (`kumbal-machine · 5h 91%`), so two chips can still be told apart; the bar never wraps. *(designer's call)*
 - **Chats on another machine use that machine's limits** (owner, "YES"); see §5.
 - **Usage dialog:** one section per account. Its heading is the email and plan, with the machines on that account. Each section has its own windows (5-hour, weekly, per-model, extra usage), as the dialog shows today.
 - The owner approved the full playback in §3 to §5.
