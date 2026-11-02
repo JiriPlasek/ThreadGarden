@@ -42,7 +42,7 @@
    */
   let { ref }: { ref: ChatRef } = $props();
 
-  const { tabs, settings, usage, usageAccounts } = useApp();
+  const { tabs, settings, usageAccounts } = useApp();
   /** The chat's machine (`ChatPane` shows it inside that machine's scope). */
   const scope = useScope();
   const { chats, interaction, scheduled } = scope;
@@ -219,7 +219,7 @@
   const editing = $derived(
     editingSend
       ? {
-          label: `Editing the message scheduled for ${sendTimeText(editingSend.sendAt, usage.now)}`,
+          label: `Editing the message scheduled for ${sendTimeText(editingSend.sendAt, scope.usage.now)}`,
           onSave: async (text: string, images: ImageRef[]): Promise<boolean> => {
             const id = editingSend?.id;
             if (!id) return false;

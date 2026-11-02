@@ -234,7 +234,7 @@ service and the UI; the service validates every request.
   adds the `power.*` methods and the event `power.changed` ([Power](#power)).
   Protocol 7 adds `folders.list`, `.complete`, `.create`, `projects.createIn`,
   `.create`, `.clone`, `.job`, `.cancel`, `.origins` and `github.status`,
-  `.repos` ([Projects](#projects)).
+  `.repos` ([Projects](#projects)). Protocol 8 adds `account` to the usage state.
 - **Local-only methods** (v1.4). Every request is dispatched with its
   origin, `local` (the loopback server) or `remote` (the TLS listener), and
   a method registered `localOnly` answers `FORBIDDEN` to a remote caller
@@ -540,13 +540,14 @@ machine (every chat of a service is the same account), in `threadgarden.db`
 (`usage_limits`, with the time it was observed), and broadcasts `usage.changed`
 when what the UI shows changes. Usage is per machine, grouped by account
 (protocol 8, usage-per-account design): each session reports its account
-(`accountInfo()`), the state carries it (`account`: kind, email, plan), and a
+(`accountInfo()`), the state carries it (`account`: kind, email, provider, plan), and a
 service that learns another email than the one its windows were read for
 forgets those windows (`windowsOf`, the normalised email they belong to; the
 refused chats stay). The desktop gives every machine scope its own `UsageStore`
 (This PC's is the singleton `usage`; a paired machine's is fed by that
-machine's `usage.get` and `usage.changed`), and `UsageAccounts` /
-`groupUsage` (`src/lib/usage/accounts.ts`) merge the machines into one entry
+machine's `usage.get` and `usage.changed`), and `UsageAccounts`
+(`src/lib/state/usage-accounts.svelte.ts`) and `groupUsage`
+(`src/lib/usage/accounts.ts`) merge the machines into one entry
 per account: the same claude.ai email is one entry with the newest reading per
 window, while a machine with no known account, an API key or a provider is an
 entry of its own (never guessed onto an account). The meter shows a chip per
@@ -692,8 +693,8 @@ machine picker. Notifications come from every connected machine and name it.
 **Stop all work** stops every connected machine's work (Ruling R17);
 restarting or quitting the service acts on This PC only. A restart of the
 desktop or its service changes nothing on the machine: the relays reopen and
-the UI unlocks the machines again from the keychain. Analytics and the usage
-meter show This PC only in this release.
+the UI unlocks the machines again from the keychain. Analytics shows
+This PC only in this release.
 
 ### Power
 
