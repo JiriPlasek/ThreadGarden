@@ -198,9 +198,10 @@ describe('a new chat on another machine', () => {
     expect(within(folder).getByRole('option', { name: 'tg-cli' })).toBeTruthy();
     expect(within(folder).queryByRole('option', { name: 'alpha' })).toBeNull();
     await userEvent.selectOptions(folder, '/home/jiri');
-    const choose = within(dialog).getByRole('button', { name: /choose folder/i });
-    expect((choose as HTMLButtonElement).disabled).toBe(true);
-    expect(choose.getAttribute('title')).toBe('Only for This PC');
+    // Ubuntu PC's service predates projects: no folder browser there yet.
+    const browse = within(dialog).getByRole('button', { name: 'Browse…' });
+    expect((browse as HTMLButtonElement).disabled).toBe(true);
+    expect(browse.getAttribute('title')).toBe('Update Ubuntu PC to use this');
 
     await userEvent.type(within(dialog).getByRole('textbox', { name: /message/i }), 'hi{Enter}');
     await waitFor(() => expect(remote.calls('chat.create')).toHaveLength(1));

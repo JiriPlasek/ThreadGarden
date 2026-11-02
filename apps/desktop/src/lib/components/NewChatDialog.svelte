@@ -1,16 +1,18 @@
 <script lang="ts">
-  import type { ImageRef, Project } from '@threadgarden/protocol';
-  import FolderOpenIcon from '@lucide/svelte/icons/folder-open';
+  import type { ImageRef, Project, Result } from '@threadgarden/protocol';
   import { untrack } from 'svelte';
   import { buildFlags } from '#lib/build-flags.js';
   import Composer from '#lib/components/composer/Composer.svelte';
   import InScope from '#lib/components/InScope.svelte';
+  import ExistingFolderTab from '#lib/components/new-chat/ExistingFolderTab.svelte';
+  import NewProjectTab from '#lib/components/new-chat/NewProjectTab.svelte';
   import * as Dialog from '#lib/components/ui/dialog/index.js';
-  import { isTauri, pickFolder } from '#lib/native.js';
+  import { nameProblem, projectsApi, supportsProjects } from '#lib/projects.js';
   import { RequestError } from '#lib/service/client.js';
   import { useApp } from '#lib/state/context.js';
   import { machineLabel, machineNameOf } from '#lib/state/machines.svelte.js';
   import { newChatDraftKey, type ModelChoice } from '#lib/state/interaction.svelte.js';
+  import type { MachineScope } from '#lib/state/scope.js';
 
   /**
    * Starts a chat (spec §5.4): in any listed project or any folder from the
@@ -22,8 +24,13 @@
    * With more than one machine, a Machine select comes first (the machines
    * that are on; the selected project's machine, else This PC, by default):
    * the folders are that machine's projects plus its home folder, the chat
-   * starts there and the composer talks to it. The folder picker is This
-   * PC's only.
+   * starts there and the composer talks to it.
+   *
+   * Tabs under it say what is starting: an Existing folder, a New project
+   * (made first, then the chat starts in it) or a Clone. Model, Permission
+   * mode and the composer are shared by all three; this dialog keeps the
+   * tab and sends by it. A machine whose service predates projects offers
+   * only Existing folder, without Browse….
    */
   const { interaction, places, tabs, settings, scopes, machines, power } = useApp();
 
@@ -39,6 +46,13 @@
     Number(b.pinned) - Number(a.pinned) ||
     b.lastActivity - a.lastActivity ||
     a.displayName.localeCompare(b.displayName);
+
+  type Tab = 'existing' | 'new' | 'clone';
+  const TABS: { id: Tab; label: string }[] = [
+    { id: 'existing', label: 'Existing folder' },
+    { id: 'new', label: 'New project' },
+    { id: 'clone', label: 'Clone' },
+  ];
 
   const local = scopes.local();
   /** The chosen machine (This PC's id until the dialog opens). */
@@ -74,8 +88,21 @@
   /** Another machine's home folder (its service reports it). */
   const home = $derived(onThisPc ? null : (machines.get(scope.machineId)?.info?.home ?? null));
 
+  let tab = $state<Tab>('existing');
+  /** This PC always can (its service is the app's own version). */
+  const supported = $derived(onThisPc || supportsProjects(machines.get(scope.machineId)));
+  const machineName = $derived(machineNameOf(machines, scope.machineId));
+  const updateHint = $derived(supported ? null : `Update ${machineName} to use this`);
+  const projectsOf = $derived(projectsApi(scope.api));
+
   let cwd = $state('');
-  let picked = $state<string | null>(null);
+  /** A folder chosen with Browse…, on the machine it was chosen on. */
+  let picked = $state<{ machineId: string; path: string } | null>(null);
+  let name = $state('');
+  let createIn = $state('');
+  let github = $state(false);
+  /** A project made whose chat did not start, with the message meant for it (Start there). */
+  let made = $state<{ path: string; text: string } | null>(null);
   let model = $state('');
   let mode = $state('default');
   let models = $state.raw<ModelChoice[]>([]);
@@ -93,9 +120,8 @@
   const folders = $derived.by(() => {
     const list = projects.map((p) => ({ path: p.path, label: p.displayName }));
     if (home && !list.some((f) => f.path === home)) list.push({ path: home, label: 'Home folder' });
-    const extra = [onThisPc ? picked : null, given].filter(
-      (p): p is string => !!p && !list.some((f) => f.path === p),
-    );
+    const mine = picked?.machineId === scope.machineId ? picked.path : null;
+    const extra = [mine, given].filter((p): p is string => !!p && !list.some((f) => f.path === p));
     return [...new Set(extra)].map((p) => ({ path: p, label: p })).concat(list);
   });
 
@@ -113,7 +139,11 @@
         machineId = next;
         cwd = firstFolder();
       });
+      tab = 'existing';
+      name = '';
+      github = false;
       error = null;
+      made = null;
       created = false;
     }
     wasOpen = open;
@@ -126,9 +156,16 @@
   const chooseMachine = (id: string): void => {
     machineId = id;
     cwd = firstFolder();
+    createIn = '';
+    made = null;
     models = [];
     model = '';
   };
+
+  // A machine that can't make projects offers only Existing folder.
+  $effect(() => {
+    if (!supported && tab !== 'existing') tab = 'existing';
+  });
 
   // The chosen machine was removed while the dialog is open: back to This PC, with its folder.
   $effect(() => {
@@ -136,60 +173,129 @@
     untrack(() => chooseMachine(local.machineId));
   });
 
+  /** The folder the models are asked for: the chosen one, else where a new project goes. */
+  const modelsAt = $derived(cwd || createIn);
   let modelsFor = '';
   $effect(() => {
-    if (!interaction.newChat.open || !cwd) return;
+    if (!interaction.newChat.open || !modelsAt) return;
     const ask = scope.interaction;
-    const at = cwd;
+    const at = modelsAt;
     const key = `${scope.machineId}\n${at}`;
     if (modelsFor === key) return;
     modelsFor = key;
     ask
       .models(at)
       .then((list) => {
-        if (cwd === at && scope.interaction === ask) models = list;
+        if (modelsAt === at && scope.interaction === ask) models = list;
       })
       .catch(() => {});
   });
 
   const modelOptions = $derived(models.filter((m) => m.value !== 'default'));
 
-  const chooseFolder = async (): Promise<void> => {
-    const path = await pickFolder();
-    if (path) {
-      picked = path;
-      cwd = path;
-    }
+  /** A folder chosen with Browse… (or a made project) joins the list, selected. */
+  const pickFolder = (path: string): void => {
+    picked = { machineId: scope.machineId, path };
+    cwd = path;
   };
 
-  const create = async (text: string, images: ImageRef[]): Promise<boolean> => {
-    error = null;
+  /** The New project tab's draft (its folder does not exist yet). */
+  const projectDraftKey = $derived(`new:project:${scope.machineId}`);
+  const draftKey = $derived(tab === 'new' ? projectDraftKey : newChatDraftKey(cwd));
+  const composerCwd = $derived(tab === 'new' ? createIn : cwd);
+
+  /** Starts the chat in `at` on `target` and opens it; throws what `chats.create` throws. */
+  const startChat = async (
+    target: MachineScope,
+    at: string,
+    text: string,
+    images: ImageRef[],
+  ): Promise<void> => {
+    const id = await target.chats.create({
+      cwd: at,
+      text,
+      images,
+      ...(model ? { model } : {}),
+      ...(mode !== 'default' ? { permissionMode: mode } : {}),
+    });
+    created = true;
+    target.interaction.focusComposer(id);
+    tabs.openTab({ machineId: target.machineId, sessionId: id });
+    interaction.closeNewChat();
+  };
+
+  /** What went wrong, to show; Claude Code gone missing also brings up the setup screen. */
+  const reason = (target: MachineScope, err: unknown): string => {
+    if (err instanceof RequestError && err.code === 'CLAUDE_MISSING') {
+      target.interaction.loadStatus().catch(() => {});
+    }
+    return err instanceof Error ? err.message : String(err);
+  };
+
+  const startInFolder = async (text: string, images: ImageRef[]): Promise<boolean> => {
     if (!cwd) {
       error = 'Choose a folder for the chat first.';
       return false;
     }
     const target = scope;
     try {
-      const id = await target.chats.create({
-        cwd,
-        text,
-        images,
-        ...(model ? { model } : {}),
-        ...(mode !== 'default' ? { permissionMode: mode } : {}),
-      });
-      created = true;
-      target.interaction.focusComposer(id);
-      tabs.openTab({ machineId: target.machineId, sessionId: id });
-      interaction.closeNewChat();
+      await startChat(target, cwd, text, images);
       return true;
     } catch (err) {
-      error = err instanceof Error ? err.message : String(err);
-      // Claude Code went missing: the status refresh brings up the setup screen.
-      if (err instanceof RequestError && err.code === 'CLAUDE_MISSING') {
-        target.interaction.loadStatus().catch(() => {});
-      }
+      error = reason(target, err);
       return false;
     }
+  };
+
+  /** Makes the project, then starts the chat in it. A made project stays whatever follows. */
+  const startProject = async (text: string, images: ImageRef[]): Promise<boolean> => {
+    // The hint under the name already says what is wrong with it.
+    if (nameProblem(name)) return false;
+    if (!name || !createIn) {
+      error = name ? 'Choose where to create the project first.' : 'Name the project first.';
+      return false;
+    }
+    const target = scope;
+    const called = name;
+    let result: Result<'projects.create'>;
+    try {
+      result = await projectsApi(target.api).create({ createIn, name: called, github });
+    } catch (err) {
+      error = reason(target, err);
+      return false;
+    }
+    const halfway = (why: string): false => {
+      error = `${called} was created, but the chat didn't start: ${why}`;
+      made = { path: result.path, text };
+      return false;
+    };
+    if (result.problem) return halfway(result.problem);
+    try {
+      await startChat(target, result.path, text, images);
+      return true;
+    } catch (err) {
+      return halfway(reason(target, err));
+    }
+  };
+
+  /** Start there: the made project selected in Existing folder, the message moved to its draft. */
+  const startThere = (): void => {
+    if (!made) return;
+    scope.interaction.saveDraft(newChatDraftKey(made.path), made.text);
+    scope.interaction.clearDraft(projectDraftKey);
+    pickFolder(made.path);
+    tab = 'existing';
+    made = null;
+    error = null;
+  };
+
+  /** Sends the first message the way the open tab starts a chat. */
+  const create = async (text: string, images: ImageRef[]): Promise<boolean> => {
+    error = null;
+    made = null;
+    if (tab === 'new') return startProject(text, images);
+    if (tab === 'clone') return false;
+    return startInFolder(text, images);
   };
 
   /** `/model` and `/permissions` in the first message open this dialog's pickers (R25). */
@@ -224,8 +330,8 @@
       >
     </Dialog.Header>
 
-    <div class="grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-2 text-xs">
-      {#if machines.several}
+    {#if machines.several}
+      <div class="grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-2 text-xs">
         <label for="new-chat-machine" class="text-muted-foreground">Machine</label>
         <select
           id="new-chat-machine"
@@ -240,33 +346,61 @@
             <option value={m.id}>{m.label}</option>
           {/each}
         </select>
-      {/if}
+      </div>
+    {/if}
 
-      <label for="new-chat-folder" class="text-muted-foreground">Folder</label>
-      <div class="flex min-w-0 gap-1.5">
-        <select id="new-chat-folder" class={selectClass} bind:value={cwd}>
-          {#if folders.length === 0}
-            <option value="">No projects yet: choose a folder</option>
-          {/if}
-          {#each folders as f (f.path)}
-            <option value={f.path} title={f.path}>{f.label}</option>
-          {/each}
-        </select>
+    <div role="tablist" aria-label="Start from" class="-mb-2 flex gap-1 border-b text-xs">
+      {#each TABS as t (t.id)}
         <button
           type="button"
-          class="hover:bg-muted flex h-8 shrink-0 items-center gap-1 rounded-md border px-2 disabled:opacity-50"
-          disabled={!isTauri || !onThisPc}
-          title={!onThisPc
-            ? 'Only for This PC'
-            : isTauri
-              ? 'Choose any folder'
-              : 'The folder picker needs the desktop app'}
-          onclick={() => void chooseFolder()}
+          role="tab"
+          id="new-chat-tab-{t.id}"
+          aria-selected={tab === t.id}
+          aria-controls="new-chat-panel"
+          disabled={t.id !== 'existing' && !supported}
+          title={t.id === 'existing' ? undefined : (updateHint ?? undefined)}
+          class="-mb-px border-b-2 px-2.5 py-1.5 disabled:opacity-50 {tab === t.id
+            ? 'border-primary text-foreground'
+            : 'text-muted-foreground hover:text-foreground border-transparent'}"
+          onclick={() => (tab = t.id)}>{t.label}</button
         >
-          <FolderOpenIcon class="size-4" aria-hidden="true" /> Choose folder…
-        </button>
-      </div>
+      {/each}
+    </div>
 
+    <div
+      id="new-chat-panel"
+      role="tabpanel"
+      aria-labelledby="new-chat-tab-{tab}"
+      class="grid gap-2"
+    >
+      {#if tab === 'existing'}
+        <ExistingFolderTab
+          {folders}
+          bind:cwd
+          {onThisPc}
+          api={projectsOf}
+          {machineName}
+          {home}
+          blocked={updateHint}
+          onPick={pickFolder}
+        />
+      {:else if tab === 'new'}
+        {#key scope.machineId}
+          <NewProjectTab
+            bind:name
+            bind:createIn
+            bind:github
+            api={projectsOf}
+            {onThisPc}
+            {machineName}
+            platform={machines.get(scope.machineId)?.info?.platform}
+            {home}
+          />
+        {/key}
+      {/if}
+    </div>
+
+    <div class="grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-2 text-xs">
       <label for="new-chat-model" class="text-muted-foreground">Model</label>
       <select id="new-chat-model" class={selectClass} bind:value={model}>
         <option value="">Default</option>
@@ -283,12 +417,6 @@
       </select>
     </div>
 
-    {#if cwd}
-      <p class="text-muted-foreground -mt-1 truncate font-mono text-[0.6875rem]" title={cwd}>
-        {cwd}
-      </p>
-    {/if}
-
     {#if buildFlags.apiKeyOnly && !settings.hasApiKey}
       <p role="note" class="rounded-md bg-amber-500/15 px-2 py-1.5 text-xs">
         This build of Threadgarden runs chats only on an Anthropic API key. Add your key first.
@@ -301,15 +429,22 @@
     {/if}
 
     {#if error}
-      <p class="text-destructive text-xs" role="alert">{error}</p>
+      <p class="text-destructive text-xs" role="alert">
+        {error}
+        {#if made}
+          <button type="button" class="underline underline-offset-2" onclick={startThere}
+            >Start there</button
+          >
+        {/if}
+      </p>
     {/if}
 
-    {#key `${scope.machineId}\n${cwd}`}
+    {#key `${scope.machineId}\n${draftKey}`}
       <InScope {scope}>
         <Composer
-          draftKey={newChatDraftKey(cwd)}
-          {cwd}
-          commandScope={{ cwd }}
+          {draftKey}
+          cwd={composerCwd}
+          commandScope={{ cwd: composerCwd }}
           label="First message"
           placeholder="What should Claude do?"
           autofocus

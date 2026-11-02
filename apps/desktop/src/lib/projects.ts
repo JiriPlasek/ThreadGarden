@@ -4,6 +4,7 @@
  */
 import {
   PROJECTS_CAPABILITY,
+  ProjectNameSchema,
   type CloneJob,
   type FolderListing,
   type GithubStatus,
@@ -13,6 +14,21 @@ import {
 } from '@threadgarden/protocol';
 import type { Api } from './state/api';
 import type { MachineEntry } from './state/machines.svelte';
+
+/** Ruling P9: what the New project tab says under a name the pattern or length refuses. */
+export const NAME_HINT = 'Letters, digits, . _ - only (at most 100)';
+const TRAILING_DOT = "A name can't end with '.'";
+
+/**
+ * Why `name` can't be a project's name, in the dialog's words; null when it can.
+ * Windows device names are known only to the service, which refuses them itself.
+ */
+export const nameProblem = (name: string): string | null => {
+  const checked = ProjectNameSchema.safeParse(name);
+  if (checked.success) return null;
+  const said = checked.error.issues.map((i) => i.message);
+  return said.every((m) => m === TRAILING_DOT) ? TRAILING_DOT : NAME_HINT;
+};
 
 /** The machine's service can browse folders and create or clone projects. */
 export const supportsProjects = (m: MachineEntry | undefined): boolean =>
