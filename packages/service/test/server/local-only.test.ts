@@ -6,6 +6,7 @@ import { WebSocket } from 'ws';
 import { methods } from '@threadgarden/protocol';
 import { startService, type ServiceHandle } from '../../src/main.js';
 import { generateCorpus } from '../../src/testing/corpus.js';
+import { fakeTools } from '../projects/fake-tools.js';
 
 /**
  * Ruling R14: a paired device has full control of the chats, but never of the
@@ -37,6 +38,7 @@ describe('methods a paired device may not call', () => {
       adapter: generateCorpus({ sessions: 1, projects: 1, bigSessionMessages: 0 }),
       installSignalHandlers: false,
       headless: true,
+      projectTools: fakeTools(),
       remote: { addresses: ['127.0.0.1'], port: 0 },
       logger: { debug() {}, info() {}, warn() {}, error() {}, flush: async () => {} },
     });
