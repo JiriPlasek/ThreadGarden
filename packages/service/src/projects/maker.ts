@@ -216,6 +216,15 @@ export class ProjectMaker {
     entry.cancel();
   }
 
+  /**
+   * The service is stopping: stops every running clone (on POSIX git runs detached and would
+   * outlive it) and waits until their partial folders are removed (best effort).
+   */
+  async close(): Promise<void> {
+    for (const { job } of this.finishing.values()) this.cancel(job.jobId);
+    await Promise.all([...this.finishing.values()].map((f) => f.finished.catch(() => {})));
+  }
+
   async origins(): Promise<string[]> {
     const found = await Promise.all(
       this.deps.recentCwds().map((cwd) => originOf(this.deps.tools, cwd)),

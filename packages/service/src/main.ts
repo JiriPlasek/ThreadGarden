@@ -270,6 +270,8 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   let relay: Relay | undefined;
   let poller: ExternalPoller | undefined;
   let projectOrder: ProjectOrderNotifier | undefined;
+  /** New project and Clone (with a database); its running clones stop with the service. */
+  let maker: ProjectMaker | undefined;
   /** Idle tracking for idle shutdown (a headless machine's power control). */
   const idle = headless
     ? new IdleMonitor({
@@ -757,15 +759,16 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         titles: chatTitles,
       });
       const projectTools = opts.projectTools ?? systemTools;
+      maker = new ProjectMaker({
+        tools: projectTools,
+        store: { get: (k) => opened.getUiState(k), set: (k, v) => opened.setUiState(k, v) },
+        headless,
+        home: os.homedir(),
+        recentCwds: () => opened.recentCwds().map((r) => r.cwd),
+        requireRunnable: chatHandlers.requireRunnable,
+      });
       registerProjectHandlers(router, {
-        maker: new ProjectMaker({
-          tools: projectTools,
-          store: { get: (k) => opened.getUiState(k), set: (k, v) => opened.setUiState(k, v) },
-          headless,
-          home: os.homedir(),
-          recentCwds: () => opened.recentCwds().map((r) => r.cwd),
-          requireRunnable: chatHandlers.requireRunnable,
-        }),
+        maker,
         tools: projectTools,
         home: os.homedir(),
       });
@@ -949,6 +952,8 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
           power?.close();
         });
         await step('server', () => wsServer.close());
+        // No request can start one now; a clone left running would outlive the service.
+        await step('clone jobs', () => maker?.close());
         await step('discovery', () => removeDiscovery(dataDir));
         await step('database', () => db?.close());
       } finally {

@@ -603,6 +603,33 @@ describe('clone', () => {
     vi.advanceTimersByTime(60 * 1000);
     expect(() => maker.job('job-1')).toThrow(expect.objectContaining({ code: 'NOT_FOUND' }));
   });
+
+  it('close stops the running clones and removes their partial folders; a finished one stays', async () => {
+    const { maker, tools } = setup({ replies: [ghReady] });
+    await maker.clone({ createIn: code, repo: 'me/done' });
+    tools.spawned[0]!.finish({ code: 0 });
+    await vi.waitFor(() => expect(maker.job('job-1').state).toBe('done'));
+    await maker.clone({ createIn: code, repo: 'me/quick' });
+    await maker.clone({ createIn: code, repo: 'me/slow' });
+    for (const name of ['quick', 'slow']) {
+      mkdirSync(path.join(code, name, '.git', 'objects'), { recursive: true });
+    }
+    // Killing this one takes a moment: close waits for it.
+    tools.spawned[2]!.exitOnCancel = false;
+
+    let closed = false;
+    const closing = maker.close().then(() => (closed = true));
+    expect(tools.spawned.map((s) => s.cancelled)).toEqual([false, true, true]);
+    expect(maker.job('job-2').state).toBe('cancelled');
+    expect(maker.job('job-3').state).toBe('cancelled');
+    await vi.waitFor(() => expect(existsSync(path.join(code, 'quick'))).toBe(false));
+    expect(closed).toBe(false);
+
+    tools.spawned[2]!.finish({ code: -1, stderr: 'killed' });
+    await closing;
+    expect(readdirSync(code)).toEqual(['done']);
+    expect(maker.made().map((m) => m.repo)).toEqual(['me/done']);
+  });
 });
 
 describe('origins', () => {
