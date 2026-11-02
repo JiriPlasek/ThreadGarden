@@ -75,7 +75,8 @@ test('a row wider than the list does not make following the bottom loop', async 
     content: '[data-viewport] [data-row] { height: 40px; overflow: hidden; }',
   });
   const before = await settled(list);
-  expect(before.bar).toBeGreaterThan(1);
+  // Overlay scrollbars (macOS) take no room: there was nothing to loop on there.
+  test.skip(before.bar < 2, 'needs scrollbars that take room (Windows, Linux)');
 
   // The first rendered row becomes wider than the list (which used to show a horizontal
   // scrollbar for it).
