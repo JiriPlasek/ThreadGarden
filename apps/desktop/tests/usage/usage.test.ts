@@ -7,7 +7,7 @@ import {
 } from '@threadgarden/protocol';
 import { render, screen, waitFor, within } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import AgentsStrip from '../../src/lib/components/layout/AgentsStrip.svelte';
 import ChatList from '../../src/lib/components/layout/ChatList.svelte';
 import TabsBar from '../../src/lib/components/layout/TabsBar.svelte';
@@ -133,7 +133,6 @@ describe('usage meter and dialog', () => {
 
 describe('usage per machine', () => {
   const KEY = `threadgarden.usage.${M1}`;
-  afterEach(() => localStorage.removeItem(KEY));
 
   it('a remote store restores its last state from localStorage and keeps it after disconnect', async () => {
     const saved = usageState({ account: { email: 'me@x.cz', kind: 'login' } });

@@ -1,11 +1,15 @@
 /**
  * jsdom lacks a few browser APIs that Svelte bindings and bits-ui rely on;
- * component tests get inert stand-ins. Rendered components are unmounted after each test.
+ * component tests get inert stand-ins. Rendered components are unmounted after each test,
+ * and `localStorage` is cleared (a paired machine's kept usage must not leak into the next test).
  */
 import { cleanup } from '@testing-library/svelte';
 import { afterEach } from 'vitest';
 
-afterEach(() => cleanup());
+afterEach(() => {
+  cleanup();
+  localStorage.clear();
+});
 
 if (typeof window !== 'undefined') {
   if (!('ResizeObserver' in window)) {
