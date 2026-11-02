@@ -436,5 +436,61 @@ describe('UsageTracker', () => {
       tracker().noteAccount(login('me@example.com'));
       expect(tracker().state().account).toEqual(login('me@example.com'));
     });
+
+    it('coming back as another email drops the windows even after an email-less step', () => {
+      for (const between of [{ kind: 'apiKey' as const }, { kind: 'login' as const }]) {
+        db.close();
+        db = openDb(':memory:');
+        const t = tracker();
+        t.noteAccount(login('a@example.com'));
+        t.observeEvent('x', { status: 'allowed', rateLimitType: 'five_hour' });
+        t.noteAccount(between);
+        expect(t.state().windows).toHaveLength(1);
+        t.noteAccount(login('b@example.com'));
+        expect(t.state().windows).toEqual([]);
+        expect(tracker().state().windows).toEqual([]);
+      }
+    });
+
+    it('coming back as the same email after an API key keeps the windows', () => {
+      const t = tracker();
+      t.noteAccount(login('a@example.com'));
+      t.observeEvent('x', { status: 'allowed', rateLimitType: 'five_hour' });
+      t.noteAccount({ kind: 'apiKey' });
+      t.noteAccount(login('A@example.com'));
+      expect(t.state().windows).toHaveLength(1);
+    });
+
+    it('remembers whose windows they are across a restart', () => {
+      const t = tracker();
+      t.noteAccount(login('a@example.com'));
+      t.observeEvent('x', { status: 'allowed', rateLimitType: 'five_hour' });
+      t.noteAccount({ kind: 'apiKey' });
+      const again = tracker();
+      again.noteAccount(login('b@example.com'));
+      expect(again.state().windows).toEqual([]);
+    });
+
+    it('a new email forgets the old plan facts', async () => {
+      const t = tracker();
+      t.noteAccount(login('a@example.com'));
+      await t.refresh(async () => ({
+        subscription_type: 'max',
+        rate_limits_available: true,
+        rate_limits: { five_hour: { utilization: 3, resets_at: '2026-10-31T15:00:00Z' } },
+      }));
+      expect(t.state().subscriptionType).toBe('max');
+      t.noteAccount(login('b@example.com', 'pro'));
+      expect(t.state().subscriptionType).toBeUndefined();
+      expect(t.state().rateLimitsAvailable).toBeUndefined();
+    });
+
+    it('the same account and plan publishes nothing', () => {
+      const t = tracker();
+      t.noteAccount(login('a@example.com'));
+      emitted = [];
+      t.noteAccount(login('A@example.com'));
+      expect(emitted).toEqual([]);
+    });
   });
 });

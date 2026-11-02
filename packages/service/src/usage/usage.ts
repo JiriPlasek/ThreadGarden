@@ -249,6 +249,8 @@ type Account = {
   rateLimitsAvailable?: boolean;
   /** Who the readings belong to; unknown until a session has said. */
   account?: UsageAccount;
+  /** Normalised email of the account the windows were read for (not shown). */
+  windowsOf?: string;
 };
 
 export class UsageTracker {
@@ -309,24 +311,36 @@ export class UsageTracker {
    */
   noteAccount(account: UsageAccount): void {
     const known = this.account.account;
-    if (known && sameAccount(known, account)) {
-      if (known.plan === account.plan) return;
-      this.setAccount({ ...known, ...(account.plan ? { plan: account.plan } : {}) });
-      if (!account.plan) delete this.account.account!.plan;
-    } else {
-      if (known?.email && account.email) this.dropWindows();
-      this.setAccount(account);
+    const email = account.email?.trim().toLowerCase();
+    // Whose readings the windows are survives accounts without an email (an
+    // API key, a logged-out chat): coming back as someone else never inherits them.
+    let { windowsOf } = this.account;
+    let dropped = false;
+    if (email && windowsOf !== email) {
+      if (windowsOf) {
+        this.dropWindows();
+        dropped = true;
+      }
+      windowsOf = email;
     }
+    if (known && sameAccount(known, account) && known.plan === account.plan && !dropped) {
+      if (windowsOf === this.account.windowsOf) return;
+    }
+    const base = known && sameAccount(known, account) ? known : account;
+    this.account = {
+      ...this.account,
+      ...(windowsOf ? { windowsOf } : {}),
+      account: { ...base, plan: account.plan },
+    };
     this.store(ACCOUNT_KEY, this.account);
     this.publish();
   }
 
-  private setAccount(account: UsageAccount): void {
-    this.account = { ...this.account, account };
-  }
-
+  /** Forgets every window, stored ones too, and the plan facts read for the old account. */
   private dropWindows(): void {
     this.windows.clear();
+    delete this.account.subscriptionType;
+    delete this.account.rateLimitsAvailable;
     try {
       this.deps.raw?.prepare('DELETE FROM usage_limits WHERE key != ?').run(ACCOUNT_KEY);
     } catch (err) {
@@ -500,7 +514,9 @@ export class UsageTracker {
           const plan = str(value.subscriptionType);
           const available = bool(value.rateLimitsAvailable);
           const who = UsageAccountSchema.safeParse(value.account);
+          const windowsOf = str(value.windowsOf);
           this.account = {
+            ...(windowsOf ? { windowsOf } : {}),
             ...(plan ? { subscriptionType: plan } : {}),
             ...(available === undefined ? {} : { rateLimitsAvailable: available }),
             ...(who.success ? { account: who.data } : {}),
