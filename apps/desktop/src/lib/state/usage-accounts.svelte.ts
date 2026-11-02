@@ -1,14 +1,18 @@
 /**
  * Usage per account (usage-per-account design §4): every machine scope's
  * usage, grouped into account entries for the bottom bar's chips and the
- * Usage dialog, plus the dialog's own state. A machine whose service never
- * answered and that has no kept copy is not listed.
+ * Usage dialog, plus the dialog's own state. A machine that is off and knows
+ * nothing (never answered, or kept an empty state) is not listed.
  */
-import { usageEmpty } from '@threadgarden/protocol';
+import type { UsageState } from '@threadgarden/protocol';
 import { groupUsage, type UsageEntry, type UsageMachine } from '../usage/accounts';
 import { quietly } from './api';
 import { machineNameOf, machines } from './machines.svelte';
 import { scopes, type Scopes } from './scope';
+
+/** A state with nothing to show: no windows, no account, no refused chats. */
+const isEmpty = (s: UsageState): boolean =>
+  s.windows.length === 0 && s.account === undefined && s.refused.length === 0;
 
 export class UsageAccounts {
   /** The Usage dialog is open. */
@@ -28,7 +32,7 @@ export class UsageAccounts {
   entries = $derived.by((): UsageEntry[] => {
     const list: UsageMachine[] = [];
     for (const { machineId, usage } of this.scopes.all()) {
-      if (!usage.connected && usage.value === usageEmpty) continue;
+      if (!usage.connected && isEmpty(usage.value)) continue;
       list.push({
         machineId,
         name: this.names(machineId),

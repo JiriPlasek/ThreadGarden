@@ -1,5 +1,8 @@
 import type { UsageAccount, UsageState, UsageWindow } from '@threadgarden/protocol';
 import { describe, expect, it } from 'vitest';
+import type { MachineScope } from '../../src/lib/state/scope';
+import { UsageAccounts } from '../../src/lib/state/usage-accounts.svelte';
+import { UsageStore } from '../../src/lib/state/usage.svelte';
 import { chipWindows, groupUsage, type UsageMachine } from '../../src/lib/usage/accounts';
 
 const win = (key: string, observedAt: number, over: Partial<UsageWindow> = {}): UsageWindow => ({
@@ -135,5 +138,34 @@ describe('chipWindows', () => {
       machine('pc', login('me@x.cz'), [win('seven_day', 1), win('current', 1)]),
     ]);
     expect(chipWindows(e!).map((w) => w.key)).toEqual(['current', 'seven_day']);
+  });
+});
+
+describe('UsageAccounts', () => {
+  const accountsOf = (stores: Record<string, UsageStore>): UsageAccounts =>
+    new UsageAccounts(
+      {
+        all: () =>
+          Object.entries(stores).map(([machineId, usage]) => ({
+            machineId,
+            usage,
+          })) as MachineScope[],
+      },
+      (id) => id,
+    );
+
+  it('an off machine whose kept copy is an empty state is not listed', () => {
+    const empty: UsageState = { windows: [], refused: [] };
+    localStorage.setItem('threadgarden.usage.m1', JSON.stringify(empty));
+    const off = new UsageStore({ remember: 'm1' });
+    expect(off.value).toEqual(empty);
+    expect(accountsOf({ pc: new UsageStore(), m1: off }).entries).toEqual([]);
+  });
+
+  it('an off machine with a known account is listed', () => {
+    const kept: UsageState = { windows: [], refused: [], account: login('me@x.cz') };
+    localStorage.setItem('threadgarden.usage.m1', JSON.stringify(kept));
+    const entries = accountsOf({ m1: new UsageStore({ remember: 'm1' }) }).entries;
+    expect(entries.map((e) => e.key)).toEqual(['email:me@x.cz']);
   });
 });
