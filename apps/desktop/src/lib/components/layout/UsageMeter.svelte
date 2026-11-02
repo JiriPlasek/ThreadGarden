@@ -4,7 +4,7 @@
   import { clockTime, percentText, resetText } from '#lib/format/usage.js';
   import { useApp } from '#lib/state/context.js';
   import { windowLabel, windowStatus } from '#lib/state/usage.svelte.js';
-  import { chipWindows, type UsageEntry } from '#lib/usage/accounts.js';
+  import { chipWindows } from '#lib/usage/accounts.js';
   import { cn } from '#lib/utils.js';
 
   /**
@@ -20,7 +20,7 @@
     compact?: boolean;
   };
   const { compact }: Props = $props();
-  const { usage, usageAccounts, machines } = useApp();
+  const { usageAccounts, machines } = useApp();
 
   /** Below this bar width the chips shrink to their 5-hour figure. */
   const NARROW = 960;
@@ -37,7 +37,7 @@
     return () => observer.disconnect();
   });
 
-  const now = $derived(usage.now);
+  const now = $derived(usageAccounts.now);
   const hasReset = (w: UsageWindow): boolean => w.resetsAt !== undefined && w.resetsAt <= now;
 
   const SHORT: Record<string, string> = {
@@ -90,7 +90,7 @@
   /** The chips: an entry shows when it is a login with a 5-hour reading. */
   const chips = $derived.by((): Chip[] => {
     const out: Chip[] = [];
-    for (const e of usageAccounts.entries as UsageEntry[]) {
+    for (const e of usageAccounts.entries) {
       if (e.account && e.account.kind !== 'login') continue;
       const windows = chipWindows(e);
       if (!windows.some(isFiveHour)) continue;

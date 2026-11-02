@@ -39,6 +39,12 @@ export class UsageAccounts {
     return groupUsage(list);
   });
 
+  /**
+   * The chips' clock: the latest `now` of every machine's store. Each store
+   * moves on at its own next reset, so any machine's window lapses on time.
+   */
+  now = $derived.by((): number => Math.max(...this.scopes.all().map((s) => s.usage.now)));
+
   /** Opens the Usage dialog, asking running chats for fresh readings. */
   open = (): void => {
     this.dialogOpen = true;

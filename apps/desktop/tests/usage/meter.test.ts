@@ -1,10 +1,13 @@
-import type { UsageAccount, UsageWindow } from '@threadgarden/protocol';
+import type { UsageAccount, UsageState, UsageWindow } from '@threadgarden/protocol';
 import { render, screen } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import UsageMeter from '../../src/lib/components/layout/UsageMeter.svelte';
 import { clockTime } from '../../src/lib/format/usage';
 import { APP_CONTEXT } from '../../src/lib/state/context';
+import type { MachineScope } from '../../src/lib/state/scope';
+import { UsageAccounts } from '../../src/lib/state/usage-accounts.svelte';
+import { UsageStore } from '../../src/lib/state/usage.svelte';
 import { groupUsage, type UsageMachine } from '../../src/lib/usage/accounts';
 
 const HOUR = 3_600_000;
@@ -39,8 +42,7 @@ const renderMeter = (machines: UsageMachine[], several = false, compact?: boolea
     [
       APP_CONTEXT,
       {
-        usage: { now: NOW },
-        usageAccounts: { entries: groupUsage(machines), open },
+        usageAccounts: { entries: groupUsage(machines), open, now: NOW },
         machines: { several },
       },
     ],
@@ -117,6 +119,45 @@ describe('usage chips', () => {
     expect(text(chip)).not.toContain('100%');
   });
 
+  it("a remote machine's limit stops being red at its reset, by its own store's clock", async () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    try {
+      vi.setSystemTime(NOW);
+      const kept: UsageState = {
+        windows: [win('five_hour', 100, { status: 'rejected', resetsAt: NOW + 60_000 })],
+        refused: [],
+        account: login('me@x.cz'),
+      };
+      localStorage.setItem('threadgarden.usage.m1', JSON.stringify(kept));
+      const here = new UsageStore();
+      const there = new UsageStore({ remember: 'm1' });
+      const accounts = new UsageAccounts(
+        {
+          all: () =>
+            [
+              { machineId: 'pc', usage: here },
+              { machineId: 'm1', usage: there },
+            ] as MachineScope[],
+        },
+        (id) => id,
+      );
+      const context = new Map<unknown, unknown>([
+        [APP_CONTEXT, { usageAccounts: accounts, machines: { several: true } }],
+      ]);
+      render(UsageMeter, { context });
+      const chip = screen.getByRole('button', { name: /^usage/i });
+      expect(text(chip)).toContain('Limit reached');
+
+      // Only the remote store's timer fires; This PC's store has nothing ahead.
+      await vi.advanceTimersByTimeAsync(62_000);
+      expect(here.now).toBe(NOW);
+      expect(chip.querySelector('.text-red-700')).toBeNull();
+      expect(text(chip)).not.toContain('Limit reached');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('a rejected window is red', () => {
     renderMeter([machine('pc', login('me@x.cz'), [win('five_hour', 100, { status: 'rejected' })])]);
     const chip = screen.getByRole('button', { name: /^usage/i });
@@ -157,20 +198,10 @@ describe('usage chips', () => {
     expect(label).toContain('As of ' + clockTime(NOW - 60_000));
   });
 
-  it('renders nothing without chips', () => {
-    const { container } = render(UsageMeter, {
-      context: new Map<unknown, unknown>([
-        [
-          APP_CONTEXT,
-          {
-            usage: { now: NOW },
-            usageAccounts: { entries: [], open: vi.fn() },
-            machines: { several: false },
-          },
-        ],
-      ]),
-    });
-    expect(container.querySelector('div')).toBeNull();
+  it('shows no chip without entries', () => {
+    renderMeter([]);
+    expect(screen.queryAllByRole('button')).toHaveLength(0);
+    expect(screen.queryByLabelText(/^usage/i)).toBeNull();
   });
 
   it('no chip for an API-key entry or an entry without a 5-hour window', () => {
