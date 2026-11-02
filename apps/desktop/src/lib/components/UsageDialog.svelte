@@ -39,12 +39,14 @@
       const email = a?.kind === 'login' ? a.email : undefined;
       const kindText = a?.kind === 'apiKey' ? 'API key' : a?.kind === 'provider' ? a.provider : '';
       const plan = !noLimits && subscription ? `${capital(subscription)} plan` : null;
+      const title = email ?? first;
+      const detail = noLimits ? (kindText ? kindText : null) : plan;
       return {
         key: e.key,
-        title: email ?? first,
+        title,
+        heading: detail ? `${title} · ${detail}` : title,
         // An email names the account; its machines then sit beside it.
         machines: email ? e.machines.map((m) => m.name).join(', ') : '',
-        detail: noLimits ? (kindText ? kindText : null) : plan,
         noLimits,
         asOf: e.asOf,
         windows: sortWindows(e.windows),
@@ -94,18 +96,23 @@
     {/if}
 
     {#each sections as section (section.key)}
-      <section class="flex flex-col gap-3" aria-label={section.title}>
-        <div class="flex items-baseline gap-2 text-sm">
-          <h3 class="min-w-0 flex-1 truncate font-semibold">
-            {section.title}{section.detail ? ` · ${section.detail}` : ''}
-          </h3>
-          {#if section.asOf !== undefined}
-            <span class="text-muted-foreground text-xs">as of {clockTime(section.asOf)}</span>
-          {/if}
+      <!-- min-w-0: the dialog is a grid, whose column would otherwise grow to a long name. -->
+      <section class="flex min-w-0 flex-col gap-3" aria-label={section.title}>
+        <div class="flex flex-col gap-0.5">
+          <div class="flex items-baseline gap-2 text-sm">
+            <h3 class="min-w-0 flex-1 truncate font-semibold" title={section.heading}>
+              {section.heading}
+            </h3>
+            {#if section.asOf !== undefined}
+              <span class="text-muted-foreground shrink-0 text-xs"
+                >as of {clockTime(section.asOf)}</span
+              >
+            {/if}
+          </div>
           {#if section.machines}
-            <span class="text-muted-foreground max-w-[50%] truncate text-xs"
-              >{section.machines}</span
-            >
+            <p class="text-muted-foreground truncate text-xs" title={section.machines}>
+              {section.machines}
+            </p>
           {/if}
         </div>
         {#if section.windows.length === 0}

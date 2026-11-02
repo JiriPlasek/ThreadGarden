@@ -21,6 +21,11 @@ test('usage meter, Usage dialog, limit notice and "Send when the limit resets"',
   const dialog = page.getByRole('dialog', { name: 'Usage' });
   await expect(dialog.getByRole('meter', { name: '5-hour limit used' }).first()).toBeVisible();
   await expect(dialog.getByRole('meter', { name: 'Weekly limit used' }).first()).toBeVisible();
+  // A long machine name or email truncates; it never widens the dialog past its edge.
+  await dialog.locator('section h3').first().evaluate((h) => {
+    h.textContent = `kumbal-machine-Z270-Gaming-K3-${'x'.repeat(80)}`;
+  });
+  expect(await dialog.evaluate((d) => d.scrollWidth - d.clientWidth)).toBeLessThanOrEqual(0);
   await page.keyboard.press('Escape');
 
   const list = page.getByRole('region', { name: 'Chat list' });
