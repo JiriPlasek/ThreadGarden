@@ -62,7 +62,9 @@ export class Router {
     }
     const parsed = def.params.safeParse(req.params);
     if (!parsed.success) {
-      return { id: req.id, error: { code: 'INVALID_PARAMS', message: parsed.error.message } };
+      // The schema's own words; zod's `message` is a JSON dump of its issues.
+      const message = parsed.error.issues.map((i) => i.message).join('; ');
+      return { id: req.id, error: { code: 'INVALID_PARAMS', message } };
     }
     try {
       return { id: req.id, result: await entry.handler(parsed.data, ctx) };

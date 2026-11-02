@@ -201,6 +201,22 @@ describe('router', () => {
     const res = await makeRouter().dispatch({ id: 2, method: 'hello', params: { nope: 1 } }, ctx);
     expect(res).toMatchObject({ id: 2, error: { code: 'INVALID_PARAMS' } });
   });
+  it("says what is wrong with the params in the schema's words, not as JSON", async () => {
+    const router = new Router();
+    router.register('folders.create', async () => ({ path: '/x' }));
+    const res = await router.dispatch(
+      { id: 4, method: 'folders.create', params: { parent: '', name: 'my folder' } },
+      ctx,
+    );
+    expect(res).toEqual({
+      id: 4,
+      error: {
+        code: 'INVALID_PARAMS',
+        message:
+          'Too small: expected string to have >=1 characters; Use letters, digits, dots, dashes and underscores only (up to 100)',
+      },
+    });
+  });
   it('returns METHOD_NOT_FOUND for unknown methods', async () => {
     const res = await makeRouter().dispatch({ id: 3, method: 'bogus', params: {} }, ctx);
     expect(res).toMatchObject({ id: 3, error: { code: 'METHOD_NOT_FOUND' } });
