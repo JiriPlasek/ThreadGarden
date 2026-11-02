@@ -42,6 +42,16 @@ describe('listFolders', () => {
     expect(listing.folders.map((f) => f.name)).toEqual(['alpha', 'beta']);
   });
 
+  it('normalizes the path it was given', async () => {
+    const dotted = await listFolders(path.join(code, '..', 'code'));
+    expect(dotted.path).toBe(code);
+    expect(dotted.parent).toBe(tmp);
+    const up = await listFolders(path.join(code, '..'));
+    expect(up.path).toBe(tmp);
+    expect(up.parent).toBe(path.dirname(tmp));
+    expect((await listFolders(code + path.sep)).path).toBe(code);
+  });
+
   it('a relative path is refused', async () => {
     await expect(listFolders('code/alpha', tmp)).rejects.toMatchObject({
       code: 'NOT_FOUND',
@@ -64,6 +74,15 @@ describe('completeFolder', () => {
       path.join(code, 'beta'),
     ]);
     expect(await completeFolder(path.join(code, '.h'))).toEqual([path.join(code, '.hidden')]);
+  });
+
+  it('keeps the trailing separator through ~', async () => {
+    expect(await completeFolder('~/', tmp)).toEqual([code]);
+    expect(await completeFolder('~/code/', tmp)).toEqual([
+      path.join(code, 'alpha'),
+      path.join(code, 'beta'),
+    ]);
+    if (path.sep === '\\') expect(await completeFolder('~\\', tmp)).toEqual([code]);
   });
 });
 

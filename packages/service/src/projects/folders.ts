@@ -59,17 +59,18 @@ const childFolders = async (dir: string, withHidden: boolean): Promise<FolderEnt
 };
 
 export const listFolders = async (p: string, home?: string): Promise<FolderListing> => {
-  const dir = absolute(p, home);
+  const dir = path.resolve(absolute(p, home));
   const folders = await childFolders(dir, false);
   const parent = path.dirname(dir);
   return { path: dir, parent: parent === dir ? null : parent, folders };
 };
 
 export const completeFolder = async (partial: string, home?: string): Promise<string[]> => {
-  const expanded = absolute(partial, home);
-  const endsWithSep = expanded.endsWith('/') || (path.sep === '\\' && expanded.endsWith('\\'));
-  const dir = endsWithSep ? expanded : path.dirname(expanded);
-  const prefix = endsWithSep ? '' : path.basename(expanded);
+  // Decided on what was typed: expanding `~/` drops its separator.
+  const endsWithSep = partial.endsWith('/') || (path.sep === '\\' && partial.endsWith('\\'));
+  const resolved = path.resolve(absolute(partial, home));
+  const dir = endsWithSep ? resolved : path.dirname(resolved);
+  const prefix = endsWithSep ? '' : path.basename(resolved);
   const fold = (s: string): string => (process.platform === 'win32' ? s.toLowerCase() : s);
   const folders = await childFolders(dir, prefix.startsWith('.'));
   return folders
