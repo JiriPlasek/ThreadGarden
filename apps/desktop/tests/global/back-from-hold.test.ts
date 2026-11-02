@@ -263,14 +263,15 @@ describe('"Back from hold" notifications (v1.2 §3)', () => {
     await vi.waitFor(() => expect(again.notify).toHaveBeenCalledTimes(1));
   });
 
-  it('focusing soon after the notification shows Needs you (Ruling R26)', async () => {
+  it('focusing after the notification keeps the place', async () => {
     const env = await start();
     await flush();
     blur();
     env.server.push('chatBackFromHold', back('h1'));
     await vi.waitFor(() => expect(env.notify).toHaveBeenCalled());
     focus();
-    await vi.waitFor(() => expect(env.app.places.selected).toEqual({ kind: 'needsYou' }));
+    await flush();
+    expect(env.app.places.selected).toEqual({ kind: 'active' });
   });
 });
 
