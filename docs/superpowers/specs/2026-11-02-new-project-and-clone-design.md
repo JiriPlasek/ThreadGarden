@@ -128,6 +128,17 @@ The new project shows up in the machine's project list as soon as its first chat
 
 **Wanted behaviour** *(owner's intent, mechanism the designer's call)*: coming back to the window, or clicking a tab, never changes the selected place. The owner's chosen place stays until they choose another. Opening the single waiting chat in a tab after a notification may stay, since it doesn't touch the place.
 
+## 8b. Also in this step: the window's update loop (bug, owner)
+
+**What the owner saw:** "Something went wrong" with `https://svelte.dev/e/effect_update_depth_exceeded`. 0.4.1 logged it in service.log at 2026-11-02 01:23:31 as `ui (navigation)`, with a minified stack. This is the old "500 Internal Error". All three times it happened right after the owner sent a message in a very long This PC chat, once while the turn was still running.
+
+**Likely cause** (to be confirmed with a failing test first): the measuring effect in `apps/desktop/src/lib/components/chat/MessageList.svelte` handles a row whose measured height differs from its estimate. It bumps `version` and returns without calling `reposition()`.
+- The offsets move under an unchanged `scrollTop`, so the visible range drifts onto unmeasured rows.
+- Those rows get measured too, which drifts the range again.
+- In a chat with thousands of rows this can take more than Svelte's 1,000 updates in one flush.
+
+**Wanted behaviour** *(designer's call on mechanism)*: measuring keeps the view where it was (stuck to the bottom, or on the anchored row), and the list settles within a few rounds whatever the chat's length. As a safety net, a measuring pass that keeps changing heights past a small bound finishes on the next frame instead of in the same flush. A very long chat never brings up the error screen.
+
 ## 9. Not in this step
 
 - Worktrees, the "push your work" instruction, Move to…, and switching branches on This PC. These are the later plan 2 items.
