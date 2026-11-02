@@ -535,9 +535,25 @@ was 4.34:1 on the muted grey.)
 **Usage limits** (v1.3, `src/usage/usage.ts`). Every live session streams
 `rate_limit_event`s (`rate_limit_info`: `status`, `resetsAt`,
 `rateLimitType`, `utilization`, overage fields); the normalizer renders none
-of them. The service keeps the latest value per window, account-wide (every
-chat is the same account), in `threadgarden.db` (`usage_limits`, with the time it
-was observed), and broadcasts `usage.changed` when what the UI shows changes.
+of them. The service keeps the latest value per window, account-wide on that
+machine (every chat of a service is the same account), in `threadgarden.db`
+(`usage_limits`, with the time it was observed), and broadcasts `usage.changed`
+when what the UI shows changes. Usage is per machine, grouped by account
+(protocol 8, usage-per-account design): each session reports its account
+(`accountInfo()`), the state carries it (`account`: kind, email, plan), and a
+service that learns another email than the one its windows were read for
+forgets those windows (`windowsOf`, the normalised email they belong to; the
+refused chats stay). The desktop gives every machine scope its own `UsageStore`
+(This PC's is the singleton `usage`; a paired machine's is fed by that
+machine's `usage.get` and `usage.changed`), and `UsageAccounts` /
+`groupUsage` (`src/lib/usage/accounts.ts`) merge the machines into one entry
+per account: the same claude.ai email is one entry with the newest reading per
+window, while a machine with no known account, an API key or a provider is an
+entry of its own (never guessed onto an account). The meter shows a chip per
+entry and the Usage dialog a section per entry; a machine that is off shows
+its last state "as of" the time it was seen. A chat reads its refusal and the
+reset behind "When the limit resets" from its own machine's store, never
+This PC's.
 Claude Code 2.1.314 sends `resetsAt` in epoch seconds and `utilization` as a
 fraction (read from its bundle: the reset is `Math.floor(Date.now()/1000)+…`
 and its own usage answer multiplies by 100); Threadgarden stores epoch ms and

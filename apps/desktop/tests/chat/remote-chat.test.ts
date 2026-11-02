@@ -1,11 +1,12 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
-import { POWER_CAPABILITY } from '@threadgarden/protocol';
+import { POWER_CAPABILITY, type UsageState } from '@threadgarden/protocol';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { routeFileDrop } from '../../src/lib/components/composer/drop';
 import ChatPane from '../../src/lib/components/layout/ChatPane.svelte';
 import TabsBar from '../../src/lib/components/layout/TabsBar.svelte';
 import NewChatDialog from '../../src/lib/components/NewChatDialog.svelte';
+import { clockTime } from '../../src/lib/format/usage';
 import {
   LOCAL,
   M1,
@@ -58,12 +59,19 @@ const chatHandlers = (server: FakeServer, o: { cwd: string; title: string }): vo
 };
 
 /** Two machines, each with a chat `s1` (the same id), and the chat pane on `machineId/s1`. */
-const renderChat = async (machineId: string) => {
+const renderChat = async (
+  machineId: string,
+  extra: { local?: (s: FakeServer) => void; remote?: (s: FakeServer) => void } = {},
+) => {
   const env = await setupTwoMachines({
-    configure: (s) => chatHandlers(s, { cwd: 'C:\\work\\alpha', title: 'Local chat' }),
+    configure: (s) => {
+      chatHandlers(s, { cwd: 'C:\\work\\alpha', title: 'Local chat' });
+      extra.local?.(s);
+    },
     configureRemote: (s) => {
       chatHandlers(s, { cwd: '/home/jiri/tg-cli', title: 'Scaffold' });
       s.handlers['projects.list'] = () => [project('p1', 'tg-cli')];
+      extra.remote?.(s);
     },
   });
   env.app.tabs.openTab({ machineId, sessionId: 's1' });
@@ -157,6 +165,92 @@ describe('chats on another machine', () => {
     await routeFileDrop(['C:\\work\\alpha\\a.txt'], { x: 1, y: 1 });
     await waitFor(() => expect(composer().value).toBe('@a.txt '));
     expect(screen.queryByRole('status', { name: /notice/i })).toBeNull();
+  });
+});
+
+describe('usage limits in a chat follow the chat’s machine', () => {
+  const HOUR = 3_600_000;
+  const state = (resetsAt: number | undefined, refusedSession?: string): UsageState => ({
+    windows: [
+      {
+        key: 'five_hour',
+        status: 'rejected',
+        ...(resetsAt !== undefined ? { resetsAt } : {}),
+        observedAt: Date.now(),
+        source: 'event',
+      },
+    ],
+    refused: refusedSession
+      ? [
+          {
+            sessionId: refusedSession,
+            at: Date.now(),
+            ...(resetsAt !== undefined ? { resetsAt } : {}),
+          },
+        ]
+      : [],
+  });
+  const answering =
+    (s: UsageState) =>
+    (server: FakeServer): void => {
+      server.handlers['usage.get'] = () => s;
+      server.handlers['scheduled.list'] = () => ({ items: [] });
+    };
+  const sendWhenReset = () => screen.queryByRole('button', { name: /send when the limit resets/i });
+
+  it('a chat on another machine shows "Usage limit reached" from that machine’s refusal', async () => {
+    const reset = Date.now() + 2 * HOUR;
+    // This PC has no refusal for s1: only Ubuntu PC's does.
+    await renderChat(M1, {
+      remote: answering(state(reset, 's1')),
+      local: answering(state(undefined)),
+    });
+    expect(
+      await screen.findByText(`Usage limit reached — resets at ${clockTime(reset)}`),
+    ).toBeTruthy();
+  });
+
+  it('Send when the limit resets in a remote chat uses that machine’s reset time, not This PC’s', async () => {
+    const remoteReset = Date.now() + 2 * HOUR;
+    const localReset = Date.now() + 5 * HOUR;
+    const { remote, server, composer } = await renderChat(M1, {
+      remote: (s) => {
+        answering(state(remoteReset, 's1'))(s);
+        s.handlers['scheduled.create'] = () => ({}) as never;
+      },
+      local: answering(state(localReset)),
+    });
+    await screen.findByText(`Usage limit reached — resets at ${clockTime(remoteReset)}`);
+    const button = await screen.findByRole('button', { name: /send when the limit resets/i });
+    expect(button.getAttribute('title')).toContain(clockTime(remoteReset));
+    expect(button.getAttribute('title')).not.toContain(clockTime(localReset));
+    await userEvent.type(composer(), 'Carry on');
+    await userEvent.click(button);
+    await waitFor(() => expect(remote.calls('scheduled.create')).toHaveLength(1));
+    expect(server.calls('scheduled.create')).toHaveLength(0);
+  });
+
+  it('a remote machine with no reset time hides the choice even when This PC has one', async () => {
+    const { composer } = await renderChat(M1, {
+      remote: answering(state(undefined, 's1')),
+      local: answering(state(Date.now() + 5 * HOUR)),
+    });
+    await screen.findByText(/Usage limit reached/);
+    await waitFor(() => expect(composer()).toBeTruthy());
+    expect(sendWhenReset()).toBeNull();
+  });
+
+  it('This PC’s chat is unchanged', async () => {
+    const reset = Date.now() + HOUR;
+    await renderChat(LOCAL, {
+      local: answering(state(reset, 's1')),
+      remote: answering(state(Date.now() + 5 * HOUR)),
+    });
+    expect(
+      await screen.findByText(`Usage limit reached — resets at ${clockTime(reset)}`),
+    ).toBeTruthy();
+    const button = await screen.findByRole('button', { name: /send when the limit resets/i });
+    expect(button.getAttribute('title')).toContain(clockTime(reset));
   });
 });
 

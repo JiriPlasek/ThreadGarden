@@ -27,7 +27,7 @@
 
   const { usage } = useApp();
   /** The chat's machine keeps its scheduled messages. */
-  const { scheduled } = useScope();
+  const { scheduled, usage: machineUsage } = useScope();
 
   const items = $derived(scheduled.forChat(sessionId));
   let error = $state<string | null>(null);
@@ -136,7 +136,7 @@
 <ScheduleDialog
   bind:open={retimeOpen}
   title="Change the time"
-  resetAt={usage.limitResetAt}
+  resetAt={machineUsage.limitResetAt}
   initial={retiming?.sendAt}
   onPick={retime}
 />
