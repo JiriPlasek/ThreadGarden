@@ -13,7 +13,12 @@ export const expandHome = (p: string, home: string = homedir()): string => {
   return p;
 };
 
-export const validName = (name: string): boolean => ProjectNameSchema.safeParse(name).success;
+/** Windows device names: `nul` or `con.txt` there is the device, not a folder. */
+const WINDOWS_DEVICE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
+
+/** The protocol's name rule, and on Windows no device names. `platform` is a seam for tests. */
+export const validName = (name: string, platform: NodeJS.Platform = process.platform): boolean =>
+  ProjectNameSchema.safeParse(name).success && !(platform === 'win32' && WINDOWS_DEVICE.test(name));
 
 const absolute = (p: string, home?: string): string => {
   const expanded = expandHome(p, home);

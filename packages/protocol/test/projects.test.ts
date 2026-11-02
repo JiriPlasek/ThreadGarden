@@ -9,11 +9,16 @@ import {
 } from '../src/index.js';
 
 describe('ProjectNameSchema', () => {
-  it.each(['plant-logger', 'a.b_c-1', 'a'.repeat(100)])('accepts %s', (name) => {
+  it.each(['plant-logger', 'a.b_c-1', 'a.b', '.env', 'a'.repeat(100)])('accepts %s', (name) => {
     expect(ProjectNameSchema.safeParse(name).success).toBe(true);
   });
 
   it.each(['.', '..', 'a/b', 'a b', 'C:\\x', '../x', '', 'a'.repeat(101)])('rejects %j', (name) => {
+    expect(ProjectNameSchema.safeParse(name).success).toBe(false);
+  });
+
+  // Windows drops a trailing dot, so `plant.` would name the existing `plant`.
+  it.each(['plant.', '...', 'a.'])('rejects the trailing dot in %j', (name) => {
     expect(ProjectNameSchema.safeParse(name).success).toBe(false);
   });
 });

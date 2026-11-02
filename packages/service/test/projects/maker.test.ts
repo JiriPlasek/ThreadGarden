@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -173,6 +173,15 @@ describe('create', () => {
       const s = await refuses({ replies: [gitInit] }, { name: '../x' }, { code: 'INVALID_NAME' });
       expect(s.requireRunnable).not.toHaveBeenCalled();
       expect(existsSync(path.join(home, 'x'))).toBe(false);
+    });
+
+    // Windows drops a trailing dot: `plant.` would run git in the owner's `plant`, `...` in Create in.
+    it.each(['plant.', '...'])('a name ending in a dot (%s)', async (name) => {
+      mkdirSync(path.join(code, 'plant'));
+      writeFileSync(path.join(code, 'plant', 'mine.txt'), 'x');
+      await refuses({ replies: [gitInit] }, { name }, { code: 'INVALID_NAME' });
+      expect(readdirSync(code)).toEqual(['plant']);
+      expect(readdirSync(path.join(code, 'plant'))).toEqual(['mine.txt']);
     });
 
     it('an existing target, with the exact message', async () => {
@@ -408,6 +417,17 @@ describe('clone', () => {
     ).toMatchObject({ code: 'GH_NOT_READY' });
     expect(notReady.tools.spawned).toEqual([]);
     expect(existsSync(path.join(code, 'fresh'))).toBe(false);
+  });
+
+  it('a repo name ending in a dot is INVALID_NAME', async () => {
+    mkdirSync(path.join(code, 'thing'));
+    const s = setup({ replies: [originIs('https://github.com/owner/thing'), ghReady] });
+    expect(
+      await failure(() => s.maker.clone({ createIn: code, repo: 'owner/thing.' })),
+    ).toMatchObject({ code: 'INVALID_NAME' });
+    expect(s.tools.calls).toEqual([]);
+    expect(s.requireRunnable).not.toHaveBeenCalled();
+    expect(readdirSync(path.join(code, 'thing'))).toEqual([]);
   });
 
   it('Claude missing refuses before cloning', async () => {

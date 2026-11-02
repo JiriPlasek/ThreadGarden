@@ -2,7 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { completeFolder, listFolders, makeFolder } from '../../src/projects/folders.js';
+import { completeFolder, listFolders, makeFolder, validName } from '../../src/projects/folders.js';
 
 let tmp: string;
 let code: string;
@@ -95,5 +95,23 @@ describe('makeFolder', () => {
     expect(await makeFolder(code, 'gamma')).toBe(path.join(code, 'gamma'));
     expect(existsSync(path.join(code, 'gamma'))).toBe(true);
     expect(await codeOf(() => makeFolder(path.join(tmp, 'nope'), 'x'))).toBe('NOT_FOUND');
+  });
+});
+
+describe('validName', () => {
+  it('follows the protocol rule: no trailing dot on any platform', () => {
+    expect(validName('plant', 'linux')).toBe(true);
+    expect(validName('plant.', 'linux')).toBe(false);
+    expect(validName('...', 'linux')).toBe(false);
+  });
+
+  it('refuses Windows device names there, with or without an extension', () => {
+    for (const name of ['nul', 'CON', 'Con.txt', 'com1.md', 'LPT9', 'prn', 'aux.tar.gz']) {
+      expect(validName(name, 'win32')).toBe(false);
+      expect(validName(name, 'linux')).toBe(true);
+    }
+    for (const name of ['console', 'com10', 'lpt0', 'nul-x', 'auxiliary.md']) {
+      expect(validName(name, 'win32')).toBe(true);
+    }
   });
 });

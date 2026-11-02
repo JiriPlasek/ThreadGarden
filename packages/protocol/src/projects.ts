@@ -10,7 +10,9 @@ export const ProjectNameSchema = z
   .string()
   .refine((name) => PROJECT_NAME.test(name) && name !== '.' && name !== '..', {
     message: 'Use letters, digits, dots, dashes and underscores only (up to 100)',
-  });
+  })
+  // Windows drops a trailing dot, so `plant.` would name the existing `plant`.
+  .refine((name) => !name.endsWith('.'), { message: "A name can't end with '.'" });
 
 export const FolderEntrySchema = z.object({
   name: z.string(),
