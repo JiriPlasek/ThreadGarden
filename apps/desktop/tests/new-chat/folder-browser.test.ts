@@ -3,7 +3,7 @@ import { render, screen, waitFor } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import FolderBrowser from '../../src/lib/components/new-chat/FolderBrowser.svelte';
-import type { ProjectsApi } from '../../src/lib/projects';
+import { NAME_HINT, type ProjectsApi } from '../../src/lib/projects';
 
 const listing = (path: string, parent: string | null, folders: FolderListing['folders'] = []) => ({
   path,
@@ -84,6 +84,16 @@ describe('FolderBrowser', () => {
     await userEvent.type(screen.getByLabelText('Folder name'), 'fresh{Enter}');
     await waitFor(() => expect(api.makeFolder).toHaveBeenCalledWith('C:\\Users\\j', 'fresh'));
     await waitFor(() => expect(api.list).toHaveBeenLastCalledWith('C:\\Users\\j\\fresh'));
+  });
+
+  it('New folder with `my folder` shows the hint, not JSON', async () => {
+    const api = fakeApi();
+    setup(api);
+    await userEvent.click(await screen.findByRole('button', { name: 'New folder' }));
+    await userEvent.type(screen.getByLabelText('Folder name'), 'my folder{Enter}');
+    expect(await screen.findByText(NAME_HINT)).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(api.makeFolder).not.toHaveBeenCalled();
   });
 
   it('an error shows in place and keeps the last listing', async () => {

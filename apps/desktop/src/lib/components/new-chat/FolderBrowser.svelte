@@ -2,7 +2,7 @@
   import type { FolderListing } from '@threadgarden/protocol';
   import FolderIcon from '@lucide/svelte/icons/folder';
   import * as Dialog from '#lib/components/ui/dialog/index.js';
-  import type { ProjectsApi } from '#lib/projects.js';
+  import { nameProblem, type ProjectsApi } from '#lib/projects.js';
 
   /**
    * A dialog for choosing a folder on a machine. Every path comes from the
@@ -31,6 +31,8 @@
   let busy = $state(false);
   let naming = $state(false);
   let newName = $state('');
+  /** What is wrong with the new folder's name, said here rather than asked of the machine. */
+  const nameHint = $derived(newName ? nameProblem(newName) : null);
 
   const message = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
@@ -104,7 +106,7 @@
   };
 
   const makeFolder = async (): Promise<void> => {
-    if (!listing || !newName) return;
+    if (!listing || !newName || nameHint) return;
     busy = true;
     let path: string;
     try {
@@ -196,14 +198,19 @@
           class="bg-background h-8 w-full min-w-0 rounded-md border px-2 text-sm"
           spellcheck="false"
           autocomplete="off"
+          aria-invalid={!!nameHint}
+          aria-describedby={nameHint ? 'folder-browser-name-problem' : undefined}
           bind:value={newName}
         />
         <button
           type="submit"
           class="hover:bg-muted h-8 shrink-0 rounded-md border px-3 text-sm"
-          disabled={busy || !newName}>Create</button
+          disabled={busy || !newName || !!nameHint}>Create</button
         >
       </form>
+      {#if nameHint}
+        <p id="folder-browser-name-problem" class="text-destructive -mt-2 text-xs">{nameHint}</p>
+      {/if}
     {/if}
 
     {#if error}
