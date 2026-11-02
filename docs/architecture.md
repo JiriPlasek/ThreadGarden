@@ -207,8 +207,9 @@ service and the UI; the service validates every request.
   or 8 for a desktop on 7). What a machine can do is read from the
   capabilities in its `hello`, not from its version: the desktop offers power
   control only with `power`, and New project, Clone and Browse… only with
-  `projects`; an older machine shows them disabled with "Update ‹machine› to
-  use this". A method a service lacks still answers `METHOD_NOT_FOUND` (it
+  `projects`. On an older machine the New project and Clone tabs and Browse…
+  show disabled with "Update ‹machine› to use this"; power control without
+  `power` isn't offered at all. A method a service lacks still answers `METHOD_NOT_FOUND` (it
   surfaces as any failed request). A machine outside that window shows as
   needing attention ("Different Threadgarden version").
 - **Requests** `{id, method, params}` → `{id, result}` or `{id, error: {code,
