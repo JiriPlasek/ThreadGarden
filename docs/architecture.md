@@ -228,6 +228,9 @@ service and the UI; the service validates every request.
   `machines.list`, `.pair`, `.unlock`, `.update`, `.remove` for the machines
   this one pairs with and relays to (event `machines.changed`). Protocol 6
   adds the `power.*` methods and the event `power.changed` ([Power](#power)).
+  Protocol 7 adds `folders.list`, `.complete`, `.create`, `projects.createIn`,
+  `.create`, `.clone`, `.job`, `.cancel`, `.origins` and `github.status`,
+  `.repos` ([Projects](#projects)).
 - **Local-only methods** (v1.4). Every request is dispatched with its
   origin, `local` (the loopback server) or `remote` (the TLS listener), and
   a method registered `localOnly` answers `FORBIDDEN` to a remote caller
@@ -574,9 +577,9 @@ fork is indexed at once so it can be opened.
 v1.4 lets the desktop run chats on another computer: a **machine** is one
 Threadgarden service. The design is
 [`2026-10-31-remote-machines-design.md`](superpowers/specs/2026-10-31-remote-machines-design.md);
-this release covers pairing, the connection, chats on a paired machine and
-[power control](#power) (not yet projects created or cloned there, moving
-chats, offline copies, or analytics and usage across machines). The owner's setup
+this release covers pairing, the connection, chats on a paired machine,
+[power control](#power) and [new projects and clones](#projects) (not yet
+moving chats, offline copies, or analytics and usage across machines). The owner's setup
 steps are in [Remote machines](remote-machines.md).
 
 **Identity.** Every service has a machine id (random, made once, kept in
@@ -732,6 +735,48 @@ returned or shown. Tasmota has no TLS, so it crosses the LAN in clear text; the
 switch is reached from services only (the webview's CSP does not allow it) and
 should stay on the home network.
 
+### Projects
+
+New chat starts in an existing folder, a new project or a clone, on any
+machine whose service has the capability `projects` (protocol 7; the design is
+[`2026-11-02-new-project-and-clone-design.md`](superpowers/specs/2026-11-02-new-project-and-clone-design.md),
+the owner's steps are in [Remote machines](remote-machines.md#starting-projects)).
+An older machine offers only Existing folder.
+
+**The service builds every path** (`projects/folders.ts`, `projects/maker.ts`):
+`~` is its own home, and the desktop shows only paths the service returned,
+so a Windows desktop browsing a Linux machine never joins or splits one. The
+folder browser lists folder names only (hidden ones only when typed), never
+file contents. A name is GitHub's (`A-Za-z0-9._-`, at most 100, not `.` or
+`..`, not ending in `.`; on Windows not a device name such as `CON`).
+**Create in** is remembered per machine (`projects.createIn` in the ui state);
+the first time it is `~/threadgarden/projects` on a headless machine (made
+when first used) and elsewhere the parent of the most recently active
+project, else the home folder.
+
+**git and `gh`** (`projects/github.ts`) run with `GH_PROMPT_DISABLED=1`,
+`GIT_TERMINAL_PROMPT=0`, `LC_ALL=C`, hidden windows and a timeout (a clone has
+only Cancel), so a locked keyring or a password prompt is an error, never a
+hang. GitHub goes through the machine's own `gh` as whoever is signed in
+there; Threadgarden stores no GitHub token. New repos are `--private`, and
+nothing is pushed. A clone is a job: `projects.clone` answers at once with
+the job (or `existing`, when the target is already a clone of the same repo),
+the dialog's Clone tab polls `projects.job` every second, and Cancel, or
+closing the dialog, calls `projects.cancel`.
+
+**Git access and writes.** Besides its data dir, Threadgarden now writes in
+one more way, on any machine: New project and Clone **make a new folder** and
+run `git init` (with the tick, `gh repo create` and `git remote add origin`)
+or `git clone` in it. Everything that can be checked runs first (Claude Code
+runnable, the folder free, the repo name free). A failed or cancelled step
+removes only the folder this call or job made; once the GitHub repo exists
+nothing is removed, and the dialog offers Start there. Each machine records
+what it made (`projects.made`: path, repo, kind, time) for the later plan-2
+items; only those folders may later be changed more freely. Threadgarden
+never touches a folder it did not make (it only reads `git remote get-url
+origin` there, to mark the repos This PC has and to recognise a clone already
+in place) and never deletes a GitHub repo.
+
 ## Security model
 
 - **Loopback and token.** The service binds `127.0.0.1` only, on a random port.
@@ -802,6 +847,10 @@ should stay on the home network.
   through the user's own `claude` and authentication, with no tools, no
   settings and no transcript; never when settings route requests elsewhere
   (Ruling R33).
+- **Folders and git** ([Projects](#projects)). Threadgarden makes new folders
+  and runs `git init` or `git clone` in them (New project, Clone), and never
+  changes or removes a folder it did not make. `gh` and git never prompt, and
+  no GitHub token is stored.
 - **Permissions.** Threadgarden offers the default, acceptEdits, plan and auto
   permission modes, never `bypassPermissions`, and it filters out "always
   allow" suggestions that would switch a session to bypass.

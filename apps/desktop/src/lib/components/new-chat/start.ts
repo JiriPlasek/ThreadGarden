@@ -37,6 +37,12 @@ export const sendOf = (o: {
   },
 });
 
+/** `send` with the message as it is now in its draft (else as it was sent). */
+export const asNow = (send: Send): Send => {
+  const text = send.target.interaction.cachedDraft(send.draftKey) || send.text;
+  return { ...send, text, chat: { ...send.chat, text } };
+};
+
 /** A folder the service just made for a new chat (`problem`: a step it skipped, e.g. the repo). */
 export type MadeFolder = {
   /** What the owner calls it: the project's or the repo's name. */

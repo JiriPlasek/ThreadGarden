@@ -24,10 +24,11 @@ do the steps once, over SSH; after that everything happens in Threadgarden.
 - Optionally, Threadgarden turns the PC on and shuts it down through a
   Tasmota smart plug on your network: see [Power control](#4-power-control).
   Without it the PC simply stays on.
-- Not yet: cloning or creating projects there from Threadgarden, moving
-  chats between machines, and showing a machine's chats while it is off
-  (an Off machine's group says "Its chats appear once it's on."). Analytics
-  and the usage meter show This PC only for now.
+- From the desktop you can start a new project there, clone a repo there,
+  or start in any folder of it: see [Starting projects](#starting-projects).
+- Not yet: moving chats between machines, and showing a machine's chats
+  while it is off (an Off machine's group says "Its chats appear once it's
+  on."). Analytics and the usage meter show This PC only for now.
 
 > **Status of the installer.** `install.sh` has so far only been tested in
 > CI (on GitHub's Ubuntu runner, with stand-ins for `systemctl`, `loginctl`
@@ -288,13 +289,44 @@ machine is listed in Settings → Machines as **On**, and the places column
 shows a group for it under This PC.
 
 **A first chat there:** click **New chat** (the + beside the tabs, or
-Ctrl+N), choose the machine under
-**Machine**, and pick its **Home folder** (or one of its projects). Ask, for
-example, "Clone `<owner>/<repo>` with gh into `~/projects`". Until
-Threadgarden can clone and create projects itself (a later release), a
-folder on the Ubuntu PC becomes a project there once a chat has run in it:
-the simplest way is to clone it over SSH and run `claude` in it once
-(`cd ~/projects/<repo> && claude`, one message, `/exit`).
+Ctrl+N), choose the machine under **Machine**, and start in its **Home
+folder**, a new project or a clone (below). A folder on the Ubuntu PC
+becomes a project there once a chat has run in it.
+
+### Starting projects
+
+**New chat** asks what you are starting, in three tabs under **Machine**.
+The first message, Model and Permission mode are shared by all three.
+
+- **Existing folder:** one of the machine's projects, or its Home folder.
+  **Browse…** opens a folder browser on that machine (the native picker on
+  This PC): type any path (`~` is its home; Tab completes), go into folders,
+  make a **New folder**, then **Use this folder**.
+- **New project:** a **Name** and **Create in**, the folder it goes in
+  (remembered per machine; the first time on the Ubuntu PC it is
+  `~/threadgarden/projects`). Threadgarden makes the folder, runs `git init`
+  in it and starts the chat there. Tick **Create a GitHub repo** to also
+  create a private repo on the account signed in to `gh` there and set it as
+  `origin`; nothing is pushed until Claude pushes.
+- **Clone:** every repo that account reaches (yours, your organizations' and
+  those you collaborate on), most recently updated first, with a search box;
+  **on This PC** marks the ones This PC already has. Pick one and send the
+  first message: it is cloned into Create in (its default branch), "Cloning
+  ‹owner/name›…" shows meanwhile, and the chat starts in the clone. **Cancel**,
+  or closing the dialog, stops the clone and removes the half-made folder. If
+  the clone is already there, **Start there** starts the chat in it.
+
+Clone and the GitHub tick use that machine's own `gh`, so it must be signed
+in and set up for git: `gh auth login --insecure-storage` and `gh auth
+setup-git` on the Ubuntu PC (see [git and the GitHub
+CLI](#git-and-the-github-cli)); on This PC, `gh auth login` and `gh auth
+setup-git` once. Until then Clone shows what to run instead of a list, and
+the tick is disabled with the same reason; the rest works without `gh`.
+
+Threadgarden only makes new folders here: it never removes a folder it
+didn't make, and never deletes a GitHub repo. A machine still on an older
+Threadgarden offers only Existing folder, without Browse…, and says "Update
+‹machine› to use this" ([Upgrading](#upgrading)).
 
 ## 4. Power control
 

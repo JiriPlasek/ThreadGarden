@@ -1,10 +1,8 @@
 <script lang="ts">
   import type { GithubStatus } from '@threadgarden/protocol';
   import { onMount } from 'svelte';
-  import { pickFolder } from '#lib/native.js';
   import { nameProblem, type ProjectsApi } from '#lib/projects.js';
   import CreateInField from './CreateInField.svelte';
-  import FolderBrowser from './FolderBrowser.svelte';
   import { errorText } from './start.js';
 
   /**
@@ -35,7 +33,6 @@
   } = $props();
 
   let gh = $state<GithubStatus | null>(null);
-  let browsing = $state(false);
 
   const problem = $derived(name ? nameProblem(name) : null);
   /** Ruling P3: display only, never sent; the service builds the real path. */
@@ -46,17 +43,9 @@
   });
 
   onMount(() => {
-    // Answers after this tab is gone (another machine chosen) are dropped:
-    // a bound prop would still write them into the dialog.
+    // An answer after this tab is gone (another machine chosen) is dropped:
+    // a bound prop would still write it into the dialog.
     let live = true;
-    const before = createIn;
-    api
-      .createIn()
-      .then((path) => {
-        // A place typed meanwhile wins.
-        if (live && createIn === before) createIn = path;
-      })
-      .catch(() => {});
     api
       .githubStatus()
       .then((status) => {
@@ -73,15 +62,6 @@
   $effect(() => {
     if (gh && !gh.ready) github = false;
   });
-
-  const browse = async (): Promise<void> => {
-    if (!onThisPc) {
-      browsing = true;
-      return;
-    }
-    const path = await pickFolder();
-    if (path) createIn = path;
-  };
 </script>
 
 <div class="grid gap-2 text-xs">
@@ -101,7 +81,7 @@
     {/if}
   </div>
 
-  <CreateInField value={createIn} onChange={(v) => (createIn = v)} browse={() => void browse()} />
+  <CreateInField bind:value={createIn} {api} {onThisPc} {machineName} {home} />
 
   <label class="flex w-fit items-center gap-2">
     <input
@@ -119,16 +99,3 @@
     </p>
   {/if}
 </div>
-
-{#if browsing}
-  <FolderBrowser
-    {api}
-    {machineName}
-    start={createIn || home || '~'}
-    onPick={(path) => {
-      browsing = false;
-      createIn = path;
-    }}
-    onCancel={() => (browsing = false)}
-  />
-{/if}

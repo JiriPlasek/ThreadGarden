@@ -4,6 +4,7 @@
   import { buildFlags } from '#lib/build-flags.js';
   import Composer from '#lib/components/composer/Composer.svelte';
   import InScope from '#lib/components/InScope.svelte';
+  import CloneTab from '#lib/components/new-chat/CloneTab.svelte';
   import ExistingFolderTab from '#lib/components/new-chat/ExistingFolderTab.svelte';
   import NewProjectTab from '#lib/components/new-chat/NewProjectTab.svelte';
   import {
@@ -13,6 +14,7 @@
     notStartedText,
     sendOf,
     startInMade,
+    type MadeFolder,
     type NotStarted,
     type Send,
   } from '#lib/components/new-chat/start.js';
@@ -35,9 +37,10 @@
    * starts there and the composer talks to it.
    *
    * Tabs under it say what is starting: an Existing folder, a New project
-   * (made first, then the chat starts in it) or a Clone. Model, Permission
-   * mode and the composer are shared by all three; this dialog keeps the
-   * tab and sends by it. A machine whose service predates projects offers
+   * (made first, then the chat starts in it) or a Clone (the Clone tab
+   * clones and follows the job, then the chat starts in the clone). Model,
+   * Permission mode and the composer are shared by all three; this dialog
+   * keeps the tab and sends by it. A machine whose service predates projects offers
    * only Existing folder, without Browse….
    */
   const { interaction, places, tabs, settings, scopes, machines, power } = useApp();
@@ -102,6 +105,9 @@
   const machineName = $derived(machineNameOf(machines, scope.machineId));
   const updateHint = $derived(supported ? null : `Update ${machineName} to use this`);
   const projectsOf = $derived(projectsApi(scope.api));
+  /** This PC's, for the Clone tab's "on This PC" marks. */
+  const localProjects = projectsApi(local.api);
+  let cloneTab = $state<ReturnType<typeof CloneTab>>();
 
   let cwd = $state('');
   /** A folder chosen with Browse…, on the machine it was chosen on. */
@@ -208,11 +214,13 @@
     cwd = path;
   };
 
-  /** The New project tab's draft (its folder does not exist yet). */
+  /** New project's and Clone's drafts (their folder does not exist yet). */
   const draftKey = $derived(
-    tab === 'new' ? `new:project:${scope.machineId}` : newChatDraftKey(cwd),
+    tab === 'existing'
+      ? newChatDraftKey(cwd)
+      : `new:${tab === 'new' ? 'project' : 'clone'}:${scope.machineId}`,
   );
-  const composerCwd = $derived(tab === 'new' ? createIn : cwd);
+  const composerCwd = $derived(tab === 'existing' ? cwd : createIn);
 
   /** Starts the chat in `at` and opens it; throws what `chats.create` throws. */
   const startChat = async ({ target, chat }: Send, at: string): Promise<void> => {
@@ -226,13 +234,13 @@
     interaction.closeNewChat();
   };
 
-  const startInFolder = async (send: Send): Promise<boolean> => {
-    if (!cwd) {
+  const startInFolder = async (send: Send, at = cwd): Promise<boolean> => {
+    if (!at) {
       error = 'Choose a folder for the chat first.';
       return false;
     }
     try {
-      await startChat(send, cwd);
+      await startChat(send, at);
       return true;
     } catch (err) {
       error = errorText(err);
@@ -258,7 +266,25 @@
       error = errorText(err);
       return false;
     }
-    made = await startInMade(send, { name: called, ...result }, (at) => startChat(send, at));
+    return startInFolderMade(send, { name: called, ...result });
+  };
+
+  /** Clones the repo chosen in the Clone tab (which shows the progress), then starts the chat in it. */
+  const startClone = async (send: Send): Promise<boolean> => {
+    let cloned: MadeFolder | null;
+    try {
+      cloned = (await cloneTab?.submit(send)) ?? null;
+    } catch (err) {
+      noteMissingClaude(send.target, err);
+      error = errorText(err);
+      return false;
+    }
+    return cloned ? startInFolderMade(send, cloned) : false;
+  };
+
+  /** Starts the chat in a folder just made; when it doesn't start, the alert offers Start there. */
+  const startInFolderMade = async (send: Send, folder: MadeFolder): Promise<boolean> => {
+    made = await startInMade(send, folder, (at) => startChat(send, at));
     if (made) error = notStartedText(made);
     return !made;
   };
@@ -282,7 +308,7 @@
     made = null;
     const send = sendOf({ target: scope, draftKey, text, images, model, mode });
     if (tab === 'new') return startProject(send);
-    if (tab === 'clone') return false;
+    if (tab === 'clone') return startClone(send);
     return startInFolder(send);
   };
 
@@ -383,6 +409,19 @@
             {machineName}
             platform={machines.get(scope.machineId)?.info?.platform}
             {home}
+          />
+        {/key}
+      {:else}
+        {#key scope.machineId}
+          <CloneTab
+            bind:this={cloneTab}
+            bind:createIn
+            api={projectsOf}
+            thisPc={localProjects}
+            {onThisPc}
+            {machineName}
+            {home}
+            startIn={startInFolder}
           />
         {/key}
       {/if}
