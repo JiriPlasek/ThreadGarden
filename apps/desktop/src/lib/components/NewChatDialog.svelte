@@ -6,13 +6,21 @@
   import InScope from '#lib/components/InScope.svelte';
   import ExistingFolderTab from '#lib/components/new-chat/ExistingFolderTab.svelte';
   import NewProjectTab from '#lib/components/new-chat/NewProjectTab.svelte';
+  import {
+    errorText,
+    moveDraft,
+    noteMissingClaude,
+    notStartedText,
+    sendOf,
+    startInMade,
+    type NotStarted,
+    type Send,
+  } from '#lib/components/new-chat/start.js';
   import * as Dialog from '#lib/components/ui/dialog/index.js';
   import { nameProblem, projectsApi, supportsProjects } from '#lib/projects.js';
-  import { RequestError } from '#lib/service/client.js';
   import { useApp } from '#lib/state/context.js';
   import { machineLabel, machineNameOf } from '#lib/state/machines.svelte.js';
   import { newChatDraftKey, type ModelChoice } from '#lib/state/interaction.svelte.js';
-  import type { MachineScope } from '#lib/state/scope.js';
 
   /**
    * Starts a chat (spec §5.4): in any listed project or any folder from the
@@ -101,8 +109,8 @@
   let name = $state('');
   let createIn = $state('');
   let github = $state(false);
-  /** A project made whose chat did not start, with the message meant for it (Start there). */
-  let made = $state<{ path: string; text: string } | null>(null);
+  /** A folder made whose chat did not start (Start there). */
+  let made = $state<NotStarted | null>(null);
   let model = $state('');
   let mode = $state('default');
   let models = $state.raw<ModelChoice[]>([]);
@@ -157,6 +165,7 @@
     machineId = id;
     cwd = firstFolder();
     createIn = '';
+    github = false;
     made = null;
     models = [];
     model = '';
@@ -193,30 +202,23 @@
 
   const modelOptions = $derived(models.filter((m) => m.value !== 'default'));
 
-  /** A folder chosen with Browse… (or a made project) joins the list, selected. */
-  const pickFolder = (path: string): void => {
-    picked = { machineId: scope.machineId, path };
+  /** A folder chosen with Browse… (or a made one) joins its machine's list, selected. */
+  const pickFolder = (path: string, on = scope.machineId): void => {
+    picked = { machineId: on, path };
     cwd = path;
   };
 
   /** The New project tab's draft (its folder does not exist yet). */
-  const projectDraftKey = $derived(`new:project:${scope.machineId}`);
-  const draftKey = $derived(tab === 'new' ? projectDraftKey : newChatDraftKey(cwd));
+  const draftKey = $derived(
+    tab === 'new' ? `new:project:${scope.machineId}` : newChatDraftKey(cwd),
+  );
   const composerCwd = $derived(tab === 'new' ? createIn : cwd);
 
-  /** Starts the chat in `at` on `target` and opens it; throws what `chats.create` throws. */
-  const startChat = async (
-    target: MachineScope,
-    at: string,
-    text: string,
-    images: ImageRef[],
-  ): Promise<void> => {
-    const id = await target.chats.create({
-      cwd: at,
-      text,
-      images,
-      ...(model ? { model } : {}),
-      ...(mode !== 'default' ? { permissionMode: mode } : {}),
+  /** Starts the chat in `at` and opens it; throws what `chats.create` throws. */
+  const startChat = async ({ target, chat }: Send, at: string): Promise<void> => {
+    const id = await target.chats.create({ cwd: at, ...chat }).catch((err: unknown) => {
+      noteMissingClaude(target, err);
+      throw err;
     });
     created = true;
     target.interaction.focusComposer(id);
@@ -224,66 +226,51 @@
     interaction.closeNewChat();
   };
 
-  /** What went wrong, to show; Claude Code gone missing also brings up the setup screen. */
-  const reason = (target: MachineScope, err: unknown): string => {
-    if (err instanceof RequestError && err.code === 'CLAUDE_MISSING') {
-      target.interaction.loadStatus().catch(() => {});
-    }
-    return err instanceof Error ? err.message : String(err);
-  };
-
-  const startInFolder = async (text: string, images: ImageRef[]): Promise<boolean> => {
+  const startInFolder = async (send: Send): Promise<boolean> => {
     if (!cwd) {
       error = 'Choose a folder for the chat first.';
       return false;
     }
-    const target = scope;
     try {
-      await startChat(target, cwd, text, images);
+      await startChat(send, cwd);
       return true;
     } catch (err) {
-      error = reason(target, err);
+      error = errorText(err);
       return false;
     }
   };
 
-  /** Makes the project, then starts the chat in it. A made project stays whatever follows. */
-  const startProject = async (text: string, images: ImageRef[]): Promise<boolean> => {
-    // The hint under the name already says what is wrong with it.
-    if (nameProblem(name)) return false;
+  /** Makes the project, then starts the chat in it (`startInMade`). */
+  const startProject = async (send: Send): Promise<boolean> => {
     if (!name || !createIn) {
       error = name ? 'Choose where to create the project first.' : 'Name the project first.';
       return false;
     }
-    const target = scope;
+    // The hint under the name already says what is wrong with it.
+    if (nameProblem(name)) return false;
+    const { target } = send;
     const called = name;
     let result: Result<'projects.create'>;
     try {
       result = await projectsApi(target.api).create({ createIn, name: called, github });
     } catch (err) {
-      error = reason(target, err);
+      noteMissingClaude(target, err);
+      error = errorText(err);
       return false;
     }
-    const halfway = (why: string): false => {
-      error = `${called} was created, but the chat didn't start: ${why}`;
-      made = { path: result.path, text };
-      return false;
-    };
-    if (result.problem) return halfway(result.problem);
-    try {
-      await startChat(target, result.path, text, images);
-      return true;
-    } catch (err) {
-      return halfway(reason(target, err));
-    }
+    made = await startInMade(send, { name: called, ...result }, (at) => startChat(send, at));
+    if (made) error = notStartedText(made);
+    return !made;
   };
 
-  /** Start there: the made project selected in Existing folder, the message moved to its draft. */
+  /** Start there: back on the folder's machine, the folder selected in Existing folder. */
   const startThere = (): void => {
-    if (!made) return;
-    scope.interaction.saveDraft(newChatDraftKey(made.path), made.text);
-    scope.interaction.clearDraft(projectDraftKey);
-    pickFolder(made.path);
+    const left = made;
+    const target = left && scopes.get(left.machineId);
+    if (!left || !target) return;
+    moveDraft(target.interaction, left);
+    if (left.machineId !== scope.machineId) chooseMachine(left.machineId);
+    pickFolder(left.path, left.machineId);
     tab = 'existing';
     made = null;
     error = null;
@@ -293,9 +280,10 @@
   const create = async (text: string, images: ImageRef[]): Promise<boolean> => {
     error = null;
     made = null;
-    if (tab === 'new') return startProject(text, images);
+    const send = sendOf({ target: scope, draftKey, text, images, model, mode });
+    if (tab === 'new') return startProject(send);
     if (tab === 'clone') return false;
-    return startInFolder(text, images);
+    return startInFolder(send);
   };
 
   /** `/model` and `/permissions` in the first message open this dialog's pickers (R25). */

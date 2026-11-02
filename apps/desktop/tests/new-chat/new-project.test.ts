@@ -285,6 +285,90 @@ describe('New chat tabs', () => {
     expect(env.remote.calls('chat.create')).toHaveLength(0);
   });
 
+  it('sending without a name says to name the project', async () => {
+    const env = await twoMachines();
+    const dialog = await open(env);
+    await newProject(dialog, '/home/jiri/threadgarden/projects');
+    await userEvent.type(message(dialog), 'hi{Enter}');
+    await waitFor(() =>
+      expect(within(dialog).getByRole('alert').textContent?.trim()).toBe('Name the project first.'),
+    );
+    expect(env.remote.calls('projects.create')).toHaveLength(0);
+  });
+
+  it("a machine's late Create in never lands on the machine chosen since", async () => {
+    let answerHere: (v: unknown) => void = () => {};
+    let answerThere: (v: unknown) => void = () => {};
+    const env = await twoMachines({
+      configure: (s) => {
+        s.handlers['projects.createIn'] = () => new Promise((r) => (answerHere = r));
+      },
+      configureRemote: (s) => {
+        s.handlers['projects.createIn'] = () => new Promise((r) => (answerThere = r));
+      },
+    });
+    const dialog = await open(env, false);
+    await userEvent.click(within(dialog).getByRole('tab', { name: 'New project' }));
+    await waitFor(() => expect(env.server.calls('projects.createIn')).toHaveLength(1));
+    await userEvent.selectOptions(within(dialog).getByRole('combobox', { name: /machine/i }), M1);
+    await waitFor(() => expect(env.remote.calls('projects.createIn')).toHaveLength(1));
+    answerHere({ path: '/work' });
+    await new Promise((r) => setTimeout(r, 20));
+    answerThere({ path: '/home/jiri/threadgarden/projects' });
+    const where = within(dialog).getByRole('textbox', { name: 'Create in' }) as HTMLInputElement;
+    await waitFor(() => expect(where.value).toBe('/home/jiri/threadgarden/projects'));
+  });
+
+  it('a project made on one machine while another was chosen: Start there goes back to it', async () => {
+    let answer: (v: unknown) => void = () => {};
+    const made = '/home/jiri/threadgarden/projects/plant-logger';
+    const env = await twoMachines({
+      configureRemote: (s) => {
+        s.handlers['chat.models'] = () => [{ value: 'opus', displayName: 'Opus', description: '' }];
+        s.handlers['projects.create'] = () => new Promise((r) => (answer = r));
+        s.handlers['chat.create'] = () => {
+          throw new RpcFail('SPAWN_FAILED', 'the relay dropped');
+        };
+      },
+    });
+    const dialog = await open(env);
+    const name = await newProject(dialog, '/home/jiri/threadgarden/projects');
+    const model = within(dialog).getByRole('combobox', { name: /^model/i }) as HTMLSelectElement;
+    await waitFor(() => expect(within(model).getByRole('option', { name: 'Opus' })).toBeTruthy());
+    await userEvent.selectOptions(model, 'opus');
+    await userEvent.type(name, 'plant-logger');
+    await userEvent.type(message(dialog), 'scaffold it{Enter}');
+    await waitFor(() => expect(env.remote.calls('projects.create')).toHaveLength(1));
+    const machine = within(dialog).getByRole('combobox', { name: /machine/i }) as HTMLSelectElement;
+    await userEvent.selectOptions(machine, LOCAL);
+    answer({ path: made, repo: null, problem: null });
+
+    await waitFor(() => expect(env.remote.calls('chat.create')).toHaveLength(1));
+    expect(env.remote.calls('chat.create')[0]!.params).toMatchObject({ cwd: made, model: 'opus' });
+    const alert = await within(dialog).findByRole('alert');
+    await waitFor(() =>
+      expect(alert.textContent).toContain("plant-logger was created, but the chat didn't start"),
+    );
+    await userEvent.click(within(alert).getByRole('button', { name: 'Start there' }));
+    expect(machine.value).toBe(M1);
+    const folder = within(dialog).getByRole('combobox', { name: /folder/i }) as HTMLSelectElement;
+    expect(folder.value).toBe(made);
+    await waitFor(() => expect((message(dialog) as HTMLTextAreaElement).value).toBe('scaffold it'));
+    expect(env.server.calls('chat.create')).toHaveLength(0);
+  });
+
+  it('the GitHub tick does not follow to another machine', async () => {
+    const dialog = await open(await twoMachines(), false);
+    await newProject(dialog, '/work');
+    const tick = () =>
+      within(dialog).getByRole('checkbox', { name: /create a github repo/i }) as HTMLInputElement;
+    await waitFor(() => expect(tick().disabled).toBe(false));
+    await userEvent.click(tick());
+    await userEvent.selectOptions(within(dialog).getByRole('combobox', { name: /machine/i }), M1);
+    await waitFor(() => expect(tick().disabled).toBe(false));
+    expect(tick().checked).toBe(false);
+  });
+
   it('an older machine (no projects capability) disables New project, Clone and Browse… with the update hint', async () => {
     const dialog = await open(await twoMachines({ older: true }));
     for (const el of [

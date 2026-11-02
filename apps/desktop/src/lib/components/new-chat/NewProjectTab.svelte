@@ -5,6 +5,7 @@
   import { nameProblem, type ProjectsApi } from '#lib/projects.js';
   import CreateInField from './CreateInField.svelte';
   import FolderBrowser from './FolderBrowser.svelte';
+  import { errorText } from './start.js';
 
   /**
    * New chat's New project tab: the project's name, where it goes (the
@@ -45,20 +46,28 @@
   });
 
   onMount(() => {
+    // Answers after this tab is gone (another machine chosen) are dropped:
+    // a bound prop would still write them into the dialog.
+    let live = true;
     const before = createIn;
     api
       .createIn()
       .then((path) => {
         // A place typed meanwhile wins.
-        if (createIn === before) createIn = path;
+        if (live && createIn === before) createIn = path;
       })
       .catch(() => {});
     api
       .githubStatus()
-      .then((status) => (gh = status))
+      .then((status) => {
+        if (live) gh = status;
+      })
       .catch((e: unknown) => {
-        gh = { ready: false, login: null, problem: e instanceof Error ? e.message : String(e) };
+        if (live) gh = { ready: false, login: null, problem: errorText(e) };
       });
+    return () => {
+      live = false;
+    };
   });
 
   $effect(() => {
