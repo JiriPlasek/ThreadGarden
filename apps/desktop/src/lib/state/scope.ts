@@ -145,9 +145,13 @@ export const createScope = (
     usage: new UsageStore({ remember: machineId }),
   });
   // Its `sessions` lists its projects; the other places are listed across machines.
-  const stop = wireScope(scope, deps, { projectsOnly: true });
+  const unwire = wireScope(scope, deps, { projectsOnly: true });
   // This PC's usage is initialised by `app.ts`, as it always was.
   scope.usage.init(api);
+  const stop = (): void => {
+    unwire();
+    scope.usage.stop();
+  };
   return Object.assign(scope, { stop });
 };
 
@@ -252,6 +256,8 @@ export class Scopes {
       const scope = this.others.get(id);
       this.others.delete(id);
       scope?.stop?.();
+      // Its kept usage goes too: pairing it again must not show the old windows.
+      scope?.usage.forget();
       if (scope) this.gone(scope);
     });
   };

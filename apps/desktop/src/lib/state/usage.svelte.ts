@@ -93,6 +93,8 @@ export class UsageStore {
   private version = 0;
   /** A paired machine's id: its last state is kept, so an off machine still shows it. */
   private readonly remember: string | undefined;
+  /** Its scope is gone: no timer runs and nothing more is kept. */
+  private stopped = false;
 
   constructor(opts: { remember?: string } = {}) {
     this.remember = opts.remember;
@@ -151,6 +153,24 @@ export class UsageStore {
     this.set(await api.request('usage.get', { refresh: true }));
   };
 
+  /** Its scope is gone: stops the reset timer and keeps no later state. */
+  stop = (): void => {
+    this.stopped = true;
+    clearTimeout(this.timer);
+    this.timer = undefined;
+  };
+
+  /** Its machine was removed: stops, and removes the kept copy (a re-pairing starts empty). */
+  forget = (): void => {
+    this.stop();
+    if (this.remember === undefined) return;
+    try {
+      storage()?.removeItem(rememberKey(this.remember));
+    } catch {
+      // Storage unavailable: nothing was kept either.
+    }
+  };
+
   private load = async (): Promise<void> => {
     if (!this.api) return;
     const asked = this.version;
@@ -163,7 +183,7 @@ export class UsageStore {
     this.value = state;
     this.now = Date.now();
     this.wake();
-    if (this.remember !== undefined) {
+    if (this.remember !== undefined && !this.stopped) {
       try {
         storage()?.setItem(rememberKey(this.remember), JSON.stringify(state));
       } catch {
@@ -176,6 +196,7 @@ export class UsageStore {
   private wake = (): void => {
     clearTimeout(this.timer);
     this.timer = undefined;
+    if (this.stopped) return;
     const now = Date.now();
     const times = [
       ...this.value.windows.map((w) => w.resetsAt),

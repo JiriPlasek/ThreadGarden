@@ -134,6 +134,20 @@ describe('usage meter and dialog', () => {
 describe('usage per machine', () => {
   const KEY = `threadgarden.usage.${M1}`;
 
+  it('forget() stops the reset timer and removes the kept copy', () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
+    try {
+      localStorage.setItem(KEY, JSON.stringify(usageState()));
+      const store = new UsageStore({ remember: M1 });
+      expect(vi.getTimerCount()).toBe(1);
+      store.forget();
+      expect(vi.getTimerCount()).toBe(0);
+      expect(localStorage.getItem(KEY)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('a remote store restores its last state from localStorage and keeps it after disconnect', async () => {
     const saved = usageState({ account: { email: 'me@x.cz', kind: 'login' } });
     localStorage.setItem(KEY, JSON.stringify(saved));
