@@ -142,16 +142,18 @@
 - Modify: `apps/desktop/src/lib/notifications.ts:99-125` (`openNotified`)
 - Test: `apps/desktop/tests/global/notifications.test.ts`
 
+**Wanted behaviour (owner, 2026-11-02):** coming back to the window after a notification changes **nothing**: neither the place nor the open tab. The owner saw both switch when they brought Threadgarden to the front over another window.
+
 - [ ] **Step 1: Change the tests to the wanted behaviour.**
-  - Rename and flip the tests at lines 84, 134, 187 and 329, which today assert `places.selected` becomes `{ kind: 'needsYou' }`. They now select `{ kind: 'active' }` first (use the place the harness offers for Active), and assert it is still `{ kind: 'active' }` after focus.
-  - The "opens the only waiting chat" assertions stay.
-  - Add `the owner's place survives clicking the notified chat's tab`:
-    1. Select Active.
-    2. A notification about `s2` arrives while the window is unfocused.
-    3. Focus the window, then `tabs.openTab` the `s2` tab.
-    4. Assert `places.selected` is Active.
-- [ ] **Step 2: Run and watch the changed tests fail.** Run: `… --filter desktop test -- tests/global/notifications.test.ts`. Expected: FAIL, with `needsYou` received where `active` was expected.
-- [ ] **Step 3: Remove the place change from `openNotified`.** Delete `places.select({ kind: 'needsYou' })` and its comment. Keep opening the single waiting chat. Drop `places` from the destructured deps if nothing else uses it there.
+  - The tests at lines 84, 134, 187 and 329 today assert that focus soon after a notification selects Needs you and/or opens the waiting chat. Rewrite them as `focus after a notification keeps the place and the open tab`, covering one waiting chat, several waiting, a finish notification, and a chat on another machine:
+    1. Select `{ kind: 'active' }` and open a tab on another chat (`s9`).
+    2. The notification arrives while the window is unfocused.
+    3. Focus the window.
+    4. Assert `places.selected` is still Active, `tabs.active` is still the `s9` tab, and no `sessions.list` with `place.kind === 'needsYou'` was requested for this purpose.
+  - Delete the tests that only exist for the heuristic: line 102 (`…about the open chat keeps the place`) is now covered by the above, and line 346 (`a machine failing to list Needs you…`) has no subject left. Line 122 (`focus long after…changes nothing`) stays as it is.
+  - Notification posting, the tray badge and `ui.visibility` tests are unchanged.
+- [ ] **Step 2: Run and watch the changed tests fail.** Run from `apps/desktop`: `pnpm --config.verify-deps-before-run=false exec vitest run tests/global/notifications.test.ts`. Expected: FAIL, with `needsYou` received where `active` was expected, or the tab moved to `s2`.
+- [ ] **Step 3: Remove the focus heuristic.** Delete `openNotified` and everything only it uses: the `notifiedAt`/`notified` bookkeeping, `FOCUS_OPENS_WITHIN_MS`, and its call from the focus handler. Keep whatever the focus handler still needs for `ui.visibility`/`focused`. Drop `places` (and `tabs`, if unused) from the deps. Keep posting notifications exactly as today.
 - [ ] **Step 4: Run the file.** Expected: PASS.
 - [ ] **Step 5: Commit.** `fix(notifications): coming back to the window no longer switches the place to Needs you`.
 

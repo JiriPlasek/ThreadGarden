@@ -126,7 +126,9 @@ The new project shows up in the machine's project list as soon as its first chat
 
 **Likely cause** (to be confirmed with a failing test first): when the window regains focus within a short time after a notification, `openNotified` in `apps/desktop/src/lib/notifications.ts` selects Needs you. It skips that only when every notification was about the tab already active at that moment. The owner's click on the tab arrives after the focus, so the place has already moved.
 
-**Wanted behaviour** *(owner's intent, mechanism the designer's call)*: coming back to the window, or clicking a tab, never changes the selected place. The owner's chosen place stays until they choose another. Opening the single waiting chat in a tab after a notification may stay, since it doesn't touch the place.
+**What the owner saw, more precisely** (2026-11-02): Threadgarden was behind another window, showing a different chat's tab. A notification said a chat needed the owner. The owner clicked Threadgarden to bring it to the front, and both the place and the tab switched.
+
+**Wanted behaviour** *(owner's intent, mechanism the designer's call)*: coming back to the window changes nothing. Neither the selected place nor the open tab moves; the owner's chosen place and tab stay until they choose others. The "open what the notification was about when the window regains focus soon after it" heuristic is removed entirely: the app can't tell a click on the notification from any other way of coming back. The notification itself, the Needs you count and the tray badge still say what is waiting.
 
 ## 8b. Also in this step: the window's update loop (bug, owner)
 
