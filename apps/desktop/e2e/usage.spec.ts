@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 import { markAllSeen, openApp, resetTabs } from './helpers';
 
 /*
- * v1.3 B: the usage meter and a chat refused by the (mock) usage limit. The
+ * v1.3 B: the per-account usage chip and a chat refused by the (mock) usage limit. The
  * mock stays refused for two minutes after "limit", so this spec runs last
  * (file order) and leaves nothing scheduled behind.
  */
@@ -15,12 +15,12 @@ test('usage meter, Usage dialog, limit notice and "Send when the limit resets"',
   page,
 }) => {
   await openApp(page);
-  const meter = page.getByRole('button', { name: /^Usage: 5-hour limit/ });
+  const meter = page.getByRole('button', { name: /^Usage: .*5-hour limit/ }).first();
   await expect(meter).toContainText('%');
   await meter.click();
   const dialog = page.getByRole('dialog', { name: 'Usage' });
-  await expect(dialog.getByRole('meter', { name: '5-hour limit used' })).toBeVisible();
-  await expect(dialog.getByRole('meter', { name: 'Weekly limit used' })).toBeVisible();
+  await expect(dialog.getByRole('meter', { name: '5-hour limit used' }).first()).toBeVisible();
+  await expect(dialog.getByRole('meter', { name: 'Weekly limit used' }).first()).toBeVisible();
   await page.keyboard.press('Escape');
 
   const list = page.getByRole('region', { name: 'Chat list' });
