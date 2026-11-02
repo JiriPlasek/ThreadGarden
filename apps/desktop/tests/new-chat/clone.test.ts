@@ -6,9 +6,10 @@ import {
   type GithubStatus,
   type Repo,
 } from '@threadgarden/protocol';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import NewChatDialog from '../../src/lib/components/NewChatDialog.svelte';
-import { LOCAL, M1, machineInfo, project, setupTwoMachines } from '../layout/harness';
+import { CLONE_POLL_MS, watchClone } from '../../src/lib/components/new-chat/clone';
+import { M1, machineInfo, project, setupTwoMachines } from '../layout/harness';
 import { RpcFail, type FakeServer } from '../service/fake-ws';
 
 const READY: GithubStatus = { ready: true, login: 'jiri', problem: null };
@@ -274,20 +275,94 @@ describe('New chat: Clone', () => {
     expect(env.remote.calls('chat.create')).toHaveLength(0);
   });
 
-  it('a machine switch mid-clone cancels it and starts no chat anywhere', async () => {
+  it('while cloning, the Machine select and the other tabs wait; Cancel frees them', async () => {
     const env = await twoMachines((s) => {
       s.handlers['projects.job'] = () => job();
     });
     const dialog = await openClone(env);
+    const machine = within(dialog).getByRole('combobox', { name: /machine/i }) as HTMLSelectElement;
+    const others = ['Existing folder', 'New project'].map(
+      (name) => within(dialog).getByRole('tab', { name }) as HTMLButtonElement,
+    );
+    expect(machine.disabled).toBe(false);
+    expect(others.map((t) => t.disabled)).toEqual([false, false]);
+
     await clonePlant(dialog);
     await within(dialog).findByText('Cloning Jiri/Plant…');
-    await userEvent.selectOptions(
-      within(dialog).getByRole('combobox', { name: /machine/i }),
-      LOCAL,
-    );
-    await waitFor(() => expect(env.remote.calls('projects.cancel')).toHaveLength(1));
-    expect(env.server.calls('projects.cancel')).toHaveLength(0);
+    expect(machine.disabled).toBe(true);
+    expect(others.map((t) => t.disabled)).toEqual([true, true]);
+
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(machine.disabled).toBe(false));
+    expect(others.map((t) => t.disabled)).toEqual([false, false]);
+    expect(env.remote.calls('projects.cancel')).toHaveLength(1);
+    expect(machine.value).toBe(M1);
     expect(env.remote.calls('chat.create')).toHaveLength(0);
     expect(env.server.calls('chat.create')).toHaveLength(0);
+  });
+
+  it('a search that hides the chosen repo clears the choice', async () => {
+    const env = await twoMachines();
+    const dialog = await openClone(env);
+    await repoRows(dialog);
+    await userEvent.click(within(dialog).getByRole('radio', { name: /Jiri\/Plant/ }));
+    const search = within(dialog).getByRole('searchbox', { name: /search/i });
+    await userEvent.type(search, 'acme');
+    await userEvent.type(message(dialog), 'hi{Enter}');
+    await waitFor(() =>
+      expect(within(dialog).getByRole('alert').textContent?.trim()).toBe(
+        'Choose a repo to clone first.',
+      ),
+    );
+    expect(env.remote.calls('projects.clone')).toHaveLength(0);
+    await userEvent.clear(search);
+    const plant = within(dialog).getByRole('radio', { name: /Jiri\/Plant/ }) as HTMLInputElement;
+    expect(plant.checked).toBe(false);
+  });
+
+  it('a Create in typed on New project stays when switching to Clone', async () => {
+    const env = await twoMachines();
+    const dialog = await openClone(env);
+    await userEvent.click(within(dialog).getByRole('tab', { name: 'New project' }));
+    const where = () =>
+      within(dialog).getByRole('textbox', { name: 'Create in' }) as HTMLInputElement;
+    await userEvent.clear(where());
+    await userEvent.type(where(), '/srv/mine');
+    await userEvent.click(within(dialog).getByRole('tab', { name: 'Clone' }));
+    await repoRows(dialog);
+    expect(where().value).toBe('/srv/mine');
+    expect(env.remote.calls('projects.createIn')).toHaveLength(1);
+  });
+});
+
+describe('watchClone', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('rides out a passing poll failure; three in a row cancel the job', async () => {
+    vi.useFakeTimers();
+    const api = { job: vi.fn(), cancel: vi.fn(async () => {}) };
+    api.job
+      .mockRejectedValueOnce(new Error('the relay hiccuped'))
+      .mockRejectedValueOnce(new Error('again'))
+      .mockResolvedValueOnce(job({ state: 'done' }));
+    const healthy = watchClone(api, job());
+    await vi.advanceTimersByTimeAsync(3 * CLONE_POLL_MS);
+    await expect(healthy.settled).resolves.toMatchObject({ state: 'done' });
+    expect(api.job).toHaveBeenCalledTimes(3);
+    expect(api.cancel).not.toHaveBeenCalled();
+
+    const down = {
+      job: vi.fn(async (): Promise<CloneJob> => {
+        throw new Error('gone');
+      }),
+      cancel: vi.fn(async () => {}),
+    };
+    const lost = watchClone(down, job());
+    const rejected = expect(lost.settled).rejects.toThrow('gone');
+    await vi.advanceTimersByTimeAsync(3 * CLONE_POLL_MS);
+    await rejected;
+    expect(down.job).toHaveBeenCalledTimes(3);
+    expect(down.cancel).toHaveBeenCalledTimes(1);
+    expect(down.cancel).toHaveBeenCalledWith('j1');
   });
 });

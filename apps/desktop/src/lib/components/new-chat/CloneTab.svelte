@@ -12,11 +12,12 @@
    * (newest first, searchable, marked when This PC already has it), and the
    * shared Create in. The dialog calls `submit` on send; the tab clones, shows
    * the progress with Cancel and returns the clone for the chat to start in.
-   * A clone still running when the tab goes away (the dialog closed, another
-   * tab or machine chosen) is cancelled.
+   * While a clone runs the dialog keeps its machine and tab (`busy`); one
+   * still running when the tab goes away (the dialog closed) is cancelled.
    */
   let {
     createIn = $bindable(),
+    busy = $bindable(false),
     api,
     thisPc,
     onThisPc,
@@ -25,6 +26,8 @@
     startIn,
   }: {
     createIn: string;
+    /** A clone is running (the dialog keeps its machine and tab meanwhile). */
+    busy?: boolean;
     /** The chosen machine's projects methods. */
     api: ProjectsApi;
     /** This PC's, for which repos it already has (`origins`). */
@@ -54,6 +57,15 @@
   const shown = $derived.by(() => {
     const q = query.trim().toLowerCase();
     return (repos ?? []).filter((r) => r.fullName.toLowerCase().includes(q));
+  });
+
+  // A choice the search hides is no choice: Send must not clone a repo out of sight.
+  $effect(() => {
+    if (repo && !shown.some((r) => r.fullName === repo)) repo = '';
+  });
+
+  $effect(() => {
+    busy = cloning !== null;
   });
 
   const loadRepos = (): void => {

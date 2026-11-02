@@ -115,6 +115,8 @@
   let name = $state('');
   let createIn = $state('');
   let github = $state(false);
+  /** A clone is running: the machine and the tab stay as they are until it ends (Ruling P11). */
+  let cloning = $state(false);
   /** A folder made whose chat did not start (Start there). */
   let made = $state<NotStarted | null>(null);
   let model = $state('');
@@ -155,7 +157,10 @@
       });
       tab = 'existing';
       name = '';
+      // Create in is asked again from the machine each time the dialog opens.
+      createIn = '';
       github = false;
+      cloning = false;
       error = null;
       made = null;
       created = false;
@@ -349,6 +354,7 @@
         <label for="new-chat-machine" class="text-muted-foreground">Machine</label>
         <select
           id="new-chat-machine"
+          disabled={cloning}
           class={selectClass}
           value={scope.machineId}
           onchange={(e) => chooseMachine(e.currentTarget.value)}
@@ -371,7 +377,7 @@
           id="new-chat-tab-{t.id}"
           aria-selected={tab === t.id}
           aria-controls="new-chat-panel"
-          disabled={t.id !== 'existing' && !supported}
+          disabled={(t.id !== 'existing' && !supported) || (cloning && t.id !== tab)}
           title={t.id === 'existing' ? undefined : (updateHint ?? undefined)}
           class="-mb-px border-b-2 px-2.5 py-1.5 disabled:opacity-50 {tab === t.id
             ? 'border-primary text-foreground'
@@ -415,6 +421,7 @@
         {#key scope.machineId}
           <CloneTab
             bind:this={cloneTab}
+            bind:busy={cloning}
             bind:createIn
             api={projectsOf}
             thisPc={localProjects}

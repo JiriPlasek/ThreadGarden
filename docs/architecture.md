@@ -201,13 +201,16 @@ service and the UI; the service validates every request.
   `chat.since`); **1001** when the local service stops. The UI also checks
   that the relayed `hello` names the paired machine's id: another id counts
   as a mismatch, like 4409, and the client stops.
-- **Versions across machines.** v1.4 is protocol 5. The desktop and its local
-  service still need the exact version; a remote service is accepted at
-  protocol 4, 5 or 6 (one either way). A method such a service lacks answers
-  `METHOD_NOT_FOUND`; the UI does not map that code yet (it surfaces as any
-  failed request), and a later plan shows it as "not supported on this
-  machine". A machine outside that window shows as needing attention ("Different
-  Threadgarden version").
+- **Versions across machines.** The protocol is 7 (v1.4 was 5; 6 added power
+  control, 7 projects). The desktop and its local service still need the
+  exact version; a remote service is accepted one version either way (6, 7
+  or 8 for a desktop on 7). What a machine can do is read from the
+  capabilities in its `hello`, not from its version: the desktop offers power
+  control only with `power`, and New project, Clone and Browse… only with
+  `projects`; an older machine shows them disabled with "Update ‹machine› to
+  use this". A method a service lacks still answers `METHOD_NOT_FOUND` (it
+  surfaces as any failed request). A machine outside that window shows as
+  needing attention ("Different Threadgarden version").
 - **Requests** `{id, method, params}` → `{id, result}` or `{id, error: {code,
   message}}`. Error codes the UI acts on include `GAP`, `RESUME_BLOCKED`,
   `CLAUDE_MISSING`, `NOT_LIVE`, `NOT_FOUND`, `FORK_FAILED` and
@@ -761,8 +764,11 @@ hang. GitHub goes through the machine's own `gh` as whoever is signed in
 there; Threadgarden stores no GitHub token. New repos are `--private`, and
 nothing is pushed. A clone is a job: `projects.clone` answers at once with
 the job (or `existing`, when the target is already a clone of the same repo),
-the dialog's Clone tab polls `projects.job` every second, and Cancel, or
-closing the dialog, calls `projects.cancel`.
+the dialog's Clone tab polls `projects.job` every second (three failed polls
+in a row give it up) while the dialog keeps its machine and tab, and Cancel,
+or closing the dialog, calls `projects.cancel`. A clone of the same target
+asked for while a cancelled one is still being removed waits for the removal,
+so a half-made folder never reads as `existing`.
 
 **Git access and writes.** Besides its data dir, Threadgarden now writes in
 one more way, on any machine: New project and Clone **make a new folder** and

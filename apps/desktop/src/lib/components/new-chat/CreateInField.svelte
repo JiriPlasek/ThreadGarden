@@ -6,8 +6,11 @@
 
   /**
    * The "Create in" folder of a new project or a clone: the machine's
-   * remembered place (asked each time the field appears), typed, or picked
-   * with Browse… (the native picker on This PC, the folder browser elsewhere).
+   * remembered place (asked when the field appears empty: each time the
+   * dialog opens or another machine is chosen), typed, or picked with
+   * Browse… (the native picker on This PC, the folder browser elsewhere).
+   * New project and Clone share the value, so a place chosen on one stays
+   * on the other.
    */
   let {
     value = $bindable(),
@@ -27,15 +30,15 @@
   let browsing = $state(false);
 
   onMount(() => {
+    if (value) return;
     // An answer after this field is gone (another machine chosen) is dropped:
     // a bound prop would still write it into the dialog.
     let live = true;
-    const before = value;
     api
       .createIn()
       .then((path) => {
         // A place typed meanwhile wins.
-        if (live && value === before) value = path;
+        if (live && !value) value = path;
       })
       .catch(() => {});
     return () => {

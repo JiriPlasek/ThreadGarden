@@ -14,6 +14,8 @@ export type FakeSpawn = {
   /** Finishes the fake clone with this result. */
   finish(result?: Partial<RunResult>): void;
   cancelled: boolean;
+  /** Whether cancelling ends it at once (default); false: it ends only on `finish`, like a slow kill. */
+  exitOnCancel: boolean;
 };
 
 const matches = (m: Matcher, args: string[]): boolean => {
@@ -55,6 +57,7 @@ export const fakeTools = (
       const s: FakeSpawn = {
         call,
         cancelled: false,
+        exitOnCancel: true,
         finish: (result = {}) => resolveDone(full(result)),
       };
       spawned.push(s);
@@ -62,7 +65,7 @@ export const fakeTools = (
         done,
         cancel: () => {
           s.cancelled = true;
-          resolveDone({ code: -1, stdout: '', stderr: 'cancelled' });
+          if (s.exitOnCancel) resolveDone({ code: -1, stdout: '', stderr: 'cancelled' });
         },
       };
     },

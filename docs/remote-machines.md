@@ -312,9 +312,10 @@ The first message, Model and Permission mode are shared by all three.
   those you collaborate on), most recently updated first, with a search box;
   **on This PC** marks the ones This PC already has. Pick one and send the
   first message: it is cloned into Create in (its default branch), "Cloning
-  ‹owner/name›…" shows meanwhile, and the chat starts in the clone. **Cancel**,
-  or closing the dialog, stops the clone and removes the half-made folder. If
-  the clone is already there, **Start there** starts the chat in it.
+  ‹owner/name›…" shows meanwhile, and the chat starts in the clone. While it
+  clones, the Machine and the other tabs wait. **Cancel**, or closing the
+  dialog, stops the clone and removes the half-made folder. If the clone is
+  already there, **Start there** starts the chat in it.
 
 Clone and the GitHub tick use that machine's own `gh`, so it must be signed
 in and set up for git: `gh auth login --insecure-storage` and `gh auth

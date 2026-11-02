@@ -75,6 +75,8 @@ const removeMade = (dir: string): Promise<void> =>
 /** Makes new project folders (New project, Clone), remembers Create in, and records what it made. */
 export class ProjectMaker {
   private readonly jobs = new Map<string, { job: CloneJob; cancel(): void }>();
+  /** Each clone target's job and its finish (the folder removed after a cancel or failure). */
+  private readonly finishing = new Map<string, { job: CloneJob; finished: Promise<void> }>();
   private readonly now: () => number;
   private readonly newId: () => string;
 
@@ -163,6 +165,10 @@ export class ProjectMaker {
     }
     const place = await this.place(p.createIn);
     const target = path.join(place.dir, name);
+    // A cancelled clone there is still being removed: let it go first, or its
+    // half-made folder (origin already set) would read as this repo, cloned.
+    const earlier = this.finishing.get(target);
+    if (earlier?.job.state === 'cancelled') await earlier.finished.catch(() => {});
     if (await this.exists(target)) {
       if ((await originOf(t, target)) === p.repo.toLowerCase()) {
         return { status: 'existing', path: target };
@@ -183,7 +189,12 @@ export class ProjectMaker {
     };
     const run = startClone(t, p.repo, target);
     this.jobs.set(job.jobId, { job, cancel: run.cancel });
-    void run.done.then((r) => this.finish(job, r, place.dir));
+    const finished = run.done.then((r) => this.finish(job, r, place.dir));
+    this.finishing.set(target, { job, finished });
+    const forget = (): void => {
+      if (this.finishing.get(target)?.job === job) this.finishing.delete(target);
+    };
+    void finished.then(forget, forget);
     return { status: 'started', job: { ...job } };
   }
 

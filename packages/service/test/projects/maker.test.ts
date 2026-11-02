@@ -501,6 +501,30 @@ describe('clone', () => {
       expect(maker.made()).toEqual([]);
     });
 
+    it('a clone retried right after a cancel waits for the old folder to go, then starts anew', async () => {
+      const s = setup({ replies: [ghReady, originIs('https://github.com/me/thing')] });
+      await s.maker.clone({ createIn: code, repo: 'me/thing' });
+      // git wrote origin early and fetched part of it; killing it takes a moment.
+      mkdirSync(path.join(target(), '.git', 'objects'), { recursive: true });
+      s.tools.spawned[0]!.exitOnCancel = false;
+      s.maker.cancel('job-1');
+
+      let answered = false;
+      const retry = s.maker.clone({ createIn: code, repo: 'me/thing' });
+      void retry.then(() => (answered = true));
+      await new Promise((r) => setTimeout(r, 50));
+      expect(answered).toBe(false);
+
+      s.tools.spawned[0]!.finish({ code: -1, stderr: 'killed' });
+      expect(await retry).toEqual({
+        status: 'started',
+        job: { jobId: 'job-2', state: 'running', repo: 'me/thing', path: target(), error: null },
+      });
+      expect(s.tools.spawned).toHaveLength(2);
+      // The new folder is a fresh one: the old partial clone was removed first.
+      expect(readdirSync(target())).toEqual([]);
+    });
+
     it('cancel after done keeps it', async () => {
       const { maker, tools } = await start();
       tools.spawned[0]!.finish({ code: 0 });
