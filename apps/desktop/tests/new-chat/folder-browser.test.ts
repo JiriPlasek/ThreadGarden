@@ -93,7 +93,7 @@ describe('FolderBrowser', () => {
         return listing(p, null, [{ name: 'plant', path: `${p}/plant`, git: false }]);
       }),
     });
-    setup(api);
+    const { onPick } = setup(api);
     const box = (await screen.findByLabelText('Path')) as HTMLInputElement;
     await waitFor(() => expect(box.value).toBe('/home/j'));
     await screen.findByText('plant');
@@ -101,6 +101,74 @@ describe('FolderBrowser', () => {
     await userEvent.type(box, '/nope{Enter}');
     expect((await screen.findByRole('alert')).textContent).toContain('No such folder');
     expect(screen.getByText('plant')).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: 'Use this folder' }));
+    expect(onPick).toHaveBeenCalledWith('/home/j');
+  });
+
+  it('a slow older load never replaces a newer one', async () => {
+    const pending: Record<string, (l: FolderListing) => void> = {};
+    const api = fakeApi({
+      list: vi.fn((p: string) =>
+        p === '/home/j'
+          ? Promise.resolve(
+              listing(p, null, [
+                { name: 'a', path: '/a', git: false },
+                { name: 'b', path: '/b', git: false },
+              ]),
+            )
+          : new Promise<FolderListing>((r) => (pending[p] = r)),
+      ),
+    });
+    const { onPick } = setup(api);
+    await userEvent.click(await screen.findByRole('button', { name: /^a$/ }));
+    await userEvent.click(screen.getByRole('button', { name: /^b$/ }));
+    pending['/b']!(listing('/b', null));
+    const box = screen.getByLabelText('Path') as HTMLInputElement;
+    await waitFor(() => expect(box.value).toBe('/b'));
+    pending['/a']!(listing('/a', null));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(box.value).toBe('/b');
+    await userEvent.click(screen.getByRole('button', { name: 'Use this folder' }));
+    expect(onPick).toHaveBeenCalledWith('/b');
+  });
+
+  const tabKey = (el: HTMLElement): boolean =>
+    el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }));
+
+  it('Tab moves on from an empty box and after a completion with no matches', async () => {
+    const api = fakeApi();
+    setup(api);
+    const box = (await screen.findByLabelText('Path')) as HTMLInputElement;
+    await waitFor(() => expect(box.value).toBe('/home/j'));
+    await userEvent.clear(box);
+    expect(tabKey(box)).toBe(true);
+    await userEvent.type(box, '/zzz');
+    expect(tabKey(box)).toBe(false);
+    await waitFor(() => expect(api.complete).toHaveBeenCalledWith('/zzz'));
+    await new Promise((r) => setTimeout(r, 10));
+    expect(tabKey(box)).toBe(true);
+  });
+
+  it('completion ignores case and never shortens what was typed', async () => {
+    const api = fakeApi({
+      complete: vi.fn(async () => ['C:\\Users\\Plant-a', 'C:\\Users\\plant-b']),
+    });
+    setup(api, 'C:\\');
+    const box = (await screen.findByLabelText('Path')) as HTMLInputElement;
+    await waitFor(() => expect(box.value).toBe('C:\\'));
+    await userEvent.clear(box);
+    await userEvent.type(box, 'c:\\users\\p{Tab}');
+    await waitFor(() => expect(box.value).toBe('C:\\Users\\Plant-'));
+  });
+
+  it('Enter on an empty box loads nothing', async () => {
+    const api = fakeApi();
+    setup(api);
+    const box = (await screen.findByLabelText('Path')) as HTMLInputElement;
+    await waitFor(() => expect(box.value).toBe('/home/j'));
+    await userEvent.clear(box);
+    await userEvent.type(box, '{Enter}');
+    expect(api.list).toHaveBeenCalledTimes(1);
   });
 
   it('Use this folder returns the current path; Cancel cancels', async () => {

@@ -37,11 +37,16 @@
   // Display only: the last segment of a path the service gave us.
   const label = (path: string): string => path.split(/[\\/]/).filter(Boolean).pop() ?? path;
 
+  // Only the newest load may show its result; a slower, older one is dropped.
+  let seq = 0;
+
   const load = async (path: string): Promise<void> => {
+    const mine = ++seq;
     busy = true;
     error = null;
     try {
       const next = await api.list(path);
+      if (mine !== seq) return;
       const at = chain.indexOf(next.path);
       const parentAt = next.parent === null ? -1 : chain.indexOf(next.parent);
       if (at >= 0) chain = chain.slice(0, at + 1);
@@ -50,35 +55,49 @@
       listing = next;
       pathText = next.path;
     } catch (e) {
-      error = message(e);
+      if (mine === seq) error = message(e);
     } finally {
-      busy = false;
+      if (mine === seq) busy = false;
     }
   };
 
-  const commonPrefix = (items: string[]): string =>
-    items.reduce((a, b) => {
+  /** The longest prefix the matches share, ignoring case (the machine may), cased as the first match. */
+  const commonPrefix = (items: string[]): string => {
+    const first = items[0]!;
+    let n = first.length;
+    for (const item of items) {
       let i = 0;
-      while (i < a.length && i < b.length && a[i] === b[i]) i++;
-      return a.slice(0, i);
-    });
+      while (i < n && i < item.length && first[i]!.toLowerCase() === item[i]!.toLowerCase()) i++;
+      n = i;
+    }
+    return first.slice(0, n);
+  };
+
+  /** The text a completion found nothing more for; Tab then moves on. */
+  let stuckAt: string | null = null;
 
   const complete = async (): Promise<void> => {
-    if (!pathText) return;
+    const typed = pathText;
     try {
-      const matches = await api.complete(pathText);
-      if (matches.length > 0) pathText = matches.length === 1 ? matches[0]! : commonPrefix(matches);
+      const matches = await api.complete(typed);
+      if (pathText !== typed) return;
+      const found =
+        matches.length === 1 ? matches[0]! : matches.length > 1 ? commonPrefix(matches) : typed;
+      if (found.length > typed.length || (matches.length === 1 && found !== typed)) {
+        pathText = found;
+        stuckAt = null;
+      } else stuckAt = typed;
       error = null;
     } catch (e) {
-      error = message(e);
+      if (pathText === typed) error = message(e);
     }
   };
 
   const onPathKey = (e: KeyboardEvent): void => {
     if (e.key === 'Enter') {
       e.preventDefault();
-      void load(pathText);
-    } else if (e.key === 'Tab' && !e.shiftKey) {
+      if (pathText) void load(pathText);
+    } else if (e.key === 'Tab' && !e.shiftKey && pathText && pathText !== stuckAt) {
       e.preventDefault();
       void complete();
     }
@@ -87,16 +106,17 @@
   const makeFolder = async (): Promise<void> => {
     if (!listing || !newName) return;
     busy = true;
+    let path: string;
     try {
-      const path = await api.makeFolder(listing.path, newName);
-      naming = false;
-      newName = '';
-      await load(path);
+      path = await api.makeFolder(listing.path, newName);
     } catch (e) {
       error = message(e);
-    } finally {
       busy = false;
+      return;
     }
+    naming = false;
+    newName = '';
+    await load(path);
   };
 
   $effect(() => {
