@@ -16,8 +16,15 @@ const WAKE_HORIZON_MS = 7 * 24 * 60 * MIN;
 const START_RETRY_MS = 10_000;
 /** …this many times (about 5 minutes); after that, on every minute tick. */
 const START_RETRIES = 30;
+/**
+ * A service still running this long after `systemctl poweroff` was accepted is on
+ * a machine that is not going down: a real shutdown stops it within seconds. Well
+ * inside the switch's 15 min arming, after which the switch cuts (rules.ts).
+ */
+const POWEROFF_GRACE_MS = 5 * MIN;
 
 export const SEND_DUE_SOON = 'A scheduled message is due soon';
+export const DID_NOT_POWER_OFF = 'The machine did not power off within 5 minutes.';
 export const NOT_CONFIGURED =
   'This machine has no power switch set up, so it would not turn on again.';
 
@@ -125,6 +132,8 @@ export class ShutdownSequence {
   private startProblem: string | null = null;
   private startRetries = 0;
   private retryHandle: unknown = null;
+  /** The watch started once a poweroff was accepted (see `watchPoweroff`). */
+  private graceHandle: unknown = null;
   private closed = false;
   /** The switch while a cut of this sequence is armed and the machine is not yet powering off. */
   private armed: PowerSwitch | null = null;
@@ -214,11 +223,35 @@ export class ShutdownSequence {
     this.set(RUNNING);
   }
 
-  /** Stops the start disarm's retries (the service is closing). */
+  /**
+   * Stops the start disarm's retries and the poweroff watch (the service is closing).
+   * A shutdown under way closes the service: the cut it armed must stay armed then.
+   */
   close(): void {
     this.closed = true;
     if (this.retryHandle !== null) this.timers.clear(this.retryHandle);
     this.retryHandle = null;
+    if (this.graceHandle !== null) this.timers.clear(this.graceHandle);
+    this.graceHandle = null;
+  }
+
+  /**
+   * Once a poweroff was accepted, the cut stays armed for a machine that hangs on its
+   * way down: the switch cuts when its arming runs out. A machine still running after
+   * POWEROFF_GRACE_MS is not going down, so the cut and the wake are disarmed, retried
+   * like the start disarm until they get through; no sequence arms meanwhile.
+   */
+  private watchPoweroff(): void {
+    if (this.closed) return;
+    this.graceHandle = this.timers.set(() => {
+      this.graceHandle = null;
+      if (this.closed || this.state.phase !== 'shuttingDown') return;
+      this.o.log?.warn('power: still running 5 min after poweroff; disarming the cut');
+      this.startPending = true;
+      this.startRetries = 0;
+      this.settle({ ...RUNNING, problem: DID_NOT_POWER_OFF });
+      void this.startDisarm().then(() => this.scheduleRetry());
+    }, POWEROFF_GRACE_MS);
   }
 
   /** One start disarm attempt at a time: a caller while one runs shares it. */
@@ -383,12 +416,14 @@ export class ShutdownSequence {
         this.o.log?.info(
           `power: systemctl poweroff ended by a signal (${reason}); the machine is going down`,
         );
+        this.watchPoweroff();
         return this.status();
       }
       this.o.log?.warn(`power: poweroff failed: ${reason}`);
       await disarmQuietly(sw);
       return this.settle({ ...RUNNING, problem: `The machine refused to power off (${reason})` });
     }
+    this.watchPoweroff();
     return this.status();
   }
 }

@@ -493,8 +493,13 @@ keep the machine awake.
    meanwhile, it disarms again and the machine stays on. Otherwise it stops the
    chats (they become resumable) and runs `systemctl poweroff`.
 5. The switch cuts the power once the plug has read below the off line for about
-   30 seconds. It never cuts on a timer alone, so a PC that hangs while shutting
-   down keeps its power.
+   30 seconds. A PC that hangs at the very end of its shutdown never gets there,
+   so the switch also cuts **15 minutes** after the shutdown began. By then the
+   disks have been written out, so the cut is like the power switch after a
+   frozen power-off. If the PC did not go down at all (the service is still
+   running 5 minutes after `systemctl poweroff`), the service calls the cut and
+   the wake off, and says **The machine did not power off within 5 minutes.**, so
+   a running PC is never cut.
 
 If the switch cannot be reached or refuses, the machine **stays on** and
 Threadgarden says why: powering it off without being able to switch it on again

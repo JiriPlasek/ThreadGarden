@@ -50,7 +50,10 @@ export function ruleText(config: PowerConfig): string {
     `on ${t}<${w} do Add14 %var15% endon`,
     `on ${t}>=${w} do Var14 0 endon`,
     'on Var14#State>=6 do Backlog %mem12%;Mem11 %utctime%;Event tgo endon',
-    'on Rules#Timer=8 do Event tgo endon',
+    // An arming that runs out (15 min) cuts as the low readings do: a machine that hung
+    // at the end of its shutdown never stays on. The service disarms when it is still
+    // running 5 min after its poweroff (shutdown.ts), so a running machine is never cut.
+    'on Rules#Timer=8 do Var14 6 endon',
     // A wake or a cycle is a cut too: Mem11 records it, so a Turn on waits out the minimum off time.
     `on Event#tgw do Backlog %mem12%;Mem11 %utctime%;RuleTimer6 ${m} endon`,
     'on Rules#Timer=6 do %mem13% endon',
