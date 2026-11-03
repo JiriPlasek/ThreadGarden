@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Bucket, ChatSummary, ScheduledSend } from '@threadgarden/protocol';
   import AlarmClockIcon from '@lucide/svelte/icons/alarm-clock';
+  import ArrowRightLeftIcon from '@lucide/svelte/icons/arrow-right-left';
   import ArchiveIcon from '@lucide/svelte/icons/archive';
   import InboxIcon from '@lucide/svelte/icons/inbox';
   import PauseIcon from '@lucide/svelte/icons/pause';
@@ -36,6 +37,7 @@
     onRename,
     onTogglePin,
     onMove,
+    onMoveMachine,
   }: {
     chat: ChatSummary;
     /** DOM id, referenced by the list's `aria-activedescendant`. */
@@ -67,6 +69,8 @@
     onTogglePin: (chat: ChatSummary) => void;
     /** Make active / Put on hold… / Archive (v1.2 §3). */
     onMove?: (chat: ChatSummary, bucket: Bucket) => void;
+    /** Move to… another machine (move-chat §3); absent with This PC alone. */
+    onMoveMachine?: (chat: ChatSummary) => void;
   } = $props();
 
   const line = $derived(previewLine(chat));
@@ -213,6 +217,12 @@
           <ArchiveIcon /> Archive
         </ContextMenu.Item>
       {/if}
+    {/if}
+    {#if onMoveMachine}
+      <ContextMenu.Separator />
+      <ContextMenu.Item class="py-1 text-xs" onSelect={() => onMoveMachine(chat)}>
+        <ArrowRightLeftIcon /> Move to…
+      </ContextMenu.Item>
     {/if}
   </ContextMenu.Content>
 </ContextMenu.Root>

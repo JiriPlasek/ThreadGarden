@@ -5,6 +5,7 @@
 
 <script lang="ts">
   import ArchiveIcon from '@lucide/svelte/icons/archive';
+  import ArrowRightLeftIcon from '@lucide/svelte/icons/arrow-right-left';
   import ChartColumnIcon from '@lucide/svelte/icons/chart-column';
   import MessageSquareIcon from '@lucide/svelte/icons/message-square';
   import CircleStopIcon from '@lucide/svelte/icons/circle-stop';
@@ -22,7 +23,7 @@
   import { machineNameOf } from '#lib/state/machines.svelte.js';
   import { askArchiveOlderIn } from '#lib/state/merged-list.svelte.js';
   import { mergeQuickHits, type MachineHit } from '#lib/state/quick-search.js';
-  import { chatKey } from '#lib/state/refs.js';
+  import { chatKey, parseChatKey } from '#lib/state/refs.js';
   import type { MachineScope } from '#lib/state/scope.js';
   import type { QuickHit } from '#lib/state/sessions.svelte.js';
   import { cn } from '#lib/utils.js';
@@ -34,7 +35,8 @@
    * query is dropped). Enter opens the chat or focuses its tab. Also hosts
    * commands: "New chat in…", "Stop all work", "Usage" (v1.3), "Analytics" (v1.3),
    * "Settings", "Keyboard shortcuts",
-   * and in Active or a project "Archive chats older than 30 days…". Archived
+   * and in Active or a project "Archive chats older than 30 days…"; with more
+   * than one machine, "Move to…" for the active tab's chat (move-chat §3). Archived
    * matches come last, in their own "Archived" group (v1.2 §3).
    *
    * Machines: every connected machine is searched at once (`QUICK_LIMIT`
@@ -63,6 +65,19 @@
       label: `Archive chats older than ${ARCHIVE_OLDER_DAYS} days…`,
       icon: ArchiveIcon,
       run: () => void askArchiveOlderIn(p, scopes),
+    };
+  });
+
+  /** Move to… for the chat in the active tab (not a moved-away copy). */
+  const moveCommand = $derived.by((): Command | null => {
+    const ref = tabs.active ? parseChatKey(tabs.active) : null;
+    if (!ref || !machines.several) return null;
+    if (scopes.get(ref.machineId)?.chats.get(ref.sessionId)?.movedTo) return null;
+    return {
+      id: 'move-chat',
+      label: 'Move to…',
+      icon: ArrowRightLeftIcon,
+      run: () => interaction.openMoveChat(ref),
     };
   });
 
@@ -103,7 +118,9 @@
   let latest = 0;
 
   const commands = $derived.by(() => {
-    const all = archiveOlderCommand ? [...COMMANDS, archiveOlderCommand] : COMMANDS;
+    const all = [...COMMANDS, archiveOlderCommand, moveCommand].filter(
+      (c): c is Command => c !== null,
+    );
     const q = query.trim().toLowerCase();
     return q ? all.filter((c) => c.label.toLowerCase().includes(q)) : all;
   });

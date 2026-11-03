@@ -1,5 +1,6 @@
 import type { Result } from '@threadgarden/protocol';
 import { quietly, type Api } from './api';
+import type { ChatRef } from './refs';
 
 /** Drafts are written this long after the last keystroke (spec §7: ≤ 300 ms). */
 export const DRAFT_SAVE_DELAY_MS = 300;
@@ -29,6 +30,8 @@ export class InteractionState {
     cwd: null,
     machineId: null,
   });
+  /** The Move to… dialog (move-chat §3), for the chat `ref`. */
+  moveChat = $state<{ open: boolean; ref: ChatRef | null }>({ open: false, ref: null });
   /** The Ctrl/Cmd+K quick switcher (spec §6.1). */
   switcherOpen = $state(false);
   /** Threadgarden's settings dialog (spec §6.5). */
@@ -159,6 +162,16 @@ export class InteractionState {
 
   closeNewChat = (): void => {
     this.newChat = { ...this.newChat, open: false };
+  };
+
+  // ── move a chat ─────────────────────────────────────────────────────────
+
+  openMoveChat = (ref: ChatRef): void => {
+    this.moveChat = { open: true, ref: { machineId: ref.machineId, sessionId: ref.sessionId } };
+  };
+
+  closeMoveChat = (): void => {
+    this.moveChat = { ...this.moveChat, open: false };
   };
 }
 

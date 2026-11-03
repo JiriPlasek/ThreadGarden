@@ -1,5 +1,6 @@
 <script lang="ts">
   import ActivityIcon from '@lucide/svelte/icons/activity';
+  import ArrowRightLeftIcon from '@lucide/svelte/icons/arrow-right-left';
   import ArchiveIcon from '@lucide/svelte/icons/archive';
   import CheckIcon from '@lucide/svelte/icons/check';
   import CircleStopIcon from '@lucide/svelte/icons/circle-stop';
@@ -34,7 +35,8 @@
    * "stop it there" note when it is open in a terminal. The Activity button
    * shows or hides the Activity panel (Ctrl/Cmd+., handled by ChatView). The
    * "Chat state" menu moves the chat between Active, On hold and Archived; an
-   * on-hold chat shows until when and its note (v1.2 §3).
+   * on-hold chat shows until when and its note (v1.2 §3). With more than one
+   * machine it also offers Move to… (move-chat §3), except on a moved-away copy.
    */
   let {
     chat,
@@ -47,7 +49,7 @@
     onToggleActivity?: () => void;
   } = $props();
 
-  const { machines } = useApp();
+  const { machines, interaction } = useApp();
   /** The chat's machine: its chat, project and bucket stores. */
   const { chats, places, buckets, machineId } = useScope();
   /** With more than one machine, the header names the chat's machine. */
@@ -259,6 +261,15 @@
             {#if bucket !== 'archived'}
               <DropdownMenu.Item class="py-1 text-xs" onSelect={() => moveTo('archived')}>
                 <ArchiveIcon /> Archive
+              </DropdownMenu.Item>
+            {/if}
+            {#if machines.several && !chat.movedTo}
+              <DropdownMenu.Separator />
+              <DropdownMenu.Item
+                class="py-1 text-xs"
+                onSelect={() => interaction.openMoveChat({ machineId, sessionId })}
+              >
+                <ArrowRightLeftIcon /> Move to…
               </DropdownMenu.Item>
             {/if}
           </DropdownMenu.Content>

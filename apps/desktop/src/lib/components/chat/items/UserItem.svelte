@@ -1,11 +1,13 @@
 <script lang="ts">
   import type { ChatItem } from '@threadgarden/protocol';
   import GitForkIcon from '@lucide/svelte/icons/git-fork';
+  import { isThreadgardenNote } from '#lib/move/note.js';
   import { chatActions } from '../context';
 
   /**
    * A user message. Top-level messages offer "Fork from this message" (spec §6.4);
-   * very long pastes are clamped until expanded.
+   * very long pastes are clamped until expanded. Threadgarden's own note in a
+   * moved chat (ruling R4) is labelled, so it doesn't read as the owner's words.
    */
   let { item, nested = false }: { item: Extract<ChatItem, { kind: 'user' }>; nested?: boolean } =
     $props();
@@ -15,9 +17,13 @@
   let expanded = $state(false);
   const long = $derived(item.text.length > LONG);
   const shown = $derived(long && !expanded ? `${item.text.slice(0, LONG)}…` : item.text);
+  const fromThreadgarden = $derived(isThreadgardenNote(item.text));
 </script>
 
 <div class="group bg-muted/70 relative rounded-lg px-3 py-2 text-sm">
+  {#if fromThreadgarden}
+    <div class="text-muted-foreground mb-1 text-[0.6875rem] font-medium">Sent by Threadgarden</div>
+  {/if}
   {#if item.text}
     <div class="pr-6 break-words whitespace-pre-wrap">{shown}</div>
   {/if}

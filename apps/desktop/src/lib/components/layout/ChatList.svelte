@@ -56,7 +56,8 @@
    */
   let { onCollapse }: { onCollapse?: () => void } = $props();
 
-  const { sessions, places, tabs, agents, settings, machines, scopes, power } = useApp();
+  const { sessions, places, tabs, agents, settings, machines, scopes, power, interaction } =
+    useApp();
   const local = scopes.local();
 
   /** The scope of a machine (This PC's for a project without one). */
@@ -651,6 +652,10 @@
           onRename={() => (renaming = chat)}
           onTogglePin={() => togglePin(chat)}
           onMove={(_, bucket) => moveFromMenu(chat, bucket)}
+          onMoveMachine={machines.several
+            ? () =>
+                interaction.openMoveChat({ machineId: chat.machineId, sessionId: chat.sessionId })
+            : undefined}
         />
       {/if}
     {/snippet}
