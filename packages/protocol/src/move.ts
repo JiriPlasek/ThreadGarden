@@ -28,7 +28,11 @@ export type MoveKey = z.infer<typeof MoveKeySchema>;
 
 /** What the chat's folder looks like in git; `origin` is the remote.origin URL. */
 export const GitStateSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('clean'), branch: z.string(), origin: z.string().nullable() }),
+  z.object({
+    kind: z.literal('clean'),
+    branch: z.string().nullable(),
+    origin: z.string().nullable(),
+  }),
   z.object({
     kind: z.literal('dirty'),
     branch: z.string().nullable(),

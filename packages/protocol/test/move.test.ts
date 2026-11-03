@@ -72,7 +72,23 @@ describe('move methods', () => {
     const { sessionId: _s, ...rest } = params;
     expect(m.params.safeParse(rest).success).toBe(false);
     expect(m.result.safeParse({}).success).toBe(false);
-    expect(m.result.shape.summary).toBeDefined();
+    const summary = {
+      sessionId: 's',
+      title: 't',
+      projectId: 'p',
+      cwd: '/x',
+      status: 'idle',
+      preview: '',
+      lastActivity: 1,
+      pinned: false,
+      live: false,
+      external: null,
+    };
+    const parsed = m.result.parse({ summary });
+    expect(parsed.summary.sessionId).toBe('s');
+    expect(m.result.safeParse({ summary: { ...summary, sessionId: undefined } }).success).toBe(
+      false,
+    );
   });
 
   it.each(['move.check', 'move.exportBegin', 'move.importPart'])(
@@ -96,6 +112,9 @@ describe('move methods', () => {
     const base = { cwd: '/x', busy: 'turn' };
     expect(
       r.safeParse({ ...base, git: { kind: 'clean', branch: 'a', origin: null } }).success,
+    ).toBe(true);
+    expect(
+      r.safeParse({ ...base, git: { kind: 'clean', branch: null, origin: null } }).success,
     ).toBe(true);
     expect(r.safeParse({ ...base, git: { kind: 'notRepo' } }).success).toBe(true);
     expect(r.safeParse({ ...base, git: { kind: 'weird' } }).success).toBe(false);

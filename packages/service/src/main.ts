@@ -244,7 +244,6 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       headless,
       home: os.homedir(),
       // `power` is for headless machines only (a desktop is never switched off this way).
-      // TODO(move task 4): advertise `move` once the move handlers exist.
       capabilities: headless ? [...advertised, POWER_CAPABILITY] : [...advertised],
     };
   };
