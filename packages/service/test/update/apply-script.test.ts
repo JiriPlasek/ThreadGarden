@@ -10,7 +10,7 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { UpdateStatusSchema } from '@threadgarden/protocol';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { APPLY_SCRIPT, applyArgs } from '../../src/update/apply-script.js';
@@ -60,13 +60,20 @@ describe.skipIf(process.platform === 'win32' || isRoot)('the apply script', () =
   let log: string;
   let systemctl: string;
   let work: string;
+  let home: string;
+  let unitFile: string;
 
   const DONE = JSON.stringify({ state: 'done', version: '0.7.1', from: '0.7.0', skipped: [] });
   // What a real install.sh does first, so a rollback has something to undo.
   const SWITCH = 'ln -sfn "$BASE/0.7.1" "$BASE/current"';
   const finished = (json: string) => `printf '%s\\n' '${json}' > "$UPDATE_DIR/last.json"`;
-  // What systemctl saw on disk at the moment it was called, to prove the order.
-  const RESTART_AFTER_ROLLBACK = '--user restart threadgarden current=0.7.0 last=yes pending=no';
+  // What systemctl saw on disk at each call, to prove the order: the service stops
+  // first, the old unit is loaded before the restart, and the outcome is settled by it.
+  const ROLLBACK = [
+    '--user stop threadgarden current=0.7.1 last=no pending=yes unit=new',
+    '--user daemon-reload current=0.7.0 last=no pending=yes unit=old',
+    '--user restart threadgarden current=0.7.0 last=yes pending=no unit=old',
+  ];
 
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), 'tg-apply-'));
@@ -74,10 +81,18 @@ describe.skipIf(process.platform === 'win32' || isRoot)('the apply script', () =
     work = join(root, 'a dir');
     base = join(work, 'base');
     updateDir = join(work, 'update');
+    // Never the real home: the rollback writes the unit file under $HOME.
+    home = join(work, 'home');
+    unitFile = join(home, '.config', 'systemd', 'user', 'threadgarden.service');
     log = join(root, 'calls.log');
     await mkdir(join(base, '0.7.0'), { recursive: true });
     await mkdir(join(base, '0.7.1'), { recursive: true });
     await symlink(join(base, '0.7.0'), join(base, 'current'));
+    await writeFile(join(base, '0.7.0', 'threadgarden.service'), 'old\n');
+    await writeFile(join(base, '0.7.1', 'threadgarden.service'), 'new\n');
+    // A real install.sh has already put the new release's unit in place.
+    await mkdir(dirname(unitFile), { recursive: true });
+    await writeFile(unitFile, 'new\n');
     await mkdir(updateDir, { recursive: true });
     await writeFile(join(updateDir, 'pending.json'), '{"version":"0.7.1","from":"0.7.0"}\n');
     await writeFile(log, '');
@@ -92,7 +107,8 @@ describe.skipIf(process.platform === 'win32' || isRoot)('the apply script', () =
         '[ ! -f "$UPDATE_DIR/last.json" ] || last=yes',
         'pending=no',
         '[ ! -f "$UPDATE_DIR/pending.json" ] || pending=yes',
-        'echo "$* current=$current last=$last pending=$pending" >> "$LOG"',
+        'unit=$(cat "$HOME/.config/systemd/user/threadgarden.service" 2>/dev/null)',
+        'echo "$* current=$current last=$last pending=$pending unit=$unit" >> "$LOG"',
         'exit "${SYSTEMCTL_EXIT:-0}"',
         '',
       ].join('\n'),
@@ -116,7 +132,7 @@ describe.skipIf(process.platform === 'win32' || isRoot)('the apply script', () =
         updateDir,
         timeoutS,
       }),
-      { BASE: base, UPDATE_DIR: updateDir, LOG: log, SYSTEMCTL: systemctl, ...env },
+      { HOME: home, BASE: base, UPDATE_DIR: updateDir, LOG: log, SYSTEMCTL: systemctl, ...env },
     );
   };
 
@@ -134,13 +150,14 @@ describe.skipIf(process.platform === 'win32' || isRoot)('the apply script', () =
     expect(await current()).toBe(join(base, '0.7.1'));
     expect(await calls()).toEqual([]);
     expect((await last()).state).toBe('done');
+    expect(await readFile(unitFile, 'utf8')).toBe('new\n');
   });
 
   it('install exit 1 points current back at 0.7.0, restarts, and writes failed/install', async () => {
     const { code } = await apply(`${SWITCH}\nexit 1`);
     expect(code).toBe(1);
     expect(await current()).toBe(join(base, '0.7.0'));
-    expect(await calls()).toEqual([RESTART_AFTER_ROLLBACK]);
+    expect(await calls()).toEqual(ROLLBACK);
     expect(await last()).toEqual(failed('install'));
   });
 
@@ -148,8 +165,39 @@ describe.skipIf(process.platform === 'win32' || isRoot)('the apply script', () =
     const { code } = await apply(SWITCH, 2);
     expect(code).toBe(1);
     expect(await current()).toBe(join(base, '0.7.0'));
-    expect(await calls()).toEqual([RESTART_AFTER_ROLLBACK]);
+    expect(await calls()).toEqual(ROLLBACK);
     expect(await last()).toEqual(failed('start'));
+  });
+
+  it('rollback restores the old unit file and reloads before restarting', async () => {
+    await apply(`${SWITCH}\nexit 1`);
+    expect(await readFile(unitFile, 'utf8')).toBe('old\n');
+    // unit=old already at daemon-reload, and daemon-reload before the restart.
+    expect(await calls()).toEqual(ROLLBACK);
+  });
+
+  it('an old release without a unit file leaves the unit alone and still restarts', async () => {
+    await rm(join(base, '0.7.0', 'threadgarden.service'));
+    const { code } = await apply(`${SWITCH}\nexit 1`);
+    expect(code).toBe(1);
+    expect(await readFile(unitFile, 'utf8')).toBe('new\n');
+    expect(await calls()).toEqual([
+      '--user stop threadgarden current=0.7.1 last=no pending=yes unit=new',
+      '--user daemon-reload current=0.7.0 last=no pending=yes unit=new',
+      '--user restart threadgarden current=0.7.0 last=yes pending=no unit=new',
+    ]);
+  });
+
+  it('a unit file it cannot copy does not stop the rest of the rollback', async () => {
+    await rm(join(home, '.config'), { recursive: true });
+    const { code } = await apply(`${SWITCH}\nexit 1`);
+    expect(code).toBe(1);
+    expect(await calls()).toEqual([
+      '--user stop threadgarden current=0.7.1 last=no pending=yes unit=',
+      '--user daemon-reload current=0.7.0 last=no pending=yes unit=',
+      '--user restart threadgarden current=0.7.0 last=yes pending=no unit=',
+    ]);
+    expect(await last()).toEqual(failed('install'));
   });
 
   it('the written last.json parses with UpdateStatusSchema', async () => {
@@ -158,10 +206,11 @@ describe.skipIf(process.platform === 'win32' || isRoot)('the apply script', () =
     expect(UpdateStatusSchema.parse(JSON.parse(text))).toEqual(failed('install'));
   });
 
-  it('a restart that fails during the rollback still leaves last.json written', async () => {
+  it('systemctl failing at every call of the rollback still runs each step and leaves last.json written', async () => {
     const { code } = await apply(`${SWITCH}\nexit 1`, 2, { SYSTEMCTL_EXIT: '1' });
     expect(code).toBe(1);
-    expect(await calls()).toEqual([RESTART_AFTER_ROLLBACK]);
+    expect(await current()).toBe(join(base, '0.7.0'));
+    expect(await calls()).toEqual(ROLLBACK);
     expect(await last()).toEqual(failed('install'));
   });
 
@@ -198,7 +247,9 @@ describe.skipIf(process.platform === 'win32' || isRoot)('the apply script', () =
     expect(code).toBe(1);
     expect(await current()).toBe(join(base, '0.7.1'));
     expect(await calls()).toEqual([
-      '--user restart threadgarden current=0.7.1 last=yes pending=no',
+      '--user stop threadgarden current=0.7.1 last=no pending=yes unit=new',
+      '--user daemon-reload current=0.7.1 last=no pending=yes unit=new',
+      '--user restart threadgarden current=0.7.1 last=yes pending=no unit=new',
     ]);
     expect(await last()).toEqual(failed('install'));
   });
@@ -208,7 +259,11 @@ describe.skipIf(process.platform === 'win32' || isRoot)('the apply script', () =
     const { code } = await apply(SWITCH);
     expect(code).toBe(1);
     expect(await current()).toBe(join(base, '0.7.0'));
-    expect(await calls()).toEqual(['--user restart threadgarden current=0.7.0 last=no pending=no']);
+    expect(await calls()).toEqual([
+      '--user stop threadgarden current=0.7.0 last=no pending=no unit=new',
+      '--user daemon-reload current=0.7.0 last=no pending=no unit=old',
+      '--user restart threadgarden current=0.7.0 last=no pending=no unit=old',
+    ]);
   });
 
   it('runs install.sh unattended, names the skipped file and logs its output', async () => {
