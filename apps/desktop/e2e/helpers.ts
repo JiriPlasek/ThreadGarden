@@ -1,5 +1,5 @@
 import { expect, type Locator, type Page } from '@playwright/test';
-import { MOCK_PORT, MOCK_TOKEN } from './env';
+import { MOCK_PORT, MOCK_TOKEN, REMOTE_LOCAL_PORT, REMOTE_LOCAL_TOKEN } from './env';
 
 /** Chats in the mock's history: 1,000 generated sessions plus one big one. */
 export const MOCK_CHATS = 1001;
@@ -16,9 +16,14 @@ export const openApp = async (page: Page): Promise<void> => {
   });
 };
 
-/** One request to the mock service over its WebSocket, from the test process. */
-export const serviceCall = async <T>(method: string, params: unknown): Promise<T> => {
-  const ws = new WebSocket(`ws://127.0.0.1:${MOCK_PORT}`, [`threadgarden.${MOCK_TOKEN}`]);
+/** One request to a mock service over its WebSocket, from the test process. */
+const mockCall = async <T>(
+  port: number,
+  token: string,
+  method: string,
+  params: unknown,
+): Promise<T> => {
+  const ws = new WebSocket(`ws://127.0.0.1:${port}`, [`threadgarden.${token}`]);
   try {
     return await new Promise<T>((resolve, reject) => {
       ws.onopen = () => ws.send(JSON.stringify({ id: 1, method, params }));
@@ -34,6 +39,14 @@ export const serviceCall = async <T>(method: string, params: unknown): Promise<T
     ws.close();
   }
 };
+
+/** One request to the main mock service (This PC). */
+export const serviceCall = <T>(method: string, params: unknown): Promise<T> =>
+  mockCall<T>(MOCK_PORT, MOCK_TOKEN, method, params);
+
+/** One request to the remote mock service (Ubuntu) as its own desktop: for its `mock.*` methods. */
+export const remoteCall = <T>(method: string, params: unknown): Promise<T> =>
+  mockCall<T>(REMOTE_LOCAL_PORT, REMOTE_LOCAL_TOKEN, method, params);
 
 /**
  * Nothing unread: a spec that ends right after a chat's turn finished leaves

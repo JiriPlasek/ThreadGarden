@@ -70,7 +70,8 @@
  * pretends to restart: the devices' sockets drop, later `hello`s report the new
  * version and `update.status` is `done`. The mock-only methods (local callers
  * only) `mock.failNextUpdate {reason}` (the next update fails with it) and
- * `mock.setBusy {count}` (the chats an update would stop) steer it. The
+ * `mock.setBusy {count}` (the chats an update would stop) steer it, and
+ * `mock.resetUpdate` puts it back to its start. The
  * `update` capability is offered on every OS.
  */
 import { randomUUID } from 'node:crypto';
@@ -925,6 +926,8 @@ export const MOCK_FORGET_MOVES = 'mock.forgetMoves';
 /** Updating (protocol 10): the next update fails with `reason`; the busy count `update.start` sees. */
 export const MOCK_FAIL_NEXT_UPDATE = 'mock.failNextUpdate';
 export const MOCK_SET_BUSY = 'mock.setBusy';
+/** Back to the version the mock started with, no status, no busy chats, no queued failure. */
+export const MOCK_RESET_UPDATE = 'mock.resetUpdate';
 
 /** The release the main mock's `update.latest` answers; the env variable changes it. */
 const mockLatest = (): string => process.env.THREADGARDEN_MOCK_LATEST || '0.99.0';
@@ -947,6 +950,7 @@ class MockUpdater implements Updater {
   private busy = 0;
   private failure: UpdateFailure | undefined;
   private closed = false;
+  private epoch = 0;
   private svc: ServiceHandle | undefined;
 
   /** The service exists only after the updater (it is passed to `startService`). */
@@ -963,6 +967,15 @@ class MockUpdater implements Updater {
 
   setBusy(count: number): void {
     this.busy = count;
+  }
+
+  /** A test's clean slate: an update still in its steps stops there (the epoch no longer matches). */
+  reset(): void {
+    this.epoch++;
+    this.version = pkg.version;
+    this.current = { state: 'idle' };
+    this.busy = 0;
+    this.failure = undefined;
   }
 
   // The `update` capability is offered on every OS, unlike the real updater's.
@@ -993,10 +1006,12 @@ class MockUpdater implements Updater {
   }
 
   private async perform(version: string): Promise<void> {
+    const epoch = this.epoch;
     const from = this.version;
     const failure = this.failure;
     this.failure = undefined;
     await sleep(UPDATE_STEP_MS);
+    if (epoch !== this.epoch) return;
     if (failure) {
       this.tell({
         state: 'failed',
@@ -1009,9 +1024,10 @@ class MockUpdater implements Updater {
     }
     this.stage(version, 'installing');
     await sleep(UPDATE_STEP_MS);
+    if (epoch !== this.epoch) return;
     this.stage(version, 'restarting');
     await sleep(UPDATE_STEP_MS);
-    if (this.closed) return;
+    if (this.closed || epoch !== this.epoch) return;
     // The restart: the devices lose their sockets, the new version answers the next hello.
     this.version = version;
     this.svc?.dropDevices();
@@ -1054,6 +1070,9 @@ const addMockMethods = (svc: ServiceHandle, updater: MockUpdater): void => {
         updater.setBusy(p.data.count);
         return { id: req.id, result: {} };
       }
+      case MOCK_RESET_UPDATE:
+        updater.reset();
+        return { id: req.id, result: {} };
       default:
         return dispatch(req, ctx);
     }
