@@ -184,7 +184,7 @@ describe('MachinesState', () => {
   });
 
   it('accepts a hello without a machine (an older service) and the right id', async () => {
-    remote(M1).handlers.hello = () => ({ serviceVersion: 'x', protocolVersion: 7 });
+    remote(M1).handlers.hello = () => ({ serviceVersion: 'x', protocolVersion: 8 });
     await setup([paired(M1, 'A'), paired(M2, 'B')], { [M1]: 't1', [M2]: 't2' });
     await vi.advanceTimersByTimeAsync(0);
     expect(machines.get(M1)?.status).toBe('on');
@@ -203,25 +203,25 @@ describe('MachinesState', () => {
     expect(remote(M2).sockets).toHaveLength(1);
   });
 
-  it('accepts a remote on protocol 7 or 9 but not 6 or 10', async () => {
+  it('accepts a remote on protocol 8 or 10 but not 7 or 11', async () => {
     const proto = (id: string, v: number) => {
       remote(id).handlers.hello = () => ({ serviceVersion: 'x', protocolVersion: v });
     };
-    proto('m7', 7);
-    proto('m9', 9);
-    proto('m6', 6);
+    proto('m8', 8);
     proto('m10', 10);
-    await setup([paired('m7', 'a'), paired('m9', 'b'), paired('m6', 'c'), paired('m10', 'd')], {
-      m7: 't',
-      m9: 't',
-      m6: 't',
+    proto('m7', 7);
+    proto('m11', 11);
+    await setup([paired('m8', 'a'), paired('m10', 'b'), paired('m7', 'c'), paired('m11', 'd')], {
+      m8: 't',
       m10: 't',
+      m7: 't',
+      m11: 't',
     });
     await vi.advanceTimersByTimeAsync(0);
-    expect(machines.get('m7')?.status).toBe('on');
-    expect(machines.get('m9')?.status).toBe('on');
-    expect(machines.get('m6')?.status).toBe('incompatible');
-    expect(machines.get('m10')?.status).toBe('incompatible');
+    expect(machines.get('m8')?.status).toBe('on');
+    expect(machines.get('m10')?.status).toBe('on');
+    expect(machines.get('m7')?.status).toBe('incompatible');
+    expect(machines.get('m11')?.status).toBe('incompatible');
   });
 
   it('pairs: keychain first, then connect', async () => {
