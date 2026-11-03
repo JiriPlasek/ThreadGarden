@@ -28,6 +28,8 @@ do the steps once, over SSH; after that everything happens in Threadgarden.
   or start in any folder of it: see [Starting projects](#starting-projects).
 - A chat can move from This PC to the Ubuntu PC and back, with its whole
   conversation: see [Moving a chat](#moving-a-chat).
+- The Ubuntu PC can update itself to the newest release from Settings: see
+  [Upgrading](#upgrading).
 - Not yet: showing a machine's chats while it is off (an Off machine's group
   says "Its chats appear once it's on."). The usage meter shows each
   account's usage, the Ubuntu PC's too; Analytics shows This PC only for now.
@@ -689,7 +691,7 @@ under the heading's **Open settings** and in Settings → Machines.
 | **Shutdown paused: unpushed work** | Needs you shows "Unpushed work on ‹machine›": a repository there has changes, commits or stashes that are on no remote branch, or it could not be checked. | **Ask Claude to push it**, or push over SSH, then shut down again. **Shut down anyway** leaves the work on the machine's disk. |
 | **The power switch refused the password** | The switch rejected `admin` with the saved password, so the machine stays on. | Set the password again in Settings → Power (remove power control and set it up again). On Tasmota 16, if requests are refused even with the right password, enter `SetOption128 1` on the switch's console. |
 | **Stays Off after Turn on** | The plug is on but the PC does not boot. | Check the BIOS "Restore on AC power loss" = On (4.3), and that **Wait before switching on** is long enough: a PC cut for less than about 10 s may not notice the power return. To change it, start the PC by hand (its power button) and wait until it shows On, then remove power control and set it up again with a longer wait (90 s is proven). |
-| **Needs attention:** Different Threadgarden version | The two versions are too far apart (more than one protocol version). | Install the matching release on the Ubuntu PC (see [Upgrading](#upgrading)) or update the desktop app. |
+| **Needs attention:** Different Threadgarden version | The two versions are too far apart (more than one protocol version). | If the machine runs 0.8.0 or newer, press **Update to ‹version›** on its card in Settings → Machines. Older ones need the manual steps in [Upgrading](#upgrading). Or update the desktop app. |
 
 ### When pairing fails
 
@@ -732,7 +734,47 @@ tail -n 50 ~/.local/share/threadgarden/logs/service.log   # the service's own lo
 
 ## Upgrading
 
-Download the new release as in [the install step](#the-threadgarden-headless-service)
+### From Settings
+
+Open Settings → Machines. When a paired machine runs an older release than
+the newest one on GitHub, its card says "‹new version› available" and has an
+**Update to ‹version›** button; the **Settings** button in the left column
+shows a small dot while any machine is behind. Press the button and the
+machine updates itself:
+
+1. It downloads the release from GitHub and checks it against the published
+   checksum.
+2. It installs it next to the old version and restarts. The card shows
+   Downloading, Installing and Restarting while it goes, and ends with
+   "Threadgarden ‹version› ✓". The desktop reconnects by itself.
+3. If the new version does not answer within about 90 seconds, the machine
+   goes back to the previous one and the card says what failed.
+
+If chats are working on the machine, Threadgarden asks first: the restart
+stops them (they become resumable afterwards, as after any restart).
+**Update anyway** goes ahead. A machine that is Off can be updated too: the
+button turns it on first, if it has power control.
+
+Two steps of the install need `sudo`: lingering (so the service starts at
+boot) and the rule that lets idle shutdown power the machine off. An update
+cannot ask for a password, so it skips such a step when it is not already in
+place. The update still counts as done, and the card says which step was
+skipped and what to run: `~/.local/share/threadgarden-headless/current/install.sh`
+once over SSH.
+
+If an update fails, the card says why (the download, the checksum, the
+unpacking, the install or the start) and the machine is on, or back on, its
+old version. Try again, or use the manual steps below. Two logs on the
+Ubuntu PC have the details:
+
+- `~/.local/share/threadgarden/update/install.log`: what the install printed.
+- `~/.local/share/threadgarden/logs/service.log`: the service's own log.
+
+### By hand
+
+This is the way for a machine older than 0.8.0 (the release that brings
+Update; its card says "Update it over SSH this once") and for one whose
+update failed. Download the new release as in [the install step](#the-threadgarden-headless-service)
 (a fresh, empty folder), check it with `sha256sum -c`, unpack it, and run its
 `./install.sh`. It installs the new version next to the old one, points
 `current` at it and restarts the service; running chats become resumable,
