@@ -870,8 +870,8 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     await step('indexer', () => indexer?.stop());
     await step('remote server', () => remote?.close());
     await step('relay', () => relay?.close());
-    await step('power', () => {
-      shutdown?.close();
+    await step('power', async () => {
+      await shutdown?.close();
       power?.close();
     });
     await step('server', () => server?.close());
@@ -948,8 +948,8 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
           await remote?.close();
         });
         await step('relay', () => relay?.close());
-        await step('power', () => {
-          shutdown?.close();
+        await step('power', async () => {
+          await shutdown?.close();
           power?.close();
         });
         await step('server', () => wsServer.close());

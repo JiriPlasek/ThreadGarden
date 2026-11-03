@@ -61,6 +61,8 @@ type RigOptions = {
   slowFirstSwitchMs?: number;
   /** While this says true, the switch cannot be reached (no network yet). */
   offline?: () => boolean;
+  /** Runs when the sequence stops the sessions (the cut is armed then, poweroff not yet sent). */
+  onStopAll?: () => void | Promise<void>;
 };
 
 /** Timers that fire only when told to (the start disarm's retries). */
@@ -121,6 +123,7 @@ async function rig(o: RigOptions = {}) {
     scheduled: () => o.sends ?? [],
     stopAll: async () => {
       order.push('stopAll');
+      await o.onStopAll?.();
     },
     poweroff:
       o.poweroff ??
@@ -417,7 +420,7 @@ describe('ShutdownSequence.run', () => {
       const r = await rig();
       await r.seq.run({ force: false, reason: 'manual' });
       expect(r.retries.live()).toEqual([5 * MIN]);
-      r.seq.close();
+      await r.seq.close();
       expect(r.retries.live()).toEqual([]);
       r.retries.fire();
       await new Promise((res) => setTimeout(res, 20));
@@ -437,6 +440,56 @@ describe('ShutdownSequence.run', () => {
       });
       await r.seq.run({ force: false, reason: 'manual' });
       expect(r.retries.live()).toEqual([5 * MIN]);
+    });
+
+    it('a wake that cannot be set, with the switch then out of reach: the disarm is retried until it gets through', async () => {
+      const ref: { fake?: FakeTasmota } = {};
+      let back = false;
+      const armedOnce = () => (ref.fake?.commands.includes('Event tga') ?? false) && !back;
+      const r = await rig({
+        sends: [{ sendAt: Date.now() + 3 * 60 * MIN, state: 'pending' }],
+        offline: armedOnce,
+      });
+      ref.fake = r.f;
+      const s = await r.seq.run({ force: false, reason: 'idle' });
+      expect(s.phase).toBe('running');
+      expect(r.f.commands).not.toContain('Event tgo');
+      // Before, one lost disarm was harmless (the arming expired); now it would cut.
+      expect(r.retries.live()).toEqual([10_000]);
+      back = true;
+      r.retries.fire(10_000);
+      await vi.waitFor(() => expect(r.f.commands).toContain('Event tgo'));
+    });
+
+    it('a refused poweroff with the switch out of reach: the disarm is retried until it gets through', async () => {
+      let offline = false;
+      const r = await rig({
+        offline: () => offline,
+        poweroff: async () => {
+          offline = true;
+          throw new Error('Access denied');
+        },
+      });
+      const s = await r.seq.run({ force: false, reason: 'manual' });
+      expect(s.phase).toBe('running');
+      expect(r.retries.live()).toEqual([10_000]);
+      offline = false;
+      r.retries.fire(10_000);
+      await vi.waitFor(() => expect(r.f.commands).toContain('Event tgo'));
+      expect(r.f.timers[16]).toMatchObject({ Enable: 0 });
+    });
+
+    it('the service closed while the cut is armed but before poweroff: it disarms on its way out', async () => {
+      const ref: { seq?: ShutdownSequence } = {};
+      const r = await rig({
+        onStopAll: async () => {
+          await ref.seq?.close();
+        },
+      });
+      ref.seq = r.seq;
+      await r.seq.run({ force: false, reason: 'manual' });
+      const c = r.f.commands;
+      expect(c.lastIndexOf('Event tgo')).toBeGreaterThan(c.indexOf('Event tga'));
     });
 
     it('a refused poweroff disarms at once and leaves no watch behind', async () => {
