@@ -299,11 +299,20 @@ export class RealAdapter implements AgentAdapter {
     );
   }
 
-  importSession(id: string, store: SessionStore, o: ImportOptions): Promise<void> {
-    return this.sdk.importSessionToStore(id, store, {
-      ...(o.dir === undefined ? {} : { dir: o.dir }),
-      includeSubagents: o.includeSubagents,
-    });
+  /**
+   * With `dir` the SDK looks only in that folder's project; a session it does
+   * not find there (a chat whose recorded folder is not its project's) is
+   * looked for in every project.
+   */
+  async importSession(id: string, store: SessionStore, o: ImportOptions): Promise<void> {
+    const everywhere = { includeSubagents: o.includeSubagents };
+    if (o.dir === undefined) return this.sdk.importSessionToStore(id, store, everywhere);
+    try {
+      await this.sdk.importSessionToStore(id, store, { ...everywhere, dir: o.dir });
+    } catch (err) {
+      if (!(err instanceof Error) || !/not found/i.test(err.message)) throw err;
+      await this.sdk.importSessionToStore(id, store, everywhere);
+    }
   }
 
   /**

@@ -113,13 +113,23 @@ export const makeFolder = async (parent: string, name: string, home?: string): P
   return target;
 };
 
+/** `p` is `dir` or inside it (case-insensitive on Windows, as `path.relative` is there). */
+const isInside = (dir: string, p: string): boolean => {
+  const rel = path.relative(path.resolve(dir), path.resolve(p));
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+};
+
 /**
  * A chat moved here into `cwd`: makes the folder that holds it when missing
  * (with its own missing parents), never `cwd` itself (Claude clones into it).
+ * Nothing is ever made in Claude Code's own config dir (`claudeConfigDir`).
  */
-export const makeParentFolder = async (cwd: string): Promise<void> => {
+export const makeParentFolder = async (cwd: string, claudeConfigDir: string): Promise<void> => {
   if (!path.isAbsolute(cwd)) {
     throw new ServiceError('INVALID_PARAMS', 'The folder must be a full path');
+  }
+  if (isInside(claudeConfigDir, cwd)) {
+    throw new ServiceError('INVALID_PARAMS', "A chat can't live in Claude Code's own folder");
   }
   const parent = path.dirname(cwd);
   if (await exists(parent)) return;

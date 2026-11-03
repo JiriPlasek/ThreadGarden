@@ -557,9 +557,13 @@ export const methods = {
       inUse: z.object({ branch: z.string().nullable(), running: z.number().int() }).nullable(),
     }),
   ),
-  /** Source: starts an export and locks the chat (`chat.send` answers `MOVING`). */
+  /**
+   * Source: starts an export and locks the chat (`chat.send` answers `MOVING`).
+   * The desktop makes `exportId` (uuid): the same one again (a lost answer)
+   * gives the same answer.
+   */
   'move.exportBegin': def(
-    sessionIdOnly,
+    z.object({ sessionId: z.string(), exportId: z.string() }),
     z.object({ exportId: z.string(), parts: z.number().int(), bytes: z.number() }),
   ),
   'move.exportPart': def(

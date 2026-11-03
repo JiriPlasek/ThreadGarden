@@ -131,6 +131,8 @@ export type StartOptions = {
   claudeRunner?: (claudePath: string) => (args: string[]) => Promise<string>;
   /** Approximate size budget (characters) of the chat history cache; see `registerChatHandlers`. */
   historyCacheChars?: number;
+  /** The largest chat a move carries, and what imports hold together (default 512 MiB). */
+  moveMaxBytes?: number;
   /** Runs `git` and `gh` for New project and Clone (default: the real ones); tests inject a fake. */
   projectTools?: Tools;
   /** Base environment of session processes (default `process.env`); the API key is added on top. */
@@ -264,6 +266,8 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   let host: SessionHost | undefined;
   /** Chats being moved to another machine (protocol 9). */
   const moveLocks = new MoveLocks(clock);
+  /** The move methods (with a database); `close` stops their sweep. */
+  let moveHandlers: { close(): void } | undefined;
   let indexing = { done: 0, total: 0 };
   let indexer: Indexer | undefined;
   let watcher: { close(): void } | undefined;
@@ -786,7 +790,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         recentCwds: () => opened.recentCwds().map((r) => r.cwd),
         requireRunnable: chatHandlers.requireRunnable,
       });
-      registerMoveHandlers(router, {
+      moveHandlers = registerMoveHandlers(router, {
         host: sessionHost,
         db: opened,
         store: chatStore,
@@ -795,7 +799,11 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         catalog: cat,
         index,
         release: chatHandlers.release,
+        changed: (sessionIds) => emitChat({ event: 'sessions.changed', data: { sessionIds } }),
+        claudeConfigDir: claudeDir,
         now: clock,
+        timers: opts.sessionTimers ?? realTimers,
+        ...(opts.moveMaxBytes === undefined ? {} : { maxBytes: opts.moveMaxBytes }),
         target: { tools: projectTools, createIn: () => maker!.createIn(), headless },
       });
       registerProjectHandlers(router, {
@@ -895,6 +903,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     // Clients can connect now; `claude` is found in the background (§8 cold start).
     if (!claude.current && opts.locateClaude) void relocate();
   } catch (err) {
+    await step('moves', () => moveHandlers?.close());
     await step('poller', () => poller?.stop());
     await step('watcher', () => watcher?.close());
     await step('indexer', () => indexer?.stop());
@@ -962,6 +971,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       try {
         clearTimer(timer);
         await step('scheduled sends', () => scheduled?.dispose());
+        await step('moves', () => moveHandlers?.close());
         await step('usage', () => usage?.dispose());
         // Live sessions end with the process; the registry still lists them,
         // so the next start shows them as interrupted (§4.2).

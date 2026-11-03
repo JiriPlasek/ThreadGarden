@@ -167,7 +167,10 @@ export class ScheduledSends {
     return r.n;
   }
 
-  /** With an `id` already there (a move re-creating its sends), returns that send unchanged. */
+  /**
+   * With an `id` already there for this chat (a move re-creating its sends),
+   * returns that send unchanged; another chat's id is refused.
+   */
   create(
     p: {
       sessionId: string;
@@ -180,7 +183,10 @@ export class ScheduledSends {
       const existing = this.deps.raw
         .prepare('SELECT * FROM scheduled_sends WHERE id = ?')
         .get(p.id) as Row | undefined;
-      if (existing) return toSend(existing);
+      if (existing?.session_id === p.sessionId) return toSend(existing);
+      if (existing) {
+        throw new ServiceError('INVALID_PARAMS', 'This id is a scheduled message of another chat');
+      }
     }
     if (!this.deps.exists(p.sessionId)) {
       throw new ServiceError('NOT_FOUND', `Unknown chat ${p.sessionId}`);

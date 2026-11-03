@@ -172,6 +172,29 @@ describe('RealAdapter session functions', () => {
       includeSubagents: true,
     });
   });
+
+  it('importSession looks in every project when the session is not in its dir', async () => {
+    const { sdk, adapter } = setup();
+    const store = { append: async () => {}, load: async () => null };
+    vi.mocked(sdk.importSessionToStore).mockImplementation(async (id, _s, o) => {
+      if (o?.dir !== undefined)
+        throw new Error(`Session ${id} not found in project directory for ${o.dir}`);
+    });
+    await adapter.importSession('s1', store, { dir: '/work/a', includeSubagents: true });
+    expect(sdk.importSessionToStore).toHaveBeenLastCalledWith('s1', store, {
+      includeSubagents: true,
+    });
+  });
+
+  it('importSession passes on any other failure', async () => {
+    const { sdk, adapter } = setup();
+    const store = { append: async () => {}, load: async () => null };
+    vi.mocked(sdk.importSessionToStore).mockRejectedValue(new Error('EACCES: permission denied'));
+    await expect(
+      adapter.importSession('s1', store, { dir: '/work/a', includeSubagents: true }),
+    ).rejects.toThrow(/EACCES/);
+    expect(sdk.importSessionToStore).toHaveBeenCalledTimes(1);
+  });
 });
 
 // ── v1.2 C1: chat titles ──

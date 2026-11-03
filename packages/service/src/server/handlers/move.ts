@@ -4,7 +4,6 @@
  * export in parts, `move.abort` and `move.markMoved`. On the target:
  * `move.target`, `move.importPart` and `move.commit`.
  */
-import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import {
   MOVE_ERRORS,
@@ -14,6 +13,7 @@ import {
   type MoveBusy,
   type MoveKey,
 } from '@threadgarden/protocol';
+import { realTimers, type Timers } from '../../chat/live-session.js';
 import type { SessionHost } from '../../chat/session-host.js';
 import type { Db } from '../../history/db.js';
 import { gitState } from '../../move/git-state.js';
@@ -33,6 +33,8 @@ export const MOVE_IMPORT_MAX_BYTES = 512 * 1024 * 1024;
 export const MOVE_IMPORT_MS = 10 * 60_000;
 /** A finished export or import is still recognised this long (the desktop retries). */
 export const MOVE_RECENT_MS = 60 * 60_000;
+/** How often expired exports and imports are let go of, move calls or not. */
+export const MOVE_SWEEP_MS = 60_000;
 
 /** Chats locked while a move exports them: `chat.send` answers MOVING until `unlock` or expiry. */
 export class MoveLocks {
@@ -143,7 +145,10 @@ type Import = {
   at: number;
 };
 
-/** The parts of the imports on their way here (target side), until they are committed. */
+/**
+ * The parts of the imports on their way here (target side), until they are
+ * committed. All open imports together hold at most `maxBytes`.
+ */
 export class MoveImports {
   private readonly open = new Map<string, Import>();
   /** Committed imports: a retried commit (its answer was lost) succeeds again. */
@@ -153,6 +158,13 @@ export class MoveImports {
     private readonly now: () => number = Date.now,
     private readonly maxBytes: number = MOVE_IMPORT_MAX_BYTES,
   ) {}
+
+  /** The bytes of JSON the open imports hold. */
+  bytesHeld(): number {
+    let n = 0;
+    for (const imp of this.open.values()) n += imp.bytes;
+    return n;
+  }
 
   /** Keeps one part (a part sent again replaces the first copy). */
   add(p: {
@@ -175,8 +187,9 @@ export class MoveImports {
       throw new ServiceError('INVALID_PARAMS', 'This part belongs to another import');
     }
     const bytes = jsonBytes(p.keys);
-    const total = imp.bytes - (imp.received.get(p.index)?.bytes ?? 0) + bytes;
-    if (total > this.maxBytes) {
+    const replaced = imp.received.get(p.index)?.bytes ?? 0;
+    const total = imp.bytes - replaced + bytes;
+    if (this.bytesHeld() - replaced + bytes > this.maxBytes) {
       this.open.delete(p.importId);
       throw new ServiceError(MOVE_ERRORS.tooLarge, 'This chat is too large to move');
     }
@@ -206,55 +219,113 @@ export class MoveImports {
     return this.done.get(importId)?.sessionId === sessionId;
   }
 
-  private sweep(): void {
+  /** Lets go of the imports that ran out. */
+  sweep(): void {
     const now = this.now();
     for (const [id, imp] of this.open) if (now - imp.at >= MOVE_IMPORT_MS) this.open.delete(id);
     for (const [id, d] of this.done) if (now - d.at >= MOVE_RECENT_MS) this.done.delete(id);
   }
 }
 
+type Export = { sessionId: string; parts: MoveKey[][]; bytes: number };
+
 /**
  * The exports of the chats moving away (source side). An export's parts live
- * as long as its lock; which chat an export was is remembered for an hour,
- * so a late `move.markMoved` (retried by the desktop) still finds it.
+ * as long as its lock. Which chat an export was, and when it began, is kept
+ * for an hour, so a late `move.markMoved` (retried by the desktop) still
+ * finds it; unless the chat came back here meanwhile (`supersede`).
  */
-class MoveExports {
-  private readonly parts = new Map<string, { sessionId: string; parts: MoveKey[][] }>();
-  private readonly sessions = new Map<string, { sessionId: string; at: number }>();
+export class MoveExports {
+  private readonly held = new Map<string, Export>();
+  private readonly begun = new Map<string, { sessionId: string; at: number }>();
+  /** Exports of chats that came back here since: their markMoved changes nothing. */
+  private readonly superseded = new Map<string, number>();
 
   constructor(
     private readonly locks: MoveLocks,
     private readonly now: () => number,
   ) {}
 
-  begin(exportId: string, sessionId: string, parts: MoveKey[][]): void {
+  /** The export is ready; `at` is when it locked the chat. */
+  begin(exportId: string, sessionId: string, parts: MoveKey[][], bytes: number, at = this.now()) {
     this.sweep();
-    this.parts.set(exportId, { sessionId, parts });
-    this.sessions.set(exportId, { sessionId, at: this.now() });
+    this.held.set(exportId, { sessionId, parts, bytes });
+    this.begun.set(exportId, { sessionId, at });
   }
 
-  /** The parts of an export whose lock still holds. */
-  partsOf(exportId: string): MoveKey[][] | undefined {
+  /** An export whose lock still holds. */
+  get(exportId: string): Export | undefined {
     this.sweep();
-    return this.parts.get(exportId)?.parts;
+    return this.held.get(exportId);
   }
 
-  /** The chat of an export begun within the hour. */
-  sessionOf(exportId: string): string | undefined {
+  /** The chat of an export begun within the hour, and when it began. */
+  begunOf(exportId: string): { sessionId: string; at: number } | undefined {
     this.sweep();
-    return this.sessions.get(exportId)?.sessionId;
+    return this.begun.get(exportId);
+  }
+
+  isSuperseded(exportId: string): boolean {
+    this.sweep();
+    return this.superseded.has(exportId);
+  }
+
+  /** The chat came back here: every earlier export of it is over. */
+  supersede(sessionId: string): void {
+    for (const [id, b] of this.begun) {
+      if (b.sessionId !== sessionId) continue;
+      this.begun.delete(id);
+      this.held.delete(id);
+      this.superseded.set(id, this.now());
+    }
   }
 
   drop(exportId: string): void {
-    this.parts.delete(exportId);
+    this.held.delete(exportId);
   }
 
-  private sweep(): void {
-    for (const [id, e] of this.parts) {
-      if (this.locks.exportIdOf(e.sessionId) !== id) this.parts.delete(id);
+  /** The bytes of JSON the exports hold. */
+  bytesHeld(): number {
+    let n = 0;
+    for (const e of this.held.values()) n += e.bytes;
+    return n;
+  }
+
+  /** Lets go of the exports whose lock ran out or ended. */
+  sweep(): void {
+    for (const [id, e] of this.held) {
+      if (this.locks.exportIdOf(e.sessionId) !== id) this.held.delete(id);
     }
     const now = this.now();
-    for (const [id, s] of this.sessions) if (now - s.at >= MOVE_RECENT_MS) this.sessions.delete(id);
+    for (const [id, b] of this.begun) if (now - b.at >= MOVE_RECENT_MS) this.begun.delete(id);
+    for (const [id, at] of this.superseded)
+      if (now - at >= MOVE_RECENT_MS) this.superseded.delete(id);
+  }
+}
+
+/** The exports and imports of a service, swept every `MOVE_SWEEP_MS` even with no move calls. */
+export class MoveTransfers {
+  readonly imports: MoveImports;
+  readonly exports: MoveExports;
+  private readonly timer: unknown;
+
+  constructor(
+    private readonly o: { locks: MoveLocks; now: () => number; timers: Timers; maxBytes?: number },
+  ) {
+    this.imports = new MoveImports(o.now, o.maxBytes ?? MOVE_IMPORT_MAX_BYTES);
+    this.exports = new MoveExports(o.locks, o.now);
+    this.timer = o.timers.setInterval(() => {
+      this.imports.sweep();
+      this.exports.sweep();
+    }, MOVE_SWEEP_MS);
+  }
+
+  bytesHeld(): number {
+    return this.imports.bytesHeld() + this.exports.bytesHeld();
+  }
+
+  close(): void {
+    this.o.timers.clearInterval(this.timer);
   }
 }
 
@@ -330,9 +401,19 @@ export type MoveHandlerDeps = {
   index: { refresh(sessionIds: string[]): Promise<void> };
   /** `chat.end`'s path: ends the host's session of a chat and drops its cached view. */
   release(sessionId: string): void;
+  /** Tells the clients these chats changed (`sessions.changed`). */
+  changed(sessionIds: string[]): void;
+  /** Claude Code's config dir: a moved chat's folder is never made in it. */
+  claudeConfigDir: string;
   now?: () => number;
+  /** For the sweep of expired exports and imports (default Node timers, unref'd). */
+  timers?: Timers;
+  /** The largest chat a move carries, and what all imports here hold together. */
+  maxBytes?: number;
   target: Omit<TargetDeps, 'liveChats' | 'recentCwds' | 'gitState'>;
 };
+
+type Begun = { exportId: string; parts: number; bytes: number };
 
 const BUSY_TEXT: Record<MoveBusy, string> = {
   turn: 'This chat is in the middle of a turn',
@@ -340,11 +421,30 @@ const BUSY_TEXT: Record<MoveBusy, string> = {
   subagents: 'This chat has background tasks running',
 };
 
-export const registerMoveHandlers = (router: Router, deps: MoveHandlerDeps): void => {
+/** Registers the move methods; `close` stops the sweep (service shutdown). */
+export const registerMoveHandlers = (router: Router, deps: MoveHandlerDeps): { close(): void } => {
   const { host, db, store, adapter, locks, catalog, index, release } = deps;
   const now = deps.now ?? Date.now;
-  const exports = new MoveExports(locks, now);
-  const imports = new MoveImports(now);
+  const maxBytes = deps.maxBytes ?? MOVE_IMPORT_MAX_BYTES;
+  const transfers = new MoveTransfers({
+    locks,
+    now,
+    timers: deps.timers ?? realTimers,
+    maxBytes,
+  });
+  const { exports, imports } = transfers;
+  /** Exports still gathering their keys: the same exportId again waits for the same answer. */
+  const pending = new Map<string, Promise<Begun>>();
+  /** The chat had activity here after `since` (a turn, a store append, a newer transcript). */
+  const activeSince = (sessionId: string, since: number): boolean => {
+    const moved = db.getMovedChat(sessionId);
+    const latest = Math.max(
+      host.get(sessionId)?.lastActivity ?? 0,
+      db.getSession(sessionId)?.lastModified ?? 0,
+      moved?.state === 'here' ? moved.at : 0,
+    );
+    return latest > since;
+  };
   const targetDeps: TargetDeps = {
     ...deps.target,
     recentCwds: () => db.recentCwds().map((r) => r.cwd),
@@ -384,72 +484,105 @@ export const registerMoveHandlers = (router: Router, deps: MoveHandlerDeps): voi
 
   router.register('move.target', (p) => pickTarget(targetDeps, p));
 
+  /** Gathers a locked chat's keys into parts (the lock is taken by the caller). */
+  const exportChat = async (id: string, exportId: string, at: number): Promise<Begun> => {
+    // Checked after the lock: no turn can start between the check and the export.
+    const s = host.get(id);
+    const busy = s ? busyOf(s) : null;
+    if (busy) throw new ServiceError(MOVE_ERRORS.busy, BUSY_TEXT[busy]);
+    // A chat moved here before is exported from the store (R6).
+    const keys = store.isHere(id)
+      ? store.entries(id)
+      : // Where the local transcript is looked for (all projects when unknown).
+        await importedKeys(id, s?.cwd ?? db.getSession(id)?.cwd ?? undefined);
+    if (keys.every((k) => k.entries.length === 0)) {
+      throw new ServiceError(MOVE_ERRORS.notFound, `Chat ${id} has no history to move`);
+    }
+    const parts = splitParts(keys, MOVE_PART_BYTES);
+    const bytes = parts.reduce((n, part) => n + jsonBytes(part), 0);
+    if (bytes > maxBytes) {
+      throw new ServiceError(MOVE_ERRORS.tooLarge, 'This chat is too large to move');
+    }
+    exports.begin(exportId, id, parts, bytes, at);
+    return { exportId, parts: parts.length, bytes };
+  };
+
   router.register('move.exportBegin', async (p) => {
-    const id = p.sessionId;
+    const { sessionId: id, exportId } = p;
+    const held = locks.exportIdOf(id);
+    if (held === exportId) {
+      // The same export again (its answer was lost): the same answer.
+      const running = pending.get(exportId);
+      if (running) return running;
+      const e = exports.get(exportId);
+      if (e) return { exportId, parts: e.parts.length, bytes: e.bytes };
+    }
     if (store.isAway(id)) {
       const to = store.awayTo(id)?.name ?? 'another machine';
       throw new ServiceError(MOVE_ERRORS.moved, `This chat moved to ${to}`);
     }
-    // A chat moved here before is exported from the store (R6).
-    const here = store.isHere(id);
-    const row = db.getSession(id);
-    if (!here && !host.get(id) && !row) {
+    if (!store.isHere(id) && !host.get(id) && !db.getSession(id)) {
       throw new ServiceError(MOVE_ERRORS.notFound, `Unknown chat ${id}`);
     }
-    // Where the local transcript is looked for (all projects when unknown).
-    const cwd = host.get(id)?.cwd ?? row?.cwd ?? undefined;
-    if (locks.isLocked(id)) {
+    if (held !== undefined) {
       throw new ServiceError(MOVE_ERRORS.moving, 'This chat is already being moved');
     }
-    const exportId = randomUUID();
-    // Locked first, then checked: no turn can start between the check and the export.
+    const other = exports.begunOf(exportId);
+    if (other && other.sessionId !== id) {
+      throw new ServiceError('INVALID_PARAMS', 'This exportId belongs to another chat');
+    }
+    const at = now();
     locks.lock(id, exportId);
-    try {
-      const s = host.get(id);
-      const busy = s ? busyOf(s) : null;
-      if (busy) throw new ServiceError(MOVE_ERRORS.busy, BUSY_TEXT[busy]);
-      const keys = here ? store.entries(id) : await importedKeys(id, cwd);
-      if (keys.every((k) => k.entries.length === 0)) {
-        throw new ServiceError(MOVE_ERRORS.notFound, `Chat ${id} has no history to move`);
-      }
-      const parts = splitParts(keys, MOVE_PART_BYTES);
-      exports.begin(exportId, id, parts);
-      return {
-        exportId,
-        parts: parts.length,
-        bytes: parts.reduce((n, part) => n + jsonBytes(part), 0),
-      };
-    } catch (err) {
+    const run = exportChat(id, exportId, at).catch((err: unknown) => {
       if (locks.exportIdOf(id) === exportId) locks.unlock(id);
       throw err;
+    });
+    pending.set(exportId, run);
+    try {
+      return await run;
+    } finally {
+      pending.delete(exportId);
     }
   });
 
   router.register('move.exportPart', async (p) => {
-    const parts = exports.partsOf(p.exportId);
-    if (!parts) throw expired('This export');
-    const keys = parts[p.index];
-    if (!keys) throw new ServiceError('INVALID_PARAMS', `No part ${p.index} of ${parts.length}`);
+    const e = exports.get(p.exportId);
+    if (!e) throw expired('This export');
+    const keys = e.parts[p.index];
+    if (!keys) throw new ServiceError('INVALID_PARAMS', `No part ${p.index} of ${e.parts.length}`);
     return { keys };
   });
 
   router.register('move.abort', async (p) => {
-    const id = exports.sessionOf(p.exportId);
+    const id = exports.begunOf(p.exportId)?.sessionId;
     if (id !== undefined && locks.exportIdOf(id) === p.exportId) locks.unlock(id);
     exports.drop(p.exportId);
     return {};
   });
 
   router.register('move.markMoved', async (p) => {
+    // A late retry after the chat came back here: it stays, untouched.
+    if (exports.isSuperseded(p.exportId)) return {};
     // Found even after the export expired: the target has the chat by now (R2).
-    const id = exports.sessionOf(p.exportId);
-    if (id === undefined) throw expired('This move');
-    if (!store.isAway(id)) store.markAway(id, p.to);
+    const begun = exports.begunOf(p.exportId);
+    if (!begun) throw expired('This move');
+    const id = begun.sessionId;
+    if (!store.isAway(id)) {
+      // Past its lock the chat may have gone on here: those turns must not be hidden.
+      if (locks.exportIdOf(id) !== p.exportId && activeSince(id, begun.at)) {
+        throw new ServiceError(
+          MOVE_ERRORS.expired,
+          'This chat went on here after the move began; it stays here',
+        );
+      }
+      store.markAway(id, p.to);
+    }
     // A stale Claude process must never answer here.
     release(id);
     if (locks.exportIdOf(id) === p.exportId) locks.unlock(id);
     exports.drop(p.exportId);
     catalog.invalidate();
+    deps.changed([id]);
     return {};
   });
 
@@ -462,11 +595,13 @@ export const registerMoveHandlers = (router: Router, deps: MoveHandlerDeps): voi
     const id = p.sessionId;
     if (!imports.wasCommitted(p.importId, id)) {
       const keys = imports.complete(p.importId, id);
-      await makeParentFolder(p.cwd);
+      await makeParentFolder(p.cwd, deps.claudeConfigDir);
       // A process started from an older copy here must not keep writing it.
       release(id);
       store.replace(id, keys);
       store.markHere(id, p.cwd, p.from);
+      // A late markMoved of an earlier move away from here must not hide it again.
+      exports.supersede(id);
       imports.committed(p.importId, id);
       catalog.invalidate();
     }
@@ -476,4 +611,6 @@ export const registerMoveHandlers = (router: Router, deps: MoveHandlerDeps): voi
     if (!summary) throw new ServiceError(MOVE_ERRORS.notFound, `Chat ${id} could not be listed`);
     return { summary };
   });
+
+  return { close: () => transfers.close() };
 };

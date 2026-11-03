@@ -42,7 +42,7 @@ describe('move methods', () => {
       result: { folder: '/r', matched: true, inUse: { branch: null, running: 1 } },
     },
     'move.exportBegin': {
-      params: { sessionId: 's' },
+      params: { sessionId: 's', exportId: 'e' },
       result: { exportId: 'e', parts: 2, bytes: 9 },
     },
     'move.exportPart': {
@@ -97,6 +97,12 @@ describe('move methods', () => {
       expect(methods[name as keyof typeof methods].params.safeParse(without).success).toBe(false);
     },
   );
+
+  it('move.exportBegin takes the exportId the desktop made', () => {
+    const p = methods['move.exportBegin'].params;
+    expect(p.safeParse({ sessionId: 's' }).success).toBe(false);
+    expect(p.parse({ sessionId: 's', exportId: 'e' }).exportId).toBe('e');
+  });
 
   it('round-trips entries with arbitrary fields and rejects ones without a type', () => {
     const p = methods['move.importPart'].params;

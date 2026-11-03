@@ -10,18 +10,22 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { ChatItem, ChatSummary, MoveKey, MovePeer } from '@threadgarden/protocol';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { startService, type ServiceHandle } from '../../src/main.js';
+import { startService, type ServiceHandle, type StartOptions } from '../../src/main.js';
 import type { SessionMessage } from '../../src/sdk/adapter.js';
 import {
   MOVE_IMPORT_MAX_BYTES,
+  MOVE_IMPORT_MS,
   MOVE_LOCK_MS,
   MOVE_PART_BYTES,
+  MOVE_SWEEP_MS,
   MoveImports,
+  MoveLocks,
+  MoveTransfers,
   splitParts,
 } from '../../src/server/handlers/move.js';
 import { FakeAdapter, type FakeSession } from '../../src/testing/fake-adapter.js';
 import { init, result } from '../chat/live-helpers.js';
-import { eventually } from '../e2e/ws-client.js';
+import { TestClient, eventually } from '../e2e/ws-client.js';
 
 const LAPTOP: MovePeer = { machineId: 'm-laptop', name: 'laptop' };
 const UBUNTU: MovePeer = { machineId: 'm-ubuntu', name: 'kumbal-machine' };
@@ -89,6 +93,7 @@ const machine = async (
   name: string,
   peer: MovePeer,
   seed?: (adapter: FakeAdapter, folder: string) => void,
+  extra: Partial<StartOptions> = {},
 ): Promise<Machine> => {
   const root = join(dir, name);
   const folder = join(root, 'proj');
@@ -104,6 +109,7 @@ const machine = async (
     sessionEnv: { PATH: '/usr/bin' },
     installSignalHandlers: false,
     clock: () => Date.now() + skew,
+    ...extra,
   });
   running.push(svc);
   let nextId = 1;
@@ -150,7 +156,7 @@ const copyParts = async (src: Machine, dst: Machine, sessionId: string, begin: B
 
 /** The whole move, as the desktop runs it. */
 const move = async (src: Machine, dst: Machine, sessionId: string, cwd: string) => {
-  const begin = await src.ok<Begin>('move.exportBegin', { sessionId });
+  const begin = await src.ok<Begin>('move.exportBegin', { exportId: randomUUID(), sessionId });
   const { importId, sizes, keys } = await copyParts(src, dst, sessionId, begin);
   const { summary } = await dst.ok<{ summary: ChatSummary }>('move.commit', {
     importId,
@@ -222,18 +228,27 @@ describe('a move between two services', () => {
   it('exportBegin on a busy chat answers BUSY', async () => {
     const laptop = await machine('laptop', LAPTOP, (a, f) => addLocal(a, 's1', f));
     await laptop.ok('chat.send', { sessionId: 's1', text: 'a long turn' });
-    expect((await laptop.call('move.exportBegin', { sessionId: 's1' })).error?.code).toBe('BUSY');
+    expect(
+      (await laptop.call('move.exportBegin', { exportId: randomUUID(), sessionId: 's1' })).error
+        ?.code,
+    ).toBe('BUSY');
     // Refused without keeping the lock: the chat can be sent to.
     expect(laptop.svc.moveLocks.isLocked('s1')).toBe(false);
   });
 
   it('chat.send during an export answers MOVING; after abort it works again', async () => {
     const laptop = await machine('laptop', LAPTOP, (a, f) => addLocal(a, 's1', f));
-    const begin = await laptop.ok<Begin>('move.exportBegin', { sessionId: 's1' });
+    const begin = await laptop.ok<Begin>('move.exportBegin', {
+      exportId: randomUUID(),
+      sessionId: 's1',
+    });
     expect((await laptop.call('chat.send', { sessionId: 's1', text: 'hi' })).error?.code).toBe(
       'MOVING',
     );
-    expect((await laptop.call('move.exportBegin', { sessionId: 's1' })).error?.code).toBe('MOVING');
+    expect(
+      (await laptop.call('move.exportBegin', { exportId: randomUUID(), sessionId: 's1' })).error
+        ?.code,
+    ).toBe('MOVING');
 
     await laptop.ok('move.abort', { exportId: begin.exportId });
     const part = await laptop.call('move.exportPart', { exportId: begin.exportId, index: 0 });
@@ -245,7 +260,10 @@ describe('a move between two services', () => {
 
   it('an export expires with its lock', async () => {
     const laptop = await machine('laptop', LAPTOP, (a, f) => addLocal(a, 's1', f));
-    const begin = await laptop.ok<Begin>('move.exportBegin', { sessionId: 's1' });
+    const begin = await laptop.ok<Begin>('move.exportBegin', {
+      exportId: randomUUID(),
+      sessionId: 's1',
+    });
     skew = MOVE_LOCK_MS;
     const part = await laptop.call('move.exportPart', { exportId: begin.exportId, index: 0 });
     expect(part.error?.code).toBe('EXPIRED');
@@ -340,7 +358,10 @@ describe('a move between two services', () => {
     expect((await laptop.call('chat.send', { sessionId: 's1', text: 'hi' })).error?.code).toBe(
       'MOVED',
     );
-    expect((await laptop.call('move.exportBegin', { sessionId: 's1' })).error?.code).toBe('MOVED');
+    expect(
+      (await laptop.call('move.exportBegin', { exportId: randomUUID(), sessionId: 's1' })).error
+        ?.code,
+    ).toBe('MOVED');
     const open = await laptop.ok<{ movedTo: unknown }>('chat.open', { sessionId: 's1', tail: 1 });
     expect(open.movedTo).toEqual(UBUNTU);
     // The desktop retries markMoved: the same exportId again is fine.
@@ -350,7 +371,10 @@ describe('a move between two services', () => {
   it('markMoved still works after the export expired', async () => {
     const laptop = await machine('laptop', LAPTOP, (a, f) => addLocal(a, 's1', f));
     const ubuntu = await machine('ubuntu', UBUNTU);
-    const begin = await laptop.ok<Begin>('move.exportBegin', { sessionId: 's1' });
+    const begin = await laptop.ok<Begin>('move.exportBegin', {
+      exportId: randomUUID(),
+      sessionId: 's1',
+    });
     const { importId } = await copyParts(laptop, ubuntu, 's1', begin);
     await ubuntu.ok('move.commit', { importId, sessionId: 's1', cwd: ubuntu.folder, from: LAPTOP });
 
@@ -418,6 +442,130 @@ describe('a move between two services', () => {
     const all = await ubuntu.ok<{ items: unknown[] }>('scheduled.list', { sessionId: 's1' });
     expect(all.items).toHaveLength(1);
   });
+
+  it("scheduled.create with another chat's id is refused", async () => {
+    const ubuntu = await machine('ubuntu', UBUNTU, (a, f) => {
+      addLocal(a, 's1', f);
+      addLocal(a, 's2', f);
+    });
+    const p = { sessionId: 's1', text: 'later', sendAt: Date.now() + 3_600_000, id: 'sch-1' };
+    await ubuntu.ok('scheduled.create', p);
+    const other = await ubuntu.call('scheduled.create', { ...p, sessionId: 's2' });
+    expect(other.error?.code).toBe('INVALID_PARAMS');
+    const s2 = await ubuntu.ok<{ items: unknown[] }>('scheduled.list', { sessionId: 's2' });
+    expect(s2.items).toEqual([]);
+  });
+
+  // ── fix round 1 ──
+
+  it('a markMoved retried after the chat came back leaves it here', async () => {
+    const laptop = await machine('laptop', LAPTOP, (a, f) => addLocal(a, 's1', f));
+    const ubuntu = await machine('ubuntu', UBUNTU);
+    const first = await move(laptop, ubuntu, 's1', ubuntu.folder);
+    await move(ubuntu, laptop, 's1', laptop.folder);
+    const live = await idleLive(laptop, 's1');
+
+    // A late retry of the first move's markMoved.
+    await laptop.ok('move.markMoved', { exportId: first.begin.exportId, to: UBUNTU });
+
+    expect(live.closed).toBe(false);
+    expect((await list(laptop)).map((c) => c.sessionId)).toEqual(['s1']);
+    const open = await laptop.ok<{ movedTo: unknown }>('chat.open', { sessionId: 's1', tail: 1 });
+    expect(open.movedTo).toBeNull();
+  });
+
+  it('markMoved after the lock ran out and the chat went on here answers EXPIRED', async () => {
+    const laptop = await machine('laptop', LAPTOP, (a, f) => addLocal(a, 's1', f));
+    const ubuntu = await machine('ubuntu', UBUNTU);
+    const begin = await laptop.ok<Begin>('move.exportBegin', {
+      exportId: randomUUID(),
+      sessionId: 's1',
+    });
+    const { importId } = await copyParts(laptop, ubuntu, 's1', begin);
+    await ubuntu.ok('move.commit', { importId, sessionId: 's1', cwd: ubuntu.folder, from: LAPTOP });
+    // The lock ran out and the owner went on chatting on the laptop.
+    skew = MOVE_LOCK_MS + 60_000;
+    const live = await idleLive(laptop, 's1');
+
+    const r = await laptop.call('move.markMoved', { exportId: begin.exportId, to: UBUNTU });
+
+    expect(r.error?.code).toBe('EXPIRED');
+    expect(live.closed).toBe(false);
+    expect((await list(laptop)).map((c) => c.sessionId)).toEqual(['s1']);
+  });
+
+  it('exportBegin with the same exportId twice gives the same answer and one lock', async () => {
+    const laptop = await machine('laptop', LAPTOP, (a, f) => addLocal(a, 's1', f));
+    const exportId = randomUUID();
+    const first = await laptop.ok<Begin>('move.exportBegin', { exportId, sessionId: 's1' });
+    const again = await laptop.ok<Begin>('move.exportBegin', { exportId, sessionId: 's1' });
+    expect(again).toEqual(first);
+    expect(first.exportId).toBe(exportId);
+    expect(laptop.svc.moveLocks.exportIdOf('s1')).toBe(exportId);
+    const other = await laptop.call('move.exportBegin', {
+      exportId: randomUUID(),
+      sessionId: 's1',
+    });
+    expect(other.error?.code).toBe('MOVING');
+    // The desktop that lost the answer can still abort it.
+    await laptop.ok('move.abort', { exportId });
+    expect(laptop.svc.moveLocks.isLocked('s1')).toBe(false);
+  });
+
+  it('exportBegin of a chat larger than an import may be answers TOO_LARGE', async () => {
+    const laptop = await machine(
+      'laptop',
+      LAPTOP,
+      (a, f) => addLocal(a, 's1', f, [msg('s1', 'u1', 'user', 'x'.repeat(2_000))]),
+      { moveMaxBytes: 1_000 },
+    );
+    const r = await laptop.call('move.exportBegin', { exportId: randomUUID(), sessionId: 's1' });
+    expect(r.error?.code).toBe('TOO_LARGE');
+    expect(laptop.svc.moveLocks.isLocked('s1')).toBe(false);
+  });
+
+  it('markMoved tells the clients the chat changed', async () => {
+    const laptop = await machine('laptop', LAPTOP, (a, f) => addLocal(a, 's1', f));
+    const ubuntu = await machine('ubuntu', UBUNTU);
+    const client = await TestClient.connect(laptop.svc.port, laptop.svc.token);
+    try {
+      const begin = await laptop.ok<Begin>('move.exportBegin', {
+        exportId: randomUUID(),
+        sessionId: 's1',
+      });
+      const { importId } = await copyParts(laptop, ubuntu, 's1', begin);
+      await ubuntu.ok('move.commit', {
+        importId,
+        sessionId: 's1',
+        cwd: ubuntu.folder,
+        from: LAPTOP,
+      });
+      client.events.length = 0;
+      await laptop.ok('move.markMoved', { exportId: begin.exportId, to: UBUNTU });
+      await client.waitFor(
+        (e) =>
+          e.event === 'sessions.changed' &&
+          (e.data as { sessionIds: string[] }).sessionIds.includes('s1'),
+      );
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("commit into Claude Code's own folder is refused and stores nothing", async () => {
+    const laptop = await machine('laptop', LAPTOP, (a, f) => addLocal(a, 's1', f));
+    const ubuntu = await machine('ubuntu', UBUNTU);
+    const begin = await laptop.ok<Begin>('move.exportBegin', {
+      exportId: randomUUID(),
+      sessionId: 's1',
+    });
+    const { importId } = await copyParts(laptop, ubuntu, 's1', begin);
+    const cwd = join(dir, 'ubuntu', 'claude', 'projects', 'repo');
+    const r = await ubuntu.call('move.commit', { importId, sessionId: 's1', cwd, from: LAPTOP });
+    expect(r.error?.code).toBe('INVALID_PARAMS');
+    expect(existsSync(dirname(cwd))).toBe(false);
+    expect(await list(ubuntu)).toEqual([]);
+  });
 });
 
 describe('splitParts', () => {
@@ -478,5 +626,44 @@ describe('MoveImports', () => {
     imports.add({ ...part, keys: keys(600) });
     imports.add({ ...part, keys: keys(600) });
     expect(imports.complete('i1', 's1')).toEqual(keys(600));
+  });
+
+  it('the cap holds across every open import', () => {
+    const imports = new MoveImports(() => 0, 1_000);
+    imports.add({ importId: 'i1', sessionId: 's1', parts: 1, index: 0, keys: keys(600) });
+    expect(() =>
+      imports.add({ importId: 'i2', sessionId: 's2', parts: 1, index: 0, keys: keys(600) }),
+    ).toThrow(expect.objectContaining({ code: 'TOO_LARGE' }));
+    expect(imports.complete('i1', 's1')).toEqual(keys(600));
+  });
+});
+
+describe('MoveTransfers', () => {
+  const keys = (size: number) => [{ entries: [{ type: 'user', text: 'x'.repeat(size) }] }];
+
+  it('a sweep every minute lets go of expired imports and exports, with no move calls', () => {
+    let now = 1_000;
+    const intervals: { fn: () => void; ms: number }[] = [];
+    let cleared = 0;
+    const timers = {
+      setTimeout: () => 0,
+      clearTimeout: () => {},
+      setInterval: (fn: () => void, ms: number) => intervals.push({ fn, ms }),
+      clearInterval: () => void cleared++,
+    };
+    const locks = new MoveLocks(() => now);
+    const t = new MoveTransfers({ locks, now: () => now, timers });
+    t.imports.add({ importId: 'i1', sessionId: 's1', index: 0, parts: 2, keys: keys(600) });
+    locks.lock('s2', 'e1');
+    t.exports.begin('e1', 's2', [keys(600)], 640);
+    expect(t.bytesHeld()).toBeGreaterThan(1_200);
+    expect(intervals.map((i) => i.ms)).toEqual([MOVE_SWEEP_MS]);
+
+    now += Math.max(MOVE_IMPORT_MS, MOVE_LOCK_MS);
+    intervals[0]!.fn();
+    expect(t.bytesHeld()).toBe(0);
+
+    t.close();
+    expect(cleared).toBe(1);
   });
 });
