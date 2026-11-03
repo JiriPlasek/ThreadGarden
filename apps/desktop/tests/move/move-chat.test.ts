@@ -11,7 +11,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MoveChat, RECONNECT_WAIT_MS, START_WAIT_MS } from '../../src/lib/move/move-chat.svelte';
 import { moveNote } from '../../src/lib/move/note';
 import type { AppState } from '../../src/lib/state/context';
-import { LOCAL, M1, setupTwoMachines, summary } from '../layout/harness';
+import { LOCAL, M1, machineInfo, setupTwoMachines, summary } from '../layout/harness';
 import { RpcFail, type FakeServer } from '../service/fake-ws';
 
 const REF = { machineId: LOCAL, sessionId: 's1' };
@@ -74,6 +74,8 @@ const start = async (
     power?: boolean;
     /** Power comes back when turned on (default true). */
     comesUp?: boolean;
+    /** This PC's service can move chats (default true). */
+    localMove?: boolean;
     source?: Record<string, Handler>;
     target?: Record<string, Handler>;
   } = {},
@@ -93,6 +95,14 @@ const start = async (
     powerPasswords: { [M1]: 'pw' },
     waitForOn: !o.off,
     configure: (s) => {
+      const hello = s.handlers['hello']!;
+      s.handlers['hello'] = (p) => ({
+        ...(hello(p) as object),
+        machine: machineInfo(LOCAL, 'my-host', [
+          'remote',
+          ...(o.localMove === false ? [] : [MOVE_CAPABILITY]),
+        ]),
+      });
       s.handlers['power.list'] = () => (o.power ? [{ machineId: M1, config: CONFIG }] : []);
       s.handlers['power.reading'] = () => ({
         on: !o.off,
@@ -170,6 +180,7 @@ const shownOf = (app: AppState) => app.machines.shown(app.machines.get(M1)!);
 describe('MoveChat', () => {
   it('clean chat moves: calls in order, tab re-keyed to the target, draft copied, note sent', async () => {
     const { move, log, server, remote, app } = await start();
+    const before = Date.now();
     await move.prepare(REF, M1);
     expect(move.state).toBe('ready');
     expect(move.check?.source.git).toEqual(CLEAN);
@@ -229,9 +240,16 @@ describe('MoveChat', () => {
         from: { machineId: LOCAL, name: 'This PC' },
       },
     ]);
+    // Taken just before exportBegin: markMoved works without the source's memory of it.
     expect(paramsOf(server, 'move.markMoved')).toEqual([
-      { exportId, to: { machineId: M1, name: 'Ubuntu PC' } },
+      {
+        exportId,
+        sessionId: 's1',
+        begunAt: expect.any(Number),
+        to: { machineId: M1, name: 'Ubuntu PC' },
+      },
     ]);
+    expect(paramsOf(server, 'move.markMoved')[0]!.begunAt).toBeGreaterThanOrEqual(before);
     expect(paramsOf(server, 'move.abort')).toEqual([]);
     expect(paramsOf(remote, 'drafts.set')).toContainEqual({ key: 's1', text: 'half a thought' });
     expect(paramsOf(remote, 'chat.send')).toEqual([{ sessionId: 's1', text: noteFor() }]);
@@ -303,7 +321,58 @@ describe('MoveChat', () => {
     expect(move.state).toBe('done');
   });
 
-  it('markMoved failing 3× sets oldCopyShown; retryMarkMoved clears it', async () => {
+  it('a lost markMoved answer is asked again once the source answers', async () => {
+    let lose = 2;
+    const { move, server, app } = await start({
+      source: {
+        'move.markMoved': () => {
+          if (lose-- > 0) throw new RpcFail('TIMEOUT', 'no answer');
+          return {};
+        },
+      },
+    });
+    await move.prepare(REF, M1);
+    await move.run({ moveAnyway: false });
+    const calls = paramsOf(server, 'move.markMoved');
+    expect(calls).toHaveLength(3);
+    expect(calls[2]).toEqual(calls[0]);
+    expect(move.oldCopyShown).toBe(false);
+    expect(app.interaction.pendingMarks).toEqual({});
+  });
+
+  it('a source that never comes back: the old copy is still shown, kept in the app for the chat', async () => {
+    vi.useFakeTimers({ toFake: FAKE });
+    const { move, server, app } = await start({
+      source: {
+        'move.markMoved': () => {
+          throw new RpcFail('DISCONNECTED', 'dropped');
+        },
+      },
+    });
+    // The source's link goes down with the first lost answer and stays down.
+    let down = false;
+    const local = app.machines.get(LOCAL)!;
+    server.handlers['move.markMoved'] = () => {
+      down = true;
+      local.status = 'unreachable';
+      throw new RpcFail('DISCONNECTED', 'dropped');
+    };
+    await move.prepare(REF, M1);
+    const running = move.run({ moveAnyway: false });
+    await vi.advanceTimersByTimeAsync(RECONNECT_WAIT_MS + 10_000);
+    await running;
+    expect(down).toBe(true);
+    expect(server.calls('move.markMoved')).toHaveLength(1);
+    expect(move.oldCopyShown).toBe(true);
+    expect(app.interaction.pendingMarks[`${M1}/s1`]).toMatchObject({
+      source: LOCAL,
+      exportId: paramsOf(server, 'move.exportBegin')[0]!.exportId,
+      begunAt: expect.any(Number),
+      to: { machineId: M1, name: 'Ubuntu PC' },
+    });
+  });
+
+  it('markMoved failing sets oldCopyShown; retryMarkMoved clears it', async () => {
     let fail = true;
     const { move, server, remote, app } = await start({
       source: {
@@ -316,8 +385,10 @@ describe('MoveChat', () => {
     await move.prepare(REF, M1);
     await move.run({ moveAnyway: false });
 
-    expect(server.calls('move.markMoved')).toHaveLength(3);
+    // Not a lost answer: asked once, then Retry.
+    expect(server.calls('move.markMoved')).toHaveLength(1);
     expect(move.oldCopyShown).toBe(true);
+    expect(Object.keys(app.interaction.pendingMarks)).toEqual([`${M1}/s1`]);
     // The move is done all the same: the tab follows, the note goes.
     expect(move.state).toBe('done');
     expect(server.calls('move.abort')).toHaveLength(0);
@@ -327,7 +398,8 @@ describe('MoveChat', () => {
     fail = false;
     await move.retryMarkMoved();
     expect(move.oldCopyShown).toBe(false);
-    expect(server.calls('move.markMoved')).toHaveLength(4);
+    expect(app.interaction.pendingMarks).toEqual({});
+    expect(server.calls('move.markMoved')).toHaveLength(2);
   });
 
   it('markMoved answering EXPIRED: failed, the tab stays and no note', async () => {
@@ -381,6 +453,55 @@ describe('MoveChat', () => {
     expect(move.check).toBeNull();
     await move.run({ moveAnyway: false });
     expect(server.calls('move.exportBegin')).toHaveLength(1);
+  });
+
+  it('retryMarkMoved answering EXPIRED brings the scheduled sends and the draft back to the source', async () => {
+    let answer: 'fail' | 'expired' = 'fail';
+    const { move, server, remote, app } = await start({
+      source: {
+        'move.markMoved': () => {
+          if (answer === 'fail') throw new RpcFail('INTERNAL', 'db locked');
+          throw new RpcFail(MOVE_ERRORS.expired, 'This chat went on here');
+        },
+        'scheduled.list': () => ({ items: [pending({ id: 'q1', text: 'go on' })] }),
+        'scheduled.create': (p) => pending(p as Partial<ScheduledSend>),
+        'drafts.set': () => ({}),
+      },
+      target: {
+        'drafts.get': () => ({ text: 'typed there' }),
+        'scheduled.cancel': () => ({}),
+      },
+    });
+    await move.prepare(REF, M1);
+    await move.run({ moveAnyway: false });
+    expect(paramsOf(remote, 'scheduled.create').map((p) => p.id)).toEqual(['q1']);
+    expect(paramsOf(server, 'scheduled.cancel')).toEqual([{ id: 'q1' }]);
+    // On the target now: listed there.
+    remote.handlers['scheduled.list'] = (p) =>
+      (p as P).sessionId === 's1'
+        ? { items: [pending({ id: 'q1', text: 'go on' })] }
+        : { items: [] };
+
+    answer = 'expired';
+    await move.retryMarkMoved();
+
+    // One home, the source: the send is there again and gone from the target.
+    expect(paramsOf(server, 'scheduled.create')).toEqual([
+      { sessionId: 's1', id: 'q1', text: 'go on', sendAt: expect.any(Number) },
+    ]);
+    expect(paramsOf(remote, 'scheduled.cancel')).toEqual([{ id: 'q1' }]);
+    expect(paramsOf(server, 'drafts.set')).toContainEqual({ key: 's1', text: 'typed there' });
+    expect(paramsOf(remote, 'drafts.set')).toContainEqual({ key: 's1', text: '' });
+    expect(app.tabs.open).toEqual([`${LOCAL}/s1`]);
+    expect(app.interaction.pendingMarks).toEqual({});
+  });
+
+  it('a source that cannot move: prepare refuses with the update text, asking nothing', async () => {
+    const { move, log } = await start({ localMove: false });
+    await move.prepare(REF, M1);
+    expect(move.state).toBe('failed');
+    expect(move.problem).toBe('Update This PC to move chats there');
+    expect(log).toEqual([]);
   });
 
   it('note failure leaves state noting; sendNoteAgain sends it', async () => {

@@ -141,8 +141,12 @@
         ? 'This chat is waiting for your answer. Answer it or stop the chat, then check again.'
         : busy === 'subagents'
           ? 'Background agents are running in this chat; moving it would cut them off.'
-          : null,
+          : busy === 'terminal'
+            ? 'This chat is running in a terminal'
+            : null,
   );
+  /** Threadgarden can stop its own process of the chat, never a terminal's. */
+  const canStop = $derived(busy !== null && busy !== 'terminal');
 
   const inFlight = $derived(phase === 'starting' || phase === 'moving');
   /** The first note didn't send and nothing has sent it since (the chat's own Send again may have). */
@@ -289,9 +293,11 @@
               <p class="text-destructive" role="alert">{stopError}</p>
             {/if}
             <div class="mt-1 flex gap-2">
-              <Button size="sm" variant="outline" onclick={() => void stopChat()}
-                >Stop the chat</Button
-              >
+              {#if canStop}
+                <Button size="sm" variant="outline" onclick={() => void stopChat()}
+                  >Stop the chat</Button
+                >
+              {/if}
               <Button size="sm" variant="ghost" onclick={recheck}>Check again</Button>
             </div>
           {:else}

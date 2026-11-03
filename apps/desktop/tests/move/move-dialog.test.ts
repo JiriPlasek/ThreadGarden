@@ -60,8 +60,10 @@ afterEach(() => {
 const start = async (
   o: {
     git?: GitState;
-    busy?: 'turn' | 'prompt' | 'subagents' | null;
+    busy?: 'turn' | 'prompt' | 'subagents' | 'terminal' | null;
     m1Move?: boolean;
+    /** This PC's service can move chats (default true). */
+    localMove?: boolean;
     /** M1 is off; `power`: it has power control. */
     off?: boolean;
     power?: boolean;
@@ -81,7 +83,10 @@ const start = async (
       const hello = s.handlers['hello']!;
       s.handlers['hello'] = (p) => ({
         ...(hello(p) as object),
-        machine: machineInfo(LOCAL, 'my-host', ['remote', MOVE_CAPABILITY]),
+        machine: machineInfo(LOCAL, 'my-host', [
+          'remote',
+          ...(o.localMove === false ? [] : [MOVE_CAPABILITY]),
+        ]),
       });
       s.handlers['sessions.list'] = () => ({ items: [summary('s1', { title: 'Fix usage' })] });
       s.handlers['power.list'] = () => (o.power ? [{ machineId: M1, config: CONFIG }] : []);
@@ -192,6 +197,29 @@ describe('Move to… entry points', () => {
     await userEvent.click(await screen.findByRole('option', { name: /Move to…/ }));
     expect(app.interaction.moveChat).toMatchObject({ open: true, ref: REF });
     expect(app.interaction.moveChat.summary?.sessionId).toBe('s1');
+  });
+
+  it("no Move to… for a chat whose own machine's service can't move it", async () => {
+    const { app, context } = await start({ localMove: false });
+
+    await app.chats.open('s1');
+    const header = render(ChatHeader, { context, props: { chat: app.chats.get('s1')! } });
+    await openMenu(screen.getByRole('button', { name: 'Chat state' }));
+    expect(await screen.findAllByRole('menuitem', { name: /Archive|Put on hold/ })).not.toEqual([]);
+    expect(screen.queryByRole('menuitem', { name: 'Move to…' })).toBeNull();
+    header.unmount();
+
+    const list = render(ChatList, { context });
+    await fireEvent.contextMenu(await screen.findByRole('option', { name: /Fix usage/ }));
+    expect(await screen.findAllByRole('menuitem', { name: /Pin|Rename/ })).not.toEqual([]);
+    expect(screen.queryByRole('menuitem', { name: 'Move to…' })).toBeNull();
+    list.unmount();
+
+    app.tabs.openTab(REF);
+    render(QuickSwitcher, { context });
+    await userEvent.keyboard('{Control>}k{/Control}');
+    await userEvent.type(await screen.findByRole('combobox'), 'move');
+    expect(screen.queryByRole('option', { name: /Move to…/ })).toBeNull();
   });
 });
 
@@ -327,6 +355,16 @@ describe('the Move dialog', () => {
     expect(server.calls('chat.interrupt')).toHaveLength(0);
   });
 
+  it('a chat running in a terminal says so and cannot move', async () => {
+    const { dialog } = await openDialog({ busy: 'terminal' });
+    expect(await within(dialog).findByText('This chat is running in a terminal')).toBeTruthy();
+    expect(
+      (within(dialog).getByRole('button', { name: 'Move' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    // Threadgarden can't stop a terminal's process.
+    expect(within(dialog).queryByRole('button', { name: 'Stop the chat' })).toBeNull();
+  });
+
   it('a stop that fails says so in the dialog', async () => {
     const { dialog } = await openDialog({
       busy: 'turn',
@@ -410,22 +448,15 @@ describe('the Move dialog', () => {
       },
     });
     await userEvent.click(await within(dialog).findByRole('button', { name: 'Move' }));
-    // markMoved is tried 3 times, a second apart.
-    expect(
-      await within(dialog).findByText(
-        'The old copy on This PC is still shown',
-        {},
-        { timeout: 5_000 },
-      ),
-    ).toBeTruthy();
+    expect(await within(dialog).findByText('The old copy on This PC is still shown')).toBeTruthy();
     fails = false;
     await userEvent.click(within(dialog).getByRole('button', { name: 'Retry' }));
     await waitFor(() =>
       expect(within(dialog).queryByText('The old copy on This PC is still shown')).toBeNull(),
     );
     expect(within(dialog).queryByRole('button', { name: 'Retry' })).toBeNull();
-    expect(server.calls('move.markMoved').length).toBeGreaterThan(3);
-  }, 10_000);
+    expect(server.calls('move.markMoved')).toHaveLength(2);
+  });
 
   it('a failed first note offers Send again', async () => {
     let fails = true;
@@ -491,6 +522,36 @@ describe('the moved copy', () => {
     expect(again!.text).toMatch(/^\[Threadgarden\] This chat moved from This PC to Ubuntu PC\./);
     await waitFor(() => expect(screen.queryByRole('alert', { name: /first note/ })).toBeNull());
     expect(app.interaction.pendingNotes).toEqual({});
+  });
+
+  it('the old copy still shown stays in the chat on the target once the dialog is closed, with Retry', async () => {
+    let fails = true;
+    const { dialog, server, app, context } = await openDialog({
+      source: {
+        'move.markMoved': () => {
+          if (fails) throw new RpcFail('INTERNAL', 'db locked');
+          return {};
+        },
+      },
+    });
+    app.tabs.openTab(REF);
+    render(ChatPane, { context });
+    await userEvent.click(await within(dialog).findByRole('button', { name: 'Move' }));
+    expect(await within(dialog).findByText('The old copy on This PC is still shown')).toBeTruthy();
+    await userEvent.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+    expect(app.tabs.active).toBe(`${M1}/s1`);
+    const notice = await screen.findByRole('alert', { name: /old copy/ });
+    expect(notice.textContent).toContain('The old copy on This PC is still shown');
+    fails = false;
+    await userEvent.click(within(notice).getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(screen.queryByRole('alert', { name: /old copy/ })).toBeNull());
+    expect(server.calls('move.markMoved')).toHaveLength(2);
+    expect(server.calls('move.markMoved')[1]!.params).toEqual(
+      server.calls('move.markMoved')[0]!.params,
+    );
+    expect(app.interaction.pendingMarks).toEqual({});
   });
 
   const chatOpen =

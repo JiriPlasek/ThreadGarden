@@ -8,6 +8,7 @@
   import XIcon from '@lucide/svelte/icons/x';
   import { Button } from '#lib/components/ui/button/index.js';
   import { rowPx } from '#lib/interface-scale.js';
+  import { supportsMove } from '#lib/projects.js';
   import { ARCHIVE_OLDER_DAYS } from '#lib/state/buckets.svelte.js';
   import { useApp } from '#lib/state/context.js';
   import {
@@ -652,7 +653,7 @@
           onRename={() => (renaming = chat)}
           onTogglePin={() => togglePin(chat)}
           onMove={(_, bucket) => moveFromMenu(chat, bucket)}
-          onMoveMachine={machines.several
+          onMoveMachine={machines.several && supportsMove(machines.get(chat.machineId))
             ? () =>
                 interaction.openMoveChat(
                   { machineId: chat.machineId, sessionId: chat.sessionId },

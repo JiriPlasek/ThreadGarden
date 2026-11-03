@@ -25,12 +25,14 @@ describe('moveNote', () => {
     expect(note).toContain('fix/usage');
   });
 
-  it('tells Claude to clone if missing and to check out the branch', () => {
+  it('tells Claude to clone into the folder if it is empty, else to fetch and check out the branch', () => {
     const note = moveNote(base);
-    expect(note).toMatch(/clone/i);
-    expect(note).toMatch(/missing/i);
-    expect(note).toMatch(/fetch/i);
-    expect(note).toMatch(/check out/i);
+    // Threadgarden made the folder (Claude Code starts in it), so it is empty, not missing.
+    expect(note).toContain(
+      '1. If the folder is empty, clone the repo into it: `git clone git@github.com:acme/threadgarden.git .`; otherwise, fetch.',
+    );
+    expect(note).toContain('2. Check out `fix/usage`.');
+    expect(note).not.toMatch(/missing/i);
   });
 
   it('includes the never-stash rule', () => {

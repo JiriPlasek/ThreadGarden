@@ -17,6 +17,7 @@
   import type { Component } from 'svelte';
   import ProjectIcon from '#lib/components/layout/ProjectIcon.svelte';
   import * as Dialog from '#lib/components/ui/dialog/index.js';
+  import { supportsMove } from '#lib/projects.js';
   import { useApp } from '#lib/state/context.js';
   import { formatShortcut, shortcut, type Combo } from '#lib/shortcuts.js';
   import { ARCHIVE_OLDER_DAYS } from '#lib/state/buckets.svelte.js';
@@ -71,7 +72,8 @@
   /** Move to… for the chat in the active tab (not a moved-away copy). */
   const moveCommand = $derived.by((): Command | null => {
     const ref = tabs.active ? parseChatKey(tabs.active) : null;
-    if (!ref || !machines.several) return null;
+    // Not for a chat whose own machine's service can't move chats (protocol 8).
+    if (!ref || !machines.several || !supportsMove(machines.get(ref.machineId))) return null;
     const chat = scopes.get(ref.machineId)?.chats.get(ref.sessionId);
     if (chat?.movedTo) return null;
     return {

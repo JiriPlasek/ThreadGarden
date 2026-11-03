@@ -11,6 +11,7 @@
   import SetupScreen from '#lib/components/SetupScreen.svelte';
   import { clockTime, sendTimeText } from '#lib/format/usage.js';
   import { rowPx } from '#lib/interface-scale.js';
+  import { retryOldCopy } from '#lib/move/move-chat.svelte.js';
   import { copyText } from '#lib/native.js';
   import { RequestError } from '#lib/service/client.js';
   import type { ResumeCheck } from '#lib/state/chats.svelte.js';
@@ -47,7 +48,8 @@
    */
   let { ref }: { ref: ChatRef } = $props();
 
-  const { tabs, settings, usageAccounts, machines, interaction: appInteraction } = useApp();
+  const app = useApp();
+  const { tabs, settings, usageAccounts, machines, interaction: appInteraction } = app;
   /** The chat's machine (`ChatPane` shows it inside that machine's scope). */
   const scope = useScope();
   const { chats, interaction, scheduled } = scope;
@@ -78,6 +80,20 @@
       appInteraction.notePending(ref, { text: note.text, problem });
     } finally {
       noteSending = false;
+    }
+  };
+
+  /** The source still lists its old copy of this moved chat (`move.markMoved` failed, R2): Retry. */
+  const pendingMark = $derived(appInteraction.pendingMarks[chatKey(ref)]);
+  const moveNoticeText = $derived(appInteraction.moveNotices[chatKey(ref)]);
+  let marking = $state(false);
+  const retryMark = async (): Promise<void> => {
+    if (marking) return;
+    marking = true;
+    try {
+      await retryOldCopy(app, ref);
+    } finally {
+      marking = false;
     }
   };
 
@@ -529,6 +545,41 @@
                   class="bg-background hover:bg-muted inline-flex h-6 shrink-0 items-center rounded border px-2 disabled:opacity-50"
                   disabled={noteSending}
                   onclick={() => void sendNoteAgain()}>Send again</button
+                >
+              </div>
+            {/if}
+            {#if pendingMark}
+              <div
+                class="flex items-center gap-2 rounded-md border px-3 py-1.5 text-xs"
+                role="alert"
+                aria-label="The old copy is still shown"
+              >
+                <p class="min-w-0 flex-1">
+                  The old copy on {machineNameOf(machines, pendingMark.source)} is still shown{pendingMark.problem
+                    ? `: ${pendingMark.problem}`
+                    : ''}
+                </p>
+                <button
+                  type="button"
+                  class="bg-background hover:bg-muted inline-flex h-6 shrink-0 items-center rounded border px-2 disabled:opacity-50"
+                  disabled={marking}
+                  onclick={() => void retryMark()}>Retry</button
+                >
+              </div>
+            {/if}
+            {#if moveNoticeText}
+              <div
+                class="flex items-center gap-2 rounded-md border px-3 py-1.5 text-xs"
+                role="status"
+                aria-label="About the move"
+              >
+                <p class="min-w-0 flex-1">{moveNoticeText}</p>
+                <button
+                  type="button"
+                  class="hover:bg-muted inline-flex size-6 shrink-0 items-center justify-center rounded"
+                  aria-label="Dismiss"
+                  onclick={() => appInteraction.dismissMoveNotice(ref)}
+                  ><XIcon class="size-3.5" aria-hidden="true" /></button
                 >
               </div>
             {/if}

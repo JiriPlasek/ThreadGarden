@@ -9,10 +9,10 @@ import { MOVE_ERRORS, type GitState, type MovePeer, type Result } from '@threadg
 import { supportsMove } from '../projects';
 import { RequestError } from '../service/client';
 import type { Api } from '../state/api';
-import type { InteractionState } from '../state/interaction.svelte';
+import type { InteractionState, PendingMark } from '../state/interaction.svelte';
 import { machineNameOf, type MachinesState } from '../state/machines.svelte';
 import type { PowerState } from '../state/power.svelte';
-import type { ChatRef } from '../state/refs';
+import { chatKey, type ChatRef } from '../state/refs';
 import type { Scopes } from '../state/scope';
 import type { TabsState } from '../state/tabs.svelte';
 import { moveNote } from './note';
@@ -24,11 +24,13 @@ export const RECONNECT_WAIT_MS = 2 * 60_000;
 /** How often it looks whether a machine is on meanwhile. */
 const ON_POLL_MS = 1_000;
 /**
- * Calls are tried this many times: the idempotent transfer calls after a lost
- * answer, `move.markMoved` before the old copy is said to be still shown (R2),
- * a scheduled send's cancel on the source.
+ * Calls are tried this many times: the idempotent transfer calls and
+ * `move.markMoved` after a lost answer (before the old copy is said to be
+ * still shown, R2), a scheduled send's cancel on the machine it leaves.
  */
 const TRIES = 3;
+/** The wait between tries of a failed call. */
+const RETRY_MS = 1_000;
 
 export type MoveState =
   'idle' | 'checking' | 'ready' | 'starting' | 'moving' | 'noting' | 'done' | 'failed';
@@ -39,13 +41,24 @@ export type MoveCheck = {
   target: Result<'move.target'> | null;
 };
 
-export type MoveApp = {
+/** What the hand-off after the commit needs (also from the moved chat's own view, dialog or not). */
+export type MarkApp = {
   scopes: Pick<Scopes, 'get'>;
+  machines: Pick<MachinesState, 'get'>;
+  tabs: Pick<TabsState, 'retarget'>;
+  /**
+   * Where a first note that didn't send, and an old copy still shown, are
+   * kept, so the chat on the target can offer Send again and Retry.
+   */
+  interaction: Pick<
+    InteractionState,
+    'notePending' | 'noteSent' | 'pendingMarks' | 'markPending' | 'markDone' | 'moveNotice'
+  >;
+};
+
+export type MoveApp = MarkApp & {
   machines: Pick<MachinesState, 'get' | 'shown'>;
   power: Pick<PowerState, 'turnOn' | 'config' | 'error'>;
-  tabs: Pick<TabsState, 'retarget'>;
-  /** Where a first note that didn't send is kept, so the chat on the target can offer Send again. */
-  interaction: Pick<InteractionState, 'notePending' | 'noteSent'>;
 };
 
 export type MoveOptions = {
@@ -99,6 +112,182 @@ const mayHaveReached = (target: string): string =>
 /** The move was abandoned (`abandon()`): whatever it awaited is dropped. */
 class Cancelled extends Error {}
 
+type Waiting = {
+  machines: Pick<MachinesState, 'get'>;
+  retryMs: number;
+  /** Throws when the wait is over (an abandoned move). */
+  alive?: () => void;
+};
+
+const isOnIn = (machines: Pick<MachinesState, 'get'>, id: string): boolean =>
+  machines.get(id)?.status === 'on';
+
+/** Waits until machine `id` is on, at most `ms`; false when it did not come. */
+const waitUntilOn = async (w: Waiting, id: string, ms: number): Promise<boolean> => {
+  const deadline = Date.now() + ms;
+  for (;;) {
+    w.alive?.();
+    if (isOnIn(w.machines, id)) return true;
+    if (Date.now() >= deadline) return false;
+    await pause(ON_POLL_MS);
+  }
+};
+
+/**
+ * An idempotent call on machine `machineId`: a lost answer is asked again
+ * (up to `TRIES` times) once the machine is on again (at most `RECONNECT_WAIT_MS`).
+ */
+const retryLost = async <T>(w: Waiting, machineId: string, call: () => Promise<T>): Promise<T> => {
+  for (let i = 1; ; i++) {
+    try {
+      const answer = await call();
+      w.alive?.();
+      return answer;
+    } catch (e) {
+      if (e instanceof Cancelled || i >= TRIES || !lost(e)) throw e;
+      await pause(w.retryMs);
+      if (!(await waitUntilOn(w, machineId, RECONNECT_WAIT_MS))) throw e;
+    }
+  }
+};
+
+/** `call`, tried up to `TRIES` times while it fails with an error `retry` accepts. */
+const tried = async <T>(
+  retryMs: number,
+  call: () => Promise<T>,
+  retry: (e: unknown) => boolean,
+): Promise<T> => {
+  for (let i = 1; ; i++) {
+    try {
+      return await call();
+    } catch (e) {
+      if (i >= TRIES || !retry(e)) throw e;
+      await pause(retryMs);
+    }
+  }
+};
+
+/**
+ * A chat's pending scheduled sends, re-created on `to` with the same id (R7):
+ * one waiting for the limit reset follows that machine's own reset, a timed
+ * one keeps its time. Each ends up in one place: one `to` did not take stays
+ * on `from`, and one `from` would not cancel is cancelled on `to` again
+ * (only if that fails too is it in both).
+ */
+const carrySends = async (
+  from: Api,
+  to: Api,
+  sessionId: string,
+  retryMs: number,
+): Promise<void> => {
+  let items: Result<'scheduled.list'>['items'];
+  try {
+    ({ items } = await from.request('scheduled.list', { sessionId }));
+  } catch {
+    return;
+  }
+  for (const s of items) {
+    if (s.state !== 'pending') continue;
+    try {
+      const images =
+        s.imageCount > 0 ? (await from.request('scheduled.get', { id: s.id })).images : undefined;
+      await to.request('scheduled.create', {
+        sessionId,
+        id: s.id,
+        text: s.text,
+        ...(images ? { images } : {}),
+        ...(s.afterLimitReset ? { whenLimitResets: true as const } : { sendAt: s.sendAt }),
+      });
+    } catch {
+      continue; // Not taken: it stays where it was.
+    }
+    try {
+      await tried(
+        retryMs,
+        () => from.request('scheduled.cancel', { id: s.id }),
+        () => true,
+      );
+    } catch {
+      await to.request('scheduled.cancel', { id: s.id }).catch(() => {});
+    }
+  }
+};
+
+/** The composer's unsent text goes along; `clear`: and is gone from `from` once it is on `to`. */
+const carryDraft = async (from: Api, to: Api, key: string, clear: boolean): Promise<void> => {
+  try {
+    const { text } = await from.request('drafts.get', { key });
+    if (text) await to.request('drafts.set', { key, text });
+    if (text && clear) await from.request('drafts.set', { key, text: '' });
+  } catch {
+    // A draft is a convenience; the move is done without it.
+  }
+};
+
+/**
+ * `move.markMoved` for the chat now at `there`: `done`, `expired` (the chat
+ * went on on its source, where it stays), or `failed` (kept in the app as
+ * pending, for Retry). A lost answer is asked again once the source is back.
+ */
+export const markOldCopy = async (
+  app: MarkApp,
+  there: ChatRef,
+  mark: PendingMark,
+  o: { retryMs?: number } = {},
+): Promise<'done' | 'expired' | 'failed'> => {
+  const source = app.scopes.get(mark.source)?.api;
+  try {
+    if (!source) throw new Error(`${machineNameOf(app.machines, mark.source)} is not paired`);
+    const params = {
+      exportId: mark.exportId,
+      sessionId: there.sessionId,
+      begunAt: mark.begunAt,
+      to: mark.to,
+    };
+    await retryLost({ machines: app.machines, retryMs: o.retryMs ?? RETRY_MS }, mark.source, () =>
+      source.request('move.markMoved', params),
+    );
+    app.interaction.markDone(there);
+    return 'done';
+  } catch (e) {
+    if (isExpired(e)) {
+      app.interaction.markDone(there);
+      return 'expired';
+    }
+    app.interaction.markPending(there, { ...mark, problem: reason(e) });
+    return 'failed';
+  }
+};
+
+/**
+ * Retry of a pending `move.markMoved` (the old copy is still shown), from the
+ * dialog or the moved chat. EXPIRED: the chat stays on its source after all,
+ * so its tab, its scheduled sends and its draft go back there (one home).
+ */
+export const retryOldCopy = async (
+  app: MarkApp,
+  there: ChatRef,
+  o: { retryMs?: number } = {},
+): Promise<'done' | 'expired' | 'failed'> => {
+  const mark = app.interaction.pendingMarks[chatKey(there)];
+  if (!mark) return 'done';
+  const marked = await markOldCopy(app, there, mark, o);
+  if (marked !== 'expired') return marked;
+  const home = { machineId: mark.source, sessionId: there.sessionId };
+  app.tabs.retarget(there, home);
+  // Its first note on the target is moot now.
+  app.interaction.noteSent(there);
+  const nameOf = (id: string) => machineNameOf(app.machines, id);
+  app.interaction.moveNotice(home, tooLong(nameOf(mark.source), nameOf(there.machineId)));
+  const target = app.scopes.get(there.machineId)?.api;
+  const source = app.scopes.get(mark.source)?.api;
+  if (target && source) {
+    await carrySends(target, source, there.sessionId, o.retryMs ?? RETRY_MS);
+    await carryDraft(target, source, there.sessionId, true);
+  }
+  return 'expired';
+};
+
 /** One move, from `run()` on: what it moves where, fixed when it starts (never read back from the instance). */
 type Move = {
   ref: ChatRef;
@@ -110,6 +299,8 @@ type Move = {
   /** The folder the owner picked (Browse…); else the target's choice. */
   picked: string | null;
   exportId: string;
+  /** When the move began: just before `move.exportBegin` (for `move.markMoved`). */
+  begunAt: number;
   /** `before` the commit was sent (it may be abandoned), `committing`, `after` it succeeded. */
   phase: 'before' | 'committing' | 'after';
   /** `move.exportBegin` was sent (an abort must unlock the chat). */
@@ -122,11 +313,20 @@ export class MoveChat {
   state = $state<MoveState>('idle');
   check = $state<MoveCheck | null>(null);
   problem = $state<string | null>(null);
-  /** The target has the chat but the source still lists its old copy (`markMoved` failed, R2). */
-  oldCopyShown = $state(false);
 
   /** The phase of the move in flight (null: none), for `cancellable`. */
   private phaseNow = $state<Move['phase'] | null>(null);
+
+  /**
+   * The target has the chat but the source still lists its old copy
+   * (`markMoved` failed, R2). Kept in the app (`pendingMarks`): the chat on
+   * the target says so too, and a Retry there clears it here.
+   */
+  get oldCopyShown(): boolean {
+    const move = this.lastMove;
+    if (!move || move.phase !== 'after') return false;
+    return chatKey(this.thereOf(move)) in this.app.interaction.pendingMarks;
+  }
 
   /** The move in flight can still be given up (`abandon`): its commit was not sent yet. */
   get cancellable(): boolean {
@@ -140,14 +340,14 @@ export class MoveChat {
   /** The move in flight. */
   private running: Move | null = null;
   /** The last move (for `retryMarkMoved` and `sendNoteAgain`). */
-  private last: Move | null = null;
+  private lastMove = $state.raw<Move | null>(null);
   private readonly retryMs: number;
 
   constructor(
     private readonly app: MoveApp,
     o: MoveOptions = {},
   ) {
-    this.retryMs = o.retryMs ?? 1_000;
+    this.retryMs = o.retryMs ?? RETRY_MS;
   }
 
   /** Runs the checks: `move.check` on the source, and `move.target` when the target is on. */
@@ -157,13 +357,15 @@ export class MoveChat {
     this.prepared = { ref, targetId: target, folder: folder ?? null };
     this.check = null;
     this.problem = null;
-    this.oldCopyShown = false;
+    this.lastMove = null;
     this.state = 'checking';
     try {
-      // A target known to be too old is refused before anything is asked.
-      const m = this.app.machines.get(target);
-      if (m?.info && !supportsMove(m)) {
-        return this.fail(`Update ${this.nameOf(target)} to move chats there`);
+      // A machine known to be too old, either end, is refused before anything is asked.
+      for (const id of [ref.machineId, target]) {
+        const m = this.app.machines.get(id);
+        if (m?.info && !supportsMove(m)) {
+          return this.fail(`Update ${this.nameOf(id)} to move chats there`);
+        }
       }
       const source = await this.api(ref.machineId).request('move.check', {
         sessionId: ref.sessionId,
@@ -205,6 +407,7 @@ export class MoveChat {
       check,
       picked: prepared.folder,
       exportId: crypto.randomUUID(),
+      begunAt: 0,
       phase: 'before',
       begun: false,
       cancelled: false,
@@ -214,9 +417,8 @@ export class MoveChat {
     this.busy = true;
     this.running = move;
     this.phaseNow = 'before';
-    this.last = move;
+    this.lastMove = move;
     this.problem = null;
-    this.oldCopyShown = false;
     this.state = this.isOn(targetId) ? 'moving' : 'starting';
     try {
       await this.carry(move);
@@ -244,21 +446,18 @@ export class MoveChat {
     this.fail('Move cancelled');
   };
 
-  /** Tries `markMoved` again after it failed (the old copy was still shown). */
+  /**
+   * Tries `markMoved` again after it failed (the old copy was still shown).
+   * EXPIRED: the chat stays on the source after all, its tab, scheduled sends
+   * and draft with it (`retryOldCopy`).
+   */
   retryMarkMoved = async (): Promise<void> => {
-    const move = this.last;
+    const move = this.lastMove;
     if (this.busy || !move || !this.oldCopyShown) return;
     this.busy = true;
     try {
-      const marked = await this.markMoved(move);
-      if (marked === 'failed') return;
-      this.oldCopyShown = false;
-      if (marked === 'expired') {
-        // The chat stays on the source after all: its tab goes back there.
-        const there = { machineId: move.targetId, sessionId: move.ref.sessionId };
-        this.app.tabs.retarget(there, move.ref);
-        this.expired(move);
-      }
+      const marked = await retryOldCopy(this.app, this.thereOf(move), { retryMs: this.retryMs });
+      if (marked === 'expired') this.expired(move);
     } finally {
       this.busy = false;
     }
@@ -266,7 +465,7 @@ export class MoveChat {
 
   /** Sends the first note on the target again, after it failed. */
   sendNoteAgain = async (): Promise<void> => {
-    const move = this.last;
+    const move = this.lastMove;
     if (this.busy || !move || this.state !== 'noting') return;
     this.busy = true;
     try {
@@ -321,6 +520,7 @@ export class MoveChat {
       folder = move.picked ?? there.folder;
       // 3–5. The export, part by part into the import, then the commit. Each
       // call is idempotent: a lost answer is asked again with the same ids.
+      move.begunAt = Date.now();
       move.begun = true;
       const begun = await this.again(move, ref.machineId, () =>
         source.request('move.exportBegin', { sessionId: ref.sessionId, exportId }),
@@ -357,14 +557,24 @@ export class MoveChat {
     }
 
     // 7. The old copy on the source is hidden. Before the scheduled sends: a
-    // chat that went on there (EXPIRED) stays, its sends with it.
-    const marked = await this.markMoved(move);
+    // chat that went on there (EXPIRED) stays, its sends with it. One that
+    // fails is kept in the app (`pendingMarks`) for Retry, dialog or not.
+    const mark = {
+      source: ref.machineId,
+      exportId,
+      begunAt: move.begunAt,
+      to: this.peer(targetId),
+      problem: null,
+    };
+    const marked = await markOldCopy(this.app, this.thereOf(move), mark, {
+      retryMs: this.retryMs,
+    });
     if (marked === 'expired') return this.expired(move);
-    this.oldCopyShown = marked === 'failed';
 
     // 6. Scheduled sends follow the chat (R7); 8. so does the draft.
-    await this.moveScheduled(move);
-    await this.copyDraft(move);
+    const target = this.api(targetId);
+    await carrySends(source, target, ref.sessionId, this.retryMs);
+    await carryDraft(source, target, ref.sessionId, false);
     // 9. The tab follows it.
     this.app.tabs.retarget(ref, { machineId: targetId, sessionId: ref.sessionId });
     // 10. Claude's first note (R4).
@@ -488,115 +698,23 @@ export class MoveChat {
     }
   };
 
-  /** Waits until machine `id` is on, at most `ms`; false when it did not come. */
-  private waitOn = async (move: Move, id: string, ms: number): Promise<boolean> => {
-    const deadline = Date.now() + ms;
-    for (;;) {
-      this.alive(move);
-      if (this.isOn(id)) return true;
-      if (Date.now() >= deadline) return false;
-      await pause(ON_POLL_MS);
-    }
-  };
+  /** Waits until machine `id` is on, at most `ms` (false: it did not come); a given-up move stops it. */
+  private waitOn = (move: Move, id: string, ms: number): Promise<boolean> =>
+    waitUntilOn(this.waiting(move), id, ms);
 
-  /**
-   * An idempotent call on machine `machineId`: a lost answer is asked again
-   * (up to `TRIES` times) once the machine is on again (at most `RECONNECT_WAIT_MS`).
-   */
-  private again = async <T>(move: Move, machineId: string, call: () => Promise<T>): Promise<T> => {
-    for (let i = 1; ; i++) {
-      try {
-        const answer = await call();
-        this.alive(move);
-        return answer;
-      } catch (e) {
-        if (e instanceof Cancelled || i >= TRIES || !lost(e)) throw e;
-        await pause(this.retryMs);
-        if (!(await this.waitOn(move, machineId, RECONNECT_WAIT_MS))) throw e;
-      }
-    }
-  };
+  /** An idempotent call of this move on machine `machineId` (`retryLost`). */
+  private again = <T>(move: Move, machineId: string, call: () => Promise<T>): Promise<T> =>
+    retryLost(this.waiting(move), machineId, call);
 
-  /** `call`, tried up to `TRIES` times while it fails with an error `retry` accepts. */
-  private tried = async <T>(call: () => Promise<T>, retry: (e: unknown) => boolean): Promise<T> => {
-    for (let i = 1; ; i++) {
-      try {
-        return await call();
-      } catch (e) {
-        if (i >= TRIES || !retry(e)) throw e;
-        await pause(this.retryMs);
-      }
-    }
-  };
+  private waiting = (move: Move): Waiting => ({
+    machines: this.app.machines,
+    retryMs: this.retryMs,
+    alive: () => this.alive(move),
+  });
 
-  /** `markMoved`, tried `TRIES` times; `expired` when the chat went on on the source. */
-  private markMoved = async (move: Move): Promise<'done' | 'expired' | 'failed'> => {
-    const params = { exportId: move.exportId, to: this.peer(move.targetId) };
-    try {
-      await this.tried(
-        () => move.source.request('move.markMoved', params),
-        (e) => !isExpired(e),
-      );
-      return 'done';
-    } catch (e) {
-      return isExpired(e) ? 'expired' : 'failed';
-    }
-  };
-
-  /**
-   * The chat's pending scheduled sends, re-created on the target with the same
-   * id (R7): one waiting for the limit reset follows the target's own reset, a
-   * timed one keeps its time. Each ends up in one place: one the target did
-   * not take stays on the source, and one the source would not cancel is
-   * cancelled on the target again (only if that fails too is it in both).
-   */
-  private moveScheduled = async (move: Move): Promise<void> => {
-    const { ref, source } = move;
-    const target = this.api(move.targetId);
-    let items: Result<'scheduled.list'>['items'];
-    try {
-      ({ items } = await source.request('scheduled.list', { sessionId: ref.sessionId }));
-    } catch {
-      return;
-    }
-    for (const s of items) {
-      if (s.state !== 'pending') continue;
-      try {
-        const images =
-          s.imageCount > 0
-            ? (await source.request('scheduled.get', { id: s.id })).images
-            : undefined;
-        await target.request('scheduled.create', {
-          sessionId: ref.sessionId,
-          id: s.id,
-          text: s.text,
-          ...(images ? { images } : {}),
-          ...(s.afterLimitReset ? { whenLimitResets: true as const } : { sendAt: s.sendAt }),
-        });
-      } catch {
-        continue; // Not taken by the target: it stays on the source.
-      }
-      try {
-        await this.tried(
-          () => source.request('scheduled.cancel', { id: s.id }),
-          () => true,
-        );
-      } catch {
-        await target.request('scheduled.cancel', { id: s.id }).catch(() => {});
-      }
-    }
-  };
-
-  /** The composer's unsent text follows the chat. */
-  private copyDraft = async (move: Move): Promise<void> => {
-    const { ref } = move;
-    try {
-      const { text } = await move.source.request('drafts.get', { key: ref.sessionId });
-      if (text) {
-        await this.api(move.targetId).request('drafts.set', { key: ref.sessionId, text });
-      }
-    } catch {
-      // A draft is a convenience; the move is done without it.
-    }
-  };
+  /** The moved chat on its new machine. */
+  private thereOf = (move: Move): ChatRef => ({
+    machineId: move.targetId,
+    sessionId: move.ref.sessionId,
+  });
 }

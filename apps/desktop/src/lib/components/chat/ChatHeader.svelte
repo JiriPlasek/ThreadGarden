@@ -19,6 +19,7 @@
   import ProjectIcon from '#lib/components/layout/ProjectIcon.svelte';
   import StatusIcon from '#lib/components/layout/StatusIcon.svelte';
   import { copyText } from '#lib/native.js';
+  import { supportsMove } from '#lib/projects.js';
   import { shortcut } from '#lib/shortcuts.js';
   import { taskRunning, type ChatState } from '#lib/state/chats.svelte.js';
   import { useApp, useScope } from '#lib/state/context.js';
@@ -36,7 +37,8 @@
    * shows or hides the Activity panel (Ctrl/Cmd+., handled by ChatView). The
    * "Chat state" menu moves the chat between Active, On hold and Archived; an
    * on-hold chat shows until when and its note (v1.2 §3). With more than one
-   * machine it also offers Move to… (move-chat §3), except on a moved-away copy.
+   * machine it also offers Move to… (move-chat §3), except on a moved-away copy
+   * or when the chat's own machine's service can't move chats.
    */
   let {
     chat,
@@ -263,7 +265,7 @@
                 <ArchiveIcon /> Archive
               </DropdownMenu.Item>
             {/if}
-            {#if machines.several && !chat.movedTo}
+            {#if machines.several && !chat.movedTo && supportsMove(machines.get(machineId))}
               <DropdownMenu.Separator />
               <DropdownMenu.Item
                 class="py-1 text-xs"

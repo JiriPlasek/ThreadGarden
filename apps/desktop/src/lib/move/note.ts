@@ -36,8 +36,9 @@ export function moveNote(o: MoveNoteInput): string {
       `The repo is ${o.origin}, and the chat was on ${branch}.`,
       '',
       'Get the repo ready now:',
-      '1. If the folder is missing, clone the repo into it.',
-      `2. Fetch, then check out ${o.branch ? `\`${o.branch}\`` : 'that branch'}.`,
+      // Threadgarden made the folder when it was missing (Claude Code starts in it): empty.
+      `1. If the folder is empty, clone the repo into it: \`git clone ${o.origin} .\`; otherwise, fetch.`,
+      `2. Check out ${o.branch ? `\`${o.branch}\`` : 'that branch'}.`,
       '',
       'Never stash, reset, overwrite or switch a working copy that has uncommitted changes, or one that other chats use. If that is the case here, stop and ask the owner what to do.',
     );
