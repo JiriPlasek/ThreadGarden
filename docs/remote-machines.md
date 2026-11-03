@@ -29,8 +29,8 @@ do the steps once, over SSH; after that everything happens in Threadgarden.
 - A chat can move from This PC to the Ubuntu PC and back, with its whole
   conversation: see [Moving a chat](#moving-a-chat).
 - Not yet: showing a machine's chats while it is off (an Off machine's group
-  says "Its chats appear once it's on."). Analytics and the usage meter show
-  This PC only for now.
+  says "Its chats appear once it's on."). The usage meter shows each
+  account's usage, the Ubuntu PC's too; Analytics shows This PC only for now.
 
 > **Status of the installer.** `install.sh` has so far only been tested in
 > CI (on GitHub's Ubuntu runner, with stand-ins for `systemctl`, `loginctl`
@@ -349,8 +349,10 @@ header, in the chat row's right-click menu, or with Ctrl+K. The dialog shows:
   first, then a clean one no chat is running in). Otherwise it is
   `<Create in>/<repo name>`, with Create in as New project remembers it
   (`~/threadgarden/projects` the first time on the Ubuntu PC); the folder
-  doesn't exist yet and Claude clones into it. **Browse…** picks another
-  folder; it needs the machine on.
+  doesn't exist yet: Threadgarden creates the chat's empty folder (Claude Code
+  starts in it) and Claude clones into it. **Browse…** picks another folder;
+  it needs the machine on. A chat whose own machine is on an older
+  Threadgarden offers no Move to….
 
 **The checks**, in this order:
 
@@ -358,7 +360,8 @@ header, in the chat row's right-click menu, or with Ctrl+K. The dialog shows:
    answer to a permission prompt or a question, or with background agents
    running can't move: moving would cut them off. **Stop the chat** stops it
    (for background agents it ends the chat's process, like End session), or
-   wait; then **Check again**.
+   wait; then **Check again**. A chat open in Claude Code in a terminal says
+   "This chat is running in a terminal": exit it there, then Check again.
 2. **The project is clean** on the machine the chat is on: no uncommitted
    changes (untracked files count, unless git ignores them) and no commits
    that aren't pushed. If it isn't, the dialog lists what would stay behind,
@@ -399,8 +402,8 @@ worktrees for a move: that is Claude's work in the chat.
 - **Claude's first note:** Threadgarden sends one message in the chat there,
   starting `[Threadgarden] This chat moved from This PC to kumbal-machine.`,
   shown with a small **Sent by Threadgarden** label. It tells Claude the
-  folder, the repo and the branch, to clone the repo if it is missing and
-  check out the branch, and never to stash, reset, overwrite or switch a
+  folder, the repo and the branch, to clone the repo into the folder if it is
+  empty (else fetch) and check out the branch, and never to stash, reset, overwrite or switch a
   working copy that has changes or that other chats use: Claude stops and
   asks you instead. Claude acts on it at once, so the repo is ready when you
   look again (it uses one turn of that machine's limits). If the note
@@ -423,7 +426,10 @@ If something goes wrong:
 - A move that fails before it is done leaves the chat where it was, unchanged
   and usable, with the reason in the dialog.
 - "The old copy on ‹machine› is still shown": the move is done, but the first
-  machine didn't hide its copy yet. Click **Retry**.
+  machine didn't hide its copy yet. Click **Retry**, in the dialog or, once it
+  is closed, in the chat on its new machine.
+- "This chat is already on ‹machine›": that machine has the chat already (it
+  lives there, or is a chat of its own there), so the move stored nothing.
 - "The move took too long and ‹machine› went on with this chat, so it stays
   there.": the first machine let go of the chat after 10 minutes and it was
   used there meanwhile, so the move didn't happen. The copy on the other
@@ -431,7 +437,7 @@ If something goes wrong:
 - "The move may have reached ‹machine›; check there before moving again.":
   the connection dropped at the last step. Look on that machine first.
 - While a chat is being moved, sending a message to it is refused ("This chat
-  is being moved to another machine").
+  is being moved to another machine"), and its scheduled messages wait.
 
 **Good to know:**
 

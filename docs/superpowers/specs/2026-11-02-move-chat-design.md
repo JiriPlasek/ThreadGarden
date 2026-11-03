@@ -45,7 +45,7 @@ The owner works with chats on two machines: This PC (Windows) and the Ubuntu PC 
 
 **The folder there** *(designer's call)*:
 - If the target already has a project whose `origin` matches the chat's project, the chat uses that folder. This is the same matching as Clone's "on This PC" mark.
-- Otherwise it uses `<Create in>/<repo name>`, where Create in is the place New chat remembers for that machine. The folder doesn't exist yet; Claude clones into it. Threadgarden creates the empty parent folder if it is missing, the same folder making New project already does.
+- Otherwise it uses `<Create in>/<repo name>`, where Create in is the place New chat remembers for that machine. The folder doesn't exist yet; Claude clones into it. Threadgarden creates the chat's empty folder if it is missing (Claude Code starts in it), the same folder making New project already does.
 - If the target has several folders of that repo (a clone and its worktrees), it prefers the one that has the chat's branch checked out. Next comes a clean one with no live chat. *(designer's call)*
 - **The chat's branch** is the branch checked out in the chat's folder on the source at the time of the move. Check 2 inspects that branch. *(designer's call)*
 - The dialog shows the chosen folder and lets the owner change it with the same Browse… as New chat.

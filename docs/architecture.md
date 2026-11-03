@@ -246,7 +246,7 @@ service and the UI; the service validates every request.
   Protocol 9 adds `move.check`, `.target`, `.exportBegin`, `.exportPart`,
   `.abort`, `.importPart`, `.commit` and `.markMoved`, `movedTo` on
   `chat.open`, an optional `id` on `scheduled.create`, and the error codes
-  `MOVING`, `MOVED`, `BUSY`, `TOO_LARGE` and `EXPIRED`
+  `MOVING`, `MOVED`, `BUSY`, `TOO_LARGE`, `EXPIRED` and `ALREADY_HERE`
   ([Moving a chat](#moving-a-chat)).
 - **Local-only methods** (v1.4). Every request is dispatched with its
   origin, `local` (the loopback server) or `remote` (the TLS listener), and
@@ -865,15 +865,19 @@ read-only: "Moved to ‹machine› — this copy is read-only." with **Open it o
 it is never touched: Threadgarden hides it. A chat that comes back to a
 machine holding its away copy becomes `here` again, its store replaced by the
 returning entries, so the owner sees one chat with the whole history (the
-stale local transcript stays, untouched and shadowed). Forking a `here` chat
-is refused (`forkSession` reads a local transcript).
+stale local transcript stays, untouched and shadowed). An away chat whose
+copy here is in the store (it lived here in the store, then moved on) is read
+from the store and stays indexed, so `chat.open` still shows it. Forking a
+`here` chat is refused (`forkSession` reads a local transcript).
 
 **Before anything moves** (`move.check` on the source, `move.target` on the
 target, both read-only):
 - **Busy:** a live chat mid-turn (`turn`), waiting on a permission prompt or a
   question (`prompt`), or with background tasks running (`subagents`) can't
   move. The dialog offers Stop the chat: the turn's stop, or for background
-  agents `chat.end`, which ends the chat's process.
+  agents `chat.end`, which ends the chat's process. A chat Threadgarden does
+  not run that resume safety finds running in another Claude Code process
+  (`terminal`) can't move either: "This chat is running in a terminal".
 - **Git** (`move/git-state.ts`) runs only `rev-parse`, `symbolic-ref`,
   `config --get remote.origin.url`, `status --porcelain`, `rev-list` and
   `for-each-ref`. A missing folder or one outside a work tree is `notRepo`;
@@ -906,38 +910,54 @@ which talks to both services; neither service calls the other.
    parts); a chat over 512 MiB answers `TOO_LARGE`.
 2. `move.exportPart` from the source, `move.importPart` into the target, part
    by part (the target holds open imports for 10 minutes, 512 MiB at most).
-3. `move.commit {importId, sessionId, cwd, from}` on the target makes the
-   folder's missing parent (never `cwd` itself: Claude clones into it, and
-   never inside Claude Code's config dir), ends any process it had for the
-   chat, stores the entries as the chat's whole history, marks it `here`,
-   indexes it and answers its summary. **From here the move is done**; any
+3. `move.commit {importId, sessionId, cwd, from}` on the target takes the
+   chat only if the target has no copy of it or holds it `away`; one that
+   lives here, or a local chat here that never moved away, answers
+   `ALREADY_HERE` ("This chat is already on ‹target›") and nothing is stored,
+   so a duplicate import can never delete newer history. It creates the
+   chat's folder, empty, when it is missing (Claude Code starts in it; Claude
+   then clones the repo into it), never touches an existing one and never
+   makes one inside Claude Code's config dir. It ends any process it had for
+   the chat, stores the entries as the chat's whole history, marks it `here`
+   and answers its summary once indexed (waiting at most 5 seconds for a busy
+   index queue; `summary` is null past that, and the chat is listed once it
+   is indexed). **From here the move is done**; any
    failure before it leaves the chat where it was, and the desktop sends
    `move.abort` to unlock it. The transfer calls are idempotent: the desktop
    asks again with the same ids after a lost answer (three tries, waiting up
    to 2 minutes each for the machine to be On again). If the commit's answer
    never comes, the dialog says "The move may have reached ‹target›; check
    there before moving again."
-4. `move.markMoved {exportId, to}` on the source marks the chat `away`, ends
-   its process there and unlocks it. It still works after the 10-minute lock
-   ran out (the export is remembered for an hour), unless the chat went on on
-   the source meanwhile: then it answers `EXPIRED`, the chat stays on the
-   source (its tab goes back there) and the desktop says "The move took too
-   long and ‹source› went on with this chat, so it stays there. The copy on
-   ‹target› is left as it was." A markMoved that keeps failing leaves "The
-   old copy on ‹source› is still shown" with Retry. A lock nobody ends lets go
-   after 10 minutes.
+4. `move.markMoved {exportId, sessionId, begunAt, to}` on the source marks
+   the chat `away`, ends its process there and unlocks it. `begunAt` is when
+   the desktop began the move, so it works without the source's memory of the
+   export: after the 10-minute lock ran out, past the hour, or after a
+   restart. A chat that came back to the source since (its last commit there
+   is after `begunAt`) is left as it is (`{}`). One that went on on the source
+   after the lock ran out answers `EXPIRED`: the chat stays on the source (its
+   tab goes back there) and the desktop says "The move took too long and
+   ‹source› went on with this chat, so it stays there. The copy on ‹target› is
+   left as it was." A lost answer is asked again once the source is back (as
+   in step 3). A markMoved that still fails is kept in the app (by the chat on
+   the target): the dialog and the chat there both say "The old copy on
+   ‹source› is still shown" with Retry, so closing the dialog loses nothing.
+   A Retry that answers `EXPIRED` also brings the scheduled sends and the
+   draft back to the source. A lock nobody ends lets go after 10 minutes.
 5. The chat's pending **scheduled sends** are re-created on the target with
-   the same id (`scheduled.create` with that `id` again changes nothing), then
+   the same id (`scheduled.create` with that `id` again returns it unchanged,
+   or makes a failed one pending again with the new text and time), then
    cancelled on the source: one waiting for the limit reset follows the
-   target's own reset, a timed one keeps its time. The **draft** follows too.
+   target's own reset, a timed one keeps its time. While a chat is locked or
+   away, its sends stay pending on the source rather than fire into it. The
+   **draft** follows too.
    Threadgarden's other metadata (custom title, bucket, pin, hold) stays with
    the old copy.
 6. The **tab** follows the chat to the target.
 7. **Claude's first note:** one user message sent in the chat on the target,
    whose first line is `[Threadgarden] This chat moved from ‹source› to
    ‹target›.` (`move/note.ts`). It names the folder, the repo and the branch,
-   asks Claude to clone the repo if the folder is missing and then fetch and
-   check out the branch, never to stash, reset, overwrite or switch a working
+   asks Claude to clone the repo into the folder if it is empty (`git clone
+   ‹origin› .`), else fetch, and then check out the branch, never to stash, reset, overwrite or switch a working
    copy with changes or one other chats use (stop and ask instead), and says
    what Move anyway left behind. The chat shows it with a small **Sent by
    Threadgarden** label and no Fork. If it fails to send, the chat on the
@@ -945,8 +965,8 @@ which talks to both services; neither service calls the other.
 
 Threadgarden runs no git that writes for a move (no clone, fetch, checkout,
 push, stash or worktree): getting the repo ready is Claude's work in the
-chat. Its only filesystem write besides its data dir is the parent folder in
-step 3. Tests and the mock service inject the git reads (`moveGit` in
+chat. Its only filesystem write besides its data dir is the chat's empty
+folder in step 3. Tests and the mock service inject the git reads (`moveGit` in
 `startService`) and the folder check (`folderStat`).
 
 ## Security model
@@ -1023,7 +1043,8 @@ step 3. Tests and the mock service inject the git reads (`moveGit` in
   and runs `git init` or `git clone` in them (New project, Clone), and never
   changes or removes a folder it did not make. `gh` and git never prompt, and
   no GitHub token is stored. A move ([Moving a chat](#moving-a-chat)) only
-  reads git, and makes at most the missing parent of the chat's new folder.
+  reads git, and makes at most the chat's new folder, empty, when it is
+  missing.
 - **Moved chats** live in Threadgarden's own data dir (`threadgarden.db`) on
   the machine they moved to. On the way a transcript passes through the
   desktop: over loopback for This PC's service, over the pinned TLS link for
