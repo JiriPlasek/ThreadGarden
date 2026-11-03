@@ -46,6 +46,7 @@ import type {
   SDKMessage,
   SlashCommand,
   SDKUserMessage,
+  SessionStore,
   StartOptions,
 } from '../sdk/adapter.js';
 import { startupFailureMessage, type StartupFailureMessage } from '../sdk/startup-failure.js';
@@ -154,6 +155,8 @@ export type LiveSessionOptions = LiveSessionDeps &
     sessionId?: string;
     /** An earlier instance's log, so sequence numbers continue across a resume. */
     log?: EventLog;
+    /** For `resume`: the store a chat moved here lives in (`move/store.ts`). */
+    sessionStore?: SessionStore;
   };
 
 export type LiveSnapshot = {
@@ -315,7 +318,10 @@ export class LiveSession {
     const s = new LiveSession(opts);
     s.id = sessionId;
     s.dir = cwd;
-    s.startProcess({ resume: sessionId });
+    s.startProcess({
+      resume: sessionId,
+      ...(opts.sessionStore === undefined ? {} : { sessionStore: opts.sessionStore }),
+    });
     s.setStatus('idle');
     return s;
   }
@@ -631,7 +637,7 @@ export class LiveSession {
 
   // ── process ─────────────────────────────────────────────────────────────
 
-  private startProcess(extra: Pick<StartOptions, 'sessionId' | 'resume'>): void {
+  private startProcess(extra: Pick<StartOptions, 'sessionId' | 'resume' | 'sessionStore'>): void {
     const { adapter, claudePath, env } = this.deps;
     const session = adapter.start({
       cwd: this.dir,

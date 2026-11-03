@@ -36,6 +36,7 @@ import { createQuickSearch } from './history/search.js';
 import { watchProjects } from './history/watcher.js';
 import { createLogger, type Logger } from './logger.js';
 import { DB_FILE, migrateDataDir } from './migrate-data-dir.js';
+import { ChatStore } from './move/store.js';
 import type { AgentAdapter } from './sdk/adapter.js';
 import type { ClaudeFound, ClaudeProblem } from './sdk/claude-path.js';
 import { buildSessionEnv } from './sdk/real-adapter.js';
@@ -635,6 +636,12 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       usageTracker.autoRefresh(() => sessionHost.usageReader());
 
       const catalogRef: { current?: Catalog } = {};
+      // Chats moved here live in Threadgarden's own store. Every history read
+      // of a session (index, chat view, resume) goes through `historyOf`.
+      const chatStore = new ChatStore(opened, (id) => {
+        void index.refresh([id]).catch((err: unknown) => log.error(`refresh: ${String(err)}`));
+      });
+      const historyOf = (id: string) => chatStore.historyOf(id);
       const index = new Indexer(
         adapter,
         opened,
@@ -654,6 +661,8 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
             const s = sessionHost.get(id);
             return s !== undefined && s.live && s.status !== 'idle';
           },
+          historyOf,
+          storeBacked: () => chatStore.here().map((c) => c.sessionId),
         },
       );
       indexer = index;
@@ -753,6 +762,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         located: whenLocated,
         apiKeyMissing: () => opts.apiKeyOnly === true && apiKey === null,
         resumeCheck,
+        historyOf,
         indexNow: (ids) => index.refresh(ids),
         ...(opts.historyCacheChars === undefined
           ? {}

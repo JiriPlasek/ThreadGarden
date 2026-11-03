@@ -36,6 +36,7 @@ import type { Db } from '../../history/db.js';
 import type {
   AgentAdapter,
   Effort,
+  HistoryOptions,
   ModelInfo,
   PermissionMode,
   SlashCommand,
@@ -80,6 +81,11 @@ export type ChatHandlerDeps = {
    */
   apiKeyMissing?: () => boolean;
   resumeCheck: (sessionId: string) => Promise<ResumeCheck>;
+  /**
+   * Where a chat's history is read and resumed from: Threadgarden's store for a
+   * chat moved here, else Claude Code's local transcripts (default).
+   */
+  historyOf?: (sessionId: string) => HistoryOptions;
   /**
    * Indexes sessions now: a fork Threadgarden just made, so it can be opened at
    * once, and a chat that ends (its index may have waited for its turn).
@@ -195,6 +201,7 @@ export type ChatHandlers = {
 
 export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): ChatHandlers => {
   const { host, adapter, db, catalog } = deps;
+  const historyOf = deps.historyOf ?? ((): HistoryOptions => ({}));
   const historyCache = new Map<string, CacheEntry>();
   const cacheBudget = deps.historyCacheChars ?? HISTORY_CACHE_CHARS;
   let cachedChars = 0;
@@ -293,7 +300,7 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
       historyCache.set(sessionId, hit);
       return hit.items;
     }
-    const messages = await adapter.getSessionMessages(sessionId);
+    const messages = await adapter.getSessionMessages(sessionId, historyOf(sessionId));
     const normalizer = new Normalizer();
     const byId = new Map<string, ChatItem>();
     for (const m of messages) for (const item of normalizer.push(m).items) byId.set(item.id, item);
@@ -409,17 +416,23 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
     let s = host.get(p.sessionId);
     if (!s?.live) {
       await requireRunnable();
+      const history = historyOf(p.sessionId);
       const cwd =
         s?.cwd ??
+        history.dir ??
         db.getSession(p.sessionId)?.cwd ??
-        (await adapter.getSessionInfo(p.sessionId))?.cwd;
+        (await adapter.getSessionInfo(p.sessionId, history))?.cwd;
       if (!cwd) throw new ServiceError('NOT_FOUND', `Unknown chat ${p.sessionId}`);
       // §4.4: never continue a session another process is running. `unverified`
       // is allowed; the UI asked the user to confirm before sending.
       const check = await deps.resumeCheck(p.sessionId);
       if (check.status === 'blocked') throw new ServiceError('RESUME_BLOCKED', check.reason);
       forget(p.sessionId); // the resumed process's view starts from a fresh read
-      s = host.ensureLive(p.sessionId, cwd);
+      s = host.ensureLive(
+        p.sessionId,
+        cwd,
+        history.sessionStore === undefined ? {} : { sessionStore: history.sessionStore },
+      );
       changed([p.sessionId]);
     }
     // Nothing gets lost in the archive or on hold: a chat being sent a message
@@ -515,6 +528,10 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
   });
 
   router.register('chat.fork', async (p) => {
+    // Ruling R5: the SDK forks a local transcript; a moved chat has none here.
+    if (historyOf(p.sessionId).sessionStore !== undefined) {
+      throw new ServiceError('FORK_FAILED', 'Not available for a moved chat yet');
+    }
     const s = host.get(p.sessionId);
     const uuid = s ? s.messageUuidOf(p.upToItemId) : (p.upToItemId.split(':')[0] ?? '');
     if (!uuid) throw new ServiceError('INVALID_PARAMS', 'upToItemId must name a message');

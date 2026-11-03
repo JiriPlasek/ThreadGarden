@@ -8,6 +8,7 @@
 import type { SessionKey, SessionStore, SessionStoreEntry } from '@anthropic-ai/claude-agent-sdk';
 import type { MovePeer } from '@threadgarden/protocol';
 import type { Db, StoreRow } from '../history/db.js';
+import type { HistoryOptions } from '../sdk/adapter.js';
 
 type Entry = SessionStoreEntry;
 type KeyEntries = { subpath?: string; entries: Entry[] };
@@ -22,17 +23,21 @@ const toRows = (entries: Entry[]): StoreRow[] =>
   }));
 
 export class ChatStore {
+  private sdk: SessionStore | undefined;
+
   constructor(
     private readonly db: Db,
     private readonly onAppend: (sessionId: string) => void,
     private readonly now: () => number = Date.now,
   ) {}
 
-  /** The SDK adapter: pass it as `sessionStore`. */
+  /** The SDK adapter (always the same object): pass it as `sessionStore`. */
   sessionStore(): SessionStore {
-    return {
+    this.sdk ??= {
       append: (key: SessionKey, entries: Entry[]) => {
         this.db.storeAppend(key.sessionId, toSubpath(key.subpath), toRows(entries));
+        // The listed `mtime` follows the chat's activity.
+        this.db.touchMovedChat(key.sessionId, this.now());
         this.onAppend(key.sessionId);
         return Promise.resolve();
       },
@@ -47,6 +52,18 @@ export class ChatStore {
       listSubkeys: (key) =>
         Promise.resolve(this.db.storeSubpaths(key.sessionId).filter((s) => s !== '')),
     };
+    return this.sdk;
+  }
+
+  /**
+   * Where the history of `sessionId` is read (`AgentAdapter` options): this
+   * store, in the chat's folder here, for a chat that lives here; otherwise
+   * Claude Code's local transcripts (`{}`).
+   */
+  historyOf(sessionId: string): HistoryOptions {
+    const row = this.db.getMovedChat(sessionId);
+    if (row?.state !== 'here') return {};
+    return { ...(row.cwd === null ? {} : { dir: row.cwd }), sessionStore: this.sessionStore() };
   }
 
   /** Stores the entries of several keys of a chat in one transaction (an import). */

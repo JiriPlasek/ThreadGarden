@@ -1132,6 +1132,13 @@ export class Db implements LiveRegistry {
       .run(row.sessionId, row.state, row.cwd ?? null, row.peerMachineId, row.peerName, row.at);
   }
 
+  /** A chat that lives here had activity at `at` (its store `mtime`). */
+  touchMovedChat(sessionId: string, at: number): void {
+    this.raw
+      .prepare("UPDATE moved_chats SET at = ? WHERE session_id = ? AND state = 'here'")
+      .run(at, sessionId);
+  }
+
   // --- LiveRegistry ---------------------------------------------------------------
 
   markLive(sessionId: string, cwd: string): void {

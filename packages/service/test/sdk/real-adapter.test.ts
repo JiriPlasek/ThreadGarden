@@ -134,6 +134,20 @@ describe('RealAdapter session functions', () => {
     expect(sdk.getSessionInfo).toHaveBeenCalledWith('s1');
   });
 
+  it('reads a moved chat from its store, in its dir', async () => {
+    const { sdk, adapter } = setup();
+    const sessionStore = { append: async () => {}, load: async () => null };
+    await adapter.listSessions({ limit: 5, dir: '/work/a', sessionStore });
+    expect(sdk.listSessions).toHaveBeenCalledWith({ limit: 5, dir: '/work/a', sessionStore });
+    await adapter.getSessionMessages('s1', { dir: '/work/a', sessionStore });
+    expect(sdk.getSessionMessages).toHaveBeenCalledWith('s1', { dir: '/work/a', sessionStore });
+    await adapter.getSessionInfo('s1', { dir: '/work/a', sessionStore });
+    expect(sdk.getSessionInfo).toHaveBeenCalledWith('s1', { dir: '/work/a', sessionStore });
+    // Without a store the local history is read across all projects.
+    await adapter.getSessionMessages('s2', { dir: '/work/a' });
+    expect(sdk.getSessionMessages).toHaveBeenLastCalledWith('s2', {});
+  });
+
   it('forkSession passes upToMessageId only when given', async () => {
     const { sdk, adapter } = setup();
     await expect(adapter.forkSession('s1', { upToMessageId: 'u1' })).resolves.toEqual({

@@ -119,6 +119,23 @@ describe('ChatStore', () => {
     expect(appended).toEqual(['s1', 's2']);
   });
 
+  it('an append moves the listed mtime of a chat that lives here', async () => {
+    const { store, sdk } = make();
+    store.markHere('s1', '/work/a', { machineId: 'm1', name: 'laptop' });
+    expect(await sdk.listSessions?.('p')).toEqual([{ sessionId: 's1', mtime: 1010 }]);
+    await sdk.append(key('s1'), [user('a')]);
+    expect(await sdk.listSessions?.('p')).toEqual([{ sessionId: 's1', mtime: 1020 }]);
+  });
+
+  it('historyOf reads a chat that lives here from the store, in its folder', () => {
+    const { store, sdk } = make();
+    expect(store.historyOf('s1')).toEqual({});
+    store.markHere('s1', '/work/a', { machineId: 'm1', name: 'laptop' });
+    expect(store.historyOf('s1')).toEqual({ dir: '/work/a', sessionStore: sdk });
+    store.markAway('s1', { machineId: 'm2', name: 'ubuntu' });
+    expect(store.historyOf('s1')).toEqual({});
+  });
+
   it('survives reopening the db', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'tg-store-'));
     dirs.push(dir);
