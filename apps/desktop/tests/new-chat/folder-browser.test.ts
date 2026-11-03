@@ -115,6 +115,38 @@ describe('FolderBrowser', () => {
     expect(onPick).toHaveBeenCalledWith('/home/j');
   });
 
+  it('a start that does not exist yet opens home instead, says so, and can be made there', async () => {
+    const api = fakeApi({
+      list: vi.fn(async (p: string) => {
+        if (p === '/home/j/projects/shapez_mod') throw new Error('No such folder');
+        return listing(p === '~' ? '/home/j' : p, '/home', [
+          { name: 'projects', path: '/home/j/projects', git: false },
+        ]);
+      }),
+    });
+    const { onPick } = setup(api, '/home/j/projects/shapez_mod');
+    const box = (await screen.findByLabelText('Path')) as HTMLInputElement;
+    await waitFor(() => expect(box.value).toBe('/home/j'));
+    expect(api.list).toHaveBeenCalledWith('~');
+    expect(screen.getByText("/home/j/projects/shapez_mod doesn't exist yet")).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+    const newFolder = screen.getByRole('button', { name: 'New folder' }) as HTMLButtonElement;
+    expect(newFolder.disabled).toBe(false);
+    await userEvent.click(screen.getByRole('button', { name: 'Use this folder' }));
+    expect(onPick).toHaveBeenCalledWith('/home/j');
+  });
+
+  it('a start that does not exist, with home failing too, shows the error', async () => {
+    const api = fakeApi({
+      list: vi.fn(async () => {
+        throw new Error('Permission denied');
+      }),
+    });
+    setup(api, '/gone');
+    expect((await screen.findByRole('alert')).textContent).toContain('Permission denied');
+    expect(api.list).toHaveBeenCalledWith('~');
+  });
+
   it('a slow older load never replaces a newer one', async () => {
     const pending: Record<string, (l: FolderListing) => void> = {};
     const api = fakeApi({
