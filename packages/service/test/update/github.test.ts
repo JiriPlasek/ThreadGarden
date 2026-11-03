@@ -85,6 +85,51 @@ describe('fetchChecked', () => {
   });
 });
 
+/** A fake fetch that honours the signal like the real one: it rejects when aborted. */
+const abortable = (signal: AbortSignal | null | undefined): Promise<never> =>
+  new Promise((_, reject) => {
+    signal?.addEventListener('abort', () => reject(signal.reason));
+  });
+
+describe('timeouts', () => {
+  it('a request that never answers is UNREACHABLE after the timeout', async () => {
+    const hang: Fetch = (_url, init) => abortable(init?.signal);
+    const started = Date.now();
+    await expect(fetchChecked(LATEST, { fetch: hang }, { timeoutMs: 30 })).rejects.toMatchObject({
+      code: 'UNREACHABLE',
+    });
+    expect(Date.now() - started).toBeLessThan(2_000);
+  });
+
+  it('one budget covers the redirects too', async () => {
+    let calls = 0;
+    const slow: Fetch = async (_url, init) => {
+      if (++calls === 1) {
+        await new Promise((r) => setTimeout(r, 60));
+        return redirect('https://github.com/next');
+      }
+      return abortable(init?.signal);
+    };
+    await expect(fetchChecked(LATEST, { fetch: slow }, { timeoutMs: 100 })).rejects.toMatchObject({
+      code: 'UNREACHABLE',
+    });
+  });
+
+  it('a body that stalls is UNREACHABLE', async () => {
+    const stalls: Fetch = async (_url, init) => {
+      const signal = init?.signal;
+      const body = new ReadableStream({
+        start(controller) {
+          signal?.addEventListener('abort', () => controller.error(signal.reason));
+        },
+      });
+      return new Response(body, { status: 200 });
+    };
+    const latest = new LatestRelease({ fetch: stalls, now: () => 0, timeoutMs: 30 });
+    await expect(latest.get()).rejects.toMatchObject({ code: 'UNREACHABLE' });
+  });
+});
+
 describe('LatestRelease', () => {
   it('reads version from latest.json and caches it for 10 minutes', async () => {
     let now = 1_000;
