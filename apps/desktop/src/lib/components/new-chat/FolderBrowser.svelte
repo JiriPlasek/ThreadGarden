@@ -28,6 +28,8 @@
   let chain = $state<string[]>([]);
   let pathText = $state('');
   let error = $state<string | null>(null);
+  /** The start folder, when it didn't exist and home opened instead (a move's folder is made later). */
+  let missing = $state<string | null>(null);
   let busy = $state(false);
   let naming = $state(false);
   let newName = $state('');
@@ -42,12 +44,21 @@
   // Only the newest load may show its result; a slower, older one is dropped.
   let seq = 0;
 
-  const load = async (path: string): Promise<void> => {
+  /** `orHome`: if `path` can't be listed, open the machine's home (`~`) instead. */
+  const load = async (path: string, orHome = false): Promise<void> => {
     const mine = ++seq;
     busy = true;
     error = null;
+    missing = null;
     try {
-      const next = await api.list(path);
+      let next: FolderListing;
+      try {
+        next = await api.list(path);
+      } catch (e) {
+        if (!orHome || mine !== seq) throw e;
+        next = await api.list('~');
+        if (mine === seq) missing = path;
+      }
       if (mine !== seq) return;
       const at = chain.indexOf(next.path);
       const parentAt = next.parent === null ? -1 : chain.indexOf(next.parent);
@@ -122,7 +133,7 @@
   };
 
   $effect(() => {
-    void load(start);
+    void load(start, true);
   });
 </script>
 
@@ -211,6 +222,10 @@
       {#if nameHint}
         <p id="folder-browser-name-problem" class="text-destructive -mt-2 text-xs">{nameHint}</p>
       {/if}
+    {/if}
+
+    {#if missing}
+      <p class="text-muted-foreground text-sm">{missing} doesn't exist yet</p>
     {/if}
 
     {#if error}
