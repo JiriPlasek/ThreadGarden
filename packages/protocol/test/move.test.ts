@@ -69,8 +69,7 @@ describe('move methods', () => {
     const m = methods['move.commit'];
     const params = { importId: 'i', sessionId: 's', cwd: '/x', from: peer };
     expect(m.params.safeParse(params).success).toBe(true);
-    const { sessionId: _s, ...rest } = params;
-    expect(m.params.safeParse(rest).success).toBe(false);
+    expect(m.params.safeParse({ ...params, sessionId: undefined }).success).toBe(false);
     expect(m.result.safeParse({}).success).toBe(false);
     const summary = {
       sessionId: 's',
@@ -94,8 +93,8 @@ describe('move methods', () => {
   it.each(['move.check', 'move.exportBegin', 'move.importPart'])(
     '%s rejects params without sessionId',
     (name) => {
-      const { sessionId: _s, ...rest } = cases[name]!.params;
-      expect(methods[name as keyof typeof methods].params.safeParse(rest).success).toBe(false);
+      const without = { ...cases[name]!.params, sessionId: undefined };
+      expect(methods[name as keyof typeof methods].params.safeParse(without).success).toBe(false);
     },
   );
 
