@@ -479,17 +479,43 @@ describe('ShutdownSequence.run', () => {
       expect(r.f.timers[16]).toMatchObject({ Enable: 0 });
     });
 
-    it('the service closed while the cut is armed but before poweroff: it disarms on its way out', async () => {
-      const ref: { seq?: ShutdownSequence } = {};
+    it('the service closed while the cut is armed but before poweroff: no poweroff, and it disarms after its last arming', async () => {
+      const ref: { seq?: ShutdownSequence; closing?: Promise<void> } = {};
+      const at = Date.now() + 3 * 60 * MIN;
       const r = await rig({
-        onStopAll: async () => {
-          await ref.seq?.close();
+        sends: [{ sendAt: at, state: 'pending' }],
+        onStopAll: () => {
+          ref.closing = ref.seq?.close();
         },
       });
       ref.seq = r.seq;
       await r.seq.run({ force: false, reason: 'manual' });
+      await ref.closing;
+      expect(r.order).not.toContain('poweroff');
       const c = r.f.commands;
-      expect(c.lastIndexOf('Event tgo')).toBeGreaterThan(c.indexOf('Event tga'));
+      const lastArm = Math.max(
+        c.indexOf('Event tga'),
+        c.findIndex((x) => x.startsWith('Timer16 {"Enable":1')),
+      );
+      expect(c.lastIndexOf('Event tgo')).toBeGreaterThan(lastArm);
+      expect(c.lastIndexOf('Timer16 {"Enable":0}')).toBeGreaterThan(lastArm);
+      expect(r.f.timers[16]).toMatchObject({ Enable: 0 });
+      expect(r.retries.live()).toEqual([]);
+    });
+
+    it('the service closed during the push check: nothing is armed at all', async () => {
+      const ref: { seq?: ShutdownSequence; closing?: Promise<void> } = {};
+      const r = await rig({
+        check: async () => {
+          ref.closing = ref.seq?.close();
+          return [];
+        },
+      });
+      ref.seq = r.seq;
+      await r.seq.run({ force: false, reason: 'idle' });
+      await ref.closing;
+      expect(r.f.commands).not.toContain('Event tga');
+      expect(r.order).toEqual([]);
     });
 
     it('a refused poweroff disarms at once and leaves no watch behind', async () => {

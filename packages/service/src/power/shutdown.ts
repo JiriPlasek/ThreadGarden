@@ -220,8 +220,9 @@ export class ShutdownSequence {
   /**
    * Stops the start disarm's retries and the poweroff watch (the service is closing).
    * A shutdown under way closes the service: the cut it armed must stay armed then.
-   * A sequence that armed the cut but has not sent its poweroff yet is not one, so
-   * that cut is disarmed (one attempt: the service is on its way out).
+   * A sequence that has not sent its poweroff yet is not one: it sees `closed`, arms
+   * nothing more and disarms what it armed, after its own last switch command (see
+   * `sequence`); this waits for it.
    */
   async close(): Promise<void> {
     this.closed = true;
@@ -229,12 +230,7 @@ export class ShutdownSequence {
     this.retryHandle = null;
     if (this.graceHandle !== null) this.timers.clear(this.graceHandle);
     this.graceHandle = null;
-    const sw = this.armed;
-    this.armed = null;
-    if (sw) {
-      await sw.disarm().catch(() => {});
-      await sw.armWake(null).catch(() => {});
-    }
+    await this.inFlight?.catch(() => {});
   }
 
   /**
@@ -385,6 +381,8 @@ export class ShutdownSequence {
       );
       return this.settle({ ...RUNNING, problem });
     }
+    // The service is closing (see `close`): nothing is armed any more.
+    if (this.closed) return this.set(RUNNING);
     const sw = this.makeSwitch(stored.config, stored.password);
     try {
       // From here a failure anywhere must disarm (see `run`).
@@ -417,6 +415,16 @@ export class ShutdownSequence {
       await this.o.stopAll();
     } catch (err) {
       this.o.log?.warn(`power: stopping sessions failed: ${firstLine(err)}`);
+    }
+    // The service is closing with no poweroff sent (stopped by hand, or an update): the
+    // machine stays on, so what this sequence armed is disarmed, after its own last
+    // switch command. One attempt each: the service is on its way out.
+    if (this.closed) {
+      this.armed = null;
+      this.o.log?.info(`power: ${r.reason} shutdown stopped, the service is closing`);
+      await sw.disarm().catch(() => {});
+      await sw.armWake(null).catch(() => {});
+      return this.set(RUNNING);
     }
     // Powering off: from here the cut must stay armed, whatever happens to this process.
     this.armed = null;
