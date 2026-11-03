@@ -45,7 +45,7 @@
    */
   let { onCollapse }: { onCollapse?: () => void } = $props();
 
-  const { places, interaction, tabs, scopes, machines, power } = useApp();
+  const { places, interaction, tabs, scopes, machines, power, machineUpdates } = useApp();
   const local = scopes.local();
 
   type Group = { machine: MachineEntry | undefined; scope: MachineScope };
@@ -247,8 +247,16 @@
   <header class="flex h-9 shrink-0 items-center gap-1 pr-1.5 pl-3">
     <img src={logo} alt="" class="size-4 shrink-0" />
     <span class="flex-1 text-sm font-semibold tracking-tight">Threadgarden</span>
-    <IconButton label="Settings" onclick={() => (interaction.settingsOpen = true)}>
+    <IconButton
+      label={machineUpdates.anyBehind ? 'Settings (a machine update is available)' : 'Settings'}
+      class="relative"
+      onclick={() => (interaction.settingsOpen = true)}
+    >
       <SettingsIcon />
+      {#if machineUpdates.anyBehind}<span
+          aria-hidden="true"
+          class="absolute top-0.5 right-0.5 size-1.5 rounded-full bg-amber-500"
+        ></span>{/if}
     </IconButton>
     {#if onCollapse}
       <IconButton label="Hide places" onclick={onCollapse}><PanelLeftCloseIcon /></IconButton>

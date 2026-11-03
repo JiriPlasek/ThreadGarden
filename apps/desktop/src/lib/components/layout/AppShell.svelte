@@ -38,7 +38,7 @@
    * with = + - 0 changes the interface size; an older service shows the
    * restart banner.
    */
-  const { settings, connection, places, interaction, power } = useApp();
+  const { settings, connection, places, interaction, power, machineUpdates } = useApp();
   /** Chats waiting for you, plus one per machine whose shutdown is paused by unpushed work. */
   const needsYouCount = $derived(power.needsYouCount(places.counts.needsYou));
 
@@ -114,11 +114,18 @@
             <PanelLeftOpenIcon />
           </IconButton>
           <IconButton
-            label="Settings"
+            label={machineUpdates.anyBehind
+              ? 'Settings (a machine update is available)'
+              : 'Settings'}
             side="right"
+            class="relative"
             onclick={() => (interaction.settingsOpen = true)}
           >
             <SettingsIcon />
+            {#if machineUpdates.anyBehind}<span
+                aria-hidden="true"
+                class="absolute top-0.5 right-0.5 size-1.5 rounded-full bg-amber-500"
+              ></span>{/if}
           </IconButton>
           {#if needsYouCount > 0}
             <button

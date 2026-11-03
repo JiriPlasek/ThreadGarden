@@ -43,7 +43,7 @@ describe('Settings → Machines', () => {
     const env = await setupTwoMachines();
     const settings = await openSettings(env);
     const section = within(settings).getByRole('region', { name: 'Machines' });
-    expect(within(section).getByText('This PC')).toBeTruthy();
+    expect(within(section).getByText(/^This PC · Threadgarden /)).toBeTruthy();
     const card = within(section).getByRole('group', { name: 'Ubuntu PC' });
     expect(within(card).getByText('On')).toBeTruthy();
     expect((within(card).getByLabelText('Address') as HTMLInputElement).value).toBe('192.168.1.5');
@@ -54,7 +54,7 @@ describe('Settings → Machines', () => {
     const env = await setup();
     const settings = await openSettings(env);
     const section = within(settings).getByRole('region', { name: 'Machines' });
-    expect(within(section).getByText('This PC')).toBeTruthy();
+    expect(within(section).getByText(/^This PC · Threadgarden /)).toBeTruthy();
     expect(within(section).getByRole('button', { name: /add machine/i })).toBeTruthy();
   });
 
