@@ -231,6 +231,30 @@ const steps: string[] = [
   `
     CREATE TABLE IF NOT EXISTS machine_power (machine_id TEXT PRIMARY KEY, config TEXT NOT NULL)
   `,
+  // move a chat: Threadgarden's own Agent SDK session store (`move/store.ts`).
+  // `store_entries`: transcript entries per session and `subpath` ('' = the main
+  // transcript) in `seq` order, deduplicated by `uuid`. `moved_chats`: chats
+  // that live here ('here') or went to another machine ('away'), and the peer.
+  `
+  CREATE TABLE IF NOT EXISTS store_entries (
+    session_id TEXT NOT NULL,
+    subpath TEXT NOT NULL DEFAULT '',
+    seq INTEGER NOT NULL,
+    uuid TEXT,
+    entry TEXT NOT NULL,
+    PRIMARY KEY (session_id, subpath, seq)
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS store_entries_uuid
+    ON store_entries (session_id, subpath, uuid) WHERE uuid IS NOT NULL;
+  CREATE TABLE IF NOT EXISTS moved_chats (
+    session_id TEXT PRIMARY KEY,
+    state TEXT NOT NULL CHECK (state IN ('here', 'away')),
+    cwd TEXT,
+    peer_machine_id TEXT,
+    peer_name TEXT,
+    at INTEGER NOT NULL
+  );
+  `,
 ];
 
 /** Runs the steps not run yet; `upTo` stops early (tests build older schemas with it). */
