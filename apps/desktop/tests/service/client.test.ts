@@ -157,6 +157,19 @@ describe('ServiceClient', () => {
     expect(server.sockets.length).toBe(before); // no reconnect loop
   });
 
+  it('lastHello keeps the hello of a rejected protocol; hello stays empty', async () => {
+    server.handlers['hello'] = () => ({
+      serviceVersion: '0.9.0',
+      protocolVersion: PROTOCOL_VERSION + 1,
+    });
+    const p = client.connect('ws://127.0.0.1:1', 'tok');
+    const assertion = expect(p).rejects.toMatchObject({ code: 'INCOMPATIBLE' });
+    await vi.advanceTimersByTimeAsync(0);
+    await assertion;
+    expect(client.hello).toBeNull();
+    expect(client.lastHello?.serviceVersion).toBe('0.9.0');
+  });
+
   it('a v1.1 service (protocol 1) is incompatible: the restart screen, never broken lists', async () => {
     // v1.2 added places (active, onHold) and methods a v1.1 service rejects.
     expect(PROTOCOL_VERSION).toBeGreaterThan(1);
