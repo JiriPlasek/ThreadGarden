@@ -55,7 +55,9 @@ import {
 import { IdleMonitor } from './power/idle.js';
 import { ShutdownSequence } from './power/shutdown.js';
 import { PowerStore } from './power/store.js';
+import { registerUpdateHandlers } from './server/handlers/update.js';
 import { registerUsageHandlers } from './server/handlers/usage.js';
+import { LatestRelease, type Fetch } from './update/github.js';
 import { PowerHub } from './power/hub.js';
 import { REMOTE_PORT, startRemoteServer } from './server/remote-server.js';
 import { Router } from './server/router.js';
@@ -184,6 +186,11 @@ export type StartOptions = {
    * `bin.ts` never sets it.
    */
   pairingRandom?: (n: number) => Buffer;
+  /**
+   * Updating (protocol 10). `fetch` is how GitHub is asked for the newest
+   * release (default the global one); `latest` replaces that lookup outright.
+   */
+  update?: { fetch?: Fetch; latest?: LatestRelease };
 };
 
 /** How long shutdown waits for a running index pass to reach a stopping point. */
@@ -259,6 +266,11 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       capabilities: headless ? [...CAPABILITIES, POWER_CAPABILITY] : [...CAPABILITIES],
     };
   };
+  // The newest release needs no database, so it is there whatever else is.
+  registerUpdateHandlers(router, {
+    latest:
+      opts.update?.latest ?? new LatestRelease({ fetch: opts.update?.fetch ?? fetch, now: clock }),
+  });
   router.register('hello', async (_p, ctx) => ({
     serviceVersion: pkg.version,
     protocolVersion: PROTOCOL_VERSION,
