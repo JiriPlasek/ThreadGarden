@@ -152,8 +152,15 @@ export type MovedChatRow = {
   cwd: string | null;
   peerMachineId: string | null;
   peerName: string | null;
+  /** Its last activity (the store's `mtime`). */
   at: number;
+  /** When it last came here (`move.commit`); null when it never did. */
+  cameAt: number | null;
 };
+
+/** A moved chat with when it last came here (`moved_chat_arrivals`). */
+const MOVED_CHATS = `SELECT m.*, a.came_at FROM moved_chats m
+  LEFT JOIN moved_chat_arrivals a ON a.session_id = m.session_id`;
 
 const toMovedChat = (r: Row): MovedChatRow => ({
   sessionId: r.session_id as string,
@@ -162,6 +169,7 @@ const toMovedChat = (r: Row): MovedChatRow => ({
   peerMachineId: (r.peer_machine_id as string | null) ?? null,
   peerName: (r.peer_name as string | null) ?? null,
   at: r.at as number,
+  cameAt: (r.came_at as number | null) ?? null,
 });
 
 const toSession = (r: Row): SessionRow => ({
@@ -1112,19 +1120,19 @@ export class Db implements LiveRegistry {
   }
 
   getMovedChat(sessionId: string): MovedChatRow | undefined {
-    const r = this.raw.prepare('SELECT * FROM moved_chats WHERE session_id = ?').get(sessionId);
+    const r = this.raw.prepare(`${MOVED_CHATS} WHERE m.session_id = ?`).get(sessionId);
     return r ? toMovedChat(r) : undefined;
   }
 
   /** The moved chats in `state`, oldest first. */
   listMovedChats(state: MovedChatRow['state']): MovedChatRow[] {
     return this.raw
-      .prepare('SELECT * FROM moved_chats WHERE state = ? ORDER BY at, session_id')
+      .prepare(`${MOVED_CHATS} WHERE m.state = ? ORDER BY m.at, m.session_id`)
       .all(state)
       .map(toMovedChat);
   }
 
-  /** Sets a chat's state; the folder is kept when `cwd` is undefined. */
+  /** Sets a chat's state; the folder and `cameAt` are kept when undefined. */
   setMovedChat(row: {
     sessionId: string;
     state: MovedChatRow['state'];
@@ -1132,16 +1140,32 @@ export class Db implements LiveRegistry {
     peerMachineId: string | null;
     peerName: string | null;
     at: number;
+    cameAt?: number;
   }): void {
-    this.raw
-      .prepare(
-        `INSERT INTO moved_chats (session_id, state, cwd, peer_machine_id, peer_name, at)
-         VALUES (?, ?, ?, ?, ?, ?)
-         ON CONFLICT(session_id) DO UPDATE SET state = excluded.state,
-           cwd = COALESCE(excluded.cwd, cwd), peer_machine_id = excluded.peer_machine_id,
-           peer_name = excluded.peer_name, at = excluded.at`,
-      )
-      .run(row.sessionId, row.state, row.cwd ?? null, row.peerMachineId, row.peerName, row.at);
+    this.inTransaction(() => {
+      this.raw
+        .prepare(
+          `INSERT INTO moved_chats (session_id, state, cwd, peer_machine_id, peer_name, at)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(session_id) DO UPDATE SET state = excluded.state,
+             cwd = COALESCE(excluded.cwd, cwd), peer_machine_id = excluded.peer_machine_id,
+             peer_name = excluded.peer_name, at = excluded.at`,
+        )
+        .run(row.sessionId, row.state, row.cwd ?? null, row.peerMachineId, row.peerName, row.at);
+      if (row.cameAt !== undefined) {
+        this.raw
+          .prepare('INSERT OR REPLACE INTO moved_chat_arrivals (session_id, came_at) VALUES (?, ?)')
+          .run(row.sessionId, row.cameAt);
+      }
+    });
+  }
+
+  /** The sessions whose store holds entries. */
+  storeSessionIds(): string[] {
+    return this.raw
+      .prepare('SELECT DISTINCT session_id FROM store_entries ORDER BY session_id')
+      .all()
+      .map((r) => r.session_id as string);
   }
 
   /** Forgets that a chat moved: its row and its store entries (the mock's test reset). */
@@ -1149,6 +1173,7 @@ export class Db implements LiveRegistry {
     this.inTransaction(() => {
       this.raw.prepare('DELETE FROM store_entries WHERE session_id = ?').run(sessionId);
       this.raw.prepare('DELETE FROM moved_chats WHERE session_id = ?').run(sessionId);
+      this.raw.prepare('DELETE FROM moved_chat_arrivals WHERE session_id = ?').run(sessionId);
     });
   }
 

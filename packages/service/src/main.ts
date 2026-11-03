@@ -677,7 +677,11 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
             return s !== undefined && s.live && s.status !== 'idle';
           },
           historyOf,
-          storeBacked: () => chatStore.here().map((c) => c.sessionId),
+          // An away copy that lived here in the store stays indexed: `chat.open` shows it.
+          storeBacked: () => [
+            ...chatStore.here().map((c) => c.sessionId),
+            ...chatStore.awayInStore(),
+          ],
         },
       );
       indexer = index;
@@ -810,6 +814,8 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         index,
         release: chatHandlers.release,
         changed: (sessionIds) => emitChat({ event: 'sessions.changed', data: { sessionIds } }),
+        resumeCheck,
+        machineName: () => machineOf(opened).name,
         claudeConfigDir: claudeDir,
         now: clock,
         timers: opts.sessionTimers ?? realTimers,
@@ -830,6 +836,8 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         emit: (e) => broadcastRef.fn(e),
         send: (sessionId, text, images) => chatHandlers.send({ sessionId, text, images }),
         busy: (id) => {
+          // A chat being moved, or moved away, keeps its sends pending: they move with it.
+          if (moveLocks.isLocked(id) || chatStore.isAway(id)) return true;
           const s = sessionHost.get(id);
           return s !== undefined && s.live && IN_TURN.has(s.status);
         },

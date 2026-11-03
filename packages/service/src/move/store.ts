@@ -57,13 +57,24 @@ export class ChatStore {
 
   /**
    * Where the history of `sessionId` is read (`AgentAdapter` options): this
-   * store, in the chat's folder here, for a chat that lives here; otherwise
-   * Claude Code's local transcripts (`{}`).
+   * store, in the chat's folder here, for a chat that lives here, and for an
+   * away chat whose copy here is the store's (it lived here in the store
+   * before it moved on); otherwise Claude Code's local transcripts (`{}`).
    */
   historyOf(sessionId: string): HistoryOptions {
     const row = this.db.getMovedChat(sessionId);
-    if (row?.state !== 'here') return {};
+    if (!row) return {};
+    if (row.state === 'away' && this.db.storeSubpaths(sessionId).length === 0) return {};
     return { ...(row.cwd === null ? {} : { dir: row.cwd }), sessionStore: this.sessionStore() };
+  }
+
+  /** The away chats whose read-only copy here is in the store (no local transcript holds it). */
+  awayInStore(): string[] {
+    const stored = new Set(this.db.storeSessionIds());
+    return this.db
+      .listMovedChats('away')
+      .map((c) => c.sessionId)
+      .filter((id) => stored.has(id));
   }
 
   /** Stores the entries of several keys of a chat in one transaction (an import). */
@@ -117,13 +128,15 @@ export class ChatStore {
 
   /** The chat now lives here, in `cwd`; it came `from` that machine. */
   markHere(sessionId: string, cwd: string, from: MovePeer): void {
+    const at = this.now();
     this.db.setMovedChat({
       sessionId,
       state: 'here',
       cwd,
       peerMachineId: from.machineId,
       peerName: from.name,
-      at: this.now(),
+      at,
+      cameAt: at,
     });
   }
 

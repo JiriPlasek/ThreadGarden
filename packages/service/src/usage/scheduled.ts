@@ -169,7 +169,9 @@ export class ScheduledSends {
 
   /**
    * With an `id` already there for this chat (a move re-creating its sends),
-   * returns that send unchanged; another chat's id is refused.
+   * returns that send unchanged while it is pending or going out; a failed one
+   * (e.g. left behind by an earlier move) is made pending again with the new
+   * text and time. Another chat's id is refused.
    */
   create(
     p: {
@@ -183,7 +185,16 @@ export class ScheduledSends {
       const existing = this.deps.raw
         .prepare('SELECT * FROM scheduled_sends WHERE id = ?')
         .get(p.id) as Row | undefined;
-      if (existing?.session_id === p.sessionId) return toSend(existing);
+      if (existing?.session_id === p.sessionId) {
+        if (existing.state !== 'failed') return toSend(existing);
+        return this.update({
+          id: existing.id,
+          text: p.text,
+          images: p.images,
+          sendAt: p.sendAt,
+          whenLimitResets: p.whenLimitResets,
+        });
+      }
       if (existing) {
         throw new ServiceError('INVALID_PARAMS', 'This id is a scheduled message of another chat');
       }

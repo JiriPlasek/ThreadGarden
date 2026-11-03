@@ -13,6 +13,8 @@ export const MOVE_ERRORS = {
   tooLarge: 'TOO_LARGE',
   /** The export or import is gone (its lock ran out or it was never begun). */
   expired: 'EXPIRED',
+  /** The target holds this chat already (it lives there, or is a local chat there that never moved away). */
+  already: 'ALREADY_HERE',
 } as const;
 
 /** One transcript entry as the SDK session store holds it: any JSON with a string `type`. */
@@ -44,7 +46,8 @@ export const GitStateSchema = z.discriminatedUnion('kind', [
 ]);
 export type GitState = z.infer<typeof GitStateSchema>;
 
-export const MoveBusySchema = z.enum(['turn', 'prompt', 'subagents']);
+/** What keeps a chat from moving now; `terminal`: a Claude Code process outside Threadgarden runs it. */
+export const MoveBusySchema = z.enum(['turn', 'prompt', 'subagents', 'terminal']);
 export type MoveBusy = z.infer<typeof MoveBusySchema>;
 
 /** A machine as the moved chat names it. */

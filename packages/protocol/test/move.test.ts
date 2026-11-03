@@ -24,6 +24,19 @@ describe('protocol 9', () => {
     expect(CAPABILITIES).toContain('move');
     expect(MOVE_ERRORS.moving).toBe('MOVING');
     expect(MOVE_ERRORS.expired).toBe('EXPIRED');
+    expect(MOVE_ERRORS.already).toBe('ALREADY_HERE');
+  });
+
+  it('a chat running in a terminal is busy', () => {
+    const r = methods['move.check'].result;
+    const git = { kind: 'notRepo' };
+    expect(r.safeParse({ cwd: '/x', busy: 'terminal', git }).success).toBe(true);
+  });
+
+  it('move.markMoved names the chat and when its move began', () => {
+    const p = methods['move.markMoved'].params;
+    expect(p.safeParse({ exportId: 'e', to: peer }).success).toBe(false);
+    expect(p.parse({ exportId: 'e', sessionId: 's', begunAt: 5, to: peer }).begunAt).toBe(5);
   });
 });
 
@@ -54,7 +67,10 @@ describe('move methods', () => {
       params: { importId: 'i', sessionId: 's', index: 0, parts: 1, keys: [{ entries: [entry] }] },
       result: {},
     },
-    'move.markMoved': { params: { exportId: 'e', to: peer }, result: {} },
+    'move.markMoved': {
+      params: { exportId: 'e', sessionId: 's', begunAt: 1, to: peer },
+      result: {},
+    },
   };
 
   for (const [name, c] of Object.entries(cases)) {
@@ -84,13 +100,15 @@ describe('move methods', () => {
       external: null,
     };
     const parsed = m.result.parse({ summary });
-    expect(parsed.summary.sessionId).toBe('s');
+    expect(parsed.summary?.sessionId).toBe('s');
     expect(m.result.safeParse({ summary: { ...summary, sessionId: undefined } }).success).toBe(
       false,
     );
+    // Committed but not indexed yet (the index queue was busy): listed soon.
+    expect(m.result.parse({ summary: null }).summary).toBeNull();
   });
 
-  it.each(['move.check', 'move.exportBegin', 'move.importPart'])(
+  it.each(['move.check', 'move.exportBegin', 'move.importPart', 'move.markMoved'])(
     '%s rejects params without sessionId',
     (name) => {
       const without = { ...cases[name]!.params, sessionId: undefined };

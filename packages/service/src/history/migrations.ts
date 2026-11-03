@@ -255,6 +255,15 @@ const steps: string[] = [
     at INTEGER NOT NULL
   );
   `,
+  // move a chat: when a chat last came here (its commit). `moved_chats.at`
+  // follows its activity; this tells "it came back since the move began" from
+  // "it went on here". A table of its own: every step must be safe to run again.
+  `
+  CREATE TABLE IF NOT EXISTS moved_chat_arrivals (
+    session_id TEXT PRIMARY KEY,
+    came_at INTEGER NOT NULL
+  );
+  `,
 ];
 
 /** Runs the steps not run yet; `upTo` stops early (tests build older schemas with it). */

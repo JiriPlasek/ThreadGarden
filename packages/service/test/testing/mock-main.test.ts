@@ -454,6 +454,8 @@ describe('mock service: moving a chat (protocol 9)', () => {
     });
     await ok(here, 'move.markMoved', {
       exportId: 'export-1',
+      sessionId: id,
+      begunAt: Date.now(),
       to: { machineId: 'ubuntu', name: REMOTE_MACHINE_NAME },
     });
     // The mock makes no folder for it.

@@ -54,7 +54,8 @@
  * git runs for a move. A folder named after one of the mocks' projects
  * (`proj-N`, `tg-cli`) is a clean clone of it on `main`, wherever it is (the
  * folder a chat moved to as well, as if Claude had cloned it); any other
- * folder is not a git repo. No folder is made for a chat moved here. The
+ * folder is not a git repo. No folder is made for a chat moved here (every
+ * folder counts as existing). The
  * remote's Create in is `<temp>/projects`, so a chat moved there goes to
  * `<temp>/projects/<repo>`. Like the SDK, a chat resumed from Threadgarden's
  * store records its turns in that store only. Threadgarden's first note in

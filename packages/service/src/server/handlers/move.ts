@@ -15,13 +15,15 @@ import {
 } from '@threadgarden/protocol';
 import { realTimers, type Timers } from '../../chat/live-session.js';
 import type { SessionHost } from '../../chat/session-host.js';
+import type { ResumeCheck } from '../../external/resume-safety.js';
 import type { Db } from '../../history/db.js';
 import { gitState } from '../../move/git-state.js';
 import type { ChatStore } from '../../move/store.js';
-import { makeParentFolder } from '../../projects/folders.js';
+import { makeChatFolder } from '../../projects/folders.js';
 import { originUrlOf, repoOfUrl, type Tools } from '../../projects/github.js';
 import type { AgentAdapter, SessionStore, SessionStoreEntry } from '../../sdk/adapter.js';
 import { ServiceError, type Router } from '../router.js';
+import { END_INDEX_WAIT_MS } from './chat.js';
 
 /** A lock that nobody ended (a desktop that went away) lets go after this long. */
 export const MOVE_LOCK_MS = 10 * 60_000;
@@ -246,6 +248,12 @@ export class MoveExports {
     private readonly now: () => number,
   ) {}
 
+  /** The export locked the chat at `at` and gathers its keys (`move.abort` finds it now). */
+  started(exportId: string, sessionId: string, at: number): void {
+    this.sweep();
+    this.begun.set(exportId, { sessionId, at });
+  }
+
   /** The export is ready; `at` is when it locked the chat. */
   begin(exportId: string, sessionId: string, parts: MoveKey[][], bytes: number, at = this.now()) {
     this.sweep();
@@ -409,6 +417,10 @@ export type MoveHandlerDeps = {
   release(sessionId: string): void;
   /** Tells the clients these chats changed (`sessions.changed`). */
   changed(sessionIds: string[]): void;
+  /** Resume safety (§4.4): `blocked` is a chat a Claude Code process outside Threadgarden runs. */
+  resumeCheck(sessionId: string): Promise<ResumeCheck>;
+  /** This machine's name, as a refused commit says it. */
+  machineName(): string;
   /** Claude Code's config dir: a moved chat's folder is never made in it. */
   claudeConfigDir: string;
   now?: () => number;
@@ -420,7 +432,7 @@ export type MoveHandlerDeps = {
   target: { tools: Tools } & Pick<TargetDeps, 'createIn' | 'headless'>;
   /** Git as a move reads it (default: the real git, read-only); the mock service fakes it. */
   git?: MoveGit;
-  /** Whether a folder exists, before a moved chat's parent folder is made (default `fs.stat`). */
+  /** Whether a folder exists, before a moved chat's folder is made (default `fs.stat`). */
   folderExists?: (p: string) => Promise<boolean>;
 };
 
@@ -430,6 +442,7 @@ const BUSY_TEXT: Record<MoveBusy, string> = {
   turn: 'This chat is in the middle of a turn',
   prompt: 'This chat is waiting for an answer',
   subagents: 'This chat has background tasks running',
+  terminal: 'This chat is running in a terminal',
 };
 
 /**
@@ -499,11 +512,22 @@ export const registerMoveHandlers = (
       .map(([subpath, entries]) => (subpath === '' ? { entries } : { subpath, entries }));
   };
 
+  /**
+   * What keeps the chat from moving now: Threadgarden's own process of it, or
+   * (when Threadgarden runs none) a Claude Code process in a terminal.
+   */
+  const busyNow = async (sessionId: string): Promise<MoveBusy | null> => {
+    const s = host.get(sessionId);
+    const busy = s ? busyOf(s) : null;
+    if (busy || s?.live) return busy;
+    return (await deps.resumeCheck(sessionId)).status === 'blocked' ? 'terminal' : null;
+  };
+
   router.register('move.check', async (p) => {
     const s = host.get(p.sessionId);
     const cwd = store.historyOf(p.sessionId).dir ?? s?.cwd ?? db.getSession(p.sessionId)?.cwd;
     if (!cwd) throw new ServiceError('NOT_FOUND', `Unknown chat ${p.sessionId}`);
-    return { cwd, busy: s ? busyOf(s) : null, git: await git.state(cwd) };
+    return { cwd, busy: await busyNow(p.sessionId), git: await git.state(cwd) };
   });
 
   router.register('move.target', (p) => pickTarget(targetDeps, p));
@@ -512,7 +536,7 @@ export const registerMoveHandlers = (
   const exportChat = async (id: string, exportId: string, at: number): Promise<Begun> => {
     // Checked after the lock: no turn can start between the check and the export.
     const s = host.get(id);
-    const busy = s ? busyOf(s) : null;
+    const busy = await busyNow(id);
     if (busy) throw new ServiceError(MOVE_ERRORS.busy, BUSY_TEXT[busy]);
     // A chat moved here before is exported from the store (R6).
     const keys = store.isHere(id)
@@ -527,6 +551,8 @@ export const registerMoveHandlers = (
     if (bytes > maxBytes) {
       throw new ServiceError(MOVE_ERRORS.tooLarge, 'This chat is too large to move');
     }
+    // Aborted (or the lock ran out) while the keys were gathered: nothing to hand out.
+    if (locks.exportIdOf(id) !== exportId) throw expired('This export');
     exports.begin(exportId, id, parts, bytes, at);
     return { exportId, parts: parts.length, bytes };
   };
@@ -557,6 +583,7 @@ export const registerMoveHandlers = (
     }
     const at = now();
     locks.lock(id, exportId);
+    exports.started(exportId, id, at);
     const run = exportChat(id, exportId, at).catch((err: unknown) => {
       if (locks.exportIdOf(id) === exportId) locks.unlock(id);
       throw err;
@@ -584,16 +611,33 @@ export const registerMoveHandlers = (
     return {};
   });
 
+  /**
+   * The target has the chat by now (R2). Works without the export in memory
+   * (a restart, or past the hour), from the chat's own record and `begunAt`.
+   */
   router.register('move.markMoved', async (p) => {
+    const { exportId, sessionId: id } = p;
     // A late retry after the chat came back here: it stays, untouched.
-    if (exports.isSuperseded(p.exportId)) return {};
-    // Found even after the export expired: the target has the chat by now (R2).
-    const begun = exports.begunOf(p.exportId);
-    if (!begun) throw expired('This move');
-    const id = begun.sessionId;
-    if (!store.isAway(id)) {
+    if (exports.isSuperseded(exportId)) return {};
+    const begun = exports.begunOf(exportId);
+    if (begun && begun.sessionId !== id) {
+      throw new ServiceError('INVALID_PARAMS', 'This exportId belongs to another chat');
+    }
+    // This service's own record of when the move began wins over the desktop's clock.
+    const since = begun?.at ?? p.begunAt;
+    const row = db.getMovedChat(id);
+    // It came back here after this move began (the in-memory guard is gone after a restart).
+    if (row?.state === 'here' && row.cameAt !== null && row.cameAt > since) return {};
+    if (row?.state !== 'away') {
+      if (!row && !host.get(id) && !db.getSession(id)) {
+        throw new ServiceError(MOVE_ERRORS.notFound, `Unknown chat ${id}`);
+      }
+      const held = locks.exportIdOf(id);
+      if (held !== undefined && held !== exportId) {
+        throw new ServiceError(MOVE_ERRORS.moving, 'This chat is being moved again');
+      }
       // Past its lock the chat may have gone on here: those turns must not be hidden.
-      if (locks.exportIdOf(id) !== p.exportId && activeSince(id, begun.at)) {
+      if (held !== exportId && activeSince(id, since)) {
         throw new ServiceError(
           MOVE_ERRORS.expired,
           'This chat went on here after the move began; it stays here',
@@ -615,11 +659,46 @@ export const registerMoveHandlers = (
     return {};
   });
 
+  /**
+   * Waits (at most `END_INDEX_WAIT_MS`) for the chat to be indexed: the index
+   * queue may be in a long full sync. Past the cap it is indexed afterwards.
+   */
+  const indexSoon = async (id: string): Promise<void> => {
+    const timers = deps.timers ?? realTimers;
+    let timer: unknown;
+    const capped = new Promise<void>((resolve) => {
+      timer = timers.setTimeout(resolve, END_INDEX_WAIT_MS);
+    });
+    // A failed refresh only delays the listing: the next sync indexes it.
+    const indexed = index.refresh([id]).catch(() => {});
+    try {
+      await Promise.race([indexed, capped]);
+    } finally {
+      timers.clearTimeout(timer);
+    }
+  };
+
+  /**
+   * The target takes the chat. Only a chat this machine has no copy of, or
+   * holds as `away`, is taken: one that lives here, or a local chat here
+   * that never moved away, would be overwritten (a duplicate after a failed
+   * hand-off must never delete newer history).
+   */
   router.register('move.commit', async (p) => {
     const id = p.sessionId;
     if (!imports.wasCommitted(p.importId, id)) {
+      const row = db.getMovedChat(id);
+      const ownHere =
+        row?.state === 'here' ||
+        (row?.state !== 'away' && (db.getSession(id) !== undefined || host.get(id) !== undefined));
+      if (ownHere) {
+        throw new ServiceError(
+          MOVE_ERRORS.already,
+          `This chat is already on ${deps.machineName()}`,
+        );
+      }
       const keys = imports.complete(p.importId, id);
-      await makeParentFolder(p.cwd, deps.claudeConfigDir, deps.folderExists);
+      await makeChatFolder(p.cwd, deps.claudeConfigDir, deps.folderExists);
       // A process started from an older copy here must not keep writing it.
       release(id);
       store.replace(id, keys);
@@ -629,11 +708,9 @@ export const registerMoveHandlers = (
       imports.committed(p.importId, id);
       catalog.invalidate();
     }
-    await index.refresh([id]);
+    await indexSoon(id);
     catalog.invalidate();
-    const summary = catalog.summary(id);
-    if (!summary) throw new ServiceError(MOVE_ERRORS.notFound, `Chat ${id} could not be listed`);
-    return { summary };
+    return { summary: catalog.summary(id) ?? null };
   });
 
   const forgetAll = async (): Promise<void> => {

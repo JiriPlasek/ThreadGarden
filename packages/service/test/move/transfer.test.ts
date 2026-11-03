@@ -5,7 +5,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { ChatItem, ChatSummary, MoveKey, MovePeer } from '@threadgarden/protocol';
@@ -94,11 +94,12 @@ const machine = async (
   peer: MovePeer,
   seed?: (adapter: FakeAdapter, folder: string) => void,
   extra: Partial<StartOptions> = {},
+  given?: FakeAdapter,
 ): Promise<Machine> => {
   const root = join(dir, name);
   const folder = join(root, 'proj');
   await mkdir(folder, { recursive: true });
-  const adapter = new FakeAdapter();
+  const adapter = given ?? new FakeAdapter();
   seed?.(adapter, folder);
   const svc = await startService({
     dataDir: join(root, 'data'),
@@ -125,8 +126,32 @@ const machine = async (
   };
   const m: Machine = { svc, adapter, peer, folder, call, ok };
   const local = adapter.sessions.size;
-  if (local > 0) await eventually(async () => (await list(m)).length >= local);
+  if (local > 0 && !given) await eventually(async () => (await list(m)).length >= local);
   return m;
+};
+
+/** The same machine after a service restart: same data dir and history, nothing in memory. */
+const restart = async (m: Machine, name: string): Promise<Machine> => {
+  await m.svc.close();
+  running.splice(running.indexOf(m.svc), 1);
+  let synced = 0;
+  const list = m.adapter.listSessions.bind(m.adapter);
+  m.adapter.listSessions = (o) => {
+    if (!o?.sessionStore) synced++;
+    return list(o);
+  };
+  const again = await machine(name, m.peer, undefined, {}, m.adapter);
+  // Its first full sync began; a few chats take it moments.
+  await eventually(() => synced > 0);
+  await new Promise((r) => setTimeout(r, 150));
+  return again;
+};
+
+/** Holds calls until `open()` (an SDK read or an index pass that takes long). */
+const gate = () => {
+  let open!: () => void;
+  const opened = new Promise<void>((r) => (open = r));
+  return { opened, open };
 };
 
 type Begin = { exportId: string; parts: number; bytes: number };
@@ -156,6 +181,7 @@ const copyParts = async (src: Machine, dst: Machine, sessionId: string, begin: B
 
 /** The whole move, as the desktop runs it. */
 const move = async (src: Machine, dst: Machine, sessionId: string, cwd: string) => {
+  const begunAt = Date.now() + skew;
   const begin = await src.ok<Begin>('move.exportBegin', { exportId: randomUUID(), sessionId });
   const { importId, sizes, keys } = await copyParts(src, dst, sessionId, begin);
   const { summary } = await dst.ok<{ summary: ChatSummary }>('move.commit', {
@@ -164,8 +190,9 @@ const move = async (src: Machine, dst: Machine, sessionId: string, cwd: string) 
     cwd,
     from: src.peer,
   });
-  await src.ok('move.markMoved', { exportId: begin.exportId, to: dst.peer });
-  return { begin, importId, sizes, keys, summary };
+  const marked = { exportId: begin.exportId, sessionId, begunAt, to: dst.peer };
+  await src.ok('move.markMoved', marked);
+  return { begin, importId, sizes, keys, summary, marked };
 };
 
 const items = async (m: Machine, sessionId: string) =>
@@ -304,16 +331,16 @@ describe('a move between two services', () => {
     );
   });
 
-  it('commit makes the missing parent folder and lists the chat on the target', async () => {
+  it('commit makes the missing chat folder, empty, and lists the chat on the target', async () => {
     const laptop = await machine('laptop', LAPTOP, (a, f) => addLocal(a, 's1', f));
     const ubuntu = await machine('ubuntu', UBUNTU);
     const cwd = join(dir, 'ubuntu', 'home', 'projects', 'repo');
 
     const { summary, importId } = await move(laptop, ubuntu, 's1', cwd);
 
-    expect(existsSync(dirname(cwd))).toBe(true);
-    // Claude clones into the chat's own folder: never made here.
-    expect(existsSync(cwd)).toBe(false);
+    // Claude Code starts in the chat's folder, so it must exist; Claude clones into it.
+    expect(existsSync(cwd)).toBe(true);
+    expect(await readdir(cwd)).toEqual([]);
     expect(summary).toMatchObject({ sessionId: 's1', cwd });
     expect((await list(ubuntu)).map((s) => [s.sessionId, s.cwd])).toEqual([['s1', cwd]]);
     // A retried commit (its answer was lost) succeeds with the same chat.
@@ -326,22 +353,26 @@ describe('a move between two services', () => {
     expect(again.summary.sessionId).toBe('s1');
   });
 
-  it('commit ends a process started from a stale copy here and shows the new history', async () => {
-    const laptop = await machine('laptop', LAPTOP, (a, f) =>
-      addLocal(a, 's1', f, [msg('s1', 'u-new', 'user', 'the newest question')]),
-    );
+  it('a chat coming back onto its away copy shows the new history, not the stale local one', async () => {
     const ubuntu = await machine('ubuntu', UBUNTU, (a, f) =>
       addLocal(a, 's1', f, [msg('s1', 'u-old', 'user', 'a stale question')]),
     );
+    const laptop = await machine('laptop', LAPTOP);
     const stale = await idleLive(ubuntu, 's1');
-    expect(JSON.stringify(await items(ubuntu, 's1'))).toContain('a stale question');
+    await move(ubuntu, laptop, 's1', laptop.folder);
+    expect(stale.closed).toBe(true);
+    const s = await idleLive(laptop, 's1');
+    await s.options.sessionStore!.append({ projectKey: 'k', sessionId: 's1' }, [
+      { type: 'user', uuid: 'u-new', message: { role: 'user', content: 'the newest question' } },
+    ]);
 
     await move(laptop, ubuntu, 's1', ubuntu.folder);
 
-    expect(stale.closed).toBe(true);
     const shown = JSON.stringify(await items(ubuntu, 's1'));
     expect(shown).toContain('the newest question');
-    expect(shown).not.toContain('a stale question');
+    // Ubuntu's own transcript of the chat is the stale copy: the store wins.
+    await ubuntu.ok('chat.send', { sessionId: 's1', text: 'go on' });
+    expect(ubuntu.adapter.lastSession().options.sessionStore).toBeDefined();
   });
 
   it('markMoved hides the source copy and ends its live process', async () => {
@@ -349,7 +380,7 @@ describe('a move between two services', () => {
     const ubuntu = await machine('ubuntu', UBUNTU);
     const live = await idleLive(laptop, 's1');
 
-    const { begin } = await move(laptop, ubuntu, 's1', ubuntu.folder);
+    const { marked } = await move(laptop, ubuntu, 's1', ubuntu.folder);
 
     expect(live.closed).toBe(true);
     expect(laptop.svc.host!.get('s1')).toBeUndefined();
@@ -365,12 +396,13 @@ describe('a move between two services', () => {
     const open = await laptop.ok<{ movedTo: unknown }>('chat.open', { sessionId: 's1', tail: 1 });
     expect(open.movedTo).toEqual(UBUNTU);
     // The desktop retries markMoved: the same exportId again is fine.
-    await laptop.ok('move.markMoved', { exportId: begin.exportId, to: UBUNTU });
+    await laptop.ok('move.markMoved', marked);
   });
 
   it('markMoved still works after the export expired', async () => {
     const laptop = await machine('laptop', LAPTOP, (a, f) => addLocal(a, 's1', f));
     const ubuntu = await machine('ubuntu', UBUNTU);
+    const begunAt = Date.now();
     const begin = await laptop.ok<Begin>('move.exportBegin', {
       exportId: randomUUID(),
       sessionId: 's1',
@@ -379,11 +411,13 @@ describe('a move between two services', () => {
     await ubuntu.ok('move.commit', { importId, sessionId: 's1', cwd: ubuntu.folder, from: LAPTOP });
 
     skew = MOVE_LOCK_MS + 60_000;
-    await laptop.ok('move.markMoved', { exportId: begin.exportId, to: UBUNTU });
+    await laptop.ok('move.markMoved', {
+      exportId: begin.exportId,
+      sessionId: 's1',
+      begunAt,
+      to: UBUNTU,
+    });
     expect(await list(laptop)).toEqual([]);
-    expect(
-      (await laptop.call('move.markMoved', { exportId: 'unknown', to: UBUNTU })).error?.code,
-    ).toBe('EXPIRED');
   });
 
   it('a chat moved back to its first machine is one chat with the newest history', async () => {
@@ -466,7 +500,7 @@ describe('a move between two services', () => {
     const live = await idleLive(laptop, 's1');
 
     // A late retry of the first move's markMoved.
-    await laptop.ok('move.markMoved', { exportId: first.begin.exportId, to: UBUNTU });
+    await laptop.ok('move.markMoved', first.marked);
 
     expect(live.closed).toBe(false);
     expect((await list(laptop)).map((c) => c.sessionId)).toEqual(['s1']);
@@ -477,6 +511,7 @@ describe('a move between two services', () => {
   it('markMoved after the lock ran out and the chat went on here answers EXPIRED', async () => {
     const laptop = await machine('laptop', LAPTOP, (a, f) => addLocal(a, 's1', f));
     const ubuntu = await machine('ubuntu', UBUNTU);
+    const begunAt = Date.now();
     const begin = await laptop.ok<Begin>('move.exportBegin', {
       exportId: randomUUID(),
       sessionId: 's1',
@@ -487,7 +522,12 @@ describe('a move between two services', () => {
     skew = MOVE_LOCK_MS + 60_000;
     const live = await idleLive(laptop, 's1');
 
-    const r = await laptop.call('move.markMoved', { exportId: begin.exportId, to: UBUNTU });
+    const r = await laptop.call('move.markMoved', {
+      exportId: begin.exportId,
+      sessionId: 's1',
+      begunAt,
+      to: UBUNTU,
+    });
 
     expect(r.error?.code).toBe('EXPIRED');
     expect(live.closed).toBe(false);
@@ -541,7 +581,12 @@ describe('a move between two services', () => {
         from: LAPTOP,
       });
       client.events.length = 0;
-      await laptop.ok('move.markMoved', { exportId: begin.exportId, to: UBUNTU });
+      await laptop.ok('move.markMoved', {
+        exportId: begin.exportId,
+        sessionId: 's1',
+        begunAt: Date.now(),
+        to: UBUNTU,
+      });
       await client.waitFor(
         (e) =>
           e.event === 'sessions.changed' &&
@@ -565,6 +610,263 @@ describe('a move between two services', () => {
     expect(r.error?.code).toBe('INVALID_PARAMS');
     expect(existsSync(dirname(cwd))).toBe(false);
     expect(await list(ubuntu)).toEqual([]);
+  });
+});
+
+describe('final review fixes', () => {
+  /** One import of `sessionId` with a single message, ready to commit on `m`. */
+  const importOne = async (m: Machine, sessionId: string, text: string) => {
+    const importId = randomUUID();
+    const keys = [
+      { entries: [{ type: 'user', uuid: `u-${text}`, message: { role: 'user', content: text } }] },
+    ];
+    await m.ok('move.importPart', { importId, sessionId, index: 0, parts: 1, keys });
+    return importId;
+  };
+
+  // ── C1 ──
+  it('commit leaves an existing chat folder as it is', async () => {
+    const laptop = await machine('laptop', LAPTOP, (a, f) => addLocal(a, 's1', f));
+    const ubuntu = await machine('ubuntu', UBUNTU);
+    await writeFile(join(ubuntu.folder, 'README.md'), 'mine');
+    await move(laptop, ubuntu, 's1', ubuntu.folder);
+    expect(await readdir(ubuntu.folder)).toEqual(['README.md']);
+  });
+
+  // ── C2 ──
+  it('a commit onto a chat that lives here is refused and stores nothing', async () => {
+    const laptop = await machine('laptop', LAPTOP, (a, f) => addLocal(a, 's1', f));
+    const ubuntu = await machine('ubuntu', UBUNTU);
+    await move(laptop, ubuntu, 's1', ubuntu.folder);
+    // A duplicate import of an older copy (e.g. after a failed hand-off).
+    const importId = await importOne(ubuntu, 's1', 'an older copy');
+    const r = await ubuntu.call('move.commit', {
+      importId,
+      sessionId: 's1',
+      cwd: ubuntu.folder,
+      from: LAPTOP,
+    });
+    expect(r.error?.code).toBe('ALREADY_HERE');
+    expect(r.error?.message).toMatch(/^This chat is already on .+/);
+    expect(JSON.stringify(await items(ubuntu, 's1'))).not.toContain('an older copy');
+  });
+
+  it('a commit onto a local chat here that never moved away is refused', async () => {
+    const ubuntu = await machine('ubuntu', UBUNTU, (a, f) =>
+      addLocal(a, 's1', f, [msg('s1', 'u-own', 'user', 'my own chat')]),
+    );
+    const importId = await importOne(ubuntu, 's1', 'someone else');
+    const r = await ubuntu.call('move.commit', {
+      importId,
+      sessionId: 's1',
+      cwd: ubuntu.folder,
+      from: LAPTOP,
+    });
+    expect(r.error?.code).toBe('ALREADY_HERE');
+    const shown = JSON.stringify(await items(ubuntu, 's1'));
+    expect(shown).toContain('my own chat');
+    expect(shown).not.toContain('someone else');
+  });
+
+  // ── I1 ──
+  it('a scheduled send stays pending while its chat is locked, and once it moved away', async () => {
+    const laptop = await machine('laptop', LAPTOP, (a, f) => addLocal(a, 's1', f));
+    const ubuntu = await machine('ubuntu', UBUNTU);
+    const p = { sessionId: 's1', text: 'later', sendAt: Date.now() + 60_000, id: 'sch-1' };
+    await laptop.ok('scheduled.create', p);
+    const state = async () =>
+      (await laptop.ok<{ items: { state: string }[] }>('scheduled.list', { sessionId: 's1' }))
+        .items[0]?.state;
+
+    laptop.svc.moveLocks.lock('s1', 'x1');
+    skew = 120_000;
+    laptop.svc.scheduled!.check();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(await state()).toBe('pending');
+    laptop.svc.moveLocks.unlock('s1');
+
+    skew = 0;
+    await move(laptop, ubuntu, 's1', ubuntu.folder);
+    skew = 120_000;
+    laptop.svc.scheduled!.check();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(await state()).toBe('pending');
+  });
+
+  // ── I2 ──
+  it('a chat running in a terminal is busy for move.check and exportBegin', async () => {
+    const laptop = await machine('laptop', LAPTOP, (a, f) => addLocal(a, 's1', f), {
+      externalRun: async () =>
+        JSON.stringify([
+          { pid: 7, cwd: '/x', kind: 'interactive', startedAt: 1, sessionId: 's1', status: 'busy' },
+        ]),
+    });
+    const check = await laptop.ok<{ busy: string | null }>('move.check', { sessionId: 's1' });
+    expect(check.busy).toBe('terminal');
+    const r = await laptop.call('move.exportBegin', { exportId: randomUUID(), sessionId: 's1' });
+    expect(r.error).toEqual({ code: 'BUSY', message: 'This chat is running in a terminal' });
+    expect(laptop.svc.moveLocks.isLocked('s1')).toBe(false);
+  });
+
+  // ── I3 ──
+  it('markMoved works after a restart of the source (no export in memory)', async () => {
+    let laptop = await machine('laptop', LAPTOP, (a, f) => addLocal(a, 's1', f));
+    const ubuntu = await machine('ubuntu', UBUNTU);
+    const begunAt = Date.now();
+    const begin = await laptop.ok<Begin>('move.exportBegin', {
+      exportId: randomUUID(),
+      sessionId: 's1',
+    });
+    const { importId } = await copyParts(laptop, ubuntu, 's1', begin);
+    await ubuntu.ok('move.commit', { importId, sessionId: 's1', cwd: ubuntu.folder, from: LAPTOP });
+
+    laptop = await restart(laptop, 'laptop');
+    await laptop.ok('move.markMoved', {
+      exportId: begin.exportId,
+      sessionId: 's1',
+      begunAt,
+      to: UBUNTU,
+    });
+    expect(await list(laptop)).toEqual([]);
+    expect((await laptop.call('chat.send', { sessionId: 's1', text: 'hi' })).error?.code).toBe(
+      'MOVED',
+    );
+  });
+
+  it('a late markMoved after the chat came back and the service restarted leaves it here', async () => {
+    let laptop = await machine('laptop', LAPTOP, (a, f) => addLocal(a, 's1', f));
+    const ubuntu = await machine('ubuntu', UBUNTU);
+    const first = await move(laptop, ubuntu, 's1', ubuntu.folder);
+    await move(ubuntu, laptop, 's1', laptop.folder);
+    laptop = await restart(laptop, 'laptop');
+
+    expect((await laptop.call('move.markMoved', first.marked)).error).toBeUndefined();
+    expect((await list(laptop)).map((c) => c.sessionId)).toEqual(['s1']);
+    const open = await laptop.ok<{ movedTo: unknown }>('chat.open', { sessionId: 's1', tail: 1 });
+    expect(open.movedTo).toBeNull();
+  });
+
+  it('markMoved after a restart, once the chat went on here, answers EXPIRED', async () => {
+    let laptop = await machine('laptop', LAPTOP, (a, f) => addLocal(a, 's1', f));
+    const ubuntu = await machine('ubuntu', UBUNTU);
+    const begunAt = Date.now();
+    const begin = await laptop.ok<Begin>('move.exportBegin', {
+      exportId: randomUUID(),
+      sessionId: 's1',
+    });
+    const { importId } = await copyParts(laptop, ubuntu, 's1', begin);
+    await ubuntu.ok('move.commit', { importId, sessionId: 's1', cwd: ubuntu.folder, from: LAPTOP });
+    laptop = await restart(laptop, 'laptop');
+    skew = 1_000;
+    await idleLive(laptop, 's1');
+
+    const r = await laptop.call('move.markMoved', {
+      exportId: begin.exportId,
+      sessionId: 's1',
+      begunAt,
+      to: UBUNTU,
+    });
+    expect(r.error?.code).toBe('EXPIRED');
+    expect((await list(laptop)).map((c) => c.sessionId)).toEqual(['s1']);
+  });
+
+  it('an export this service never knew is not EXPIRED: the chat is marked moved', async () => {
+    const laptop = await machine('laptop', LAPTOP, (a, f) => addLocal(a, 's1', f));
+    const r = await laptop.call('move.markMoved', {
+      exportId: 'unknown',
+      sessionId: 's1',
+      begunAt: Date.now(),
+      to: UBUNTU,
+    });
+    expect(r.error).toBeUndefined();
+    expect(await list(laptop)).toEqual([]);
+  });
+
+  // ── I5 ──
+  it('a chat that lived here in the store and moved away again stays openable', async () => {
+    const laptop = await machine('laptop', LAPTOP, (a, f) => addLocal(a, 's1', f));
+    let ubuntu = await machine('ubuntu', UBUNTU);
+    await move(laptop, ubuntu, 's1', ubuntu.folder);
+    await move(ubuntu, laptop, 's1', laptop.folder);
+    // The start's full sync must keep it: Ubuntu has no transcript of its own.
+    ubuntu = await restart(ubuntu, 'ubuntu');
+
+    const open = await ubuntu.ok<{ movedTo: unknown; items: ChatItem[] }>('chat.open', {
+      sessionId: 's1',
+      tail: 10,
+    });
+    expect(open.movedTo).toEqual(LAPTOP);
+    expect(JSON.stringify(open.items)).toContain('hello');
+  });
+
+  // ── minors ──
+  it('move.abort unlocks a chat whose export is still gathering', async () => {
+    const laptop = await machine('laptop', LAPTOP, (a, f) => addLocal(a, 's1', f));
+    const held = gate();
+    const read = laptop.adapter.importSession.bind(laptop.adapter);
+    laptop.adapter.importSession = async (...a) => {
+      await held.opened;
+      return read(...a);
+    };
+    const exportId = randomUUID();
+    const begun = laptop.call('move.exportBegin', { exportId, sessionId: 's1' });
+    await eventually(() => laptop.svc.moveLocks.isLocked('s1'));
+
+    await laptop.ok('move.abort', { exportId });
+    expect(laptop.svc.moveLocks.isLocked('s1')).toBe(false);
+    held.open();
+    expect((await begun).error?.code).toBe('EXPIRED');
+    await laptop.ok('chat.send', { sessionId: 's1', text: 'hi' });
+  });
+
+  it('commit answers within the cap while the index queue is busy', async () => {
+    const laptop = await machine('laptop', LAPTOP, (a, f) => addLocal(a, 's1', f));
+    const busy = gate();
+    const adapter = new FakeAdapter();
+    const listAll = adapter.listSessions.bind(adapter);
+    let first = true;
+    adapter.listSessions = async (o) => {
+      // The start's full sync takes long (a first run over thousands of chats).
+      if (first && !o?.sessionStore) {
+        first = false;
+        await busy.opened;
+      }
+      return listAll(o);
+    };
+    const ubuntu = await machine('ubuntu', UBUNTU, undefined, {}, adapter);
+    try {
+      const started = Date.now();
+      const { summary } = await move(laptop, ubuntu, 's1', ubuntu.folder);
+      expect(Date.now() - started).toBeLessThan(9_000);
+      expect(summary).toBeNull();
+    } finally {
+      busy.open();
+    }
+    await eventually(async () => (await list(ubuntu)).some((c) => c.sessionId === 's1'));
+  }, 20_000);
+
+  it('scheduled.create with the id of a failed send of the chat makes it pending again', async () => {
+    const ubuntu = await machine('ubuntu', UBUNTU, (a, f) => addLocal(a, 's1', f));
+    const p = { sessionId: 's1', text: 'later', sendAt: Date.now() + 3_600_000, id: 'sch-1' };
+    await ubuntu.ok('scheduled.create', p);
+    const raw = (
+      ubuntu.svc.scheduled as unknown as { deps: { raw: import('node:sqlite').DatabaseSync } }
+    ).deps.raw;
+    raw
+      .prepare(`UPDATE scheduled_sends SET state = 'failed', error = 'x' WHERE id = ?`)
+      .run('sch-1');
+
+    const again = await ubuntu.ok<{ state: string; text: string; sendAt: number }>(
+      'scheduled.create',
+      { ...p, text: 'later, again', sendAt: p.sendAt + 60_000 },
+    );
+    expect(again).toMatchObject({
+      state: 'pending',
+      text: 'later, again',
+      sendAt: p.sendAt + 60_000,
+    });
+    const all = await ubuntu.ok<{ items: unknown[] }>('scheduled.list', { sessionId: 's1' });
+    expect(all.items).toHaveLength(1);
   });
 });
 

@@ -86,6 +86,15 @@ const start = async (away: string[], seed?: (db: ReturnType<typeof openDb>) => v
     sessionEnv: { PATH: '/usr/bin' },
     installSignalHandlers: false,
   });
+  // Every chat indexed, the away ones too (they are not listed): a test that looks
+  // for an away chat in a list must not pass only because it was not indexed yet.
+  await eventually(async () => {
+    const { indexing } = await ok<{ indexing: { done: number; total: number } }>(
+      'system.status',
+      {},
+    );
+    return indexing.total === adapter.sessions.size && indexing.done === indexing.total;
+  });
   await eventually(async () => (await list()).length > 0);
   return { adapter, folder };
 };

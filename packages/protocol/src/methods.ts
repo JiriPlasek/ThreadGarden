@@ -583,7 +583,12 @@ export const methods = {
     }),
     empty,
   ),
-  /** Target: makes the missing parent folder and stores the chat as `here`. */
+  /**
+   * Target: makes the chat's folder when it is missing (empty) and stores the
+   * chat as `here`. Refused (`ALREADY_HERE`) when the chat lives here, or is a
+   * local chat here that never moved away. `summary` is null when the chat is
+   * not indexed yet (a busy index queue); it is listed once it is.
+   */
   'move.commit': def(
     z.object({
       importId: z.string(),
@@ -591,10 +596,24 @@ export const methods = {
       cwd: z.string(),
       from: MovePeerSchema,
     }),
-    z.object({ summary: ChatSummarySchema }),
+    z.object({ summary: ChatSummarySchema.nullable() }),
   ),
-  /** Source: the chat is away for good (`chat.send` answers `MOVED`); ends the lock. */
-  'move.markMoved': def(z.object({ exportId: z.string(), to: MovePeerSchema }), empty),
+  /**
+   * Source: the chat is away for good (`chat.send` answers `MOVED`); ends the
+   * lock. Works without the export (after a restart, or past the hour):
+   * `begunAt` is when the move began. A chat that came back here since is
+   * left as it is (`{}`); one that went on here after the lock ran out
+   * answers `EXPIRED`.
+   */
+  'move.markMoved': def(
+    z.object({
+      exportId: z.string(),
+      sessionId: z.string(),
+      begunAt: z.number(),
+      to: MovePeerSchema,
+    }),
+    empty,
+  ),
 } as const;
 
 export type MethodName = keyof typeof methods;

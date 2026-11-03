@@ -71,8 +71,10 @@ export type IndexerOptions = {
   /** Where a session's history is read (a chat moved here: Threadgarden's store); default local. */
   historyOf?: (sessionId: string) => HistoryOptions;
   /**
-   * The chats moved here, whose history is in the store. The SDK's listing
-   * of local transcripts does not have them; a local copy of one is stale.
+   * The chats whose history is in the store: moved here, or an away copy
+   * that lived here in the store. The SDK's listing of local transcripts
+   * does not have them; a local copy of one is stale. They are never removed
+   * as vanished.
    */
   storeBacked?: () => string[];
 };
