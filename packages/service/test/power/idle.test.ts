@@ -365,11 +365,16 @@ describe('power on a service', () => {
         result: { machine: { capabilities: string[] } };
       };
     const h = await start(true);
-    expect((await hello(h)).result.machine.capabilities).toEqual(['remote', 'projects', 'power']);
+    expect((await hello(h)).result.machine.capabilities).toEqual([
+      'remote',
+      'projects',
+      'move',
+      'power',
+    ]);
     await h.close();
     await rm(join(dir, 'data'), { recursive: true, force: true });
     const d = await start(false);
-    expect((await hello(d)).result.machine.capabilities).toEqual(['remote', 'projects']);
+    expect((await hello(d)).result.machine.capabilities).toEqual(['remote', 'projects', 'move']);
     await d.close();
   });
 });

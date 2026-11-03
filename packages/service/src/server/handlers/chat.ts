@@ -20,7 +20,9 @@ import type {
   ChatTask,
   EventMsg,
   ImageRef,
+  MovePeer,
 } from '@threadgarden/protocol';
+import { MOVE_ERRORS } from '@threadgarden/protocol';
 import {
   realTimers,
   type LiveSession,
@@ -86,6 +88,10 @@ export type ChatHandlerDeps = {
    * chat moved here, else Claude Code's local transcripts (default).
    */
   historyOf?: (sessionId: string) => HistoryOptions;
+  /** Where a chat went when it moved away from here (protocol 9); null when it did not. */
+  awayTo?: (sessionId: string) => MovePeer | null;
+  /** True while a move is exporting the chat: `chat.send` answers `MOVING`. */
+  isMoving?: (sessionId: string) => boolean;
   /**
    * Indexes sessions now: a fork Threadgarden just made, so it can be opened at
    * once, and a chat that ends (its index may have waited for its turn).
@@ -369,6 +375,7 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
       hasMore: v.items.length > items.length,
       seq: v.seq,
       tasks: v.tasks,
+      movedTo: deps.awayTo?.(p.sessionId) ?? null,
     };
   });
 
@@ -412,6 +419,11 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
    * the chat when Threadgarden is not running it (behind the resume-safety check).
    */
   const send = async (p: { sessionId: string; text: string; images?: ImageRef[] | undefined }) => {
+    if (deps.isMoving?.(p.sessionId)) {
+      throw new ServiceError(MOVE_ERRORS.moving, 'This chat is being moved to another machine');
+    }
+    const away = deps.awayTo?.(p.sessionId);
+    if (away) throw new ServiceError(MOVE_ERRORS.moved, `This chat moved to ${away.name}`);
     const input = toInput(p);
     let s = host.get(p.sessionId);
     if (!s?.live) {

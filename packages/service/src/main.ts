@@ -4,7 +4,6 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   CAPABILITIES,
-  MOVE_CAPABILITY,
   POWER_CAPABILITY,
   PROTOCOL_VERSION,
   type ChatStatus,
@@ -41,6 +40,7 @@ import type { AgentAdapter } from './sdk/adapter.js';
 import type { ClaudeFound, ClaudeProblem } from './sdk/claude-path.js';
 import { buildSessionEnv } from './sdk/real-adapter.js';
 import { registerChatHandlers } from './server/handlers/chat.js';
+import { MoveLocks, registerMoveHandlers } from './server/handlers/move.js';
 import { makeResumeChecker, registerExternalHandlers } from './server/handlers/external.js';
 import { registerFileHandlers } from './server/handlers/files.js';
 import { registerProjectHandlers } from './server/handlers/projects.js';
@@ -191,6 +191,8 @@ export type ServiceHandle = {
   /** v1.3 B: plan usage and scheduled sends (present when an adapter was given). */
   usage?: UsageTracker;
   scheduled?: ScheduledSends;
+  /** Protocol 9: the chats locked while a move exports them. */
+  moveLocks: MoveLocks;
   /** v1.4: where paired devices reach this service (headless, with a private address only). */
   remote?: { addresses: string[]; port: number };
   /** Sends an event to every local client and paired device. */
@@ -232,9 +234,6 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     }
   };
 
-  // TODO(move task 4): advertise `move` once the move handlers exist.
-  const advertised = CAPABILITIES.filter((c) => c !== MOVE_CAPABILITY);
-
   /** This machine's identity; it lives in the database, so there is none without one. */
   const machineOf = (d: Db): MachineInfo => {
     const { id, name } = loadMachineIdentity(d, os.hostname());
@@ -245,7 +244,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       headless,
       home: os.homedir(),
       // `power` is for headless machines only (a desktop is never switched off this way).
-      capabilities: headless ? [...advertised, POWER_CAPABILITY] : [...advertised],
+      capabilities: headless ? [...CAPABILITIES, POWER_CAPABILITY] : [...CAPABILITIES],
     };
   };
   router.register('hello', async (_p, ctx) => ({
@@ -263,6 +262,8 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   let db: Db | undefined;
   let power: PowerHub | undefined;
   let host: SessionHost | undefined;
+  /** Chats being moved to another machine (protocol 9). */
+  const moveLocks = new MoveLocks(clock);
   let indexing = { done: 0, total: 0 };
   let indexer: Indexer | undefined;
   let watcher: { close(): void } | undefined;
@@ -694,6 +695,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         live: live() ?? sessionHost,
         externals: opts.externals ?? (() => poller?.snapshot() ?? []),
         folderExists: (p) => folders.exists(p),
+        isAway: (id) => chatStore.isAway(id),
       });
       catalogRef.current = cat;
       const routing = new RoutingSettingsCheck();
@@ -763,6 +765,8 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         apiKeyMissing: () => opts.apiKeyOnly === true && apiKey === null,
         resumeCheck,
         historyOf,
+        awayTo: (id) => chatStore.awayTo(id),
+        isMoving: (id) => moveLocks.isLocked(id),
         indexNow: (ids) => index.refresh(ids),
         ...(opts.historyCacheChars === undefined
           ? {}
@@ -773,6 +777,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         timers: opts.sessionTimers ?? realTimers,
         titles: chatTitles,
       });
+      registerMoveHandlers(router, { host: sessionHost, db: opened, store: chatStore });
       const projectTools = opts.projectTools ?? systemTools;
       maker = new ProjectMaker({
         tools: projectTools,
@@ -1042,6 +1047,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     port: wsServer.port,
     token,
     router,
+    moveLocks,
     ...(host ? { host } : {}),
     ...(usage ? { usage } : {}),
     ...(scheduled ? { scheduled } : {}),

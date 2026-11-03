@@ -10,7 +10,7 @@ export const acceptsRemoteProtocol = (v: number): boolean =>
   Number.isInteger(v) && v >= REMOTE_PROTOCOL_RANGE.min && v <= REMOTE_PROTOCOL_RANGE.max;
 
 /**
- * What every service can do for a remote desktop. `move` is added to a service's `hello` once it has the handlers.
+ * What every service can do for a remote desktop, and says in its `hello`.
  * `power` is not here: a headless service adds it to its own `hello` at runtime.
  */
 export const CAPABILITIES = ['remote', 'projects', 'move'] as const;

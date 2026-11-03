@@ -200,6 +200,9 @@ const toBucketState = (r: Row | undefined): BucketState => {
 /** Sessions with their bucket (v1.2) as `b`. */
 const WITH_BUCKET = `sessions s LEFT JOIN chat_buckets b ON b.session_id = s.session_id`;
 
+/** A chat that moved away is kept for reading only: lists and counts leave it out. */
+const NOT_AWAY = `NOT EXISTS (SELECT 1 FROM moved_chats mv WHERE mv.session_id = s.session_id AND mv.state = 'away')`;
+
 const SESSION_SELECT = `SELECT s.*, m.custom_title AS custom_title, COALESCE(m.pinned, 0) AS pinned,
     b.bucket AS bucket, b.hold_until AS hold_until, b.hold_note AS hold_note, b.back_at AS back_at,
     ct.auto_title AS auto_title, ct.generated_title AS generated_title
@@ -263,7 +266,7 @@ export class Db implements LiveRegistry {
       if (filter.ids.length === 0) return { items: [] };
       where.push(`s.session_id IN (${filter.ids.map(() => '?').join(',')})`);
       params.push(...filter.ids);
-    }
+    } else where.push(NOT_AWAY); // a lookup by id still finds an away chat
     notIn('s.project_id', filter.excludeProjectIds, where, params as string[]);
     notIn('s.session_id', filter.excludeIds, where, params as string[]);
     if (filter.buckets) where.push(bucketIn('b.bucket', filter.buckets));
@@ -291,6 +294,7 @@ export class Db implements LiveRegistry {
   countBuckets(excludeProjectIds: string[] = []): Record<Bucket, number> {
     const where: string[] = [];
     const params: string[] = [];
+    where.push(NOT_AWAY);
     notIn('s.project_id', excludeProjectIds, where, params);
     const rows = this.raw
       .prepare(
