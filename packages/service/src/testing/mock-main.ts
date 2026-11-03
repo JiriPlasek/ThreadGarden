@@ -63,13 +63,33 @@
  * mock-only method `mock.forgetMoves` (local callers only; no real service
  * has it) forgets every move, so a spec that failed mid-move leaves no chat
  * moved away for the specs after it.
+ *
+ * Updating (protocol 10): both mocks pretend to update, never touching systemd
+ * or GitHub. `update.latest` answers `THREADGARDEN_MOCK_LATEST` (default
+ * 0.99.0). `update.start` goes through the stages about 300 ms apart, then
+ * pretends to restart: the devices' sockets drop, later `hello`s report the new
+ * version and `update.status` is `done`. The mock-only methods (local callers
+ * only) `mock.failNextUpdate {reason}` (the next update fails with it) and
+ * `mock.setBusy {count}` (the chats an update would stop) steer it. The
+ * `update` capability is offered on every OS.
  */
 import { randomUUID } from 'node:crypto';
 import { appendFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, posix } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import type { GitState } from '@threadgarden/protocol';
+import {
+  UPDATE_ERRORS,
+  UpdateFailureSchema,
+  VERSION_PATTERN,
+  type GitState,
+  type UpdateFailure,
+  type UpdateStage,
+  type UpdateStartResult,
+  type UpdateStatus,
+} from '@threadgarden/protocol';
+import { z } from 'zod';
+import pkg from '../../package.json' with { type: 'json' };
 import { readDiscovery } from '../discovery.js';
 import { findProjectIcon } from '../history/project-icons.js';
 import {
@@ -81,6 +101,8 @@ import { startService, type ServiceHandle } from '../main.js';
 import { CREATE_IN_KEY } from '../projects/maker.js';
 import { startFakeTasmota, type FakeTasmota } from './fake-tasmota.js';
 import type { MoveGit } from '../server/handlers/move.js';
+import { ServiceError } from '../server/router.js';
+import type { Updater } from '../update/updater.js';
 import { REMOTE_PORT } from '../server/remote-server.js';
 import type {
   OneShotOptions,
@@ -900,13 +922,141 @@ const fixedPairingRandom = (code: string): ((n: number) => Buffer) => {
 /** The mock's own test reset (see the file comment); not a protocol method. */
 export const MOCK_FORGET_MOVES = 'mock.forgetMoves';
 
-/** Answers `mock.forgetMoves` from local callers before the router sees it. */
-const addMockMethods = (svc: ServiceHandle): void => {
+/** Updating (protocol 10): the next update fails with `reason`; the busy count `update.start` sees. */
+export const MOCK_FAIL_NEXT_UPDATE = 'mock.failNextUpdate';
+export const MOCK_SET_BUSY = 'mock.setBusy';
+
+/** The release the main mock's `update.latest` answers; the env variable changes it. */
+const mockLatest = (): string => process.env.THREADGARDEN_MOCK_LATEST || '0.99.0';
+
+/** The step between two stages of a pretend update. */
+const UPDATE_STEP_MS = 300;
+
+const FailNextParams = z.object({ reason: UpdateFailureSchema });
+const SetBusyParams = z.object({ count: z.number().int().min(0) });
+
+/**
+ * A machine that updates itself in pretence: the stages the real updater goes
+ * through, then a restart that drops the devices and reports the new version
+ * in later `hello`s. No download, no systemd.
+ */
+class MockUpdater implements Updater {
+  /** What `hello` reports; the pretend restart changes it. */
+  version = pkg.version;
+  private current: UpdateStatus = { state: 'idle' };
+  private busy = 0;
+  private failure: UpdateFailure | undefined;
+  private closed = false;
+  private svc: ServiceHandle | undefined;
+
+  /** The service exists only after the updater (it is passed to `startService`). */
+  attach(svc: ServiceHandle): void {
+    this.svc = svc;
+    svc.onClosed(() => {
+      this.closed = true;
+    });
+  }
+
+  failNext(reason: UpdateFailure): void {
+    this.failure = reason;
+  }
+
+  setBusy(count: number): void {
+    this.busy = count;
+  }
+
+  // The `update` capability is offered on every OS, unlike the real updater's.
+  supported(): boolean {
+    return true;
+  }
+
+  status(): UpdateStatus {
+    return this.current;
+  }
+
+  async reconcile(): Promise<void> {}
+
+  async start(version: string, force: boolean): Promise<UpdateStartResult> {
+    if (!VERSION_PATTERN.test(version)) {
+      throw new ServiceError(UPDATE_ERRORS.INVALID_VERSION, 'That is not a release version');
+    }
+    if (version === this.version) {
+      throw new ServiceError(UPDATE_ERRORS.ALREADY_CURRENT, `This machine already runs ${version}`);
+    }
+    if (this.current.state === 'running') {
+      throw new ServiceError(UPDATE_ERRORS.UPDATE_RUNNING, 'An update is already running');
+    }
+    if (!force && this.busy > 0) return { started: false, busy: this.busy };
+    this.stage(version, 'downloading');
+    void this.perform(version);
+    return { started: true };
+  }
+
+  private async perform(version: string): Promise<void> {
+    const from = this.version;
+    const failure = this.failure;
+    this.failure = undefined;
+    await sleep(UPDATE_STEP_MS);
+    if (failure) {
+      this.tell({
+        state: 'failed',
+        version,
+        from,
+        reason: failure,
+        detail: `Mock: ${failure} failed`,
+      });
+      return;
+    }
+    this.stage(version, 'installing');
+    await sleep(UPDATE_STEP_MS);
+    this.stage(version, 'restarting');
+    await sleep(UPDATE_STEP_MS);
+    if (this.closed) return;
+    // The restart: the devices lose their sockets, the new version answers the next hello.
+    this.version = version;
+    this.svc?.dropDevices();
+    this.tell({ state: 'done', version, from, skipped: [] });
+  }
+
+  private stage(version: string, stage: UpdateStage): void {
+    this.tell({ state: 'running', version, from: this.version, stage });
+  }
+
+  private tell(s: UpdateStatus): void {
+    this.current = s;
+    if (!this.closed) this.svc?.broadcast({ event: 'update.progress', data: s });
+  }
+}
+
+const invalid = (id: number, message: string) => ({
+  id,
+  error: { code: 'INVALID_PARAMS', message },
+});
+
+/** Answers the mock-only methods from local callers before the router sees them. */
+const addMockMethods = (svc: ServiceHandle, updater: MockUpdater): void => {
   const dispatch = svc.router.dispatch.bind(svc.router);
   svc.router.dispatch = async (req, ctx) => {
-    if (req.method !== MOCK_FORGET_MOVES || ctx.origin !== 'local') return dispatch(req, ctx);
-    await svc.forgetMoves();
-    return { id: req.id, result: {} };
+    if (ctx.origin !== 'local') return dispatch(req, ctx);
+    switch (req.method) {
+      case MOCK_FORGET_MOVES:
+        await svc.forgetMoves();
+        return { id: req.id, result: {} };
+      case MOCK_FAIL_NEXT_UPDATE: {
+        const p = FailNextParams.safeParse(req.params);
+        if (!p.success) return invalid(req.id, p.error.message);
+        updater.failNext(p.data.reason);
+        return { id: req.id, result: {} };
+      }
+      case MOCK_SET_BUSY: {
+        const p = SetBusyParams.safeParse(req.params);
+        if (!p.success) return invalid(req.id, p.error.message);
+        updater.setBusy(p.data.count);
+        return { id: req.id, result: {} };
+      }
+      default:
+        return dispatch(req, ctx);
+    }
   };
 };
 
@@ -973,8 +1123,11 @@ export const startMockService = async (o: MockOptions = {}): Promise<MockService
       fakeTasmota.devices.clear();
       fakeTasmota.devices.set('0x863B', { name: 'MockPlug', on: true, watts: 47 });
     }
+    const updater = new MockUpdater();
     const svc = await startService({
       dataDir,
+      serviceVersion: () => updater.version,
+      update: { updater, latest: { get: async () => mockLatest() } },
       claudeConfigDir: claudeDir,
       adapter,
       claude: { path: 'mock-claude', version: MOCK_VERSION },
@@ -1000,7 +1153,8 @@ export const startMockService = async (o: MockOptions = {}): Promise<MockService
           }
         : {}),
     });
-    addMockMethods(svc);
+    updater.attach(svc);
+    addMockMethods(svc, updater);
     if (remote) {
       // The real service retries a listener that failed to start; a test mock must say so at once.
       if (!svc.remote) {

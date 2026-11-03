@@ -189,6 +189,11 @@ export type StartOptions = {
    */
   pairingRandom?: (n: number) => Buffer;
   /**
+   * The version `hello` reports (default the package's). The mock service
+   * changes it when it pretends to have updated.
+   */
+  serviceVersion?: () => string;
+  /**
    * Updating (protocol 10). `fetch` is how GitHub is asked for the newest
    * release and for its files (default the global one); `latest` replaces that
    * lookup outright. `updater` replaces the machine's updater outright (the mock
@@ -196,7 +201,7 @@ export type StartOptions = {
    */
   update?: {
     fetch?: Fetch;
-    latest?: LatestRelease;
+    latest?: Pick<LatestRelease, 'get'>;
     updater?: Updater;
     installBase?: string;
     platform?: NodeJS.Platform;
@@ -223,6 +228,11 @@ export type ServiceHandle = {
    * the locks). For the mock service's test reset only: no method calls it.
    */
   forgetMoves(): Promise<void>;
+  /**
+   * Closes every paired device's sockets, as a restart would; the devices stay
+   * paired. For the mock service's pretend update restart only: no method calls it.
+   */
+  dropDevices(): void;
   /** v1.4: where paired devices reach this service (headless, with a private address only). */
   remote?: { addresses: string[]; port: number };
   /** Sends an event to every local client and paired device. */
@@ -312,7 +322,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     supported: canUpdate,
   });
   router.register('hello', async (_p, ctx) => ({
-    serviceVersion: pkg.version,
+    serviceVersion: (opts.serviceVersion ?? (() => pkg.version))(),
     protocolVersion: PROTOCOL_VERSION,
     ...(db ? { machine: machineFor(ctx, machineOf(db)) } : {}),
   }));
@@ -1152,6 +1162,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     router,
     moveLocks,
     forgetMoves: async () => moveHandlers?.forgetAll(),
+    dropDevices: () => remote?.dropDevices(),
     ...(host ? { host } : {}),
     ...(usage ? { usage } : {}),
     ...(scheduled ? { scheduled } : {}),

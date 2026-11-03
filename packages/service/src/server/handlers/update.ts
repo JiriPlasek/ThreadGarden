@@ -9,7 +9,7 @@ import type { Updater } from '../../update/updater.js';
 import { ServiceError, type Router } from '../router.js';
 
 export type UpdateHandlerDeps = {
-  latest: LatestRelease;
+  latest: Pick<LatestRelease, 'get'>;
   updater: Updater;
   /** Whether this service offers the `update` capability. */
   supported: () => boolean;
