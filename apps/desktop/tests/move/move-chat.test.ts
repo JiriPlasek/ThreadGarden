@@ -8,7 +8,7 @@ import {
   type ScheduledSend,
 } from '@threadgarden/protocol';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { MoveChat, START_WAIT_MS } from '../../src/lib/move/move-chat.svelte';
+import { MoveChat, RECONNECT_WAIT_MS, START_WAIT_MS } from '../../src/lib/move/move-chat.svelte';
 import { moveNote } from '../../src/lib/move/note';
 import type { AppState } from '../../src/lib/state/context';
 import { LOCAL, M1, setupTwoMachines, summary } from '../layout/harness';
@@ -331,7 +331,7 @@ describe('MoveChat', () => {
   });
 
   it('markMoved answering EXPIRED: failed, the tab stays and no note', async () => {
-    const { move, remote, app } = await start({
+    const { move, server, remote, app } = await start({
       source: {
         'move.markMoved': () => {
           throw new RpcFail(MOVE_ERRORS.expired, 'This chat went on here');
@@ -348,6 +348,39 @@ describe('MoveChat', () => {
     expect(move.oldCopyShown).toBe(false);
     expect(app.tabs.open).toEqual([`${LOCAL}/s1`]);
     expect(remote.calls('chat.send')).toHaveLength(0);
+    // A new move needs fresh checks.
+    expect(move.check).toBeNull();
+    await move.run({ moveAnyway: false });
+    expect(server.calls('move.exportBegin')).toHaveLength(1);
+  });
+
+  it('retryMarkMoved answering EXPIRED: the tab goes back to the source, with the problem', async () => {
+    let answer: 'fail' | 'expired' = 'fail';
+    const { move, server, app } = await start({
+      source: {
+        'move.markMoved': () => {
+          if (answer === 'fail') throw new RpcFail('INTERNAL', 'db locked');
+          throw new RpcFail(MOVE_ERRORS.expired, 'This chat went on here');
+        },
+      },
+    });
+    await move.prepare(REF, M1);
+    await move.run({ moveAnyway: false });
+    expect(move.oldCopyShown).toBe(true);
+    expect(app.tabs.open).toEqual([`${M1}/s1`]);
+
+    answer = 'expired';
+    await move.retryMarkMoved();
+    expect(move.oldCopyShown).toBe(false);
+    expect(app.tabs.open).toEqual([`${LOCAL}/s1`]);
+    expect(app.tabs.active).toBe(`${LOCAL}/s1`);
+    expect(move.state).toBe('failed');
+    expect(move.problem).toBe(
+      'The move took too long and This PC went on with this chat, so it stays there. The copy on Ubuntu PC is left as it was.',
+    );
+    expect(move.check).toBeNull();
+    await move.run({ moveAnyway: false });
+    expect(server.calls('move.exportBegin')).toHaveLength(1);
   });
 
   it('note failure leaves state noting; sendNoteAgain sends it', async () => {
@@ -419,7 +452,8 @@ describe('MoveChat', () => {
     expect(move.problem).toBe("Ubuntu PC didn't come up in 10 minutes");
     expect(server.calls('power.turnOn')).toHaveLength(1);
     expect(server.calls('move.exportBegin')).toHaveLength(0);
-    expect(server.calls('move.abort')).toHaveLength(1);
+    // The source is unlocked all the same (Review Focus 5).
+    expect(paramsOf(server, 'move.abort')).toEqual([{ exportId: expect.any(String) }]);
     expect(app.tabs.open).toEqual([`${LOCAL}/s1`]);
   });
 
@@ -437,14 +471,236 @@ describe('MoveChat', () => {
     expect(app.tabs.open).toEqual([`${LOCAL}/s1`]);
   });
 
-  it('a target whose service cannot move: refused with the update text, and aborted', async () => {
-    const { move, server, app } = await start();
+  it('a target whose service cannot move: prepare refuses with the update text, asking nothing', async () => {
+    const { move, log, app } = await start();
     app.machines.get(M1)!.info!.capabilities = ['remote'];
     await move.prepare(REF, M1);
+    expect(move.state).toBe('failed');
+    expect(move.problem).toBe('Update Ubuntu PC to move chats there');
+    expect(log).toEqual([]);
+    await move.run({ moveAnyway: false });
+    expect(log).toEqual([]);
+  });
+
+  it('a target that turns out not to move when run: refused with the update text, and aborted', async () => {
+    const { move, server, app } = await start();
+    await move.prepare(REF, M1);
+    app.machines.get(M1)!.info!.capabilities = ['remote'];
     await move.run({ moveAnyway: false });
     expect(move.state).toBe('failed');
     expect(move.problem).toBe('Update Ubuntu PC to move chats there');
     expect(server.calls('move.exportBegin')).toHaveLength(0);
+    expect(server.calls('move.abort')).toHaveLength(1);
+  });
+
+  it('a second run during a run is refused', async () => {
+    const { move, server, remote } = await start();
+    await move.prepare(REF, M1);
+    const first = move.run({ moveAnyway: false });
+    const second = move.run({ moveAnyway: false });
+    expect(move.state).toBe('moving');
+    await Promise.all([first, second]);
+    expect(server.calls('move.exportBegin')).toHaveLength(1);
+    expect(remote.calls('move.commit')).toHaveLength(1);
+    expect(move.state).toBe('done');
+  });
+
+  it('prepare during a run is ignored', async () => {
+    const { move, server, remote } = await start();
+    await move.prepare(REF, M1);
+    const running = move.run({ moveAnyway: false });
+    await move.prepare(REF, M1, '/home/u/elsewhere');
+    await running;
+    expect(server.calls('move.check')).toHaveLength(1);
+    expect(paramsOf(remote, 'move.commit')[0]!.cwd).toBe(TARGET_FOLDER);
+    expect(move.state).toBe('done');
+  });
+
+  it('askToPush during a run is ignored', async () => {
+    const { move, server } = await start();
+    await move.prepare(REF, M1);
+    const running = move.run({ moveAnyway: false });
+    await move.askToPush(REF);
+    await running;
+    expect(server.calls('chat.send')).toHaveLength(0);
+    expect(move.state).toBe('done');
+  });
+
+  it('abandon while the target starts: no exportBegin, failed with Move cancelled', async () => {
+    vi.useFakeTimers({ toFake: FAKE });
+    const { move, server, app } = await start({ off: true, power: true });
+    await vi.waitFor(() => expect(shownOf(app)).toBe('off'));
+    await move.prepare(REF, M1);
+    const running = move.run({ moveAnyway: false });
+    expect(move.state).toBe('starting');
+    move.abandon();
+    expect(move.state).toBe('failed');
+    expect(move.problem).toBe('Move cancelled');
+    await vi.advanceTimersByTimeAsync(30_000);
+    await running;
+    expect(app.machines.get(M1)?.status).toBe('on');
+    expect(server.calls('move.exportBegin')).toHaveLength(0);
+    expect(server.calls('move.abort')).toHaveLength(0);
+    expect(move.state).toBe('failed');
+    expect(move.problem).toBe('Move cancelled');
+    expect(app.tabs.open).toEqual([`${LOCAL}/s1`]);
+  });
+
+  it('abandon during the export: abort sent, nothing imported', async () => {
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    const { move, server, remote, app } = await start({
+      source: {
+        'move.exportPart': async (p) => {
+          await held;
+          return { keys: [{ entries: [{ type: 'user', part: (p as P).index }] }] };
+        },
+      },
+    });
+    await move.prepare(REF, M1);
+    const running = move.run({ moveAnyway: false });
+    await vi.waitFor(() => expect(server.calls('move.exportPart')).toHaveLength(1));
+    move.abandon();
+    const { exportId } = paramsOf(server, 'move.exportBegin')[0]!;
+    await vi.waitFor(() => expect(paramsOf(server, 'move.abort')).toContainEqual({ exportId }));
+    release();
+    await running;
+    expect(remote.calls('move.importPart')).toHaveLength(0);
+    expect(remote.calls('move.commit')).toHaveLength(0);
+    expect(move.state).toBe('failed');
+    expect(move.problem).toBe('Move cancelled');
+    expect(app.tabs.open).toEqual([`${LOCAL}/s1`]);
+  });
+
+  it('a lost exportBegin answer is asked again with the same exportId and the move completes', async () => {
+    let lose = true;
+    const { move, server } = await start({
+      source: {
+        'move.exportBegin': (p) => {
+          if (lose) {
+            lose = false;
+            throw new RpcFail('TIMEOUT', 'no answer');
+          }
+          return { exportId: (p as P).exportId, parts: 2, bytes: 100 };
+        },
+      },
+    });
+    await move.prepare(REF, M1);
+    await move.run({ moveAnyway: false });
+    const begins = paramsOf(server, 'move.exportBegin');
+    expect(begins).toHaveLength(2);
+    expect(begins[1]).toEqual(begins[0]);
+    expect(server.calls('move.abort')).toHaveLength(0);
+    expect(move.state).toBe('done');
+  });
+
+  it('lost exportPart and importPart answers are asked again with the same ids', async () => {
+    let loseExport = true;
+    let loseImport = true;
+    const { move, server, remote } = await start({
+      source: {
+        'move.exportPart': (p) => {
+          if (loseExport) {
+            loseExport = false;
+            throw new RpcFail('DISCONNECTED', 'dropped');
+          }
+          return { keys: [{ entries: [{ type: 'user', part: (p as P).index }] }] };
+        },
+      },
+      target: {
+        'move.importPart': () => {
+          if (loseImport) {
+            loseImport = false;
+            throw new RpcFail('TIMEOUT', 'no answer');
+          }
+          return {};
+        },
+      },
+    });
+    await move.prepare(REF, M1);
+    await move.run({ moveAnyway: false });
+    const parts = paramsOf(server, 'move.exportPart');
+    expect(parts.map((p) => p.index)).toEqual([0, 0, 1]);
+    const imports = paramsOf(remote, 'move.importPart');
+    expect(imports.map((p) => p.index)).toEqual([0, 0, 1]);
+    expect(imports[1]).toEqual(imports[0]);
+    expect(move.state).toBe('done');
+  });
+
+  it('a commit cut off by a dropped target link is asked again once it is back', async () => {
+    let first = true;
+    const link: { remote?: FakeServer } = {};
+    const env = await start({
+      target: {
+        'move.commit': (p) => {
+          if (first) {
+            first = false;
+            link.remote!.drop();
+            return new Promise(() => {});
+          }
+          return { summary: summary('s1', { cwd: (p as P).cwd as string }) };
+        },
+      },
+    });
+    link.remote = env.remote;
+    const { move, server, remote, app } = env;
+    await move.prepare(REF, M1);
+    await move.run({ moveAnyway: false });
+    const commits = paramsOf(remote, 'move.commit');
+    expect(commits).toHaveLength(2);
+    expect(commits[1]).toEqual(commits[0]);
+    expect(server.calls('move.abort')).toHaveLength(0);
+    expect(move.state).toBe('done');
+    expect(app.tabs.open).toEqual([`${M1}/s1`]);
+  });
+
+  it('a commit whose target stays unreachable: aborted, the move may have reached it', async () => {
+    vi.useFakeTimers({ toFake: FAKE });
+    const link: { remote?: FakeServer } = {};
+    const env = await start({
+      target: {
+        'move.commit': () => {
+          link.remote!.refuse = true;
+          link.remote!.drop();
+          return new Promise(() => {});
+        },
+      },
+    });
+    link.remote = env.remote;
+    const { move, server, remote, app } = env;
+    await move.prepare(REF, M1);
+    const running = move.run({ moveAnyway: false });
+    await vi.advanceTimersByTimeAsync(RECONNECT_WAIT_MS + 10_000);
+    await running;
+    expect(remote.calls('move.commit')).toHaveLength(1);
+    expect(server.calls('move.abort')).toHaveLength(1);
+    expect(move.state).toBe('failed');
+    expect(move.problem).toBe(
+      'The move may have reached Ubuntu PC; check there before moving again.',
+    );
+    expect(app.tabs.open).toEqual([`${LOCAL}/s1`]);
+  });
+
+  it('a scheduled send the source will not cancel is cancelled on the target again', async () => {
+    const { move, server, remote } = await start({
+      source: {
+        'scheduled.list': () => ({ items: [pending({ id: 'q1', afterLimitReset: true })] }),
+        'scheduled.cancel': () => {
+          throw new RpcFail('INTERNAL', 'db locked');
+        },
+      },
+      target: { 'scheduled.cancel': () => ({}) },
+    });
+    await move.prepare(REF, M1);
+    await move.run({ moveAnyway: false });
+    expect(paramsOf(remote, 'scheduled.create')).toHaveLength(1);
+    expect(paramsOf(server, 'scheduled.cancel')).toEqual([
+      { id: 'q1' },
+      { id: 'q1' },
+      { id: 'q1' },
+    ]);
+    expect(paramsOf(remote, 'scheduled.cancel')).toEqual([{ id: 'q1' }]);
+    expect(move.state).toBe('done');
   });
 
   it('a waiting-for-reset send is recreated with whenLimitResets on the target', async () => {
