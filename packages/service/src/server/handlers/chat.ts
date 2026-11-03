@@ -203,6 +203,11 @@ export type ChatHandlers = {
   }) => Promise<{ queued: boolean }>;
   /** Throws `CLAUDE_MISSING` and the like when a Claude Code process may not be started. */
   requireRunnable: () => Promise<void>;
+  /**
+   * Ends the host's session of the chat, if any (its process closes), and
+   * drops its cached view, so the next read starts afresh (a move).
+   */
+  release: (sessionId: string) => void;
 };
 
 export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): ChatHandlers => {
@@ -469,6 +474,13 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
     return {};
   });
 
+  const release = (sessionId: string): void => {
+    forget(sessionId); // the next read sees the live turns, or the chat's new history
+    if (!host.get(sessionId)) return;
+    host.end(sessionId);
+    changed([sessionId]);
+  };
+
   /**
    * Indexing waits while a turn runs, so a chat ended mid-turn may not be
    * indexed yet. It is indexed before this answers (for at most
@@ -478,10 +490,8 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
    */
   router.register('chat.end', async (p) => {
     if (host.get(p.sessionId)) {
-      forget(p.sessionId); // the transcript now holds the live turns
       deps.titles?.forget(p.sessionId); // a first turn cut short gets no generated title
-      host.end(p.sessionId);
-      changed([p.sessionId]);
+      release(p.sessionId);
       const timers = deps.timers ?? realTimers;
       let timer: unknown;
       const capped = new Promise<void>((resolve) => {
@@ -606,5 +616,5 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
     return lastModels ?? [];
   });
 
-  return { send, requireRunnable };
+  return { send, requireRunnable, release };
 };

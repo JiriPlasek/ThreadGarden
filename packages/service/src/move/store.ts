@@ -74,6 +74,17 @@ export class ChatStore {
     );
   }
 
+  /**
+   * Makes these keys the chat's whole history, in one transaction: an import
+   * replaces the old copy a machine kept of a chat that comes back (§6).
+   */
+  replace(sessionId: string, keys: KeyEntries[]): void {
+    this.db.storeReplaceKeys(
+      sessionId,
+      keys.map((k) => ({ subpath: toSubpath(k.subpath), entries: toRows(k.entries) })),
+    );
+  }
+
   /** Every key of the chat with its entries, main transcript first (for a re-export). */
   entries(sessionId: string): KeyEntries[] {
     return this.db.storeSubpaths(sessionId).map((subpath) => {

@@ -8,7 +8,8 @@
  * request and answers with `oneShotReply` (v1.2 C1). History reads given a
  * `sessionStore` read it instead of `sessions`, roughly as the SDK does: the
  * entries' user and assistant lines are the messages, the last `timestamp`
- * is `lastModified`.
+ * is `lastModified`. `importSession` copies a local session (its messages as
+ * entries, then its `subagents`) into the store it is given.
  */
 import { randomUUID } from 'node:crypto';
 import type {
@@ -17,6 +18,7 @@ import type {
   AgentSession,
   CanUseTool,
   HistoryOptions,
+  ImportOptions,
   ModelInfo,
   OneShotOptions,
   PageOptions,
@@ -27,6 +29,7 @@ import type {
   SDKUserMessage,
   SessionMessage,
   SessionStore,
+  SessionStoreEntry,
   SlashCommand,
   StartOptions,
 } from '../sdk/adapter.js';
@@ -202,6 +205,10 @@ export class FakeAdapter implements AgentAdapter {
   readonly sessions = new Map<string, { info: SDKSessionInfo; messages: SessionMessage[] }>();
   readonly started: FakeSession[] = [];
   readonly forks: { sessionId: string; upToMessageId?: string; newSessionId: string }[] = [];
+  /** Subagent transcripts of local sessions, by session id (`importSession` copies them). */
+  readonly subagents = new Map<string, { subpath: string; entries: SessionStoreEntry[] }[]>();
+  /** Every `importSession` call, in order. */
+  readonly imports: { sessionId: string; options: ImportOptions }[] = [];
   /** v1.2 C1: every `oneShot` request, in order. */
   readonly oneShots: OneShotOptions[] = [];
   /** Answers `oneShot`; by default it fails, as if no model were reachable. */
@@ -267,6 +274,30 @@ export class FakeAdapter implements AgentAdapter {
     });
     this.forks.push({ sessionId: id, upToMessageId: o.upToMessageId, newSessionId });
     return { sessionId: newSessionId };
+  }
+
+  async importSession(id: string, store: SessionStore, o: ImportOptions): Promise<void> {
+    this.imports.push({ sessionId: id, options: o });
+    const local = this.sessions.get(id);
+    if (!local) throw new Error(`FakeAdapter: unknown session ${id}`);
+    const { cwd, lastModified } = local.info;
+    const key = { projectKey: o.dir ?? cwd ?? '', sessionId: id };
+    const timestamp = new Date(lastModified).toISOString();
+    await store.append(
+      key,
+      local.messages.map((m) => ({
+        type: m.type,
+        uuid: m.uuid,
+        sessionId: id,
+        timestamp,
+        ...(cwd === undefined ? {} : { cwd }),
+        message: m.message,
+      })),
+    );
+    if (!o.includeSubagents) return;
+    for (const sub of this.subagents.get(id) ?? []) {
+      await store.append({ ...key, subpath: sub.subpath }, sub.entries);
+    }
   }
 
   oneShot(o: OneShotOptions): Promise<string> {

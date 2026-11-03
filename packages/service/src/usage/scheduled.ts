@@ -167,7 +167,21 @@ export class ScheduledSends {
     return r.n;
   }
 
-  create(p: { sessionId: string; text: string; images?: ImageRef[] | undefined } & When) {
+  /** With an `id` already there (a move re-creating its sends), returns that send unchanged. */
+  create(
+    p: {
+      sessionId: string;
+      text: string;
+      images?: ImageRef[] | undefined;
+      id?: string | undefined;
+    } & When,
+  ) {
+    if (p.id !== undefined) {
+      const existing = this.deps.raw
+        .prepare('SELECT * FROM scheduled_sends WHERE id = ?')
+        .get(p.id) as Row | undefined;
+      if (existing) return toSend(existing);
+    }
     if (!this.deps.exists(p.sessionId)) {
       throw new ServiceError('NOT_FOUND', `Unknown chat ${p.sessionId}`);
     }
@@ -176,7 +190,7 @@ export class ScheduledSends {
       throw new ServiceError('INVALID_PARAMS', 'A scheduled message needs text or an image');
     }
     const { sendAt, afterReset } = this.when(p);
-    const id = randomUUID();
+    const id = p.id ?? randomUUID();
     this.deps.raw
       .prepare(
         `INSERT INTO scheduled_sends (id, session_id, text, images, send_at, created_at, after_reset)

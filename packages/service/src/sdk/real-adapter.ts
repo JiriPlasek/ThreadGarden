@@ -13,6 +13,7 @@ import {
   forkSession,
   getSessionInfo,
   getSessionMessages,
+  importSessionToStore,
   listSessions,
   query,
 } from '@anthropic-ai/claude-agent-sdk';
@@ -21,6 +22,7 @@ import type {
   AgentAdapter,
   AgentSession,
   HistoryOptions,
+  ImportOptions,
   ModelInfo,
   OneShotOptions,
   Options,
@@ -30,6 +32,7 @@ import type {
   SDKSessionInfo,
   SDKUserMessage,
   SessionMessage,
+  SessionStore,
   SlashCommand,
   StartOptions,
 } from './adapter.js';
@@ -41,9 +44,17 @@ export type SdkApi = {
   getSessionInfo: typeof getSessionInfo;
   getSessionMessages: typeof getSessionMessages;
   forkSession: typeof forkSession;
+  importSessionToStore: typeof importSessionToStore;
 };
 
-const realSdk: SdkApi = { query, listSessions, getSessionInfo, getSessionMessages, forkSession };
+const realSdk: SdkApi = {
+  query,
+  listSessions,
+  getSessionInfo,
+  getSessionMessages,
+  forkSession,
+  importSessionToStore,
+};
 
 /**
  * The environment for a session's `claude` process. The SDK's `env` option
@@ -286,6 +297,13 @@ export class RealAdapter implements AgentAdapter {
       id,
       o.upToMessageId === undefined ? {} : { upToMessageId: o.upToMessageId },
     );
+  }
+
+  importSession(id: string, store: SessionStore, o: ImportOptions): Promise<void> {
+    return this.sdk.importSessionToStore(id, store, {
+      ...(o.dir === undefined ? {} : { dir: o.dir }),
+      includeSubagents: o.includeSubagents,
+    });
   }
 
   /**

@@ -790,6 +790,12 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         host: sessionHost,
         db: opened,
         store: chatStore,
+        adapter,
+        locks: moveLocks,
+        catalog: cat,
+        index,
+        release: chatHandlers.release,
+        now: clock,
         target: { tools: projectTools, createIn: () => maker!.createIn(), headless },
       });
       registerProjectHandlers(router, {

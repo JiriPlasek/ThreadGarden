@@ -1070,6 +1070,14 @@ export class Db implements LiveRegistry {
     });
   }
 
+  /** Replaces every entry of a session with these keys, in one transaction (a move's import). */
+  storeReplaceKeys(sessionId: string, keys: { subpath: string; entries: StoreRow[] }[]): void {
+    this.inTransaction(() => {
+      this.raw.prepare('DELETE FROM store_entries WHERE session_id = ?').run(sessionId);
+      for (const k of keys) this.storeInsert(sessionId, k.subpath, k.entries);
+    });
+  }
+
   private storeInsert(sessionId: string, subpath: string, entries: StoreRow[]): void {
     if (entries.length === 0) return;
     const top = this.raw

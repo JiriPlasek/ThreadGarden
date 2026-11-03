@@ -112,3 +112,20 @@ export const makeFolder = async (parent: string, name: string, home?: string): P
   }
   return target;
 };
+
+/**
+ * A chat moved here into `cwd`: makes the folder that holds it when missing
+ * (with its own missing parents), never `cwd` itself (Claude clones into it).
+ */
+export const makeParentFolder = async (cwd: string): Promise<void> => {
+  if (!path.isAbsolute(cwd)) {
+    throw new ServiceError('INVALID_PARAMS', 'The folder must be a full path');
+  }
+  const parent = path.dirname(cwd);
+  if (await exists(parent)) return;
+  try {
+    await mkdir(parent, { recursive: true });
+  } catch (err) {
+    throw fsError(err);
+  }
+};

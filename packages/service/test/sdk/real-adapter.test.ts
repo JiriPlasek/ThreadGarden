@@ -37,6 +37,7 @@ const setup = (messages: SDKMessage[] = []) => {
     getSessionInfo: vi.fn(async () => undefined),
     getSessionMessages: vi.fn(async () => []),
     forkSession: vi.fn(async () => ({ sessionId: 'new' })),
+    importSessionToStore: vi.fn(async () => {}),
   };
   return { q, calls, sdk, adapter: new RealAdapter(sdk) };
 };
@@ -156,6 +157,20 @@ describe('RealAdapter session functions', () => {
     await adapter.forkSession('s1', {});
     expect(sdk.forkSession).toHaveBeenNthCalledWith(1, 's1', { upToMessageId: 'u1' });
     expect(sdk.forkSession).toHaveBeenNthCalledWith(2, 's1', {});
+  });
+
+  it('importSession copies through importSessionToStore, dir only when given', async () => {
+    const { sdk, adapter } = setup();
+    const store = { append: async () => {}, load: async () => null };
+    await adapter.importSession('s1', store, { dir: '/work/a', includeSubagents: true });
+    await adapter.importSession('s2', store, { includeSubagents: true });
+    expect(sdk.importSessionToStore).toHaveBeenNthCalledWith(1, 's1', store, {
+      dir: '/work/a',
+      includeSubagents: true,
+    });
+    expect(sdk.importSessionToStore).toHaveBeenNthCalledWith(2, 's2', store, {
+      includeSubagents: true,
+    });
   });
 });
 
