@@ -16,8 +16,15 @@ const WAKE_HORIZON_MS = 7 * 24 * 60 * MIN;
 const START_RETRY_MS = 10_000;
 /** …this many times (about 5 minutes); after that, on every minute tick. */
 const START_RETRIES = 30;
+/**
+ * A service still running this long after `systemctl poweroff` was accepted is on
+ * a machine that is not going down: a real shutdown stops it within seconds. Well
+ * inside the switch's 15 min arming, after which the switch cuts (rules.ts).
+ */
+const POWEROFF_GRACE_MS = 5 * MIN;
 
 export const SEND_DUE_SOON = 'A scheduled message is due soon';
+export const DID_NOT_POWER_OFF = 'The machine did not power off within 5 minutes.';
 export const NOT_CONFIGURED =
   'This machine has no power switch set up, so it would not turn on again.';
 
@@ -99,12 +106,6 @@ const firstLine = (err: unknown): string => {
 const poweroffReason = (err: unknown): string =>
   (err as { killed?: unknown } | null)?.killed === true ? 'systemctl timed out' : firstLine(err);
 
-/** Best effort: no cut and no wake on the switch; every error is ignored. */
-const disarmQuietly = async (sw: PowerSwitch): Promise<void> => {
-  await sw.disarm().catch(() => {});
-  await sw.armWake(null).catch(() => {});
-};
-
 /**
  * Powers a headless machine off safely (spec §10): the push check, then the next
  * scheduled send, then the cut and the wake are armed on the switch, and only then
@@ -125,6 +126,8 @@ export class ShutdownSequence {
   private startProblem: string | null = null;
   private startRetries = 0;
   private retryHandle: unknown = null;
+  /** The watch started once a poweroff was accepted (see `watchPoweroff`). */
+  private graceHandle: unknown = null;
   private closed = false;
   /** The switch while a cut of this sequence is armed and the machine is not yet powering off. */
   private armed: PowerSwitch | null = null;
@@ -166,7 +169,7 @@ export class ShutdownSequence {
         // Never leave a cut armed on a machine that is not powering off.
         const sw = this.armed;
         this.armed = null;
-        if (sw) await disarmQuietly(sw);
+        if (sw) await this.disarmUntilDone();
         return this.settle({ ...RUNNING, problem: 'The shutdown stopped unexpectedly.' });
       })
       .finally(() => {
@@ -214,11 +217,49 @@ export class ShutdownSequence {
     this.set(RUNNING);
   }
 
-  /** Stops the start disarm's retries (the service is closing). */
-  close(): void {
+  /**
+   * Stops the start disarm's retries and the poweroff watch (the service is closing).
+   * A shutdown under way closes the service: the cut it armed must stay armed then.
+   * A sequence that has not sent its poweroff yet is not one: it sees `closed`, arms
+   * nothing more and disarms what it armed, after its own last switch command (see
+   * `sequence`); this waits for it.
+   */
+  async close(): Promise<void> {
     this.closed = true;
     if (this.retryHandle !== null) this.timers.clear(this.retryHandle);
     this.retryHandle = null;
+    if (this.graceHandle !== null) this.timers.clear(this.graceHandle);
+    this.graceHandle = null;
+    await this.inFlight?.catch(() => {});
+  }
+
+  /**
+   * Disarms the cut and clears the wake on a machine that stays on, retried like the
+   * start disarm until both get through; no sequence arms meanwhile. A disarm lost
+   * here would cut this running machine once the switch's arming runs out (rules.ts).
+   */
+  private async disarmUntilDone(): Promise<void> {
+    this.startPending = true;
+    this.startRetries = 0;
+    await this.startDisarm();
+    this.scheduleRetry();
+  }
+
+  /**
+   * Once a poweroff was accepted, the cut stays armed for a machine that hangs on its
+   * way down: the switch cuts when its arming runs out. A machine still running after
+   * POWEROFF_GRACE_MS is not going down, so the cut and the wake are disarmed, retried
+   * like the start disarm until they get through; no sequence arms meanwhile.
+   */
+  private watchPoweroff(): void {
+    if (this.closed) return;
+    this.graceHandle = this.timers.set(() => {
+      this.graceHandle = null;
+      if (this.closed || this.state.phase !== 'shuttingDown') return;
+      this.o.log?.warn('power: still running 5 min after poweroff; disarming the cut');
+      this.settle({ ...RUNNING, problem: DID_NOT_POWER_OFF });
+      void this.disarmUntilDone();
+    }, POWEROFF_GRACE_MS);
   }
 
   /** One start disarm attempt at a time: a caller while one runs shares it. */
@@ -340,6 +381,8 @@ export class ShutdownSequence {
       );
       return this.settle({ ...RUNNING, problem });
     }
+    // The service is closing (see `close`): nothing is armed any more.
+    if (this.closed) return this.set(RUNNING);
     const sw = this.makeSwitch(stored.config, stored.password);
     try {
       // From here a failure anywhere must disarm (see `run`).
@@ -351,7 +394,7 @@ export class ShutdownSequence {
       const problem = switchProblem(err);
       this.o.log?.warn(`power: ${r.reason} shutdown stopped, the switch was not armed: ${problem}`);
       // A cut armed before the wake failed must not stay armed on a running machine.
-      await disarmQuietly(sw);
+      await this.disarmUntilDone();
       return this.settle({ ...RUNNING, problem });
     }
     // A turn that started meanwhile (a message, a scheduled send) was never checked
@@ -359,7 +402,7 @@ export class ShutdownSequence {
     if (!busyAtStart && this.o.idle.activeSince(startedAt)) {
       this.armed = null;
       this.o.log?.info(`power: ${r.reason} shutdown stopped, a chat got to work meanwhile`);
-      await disarmQuietly(sw);
+      await this.disarmUntilDone();
       return this.settle(RUNNING);
     }
 
@@ -373,6 +416,16 @@ export class ShutdownSequence {
     } catch (err) {
       this.o.log?.warn(`power: stopping sessions failed: ${firstLine(err)}`);
     }
+    // The service is closing with no poweroff sent (stopped by hand, or an update): the
+    // machine stays on, so what this sequence armed is disarmed, after its own last
+    // switch command. One attempt each: the service is on its way out.
+    if (this.closed) {
+      this.armed = null;
+      this.o.log?.info(`power: ${r.reason} shutdown stopped, the service is closing`);
+      await sw.disarm().catch(() => {});
+      await sw.armWake(null).catch(() => {});
+      return this.set(RUNNING);
+    }
     // Powering off: from here the cut must stay armed, whatever happens to this process.
     this.armed = null;
     try {
@@ -383,12 +436,14 @@ export class ShutdownSequence {
         this.o.log?.info(
           `power: systemctl poweroff ended by a signal (${reason}); the machine is going down`,
         );
+        this.watchPoweroff();
         return this.status();
       }
       this.o.log?.warn(`power: poweroff failed: ${reason}`);
-      await disarmQuietly(sw);
+      await this.disarmUntilDone();
       return this.settle({ ...RUNNING, problem: `The machine refused to power off (${reason})` });
     }
+    this.watchPoweroff();
     return this.status();
   }
 }

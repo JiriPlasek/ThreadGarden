@@ -284,7 +284,7 @@ Owner answers after the review (2026-10-31): Threadgarden may switch branches in
 - Claude installs dependencies; Threadgarden does not (§8).
 - A move requires a clean, pushed project and an idle chat; the old copy stays read-only, hidden (§9).
 - Background processes do not keep a machine awake (§10).
-- Power cut only after the reading shows the PC is off; a plug cycle when it is already on (§10).
+- Power cut only after the reading shows the PC is off; a plug cycle when it is already on (§10). *Changed by the owner on 2026-11-03*, after the Ubuntu PC froze at the very end of an idle shutdown (its disks already written out) and stayed on all night: the switch now also cuts when its 15 min arming runs out, and the service disarms if it is still running 5 min after `systemctl poweroff`, so a running PC is never cut.
 - Scheduled sends wake the machine through a bridge timer (§10).
 - Power switches sit behind one interface; Tasmota Wi-Fi plugs ship as experimental until tried on real hardware; Threadgarden claims one rule slot and its own timers on a shared switch and touches nothing else; setup never switches the plug off as a test; the cut is armed with an expiry (§10, 2026-11-01).
 - The push check blocks shutdown and raises Needs you (§10).

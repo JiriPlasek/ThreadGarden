@@ -31,8 +31,8 @@ const expected = [
   'on ZbReceived#UbuntuPlug#ActivePower<5 do Add14 %var15% endon',
   'on ZbReceived#UbuntuPlug#ActivePower>=5 do Var14 0 endon',
   'on Var14#State>=6 do Backlog %mem12%;Mem11 %utctime%;Event tgo endon',
-  'on Rules#Timer=8 do Event tgo endon',
-  'on Event#tgw do Backlog %mem12%;Mem11 %utctime%;RuleTimer6 90 endon',
+  'on Rules#Timer=8 do Backlog %mem12%;Mem11 %utctime%;Event tgo endon',
+  'on Event#tgw do Backlog Event tgo;%mem12%;Mem11 %utctime%;RuleTimer6 90 endon',
   'on Rules#Timer=6 do %mem13% endon',
   'on Clock#Timer=16 do Event tgw endon',
 ].join(' ');
@@ -46,6 +46,19 @@ describe('ruleText', () => {
   });
   it('uses the plug trigger for a Wi-Fi plug', () => {
     expect(ruleText(plug)).toContain('on StatusSNS#ENERGY#Power<5 do Add14');
+  });
+  it('an arming that runs out cuts like the low readings do: a hung shutdown never stays on', () => {
+    const t = ruleText(cfg);
+    const cut = 'do Backlog %mem12%;Mem11 %utctime%;Event tgo endon';
+    // The 15 minutes of arming end in the same cut the readings make, spelled out.
+    expect(t).toContain('RuleTimer8 900');
+    expect(t).toContain(`on Rules#Timer=8 ${cut}`);
+    expect(t).toContain(`on Var14#State>=6 ${cut}`);
+    // A disarm stops that timer as well as the readings.
+    expect(t).toContain('on Event#tgo do Backlog Var15 0;Var14 0;RuleTimer7 0;RuleTimer8 0 endon');
+  });
+  it('a wake or a cycle ends any arming: the machine it turns on is never cut later', () => {
+    expect(ruleText(cfg)).toContain('on Event#tgw do Backlog Event tgo;%mem12%;');
   });
 });
 

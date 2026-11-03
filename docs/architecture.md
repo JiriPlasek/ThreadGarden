@@ -745,7 +745,15 @@ Var14–15, Mem11–14, Timer16); the list is in
 and nothing else on the switch is changed. Arming sets a counter and a 5 s
 timer that makes the plug report its watts; six readings in a row below the
 "off" line (about 30 s) switch the plug off, a reading at or above the line
-resets the count, and the arm expires after 900 s. Every reading the plug
+resets the count, and an arm still set after 900 s cuts too (`Rules#Timer=8`
+does the same cut), for a machine that hung at the end of its shutdown. That
+is safe because every disarm of a machine that stays on is retried until the
+switch answers, and no new sequence arms meanwhile: when a sequence stops
+before its poweroff, when the poweroff is refused, and when the service is
+still running 5 min after `systemctl poweroff` was accepted (a real shutdown
+stops it within seconds). The service's close disarms only a sequence that has
+not sent its poweroff yet, and a wake or cycle (`Event tgw`) ends any arming.
+Every reading the plug
 reports counts, not only the timer's: while the desktop also reads the plug
 during a shutdown (every 5 s), the cut can come after about 15 s, but still only
 after six readings under the line. The service also disarms at every start
