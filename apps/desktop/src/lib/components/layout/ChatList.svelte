@@ -654,7 +654,10 @@
           onMove={(_, bucket) => moveFromMenu(chat, bucket)}
           onMoveMachine={machines.several
             ? () =>
-                interaction.openMoveChat({ machineId: chat.machineId, sessionId: chat.sessionId })
+                interaction.openMoveChat(
+                  { machineId: chat.machineId, sessionId: chat.sessionId },
+                  chat,
+                )
             : undefined}
         />
       {/if}

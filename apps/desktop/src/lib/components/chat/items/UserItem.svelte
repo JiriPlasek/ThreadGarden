@@ -47,7 +47,7 @@
       {/each}
     </div>
   {/if}
-  {#if !nested && actions.fork}
+  {#if !nested && actions.fork && !fromThreadgarden}
     <button
       type="button"
       class="text-muted-foreground hover:text-foreground hover:bg-background absolute top-1.5 right-1.5 rounded p-1 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"

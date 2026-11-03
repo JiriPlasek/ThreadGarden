@@ -1,6 +1,6 @@
-import type { Result } from '@threadgarden/protocol';
+import type { ChatSummary, Result } from '@threadgarden/protocol';
 import { quietly, type Api } from './api';
-import type { ChatRef } from './refs';
+import { chatKey, type ChatRef } from './refs';
 
 /** Drafts are written this long after the last keystroke (spec §7: ≤ 300 ms). */
 export const DRAFT_SAVE_DELAY_MS = 300;
@@ -11,6 +11,8 @@ export type SystemStatus = Result<'system.status'>;
 export type FileSuggestion = Result<'files.suggest'>[number];
 export type SlashCommand = Result<'chat.commands'>[number];
 export type ModelChoice = Result<'chat.models'>[number];
+/** Threadgarden's first note in a moved chat that didn't send (move-chat §6). */
+export type PendingNote = { text: string; problem: string };
 
 /**
  * What the composer, the new-chat dialog and the setup screen need from the
@@ -30,8 +32,20 @@ export class InteractionState {
     cwd: null,
     machineId: null,
   });
-  /** The Move to… dialog (move-chat §3), for the chat `ref`. */
-  moveChat = $state<{ open: boolean; ref: ChatRef | null }>({ open: false, ref: null });
+  /**
+   * The Move to… dialog (move-chat §3), for the chat `ref`; `summary` names a
+   * chat that is not open (from its row or the switcher).
+   */
+  moveChat = $state<{ open: boolean; ref: ChatRef | null; summary: ChatSummary | null }>({
+    open: false,
+    ref: null,
+    summary: null,
+  });
+  /**
+   * First notes of moved chats that didn't send, by the chat's key on its new
+   * machine: the chat there shows them with Send again, dialog or not.
+   */
+  pendingNotes = $state<Record<string, PendingNote>>({});
   /** The Ctrl/Cmd+K quick switcher (spec §6.1). */
   switcherOpen = $state(false);
   /** Threadgarden's settings dialog (spec §6.5). */
@@ -166,12 +180,28 @@ export class InteractionState {
 
   // ── move a chat ─────────────────────────────────────────────────────────
 
-  openMoveChat = (ref: ChatRef): void => {
-    this.moveChat = { open: true, ref: { machineId: ref.machineId, sessionId: ref.sessionId } };
+  openMoveChat = (ref: ChatRef, summary: ChatSummary | null = null): void => {
+    this.moveChat = {
+      open: true,
+      ref: { machineId: ref.machineId, sessionId: ref.sessionId },
+      summary,
+    };
   };
 
   closeMoveChat = (): void => {
     this.moveChat = { ...this.moveChat, open: false };
+  };
+
+  notePending = (ref: ChatRef, note: PendingNote): void => {
+    this.pendingNotes = { ...this.pendingNotes, [chatKey(ref)]: note };
+  };
+
+  noteSent = (ref: ChatRef): void => {
+    const key = chatKey(ref);
+    if (!(key in this.pendingNotes)) return;
+    const rest = { ...this.pendingNotes };
+    delete rest[key];
+    this.pendingNotes = rest;
   };
 }
 

@@ -267,7 +267,7 @@
               <DropdownMenu.Separator />
               <DropdownMenu.Item
                 class="py-1 text-xs"
-                onSelect={() => interaction.openMoveChat({ machineId, sessionId })}
+                onSelect={() => interaction.openMoveChat({ machineId, sessionId }, summary)}
               >
                 <ArrowRightLeftIcon /> Move to…
               </DropdownMenu.Item>

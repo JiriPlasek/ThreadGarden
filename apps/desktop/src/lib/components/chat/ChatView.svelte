@@ -16,7 +16,7 @@
   import type { ResumeCheck } from '#lib/state/chats.svelte.js';
   import { useApp, useScope } from '#lib/state/context.js';
   import { machineNameOf } from '#lib/state/machines.svelte.js';
-  import type { ChatRef } from '#lib/state/refs.js';
+  import { chatKey, type ChatRef } from '#lib/state/refs.js';
   import type { SendWhen } from '#lib/state/scheduled.svelte.js';
   import ActivityPanel from './ActivityPanel.svelte';
   import ChatHeader from './ChatHeader.svelte';
@@ -47,7 +47,7 @@
    */
   let { ref }: { ref: ChatRef } = $props();
 
-  const { tabs, settings, usageAccounts, machines } = useApp();
+  const { tabs, settings, usageAccounts, machines, interaction: appInteraction } = useApp();
   /** The chat's machine (`ChatPane` shows it inside that machine's scope). */
   const scope = useScope();
   const { chats, interaction, scheduled } = scope;
@@ -61,6 +61,25 @@
       ? { machineId: chat.movedTo.machineId, name: machineNameOf(machines, chat.movedTo.machineId) }
       : null,
   );
+
+  /** Threadgarden's first note after a move here didn't send (move-chat §6): Send again. */
+  const pendingNote = $derived(appInteraction.pendingNotes[chatKey(ref)]);
+  const machineName = $derived(machineNameOf(machines, scope.machineId));
+  let noteSending = $state(false);
+  const sendNoteAgain = async (): Promise<void> => {
+    const note = pendingNote;
+    if (!note || noteSending) return;
+    noteSending = true;
+    try {
+      await chats.send(sessionId, note.text);
+      appInteraction.noteSent(ref);
+    } catch (err) {
+      const problem = err instanceof Error ? err.message : String(err);
+      appInteraction.notePending(ref, { text: note.text, problem });
+    } finally {
+      noteSending = false;
+    }
+  };
 
   let root = $state<HTMLDivElement | null>(null);
   let composerBox = $state<HTMLTextAreaElement | null>(null);
@@ -496,6 +515,23 @@
           </div>
         {:else}
           <div class="mx-auto w-full max-w-4xl shrink-0 space-y-1.5 px-4 pt-1 pb-3">
+            {#if pendingNote}
+              <div
+                class="border-destructive/40 bg-destructive/5 flex items-center gap-2 rounded-md border px-3 py-1.5 text-xs"
+                role="alert"
+                aria-label="Claude's first note didn't send"
+              >
+                <p class="text-destructive min-w-0 flex-1">
+                  Claude's first note on {machineName} didn't send: {pendingNote.problem}
+                </p>
+                <button
+                  type="button"
+                  class="bg-background hover:bg-muted inline-flex h-6 shrink-0 items-center rounded border px-2 disabled:opacity-50"
+                  disabled={noteSending}
+                  onclick={() => void sendNoteAgain()}>Send again</button
+                >
+              </div>
+            {/if}
             {#if setupItem && setupItem.kind === 'system' && setupItem.id !== dismissedSetup}
               <SetupScreen
                 kind="update"

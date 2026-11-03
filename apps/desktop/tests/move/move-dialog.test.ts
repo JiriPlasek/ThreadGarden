@@ -35,6 +35,14 @@ const CONFIG: PowerConfig = {
 
 type Handler = (p: unknown) => unknown;
 
+/** What a rendered chat pane asks besides `chat.open`. */
+const PANE: Record<string, Handler> = {
+  'chat.commands': () => [],
+  'chat.models': () => [],
+  'files.suggest': () => [],
+  'chat.resumeCheck': () => ({ status: 'ok', reason: '', recentlyModified: false }),
+};
+
 let apps: AppState[] = [];
 beforeEach(() => {
   // bits-ui's scroll lock of a dialog left open by the previous test outlives it in jsdom.
@@ -97,6 +105,8 @@ const start = async (
         'scheduled.list': () => ({ items: [] }),
         'chat.send': () => ({ queued: false }),
         'chat.interrupt': () => ({}),
+        'chat.end': () => ({}),
+        ...PANE,
         ...o.source,
       });
     },
@@ -117,6 +127,7 @@ const start = async (
         'move.importPart': () => ({}),
         'move.commit': () => ({ summary: summary('s1') }),
         'chat.send': () => ({ queued: false }),
+        ...PANE,
         ...o.target,
       });
       if (o.off) s.refuse = true;
@@ -126,11 +137,11 @@ const start = async (
   return env;
 };
 
-/** Renders the dialog and opens it on This PC's chat s1. */
-const openDialog = async (o: Parameters<typeof start>[0] = {}) => {
+/** Renders the dialog and opens it on chat s1 of `ref`'s machine (This PC's by default). */
+const openDialog = async (o: Parameters<typeof start>[0] & { ref?: typeof REF } = {}) => {
   const env = await start(o);
   render(MoveChatDialog, { context: env.context });
-  env.app.interaction.openMoveChat(REF);
+  env.app.interaction.openMoveChat(o.ref ?? REF);
   const dialog = await screen.findByRole('dialog', { name: /move this chat/i });
   return { ...env, dialog };
 };
@@ -158,7 +169,7 @@ describe('Move to… entry points', () => {
     const header = render(ChatHeader, { context, props: { chat: app.chats.get('s1')! } });
     await openMenu(screen.getByRole('button', { name: 'Chat state' }));
     await userEvent.click(await screen.findByRole('menuitem', { name: 'Move to…' }));
-    expect(app.interaction.moveChat).toEqual({ open: true, ref: REF });
+    expect(app.interaction.moveChat).toMatchObject({ open: true, ref: REF });
     header.unmount();
     app.interaction.closeMoveChat();
 
@@ -167,7 +178,9 @@ describe('Move to… entry points', () => {
     const row = await screen.findByRole('option', { name: /Fix usage/ });
     await fireEvent.contextMenu(row);
     await userEvent.click(await screen.findByRole('menuitem', { name: 'Move to…' }));
-    expect(app.interaction.moveChat).toEqual({ open: true, ref: REF });
+    expect(app.interaction.moveChat).toMatchObject({ open: true, ref: REF });
+    // The row's summary comes along: the dialog names a chat that is not open.
+    expect(app.interaction.moveChat.summary?.title).toBe('Fix usage');
     list.unmount();
     app.interaction.closeMoveChat();
 
@@ -177,7 +190,8 @@ describe('Move to… entry points', () => {
     await userEvent.keyboard('{Control>}k{/Control}');
     await userEvent.type(await screen.findByRole('combobox'), 'move');
     await userEvent.click(await screen.findByRole('option', { name: /Move to…/ }));
-    expect(app.interaction.moveChat).toEqual({ open: true, ref: REF });
+    expect(app.interaction.moveChat).toMatchObject({ open: true, ref: REF });
+    expect(app.interaction.moveChat.summary?.sessionId).toBe('s1');
   });
 });
 
@@ -188,6 +202,29 @@ describe('the Move dialog', () => {
     expect(optionsOf(select)).toEqual([{ text: 'Ubuntu PC', disabled: true }]);
     expect(within(dialog).getByText('Update Ubuntu PC to move chats there')).toBeTruthy();
     expect(within(dialog).queryByRole('button', { name: 'Move' })).toBeNull();
+  });
+
+  it('a chat on Ubuntu PC offers This PC as a target', async () => {
+    const { dialog } = await openDialog({
+      ref: { machineId: M1, sessionId: 's1' },
+      target: {
+        'move.check': () => ({ cwd: '/home/u/threadgarden', busy: null, git: CLEAN }),
+      },
+      source: {
+        'move.target': () => ({ folder: 'C:\\work\\threadgarden', matched: true, inUse: null }),
+      },
+    });
+    const select = within(dialog).getByRole('combobox', { name: 'Machine' });
+    expect(optionsOf(select)).toEqual([{ text: 'This PC', disabled: false }]);
+    expect(await within(dialog).findByText('C:\\work\\threadgarden')).toBeTruthy();
+  });
+
+  it('names a chat that is not open from the summary it was opened with', async () => {
+    const env = await start();
+    render(MoveChatDialog, { context: env.context });
+    env.app.interaction.openMoveChat(REF, summary('s1', { title: 'Fix usage' }));
+    const dialog = await screen.findByRole('dialog', { name: /move this chat/i });
+    expect(within(dialog).getByText(/Fix usage/)).toBeTruthy();
   });
 
   it('an Off machine with power control will be started; one without is off', async () => {
@@ -279,6 +316,52 @@ describe('the Move dialog', () => {
       ).toBe(false),
     );
     expect(within(dialog).queryByText(/Claude is working in this chat/)).toBeNull();
+  });
+
+  it('background agents: Stop the chat ends it (an interrupt would leave them running)', async () => {
+    const { dialog, server } = await openDialog({ busy: 'subagents' });
+    expect(await within(dialog).findByText(/Background agents are running/)).toBeTruthy();
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Stop the chat' }));
+    await waitFor(() => expect(server.calls('chat.end')).toHaveLength(1));
+    expect(server.calls('chat.end')[0]!.params).toEqual({ sessionId: 's1' });
+    expect(server.calls('chat.interrupt')).toHaveLength(0);
+  });
+
+  it('a stop that fails says so in the dialog', async () => {
+    const { dialog } = await openDialog({
+      busy: 'turn',
+      source: {
+        'chat.interrupt': () => {
+          throw new RpcFail('NOT_LIVE', 'Chat s1 is not running');
+        },
+      },
+    });
+    await userEvent.click(await within(dialog).findByRole('button', { name: 'Stop the chat' }));
+    expect(await within(dialog).findByText('Chat s1 is not running')).toBeTruthy();
+  });
+
+  it('Cancel is offered until the commit is sent, not after', async () => {
+    const held: Record<string, () => void> = {};
+    const hold = (name: string, answer: unknown) => () =>
+      new Promise((resolve) => (held[name] = () => resolve(answer)));
+    const { dialog, remote } = await openDialog({
+      source: { 'move.exportBegin': hold('begin', { exportId: 'x', parts: 1, bytes: 10 }) },
+      target: { 'move.commit': hold('commit', { summary: summary('s1') }) },
+    });
+    // Before the commit: the move can be given up.
+    await userEvent.click(await within(dialog).findByRole('button', { name: 'Move' }));
+    await waitFor(() => expect(held['begin']).toBeDefined());
+    expect(within(dialog).getByText('Moving…')).toBeTruthy();
+    expect(within(dialog).getByRole('button', { name: 'Cancel' })).toBeTruthy();
+    held['begin']!();
+    // The commit is out: Cancel would do nothing, so it is gone.
+    await waitFor(() => expect(remote.calls('move.commit')).toHaveLength(1));
+    await waitFor(() =>
+      expect(within(dialog).queryByRole('button', { name: 'Cancel' })).toBeNull(),
+    );
+    expect(within(dialog).getByText('Moving…')).toBeTruthy();
+    held['commit']!();
+    expect(await within(dialog).findByText('Moved to Ubuntu PC')).toBeTruthy();
   });
 
   it('inUse warning text', async () => {
@@ -377,6 +460,39 @@ describe('the Move dialog', () => {
 });
 
 describe('the moved copy', () => {
+  it('a failed first note shows in the chat on the target, also once the dialog is closed', async () => {
+    let fails = true;
+    const { dialog, remote, app, context } = await openDialog({
+      target: {
+        'chat.send': () => {
+          if (fails) throw new RpcFail('INTERNAL', 'Claude Code is not ready');
+          return { queued: false };
+        },
+      },
+    });
+    app.tabs.openTab(REF);
+    render(ChatPane, { context });
+    await userEvent.click(await within(dialog).findByRole('button', { name: 'Move' }));
+    expect(await within(dialog).findByText(/Claude Code is not ready/)).toBeTruthy();
+    await userEvent.keyboard('{Escape}');
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+
+    // The tab followed the chat to Ubuntu PC, and the chat says the note didn't go.
+    expect(app.tabs.active).toBe(`${M1}/s1`);
+    const notice = await screen.findByRole('alert', { name: /first note/ });
+    expect(notice.textContent).toContain(
+      "Claude's first note on Ubuntu PC didn't send: Claude Code is not ready",
+    );
+    fails = false;
+    await userEvent.click(within(notice).getByRole('button', { name: 'Send again' }));
+    await waitFor(() => expect(remote.calls('chat.send')).toHaveLength(2));
+    const [first, again] = remote.calls('chat.send').map((c) => c.params as { text: string });
+    expect(again!.text).toBe(first!.text);
+    expect(again!.text).toMatch(/^\[Threadgarden\] This chat moved from This PC to Ubuntu PC\./);
+    await waitFor(() => expect(screen.queryByRole('alert', { name: /first note/ })).toBeNull());
+    expect(app.interaction.pendingNotes).toEqual({});
+  });
+
   const chatOpen =
     (over: { movedTo?: { machineId: string; name: string }; items?: ChatItem[] }) =>
     (p: unknown) => ({
@@ -419,6 +535,16 @@ describe('the moved copy', () => {
     expect(app.tabs.active).toBe(`${M1}/s1`);
   });
 
+  it('keys in an away chat (no composer) do nothing harmful', async () => {
+    await renderChat(chatOpen({ movedTo: { machineId: M1, name: 'This PC' } }));
+    const banner = await screen.findByRole('status', { name: 'Moved to Ubuntu PC' });
+    within(banner).getByRole('button', { name: 'Open it on Ubuntu PC' }).focus();
+    await userEvent.keyboard('{Escape}');
+    await userEvent.keyboard('{Control>}.{/Control}');
+    await userEvent.keyboard('{Control>}.{/Control}');
+    expect(screen.getByRole('status', { name: 'Moved to Ubuntu PC' })).toBeTruthy();
+  });
+
   it('a [Threadgarden] note shows Sent by Threadgarden', async () => {
     const note = moveNote({
       from: 'Ubuntu PC',
@@ -433,5 +559,7 @@ describe('the moved copy', () => {
     expect(await screen.findByText(/This chat moved from Ubuntu PC to This PC/)).toBeTruthy();
     expect(screen.getAllByText('Sent by Threadgarden')).toHaveLength(1);
     expect(screen.getByText('carry on please')).toBeTruthy();
+    // Only the owner's message can be forked (a moved chat refuses forks anyway, R5).
+    expect(screen.getAllByRole('button', { name: 'Fork from this message' })).toHaveLength(1);
   });
 });

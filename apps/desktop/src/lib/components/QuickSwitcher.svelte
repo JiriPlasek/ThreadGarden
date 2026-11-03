@@ -72,12 +72,13 @@
   const moveCommand = $derived.by((): Command | null => {
     const ref = tabs.active ? parseChatKey(tabs.active) : null;
     if (!ref || !machines.several) return null;
-    if (scopes.get(ref.machineId)?.chats.get(ref.sessionId)?.movedTo) return null;
+    const chat = scopes.get(ref.machineId)?.chats.get(ref.sessionId);
+    if (chat?.movedTo) return null;
     return {
       id: 'move-chat',
       label: 'Move to…',
       icon: ArrowRightLeftIcon,
-      run: () => interaction.openMoveChat(ref),
+      run: () => interaction.openMoveChat(ref, chat?.summary ?? null),
     };
   });
 

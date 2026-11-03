@@ -12,6 +12,7 @@
   import { taskRunning } from '#lib/state/chats.svelte.js';
   import { useApp } from '#lib/state/context.js';
   import { machineLabel, machineNameOf, type MachineEntry } from '#lib/state/machines.svelte.js';
+  import { chatKey } from '#lib/state/refs.js';
 
   /**
    * Move to… (move-chat §3): the target machine (every paired machine but the
@@ -21,7 +22,11 @@
    * to commit and push, Move anyway and Cancel; a folder that isn't a git
    * repo, Move anyway and Cancel. Then the move (`MoveChat`): Starting
    * ‹target›…, Moving…, and the outcome. While the move runs the dialog stays
-   * open; Cancel gives it up before the target has the chat.
+   * open; Cancel gives it up until the commit is sent.
+   *
+   * Stop the chat stops the turn (`chat.interrupt`) for a turn or a prompt;
+   * background agents outlive an interrupt, so for them it ends the chat's
+   * process (`chat.end`, as End session does).
    */
   const app = useApp();
   const { interaction, machines, scopes, power } = app;
@@ -33,6 +38,8 @@
   /** A folder chosen with Browse… on the target; else the target's own choice. */
   let picked = $state<string | null>(null);
   let browsing = $state(false);
+  /** Why Stop the chat failed. */
+  let stopError = $state<string | null>(null);
 
   type Choice = { id: string; label: string; disabled: boolean; outdated: boolean };
 
@@ -66,12 +73,13 @@
   const targetName = $derived(target ? machineNameOf(machines, target) : '');
   const targetEntry = $derived(target ? machines.get(target) : undefined);
   const targetOn = $derived(targetEntry?.status === 'on');
-  const title = $derived(
-    ref ? (scopes.get(ref.machineId)?.chats.get(ref.sessionId)?.summary?.title ?? null) : null,
-  );
+  /** The chat open in a tab, if it is (its title, its background agents). */
+  const resident = $derived(ref ? scopes.get(ref.machineId)?.chats.get(ref.sessionId) : undefined);
+  const title = $derived(resident?.summary?.title ?? interaction.moveChat.summary?.title ?? null);
 
   /** Asks the checks again (a new target, folder, or after the chat was stopped). */
   const recheck = (): void => {
+    stopError = null;
     move = new MoveChat(app);
     if (ref && target) void move.prepare(ref, target, picked ?? undefined);
   };
@@ -125,11 +133,7 @@
       : null,
   );
   /** The chat's background agents, for "subagents" (known while the chat is open). */
-  const tasks = $derived(
-    ref
-      ? (scopes.get(ref.machineId)?.chats.get(ref.sessionId)?.tasks.filter(taskRunning) ?? [])
-      : [],
-  );
+  const tasks = $derived(resident?.tasks.filter(taskRunning) ?? []);
   const busyText = $derived(
     busy === 'turn'
       ? 'Claude is working in this chat. Stop it, or wait until the turn ends and check again.'
@@ -141,6 +145,12 @@
   );
 
   const inFlight = $derived(phase === 'starting' || phase === 'moving');
+  /** The first note didn't send and nothing has sent it since (the chat's own Send again may have). */
+  const notePending = $derived(
+    phase === 'noting' && ref && target
+      ? interaction.pendingNotes[chatKey({ machineId: target, sessionId: ref.sessionId })]
+      : undefined,
+  );
   const moved = $derived(phase === 'done' || phase === 'noting');
   /** The choices of a checked chat (also after a failed or cancelled move). */
   const choosing = $derived(!!check && (phase === 'ready' || phase === 'failed'));
@@ -183,15 +193,17 @@
     if (asking.state === 'idle') close();
   };
 
-  /** Stop the chat (the composer's stop), then the checks again. */
+  /** Stop the chat, then the checks again: the turn's stop, or End session for background agents. */
   const stopChat = async (): Promise<void> => {
     const r = ref;
     const chats = r ? scopes.get(r.machineId)?.chats : undefined;
     if (!r || !chats) return;
+    stopError = null;
     try {
-      await chats.interrupt(r.sessionId);
+      if (busy === 'subagents') await chats.end(r.sessionId);
+      else await chats.interrupt(r.sessionId);
     } catch (e) {
-      move.problem = e instanceof Error ? e.message : String(e);
+      stopError = e instanceof Error ? e.message : String(e);
       return;
     }
     recheck();
@@ -273,6 +285,9 @@
             {#if busy === 'subagents'}
               <RunningTaskList {tasks} />
             {/if}
+            {#if stopError}
+              <p class="text-destructive" role="alert">{stopError}</p>
+            {/if}
             <div class="mt-1 flex gap-2">
               <Button size="sm" variant="outline" onclick={() => void stopChat()}
                 >Stop the chat</Button
@@ -332,11 +347,11 @@
       {/if}
     </div>
 
-    {#if phase === 'noting' && move.problem}
+    {#if notePending}
       <p class="text-destructive text-xs" role="alert">
-        Claude's first note on {targetName} didn't send: {move.problem}
+        Claude's first note on {targetName} didn't send: {notePending.problem}
       </p>
-    {:else if move.problem}
+    {:else if move.problem && phase !== 'noting'}
       <p class="text-destructive text-xs" role="alert">{move.problem}</p>
     {/if}
     {#if moved && move.oldCopyShown}
@@ -347,14 +362,17 @@
 
     <Dialog.Footer>
       {#if inFlight}
-        <Button size="sm" variant="outline" onclick={() => move.abandon()}>Cancel</Button>
+        <!-- Once the commit is sent the move can't be given up: no Cancel. -->
+        {#if move.cancellable}
+          <Button size="sm" variant="outline" onclick={() => move.abandon()}>Cancel</Button>
+        {/if}
       {:else if moved}
         {#if move.oldCopyShown}
           <Button size="sm" variant="outline" onclick={() => void move.retryMarkMoved()}
             >Retry</Button
           >
         {/if}
-        {#if phase === 'noting'}
+        {#if notePending}
           <Button size="sm" variant="outline" onclick={() => void move.sendNoteAgain()}
             >Send again</Button
           >

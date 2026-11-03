@@ -9,6 +9,7 @@ import { MOVE_ERRORS, type GitState, type MovePeer, type Result } from '@threadg
 import { supportsMove } from '../projects';
 import { RequestError } from '../service/client';
 import type { Api } from '../state/api';
+import type { InteractionState } from '../state/interaction.svelte';
 import { machineNameOf, type MachinesState } from '../state/machines.svelte';
 import type { PowerState } from '../state/power.svelte';
 import type { ChatRef } from '../state/refs';
@@ -43,6 +44,8 @@ export type MoveApp = {
   machines: Pick<MachinesState, 'get' | 'shown'>;
   power: Pick<PowerState, 'turnOn' | 'config' | 'error'>;
   tabs: Pick<TabsState, 'retarget'>;
+  /** Where a first note that didn't send is kept, so the chat on the target can offer Send again. */
+  interaction: Pick<InteractionState, 'notePending' | 'noteSent'>;
 };
 
 export type MoveOptions = {
@@ -121,6 +124,14 @@ export class MoveChat {
   problem = $state<string | null>(null);
   /** The target has the chat but the source still lists its old copy (`markMoved` failed, R2). */
   oldCopyShown = $state(false);
+
+  /** The phase of the move in flight (null: none), for `cancellable`. */
+  private phaseNow = $state<Move['phase'] | null>(null);
+
+  /** The move in flight can still be given up (`abandon`): its commit was not sent yet. */
+  get cancellable(): boolean {
+    return this.phaseNow === 'before';
+  }
 
   /** What `prepare` was asked for. */
   private prepared: { ref: ChatRef; targetId: string; folder: string | null } | null = null;
@@ -202,6 +213,7 @@ export class MoveChat {
     // Taken before the first await: a second run() now is ignored.
     this.busy = true;
     this.running = move;
+    this.phaseNow = 'before';
     this.last = move;
     this.problem = null;
     this.oldCopyShown = false;
@@ -211,6 +223,7 @@ export class MoveChat {
     } finally {
       if (this.running === move) {
         this.running = null;
+        this.phaseNow = null;
         this.busy = false;
       }
     }
@@ -225,6 +238,7 @@ export class MoveChat {
     if (!move || move.phase !== 'before') return;
     move.cancelled = true;
     this.running = null;
+    this.phaseNow = null;
     this.busy = false;
     if (move.begun) this.abort(move);
     this.fail('Move cancelled');
@@ -319,7 +333,7 @@ export class MoveChat {
         const part = { importId, sessionId: ref.sessionId, index, parts: begun.parts, keys };
         await this.again(move, targetId, () => target.request('move.importPart', part));
       }
-      move.phase = 'committing';
+      this.setPhase(move, 'committing');
       const commit = {
         importId,
         sessionId: ref.sessionId,
@@ -327,7 +341,7 @@ export class MoveChat {
         from: this.peer(ref.machineId),
       };
       await this.again(move, targetId, () => target.request('move.commit', commit));
-      move.phase = 'after';
+      this.setPhase(move, 'after');
     } catch (e) {
       // Abandoned: `abandon()` said so already; an export begun since is let go too.
       if (e instanceof Cancelled || move.cancelled) {
@@ -367,19 +381,30 @@ export class MoveChat {
     await this.sendNote(move);
   };
 
+  /**
+   * Sends Claude's first note on the target. One that fails is handed to the
+   * app too (`notePending`), so the chat there can offer Send again after this
+   * dialog is gone (§6); either way of sending it again clears it.
+   */
   private sendNote = async (move: Move): Promise<void> => {
-    if (move.note === null) return;
+    const text = move.note;
+    if (text === null) return;
+    const there = { machineId: move.targetId, sessionId: move.ref.sessionId };
     try {
-      await this.api(move.targetId).request('chat.send', {
-        sessionId: move.ref.sessionId,
-        text: move.note,
-      });
+      await this.api(move.targetId).request('chat.send', { sessionId: there.sessionId, text });
+      this.app.interaction.noteSent(there);
       this.problem = null;
       this.state = 'done';
     } catch (e) {
       this.problem = reason(e);
+      this.app.interaction.notePending(there, { text, problem: this.problem });
       this.state = 'noting';
     }
+  };
+
+  private setPhase = (move: Move, phase: Move['phase']): void => {
+    move.phase = phase;
+    if (this.running === move) this.phaseNow = phase;
   };
 
   /** EXPIRED: the chat stays on the source; a new move needs fresh checks. */
