@@ -313,6 +313,24 @@ describe('MachinesState', () => {
     expect(machines.get(M1)?.status).toBe('on');
   });
 
+  it('reconnect tries a client that gave up on an incompatible machine again', async () => {
+    const hello = (protocolVersion: number, serviceVersion: string) => () => ({
+      serviceVersion,
+      protocolVersion,
+      machine: { ...info(M1, M1), capabilities: ['remote', UPDATE_CAPABILITY] },
+    });
+    remote(M1).handlers.hello = hello(12, '0.9.0');
+    await setup([paired(M1, 'Ubuntu PC')], { [M1]: 'tok' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(machines.get(M1)?.status).toBe('incompatible');
+
+    remote(M1).handlers.hello = hello(PROTOCOL_VERSION, '1.0.0');
+    machines.reconnect(M1);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(machines.get(M1)).toMatchObject({ status: 'on', version: '1.0.0' });
+  });
+
   it('pairs: keychain first, then connect', async () => {
     await setup([]);
     const order: string[] = [];

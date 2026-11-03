@@ -9,6 +9,7 @@ import { MOVE_ERRORS, type GitState, type MovePeer, type Result } from '@threadg
 import { supportsMove } from '../projects';
 import { RequestError } from '../service/client';
 import type { Api } from '../state/api';
+import { bringUp, pause, waitUntilOn } from '../state/bring-up';
 import type { InteractionState, PendingMark } from '../state/interaction.svelte';
 import { machineNameOf, type MachinesState } from '../state/machines.svelte';
 import type { PowerState } from '../state/power.svelte';
@@ -21,8 +22,6 @@ import { moveNote } from './note';
 export const START_WAIT_MS = 10 * 60_000;
 /** How long a call whose answer was lost waits for its machine to be on again before it is tried again. */
 export const RECONNECT_WAIT_MS = 2 * 60_000;
-/** How often it looks whether a machine is on meanwhile. */
-const ON_POLL_MS = 1_000;
 /**
  * Calls are tried this many times: the idempotent transfer calls and
  * `move.markMoved` after a lost answer (before the old copy is said to be
@@ -98,9 +97,6 @@ const lost = (e: unknown): boolean =>
 const isExpired = (e: unknown): boolean =>
   e instanceof RequestError && e.code === MOVE_ERRORS.expired;
 
-const pause = (ms: number): Promise<void> =>
-  ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve();
-
 /** `markMoved` answered EXPIRED: the chat went on on the source after its lock ran out. */
 const tooLong = (source: string, target: string): string =>
   `The move took too long and ${source} went on with this chat, so it stays there. The copy on ${target} is left as it was.`;
@@ -117,20 +113,6 @@ type Waiting = {
   retryMs: number;
   /** Throws when the wait is over (an abandoned move). */
   alive?: () => void;
-};
-
-const isOnIn = (machines: Pick<MachinesState, 'get'>, id: string): boolean =>
-  machines.get(id)?.status === 'on';
-
-/** Waits until machine `id` is on, at most `ms`; false when it did not come. */
-const waitUntilOn = async (w: Waiting, id: string, ms: number): Promise<boolean> => {
-  const deadline = Date.now() + ms;
-  for (;;) {
-    w.alive?.();
-    if (isOnIn(w.machines, id)) return true;
-    if (Date.now() >= deadline) return false;
-    await pause(ON_POLL_MS);
-  }
 };
 
 /**
@@ -507,7 +489,10 @@ export class MoveChat {
     let folder: string;
     try {
       // 1. An Off target with power control is turned on first (R1).
-      await this.bringUp(move);
+      await bringUp(this.app, targetId, {
+        waitMs: START_WAIT_MS,
+        alive: () => this.alive(move),
+      });
       if (!supportsMove(this.app.machines.get(targetId))) {
         throw new Error(`Update ${move.targetName} to move chats there`);
       }
@@ -680,27 +665,6 @@ export class MoveChat {
     if (!this.isOn(targetId) && !this.app.power.config(targetId)) return `${targetName} is off`;
     return null;
   };
-
-  /** Turns an Off target on (R1) and waits until its link is on; throws when it does not come up. */
-  private bringUp = async (move: Move): Promise<void> => {
-    const { targetId: id, targetName: name } = move;
-    if (this.isOn(id)) return;
-    const m = this.app.machines.get(id);
-    const shown = m ? this.app.machines.shown(m) : 'unreachable';
-    if (shown !== 'off' && shown !== 'starting') throw new Error(`${name} can't be reached`);
-    if (shown === 'off') {
-      const turnedOn = await this.app.power.turnOn(id);
-      this.alive(move);
-      if (!turnedOn) throw new Error(this.app.power.error(id) ?? `${name} couldn't be turned on`);
-    }
-    if (!(await this.waitOn(move, id, START_WAIT_MS))) {
-      throw new Error(`${name} didn't come up in 10 minutes`);
-    }
-  };
-
-  /** Waits until machine `id` is on, at most `ms` (false: it did not come); a given-up move stops it. */
-  private waitOn = (move: Move, id: string, ms: number): Promise<boolean> =>
-    waitUntilOn(this.waiting(move), id, ms);
 
   /** An idempotent call of this move on machine `machineId` (`retryLost`). */
   private again = <T>(move: Move, machineId: string, call: () => Promise<T>): Promise<T> =>

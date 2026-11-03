@@ -279,6 +279,9 @@ export class MachinesState {
     return client;
   };
 
+  /** Connects machine `id` again after its client gave up on it as incompatible (it has updated since). */
+  reconnect = (id: string): void => this.connectEntry(id);
+
   /** Loads the remembered versions; what this run already saw wins. */
   private restoreVersions = async (): Promise<void> => {
     let stored: unknown;
