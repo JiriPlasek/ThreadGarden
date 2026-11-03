@@ -169,7 +169,16 @@ describe('update.latest', () => {
   const make = () => {
     const router = new Router();
     const s = scripted(json({ version: '0.8.0' }));
-    registerUpdateHandlers(router, { latest: new LatestRelease({ fetch: s.fetch, now: () => 0 }) });
+    registerUpdateHandlers(router, {
+      latest: new LatestRelease({ fetch: s.fetch, now: () => 0 }),
+      updater: {
+        supported: () => false,
+        status: () => ({ state: 'idle' }),
+        start: async () => ({ started: true }),
+        reconcile: async () => {},
+      },
+      supported: () => false,
+    });
     return router;
   };
 

@@ -6,6 +6,7 @@ import {
   CAPABILITIES,
   POWER_CAPABILITY,
   PROTOCOL_VERSION,
+  UPDATE_CAPABILITY,
   type ChatStatus,
   type EventMsg,
   type MachineInfo,
@@ -40,7 +41,7 @@ import type { AgentAdapter } from './sdk/adapter.js';
 import type { ClaudeFound, ClaudeProblem } from './sdk/claude-path.js';
 import { buildSessionEnv } from './sdk/real-adapter.js';
 import { registerChatHandlers } from './server/handlers/chat.js';
-import { MoveLocks, registerMoveHandlers, type MoveGit } from './server/handlers/move.js';
+import { busyOf, MoveLocks, registerMoveHandlers, type MoveGit } from './server/handlers/move.js';
 import { makeResumeChecker, registerExternalHandlers } from './server/handlers/external.js';
 import { registerFileHandlers } from './server/handlers/files.js';
 import { registerProjectHandlers } from './server/handlers/projects.js';
@@ -58,6 +59,7 @@ import { PowerStore } from './power/store.js';
 import { registerUpdateHandlers } from './server/handlers/update.js';
 import { registerUsageHandlers } from './server/handlers/usage.js';
 import { LatestRelease, type Fetch } from './update/github.js';
+import { MachineUpdater, type Run, type Updater } from './update/updater.js';
 import { PowerHub } from './power/hub.js';
 import { REMOTE_PORT, startRemoteServer } from './server/remote-server.js';
 import { Router } from './server/router.js';
@@ -188,9 +190,18 @@ export type StartOptions = {
   pairingRandom?: (n: number) => Buffer;
   /**
    * Updating (protocol 10). `fetch` is how GitHub is asked for the newest
-   * release (default the global one); `latest` replaces that lookup outright.
+   * release and for its files (default the global one); `latest` replaces that
+   * lookup outright. `updater` replaces the machine's updater outright (the mock
+   * service); otherwise `installBase`, `platform` and `run` go to the real one.
    */
-  update?: { fetch?: Fetch; latest?: LatestRelease };
+  update?: {
+    fetch?: Fetch;
+    latest?: LatestRelease;
+    updater?: Updater;
+    installBase?: string;
+    platform?: NodeJS.Platform;
+    run?: Run;
+  };
 };
 
 /** How long shutdown waits for a running index pass to reach a stopping point. */
@@ -253,6 +264,32 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     }
   };
 
+  const updateFetch = opts.update?.fetch ?? fetch;
+  // Sessions and the poller exist later; read them lazily.
+  const updater: Updater =
+    opts.update?.updater ??
+    new MachineUpdater({
+      dataDir,
+      currentVersion: pkg.version,
+      ...(opts.update?.installBase === undefined ? {} : { installBase: opts.update.installBase }),
+      ...(opts.update?.platform === undefined ? {} : { platform: opts.update.platform }),
+      ...(opts.update?.run === undefined ? {} : { run: opts.update.run }),
+      fetch: updateFetch,
+      busyCount: async () => {
+        const chats = (host?.list() ?? []).filter((c) => {
+          const s = host?.get(c.sessionId);
+          return s !== undefined && busyOf(s) !== null;
+        });
+        const external = (opts.externals ?? (() => poller?.snapshot() ?? []))().filter(
+          (e) => e.status === 'busy' || e.state === 'working',
+        );
+        return chats.length + external.length;
+      },
+      emit: (s) => broadcastRef.fn({ event: 'update.progress', data: s }),
+      log,
+    });
+  /** A desktop's own updater looks after a desktop, whatever else is on the machine. */
+  const canUpdate = (): boolean => headless && updater.supported();
   /** This machine's identity; it lives in the database, so there is none without one. */
   const machineOf = (d: Db): MachineInfo => {
     const { id, name } = loadMachineIdentity(d, os.hostname());
@@ -263,13 +300,16 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       headless,
       home: os.homedir(),
       // `power` is for headless machines only (a desktop is never switched off this way).
-      capabilities: headless ? [...CAPABILITIES, POWER_CAPABILITY] : [...CAPABILITIES],
+      capabilities: headless
+        ? [...CAPABILITIES, POWER_CAPABILITY, ...(canUpdate() ? [UPDATE_CAPABILITY] : [])]
+        : [...CAPABILITIES],
     };
   };
-  // The newest release needs no database, so it is there whatever else is.
+  // None of these needs a database, so they are there whatever else is.
   registerUpdateHandlers(router, {
-    latest:
-      opts.update?.latest ?? new LatestRelease({ fetch: opts.update?.fetch ?? fetch, now: clock }),
+    latest: opts.update?.latest ?? new LatestRelease({ fetch: updateFetch, now: clock }),
+    updater,
+    supported: canUpdate,
   });
   router.register('hello', async (_p, ctx) => ({
     serviceVersion: pkg.version,
@@ -389,6 +429,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   };
   /** Counts of a replaced listener's sockets closing late must not count. */
   let remoteGeneration = 0;
+  let reconciled = false;
   /**
    * Puts the remote listener on `addresses` (sorted; none stops it): the
    * current one is closed and a new one started with the same port, identity,
@@ -435,6 +476,15 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       log.info(`listening for devices on ${where}`);
     } catch (err) {
       log.error(`listening for devices on ${addresses.join(', ')} failed: ${errorText(err)}`);
+      return;
+    }
+    // An update counts as done only now that devices can reach this version: one
+    // that dies before this point is rolled back by the apply script (ruling R6).
+    if (!reconciled) {
+      reconciled = true;
+      await updater
+        .reconcile()
+        .catch((err: unknown) => log.error(`update reconcile: ${errorText(err)}`));
     }
   };
   /** The move in progress, if any (one at a time; `close()` waits for it). */
