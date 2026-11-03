@@ -42,14 +42,20 @@ export const gitState = async (cwd: string, git: Git = defaultGit): Promise<GitS
     () => true,
     () => false,
   );
-  // A repository without commits has nothing to push.
-  const unpushed = await count(
-    git,
-    hasUpstream
-      ? ['rev-list', '--count', '@{u}..HEAD']
-      : ['rev-list', '--count', 'HEAD', '--not', '--remotes'],
-    cwd,
-  ).catch(() => 0);
+  // A repository without commits has nothing to push; any other git failure is not "clean".
+  const hasHead = await git(['rev-parse', '--verify', '-q', 'HEAD'], cwd).then(
+    () => true,
+    () => false,
+  );
+  const unpushed = !hasHead
+    ? 0
+    : await count(
+        git,
+        hasUpstream
+          ? ['rev-list', '--count', '@{u}..HEAD']
+          : ['rev-list', '--count', 'HEAD', '--not', '--remotes'],
+        cwd,
+      );
 
   return changed === 0 && unpushed === 0
     ? { kind: 'clean', branch, origin }

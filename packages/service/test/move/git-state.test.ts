@@ -102,6 +102,21 @@ describe.skipIf(!hasGit)('gitState', () => {
     expect(await gitState(repo)).toMatchObject({ origin: null });
   });
 
+  it('a git failure while counting unpushed commits rejects instead of reporting clean', async () => {
+    const failing = (args: string[], cwd: string) =>
+      args[0] === 'rev-list'
+        ? Promise.reject(new Error('git failed'))
+        : Promise.resolve(execFileSync('git', args, { cwd, encoding: 'utf8' }));
+    await expect(gitState(repo, failing)).rejects.toThrow();
+  });
+
+  it('a repository without commits has nothing unpushed', async () => {
+    const empty = join(root, 'empty');
+    mkdirSync(empty);
+    git(empty, 'init', '--initial-branch=main');
+    expect(await gitState(empty)).toEqual({ kind: 'clean', branch: 'main', origin: null });
+  });
+
   it('plain folder: notRepo', async () => {
     const plain = join(root, 'plain');
     mkdirSync(plain);

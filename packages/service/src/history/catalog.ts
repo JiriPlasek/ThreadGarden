@@ -569,7 +569,7 @@ export class Catalog {
     if (turns.size === 0 && backs.size === 0) return waiting;
     const since = new Map(turns);
     for (const [id, at] of backs) since.set(id, Math.max(at, since.get(id) ?? at));
-    const missing = [...since.keys()].filter((id) => !overlay.has(id));
+    const missing = [...since.keys()].filter((id) => !overlay.has(id) && !this.isAway(id));
     const rows = new Map(
       missing.length === 0
         ? []

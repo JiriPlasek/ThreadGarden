@@ -1,6 +1,8 @@
 /**
  * The away copy, the move lock and `move.check` (service wiring, fake SDK).
  */
+import { execFileSync } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -62,13 +64,14 @@ const list = async () =>
     .items;
 
 /** A service with two indexed chats (`gone`, `kept`); the ids in `away` are marked away first. */
-const start = async (away: string[]) => {
+const start = async (away: string[], seed?: (db: ReturnType<typeof openDb>) => void) => {
   const folder = join(dir, 'proj');
   await mkdir(folder, { recursive: true });
   await mkdir(dataDir(), { recursive: true });
   const db = openDb(join(dataDir(), DB_FILE));
   const store = new ChatStore(db, () => {});
   for (const id of away) store.markAway(id, TO);
+  seed?.(db);
   db.close();
   const adapter = new FakeAdapter();
   addLocal(adapter, 'gone', folder);
@@ -102,6 +105,32 @@ describe('away chats', () => {
     expect(kept.movedTo).toBeNull();
   });
 
+  it('an away chat with an unread turn or a back-from-hold mark is not in Needs you', async () => {
+    await start(['gone', 'back'], (db) => {
+      db.raw
+        .prepare('INSERT INTO turn_state (session_id, last_turn_ended_at) VALUES (?, ?)')
+        .run('gone', 1_700_000_100_000);
+      db.raw
+        .prepare("INSERT INTO chat_buckets (session_id, bucket, back_at) VALUES (?, 'active', ?)")
+        .run('back', 1_700_000_100_000);
+    });
+    const needs = await ok<{ items: ChatSummary[] }>('sessions.list', {
+      place: { kind: 'needsYou' },
+      limit: 50,
+    });
+    expect(needs.items).toEqual([]);
+    expect((await ok<{ needsYou: number }>('places.counts', {})).needsYou).toBe(0);
+  });
+
+  it('an away chat is not in Running', async () => {
+    await start(['gone']);
+    const running = await ok<{ items: ChatSummary[] }>('sessions.list', {
+      place: { kind: 'running' },
+      limit: 50,
+    });
+    expect(running.items.map((s) => s.sessionId)).not.toContain('gone');
+  });
+
   it('chat.send to a locked chat answers MOVING, to an away chat MOVED', async () => {
     await start(['gone']);
     svc!.moveLocks.lock('kept', 'x1');
@@ -119,6 +148,22 @@ describe('move.check', () => {
       sessionId: 'kept',
     });
     expect(r).toMatchObject({ cwd: folder, busy: null });
+  });
+
+  it('reports a dirty repository (one change, one commit on no remote)', async () => {
+    const { folder } = await start([]);
+    const git = (...a: string[]) =>
+      execFileSync('git', ['-c', 'user.name=T', '-c', 'user.email=t@e.com', ...a], {
+        cwd: folder,
+        stdio: 'ignore',
+      });
+    git('init', '--initial-branch=main');
+    writeFileSync(join(folder, 'a.txt'), 'a');
+    git('add', '.');
+    git('commit', '-m', 'init');
+    writeFileSync(join(folder, 'a.txt'), 'b');
+    const r = await ok<{ git: unknown }>('move.check', { sessionId: 'kept' });
+    expect(r.git).toEqual({ kind: 'dirty', branch: 'main', origin: null, changed: 1, unpushed: 1 });
   });
 
   it('a running turn is busy', async () => {
