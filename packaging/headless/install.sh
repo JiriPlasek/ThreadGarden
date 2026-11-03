@@ -9,6 +9,10 @@ SYSTEMCTL=${SYSTEMCTL-systemctl}
 LOGINCTL=${LOGINCTL-loginctl}
 SUDO=${SUDO-sudo}
 
+# An unattended caller (the service updating itself) can't read the printed
+# advice, so it names each sudo step that didn't happen, one per line, in this file.
+skip() { [ -z "${THREADGARDEN_SKIPPED_FILE-}" ] || echo "$1" >> "$THREADGARDEN_SKIPPED_FILE"; }
+
 if [ "$(id -u)" -eq 0 ]; then
   echo "Run install.sh as your own user, not root." >&2
   exit 1
@@ -96,6 +100,7 @@ case $linger in
     skipped=0
     trap 'skipped=1; echo "Skipped lingering."' INT
     $SUDO $LOGINCTL enable-linger "$user" || {
+      skip linger
       [ "$skipped" = 1 ] ||
         echo "Could not enable lingering; run 'sudo loginctl enable-linger $user' later."
     }
@@ -123,6 +128,7 @@ EOF
 
 echo
 if [ ! -d "$polkit_rules_dir" ]; then
+  skip polkit
   echo "This system has no polkit rules directory ($polkit_rules_dir), so it is" >&2
   echo "probably too old for JavaScript rules. Threadgarden won't be able to power" >&2
   echo "this machine off for idle shutdown; everything else works." >&2
@@ -142,6 +148,7 @@ else
   {
     polkit_rule_text | $SUDO tee "$polkit_rule" >/dev/null && $SUDO chmod 644 "$polkit_rule"
   } || {
+    skip polkit
     [ "$skipped" = 1 ] ||
       echo "Could not write $polkit_rule; idle shutdown will fail to power the machine off."
   }
