@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   CAPABILITIES,
+  MOVE_CAPABILITY,
   POWER_CAPABILITY,
   PROTOCOL_VERSION,
   type ChatStatus,
@@ -230,6 +231,9 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     }
   };
 
+  // TODO(move task 4): advertise `move` once the move handlers exist.
+  const advertised = CAPABILITIES.filter((c) => c !== MOVE_CAPABILITY);
+
   /** This machine's identity; it lives in the database, so there is none without one. */
   const machineOf = (d: Db): MachineInfo => {
     const { id, name } = loadMachineIdentity(d, os.hostname());
@@ -240,7 +244,8 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       headless,
       home: os.homedir(),
       // `power` is for headless machines only (a desktop is never switched off this way).
-      capabilities: headless ? [...CAPABILITIES, POWER_CAPABILITY] : [...CAPABILITIES],
+      // TODO(move task 4): advertise `move` once the move handlers exist.
+      capabilities: headless ? [...advertised, POWER_CAPABILITY] : [...advertised],
     };
   };
   router.register('hello', async (_p, ctx) => ({

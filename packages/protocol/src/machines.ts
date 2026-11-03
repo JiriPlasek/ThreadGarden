@@ -4,16 +4,16 @@ import { z } from 'zod';
  * The protocol versions a desktop accepts from a remote service: its own, one
  * older and one newer. A local service must match exactly.
  */
-export const REMOTE_PROTOCOL_RANGE = { min: 7, max: 9 } as const;
+export const REMOTE_PROTOCOL_RANGE = { min: 8, max: 10 } as const;
 
 export const acceptsRemoteProtocol = (v: number): boolean =>
   Number.isInteger(v) && v >= REMOTE_PROTOCOL_RANGE.min && v <= REMOTE_PROTOCOL_RANGE.max;
 
 /**
- * What every service can do for a remote desktop. A later plan adds `move`.
+ * What every service can do for a remote desktop. `move` is added to a service's `hello` once it has the handlers.
  * `power` is not here: a headless service adds it to its own `hello` at runtime.
  */
-export const CAPABILITIES = ['remote', 'projects'] as const;
+export const CAPABILITIES = ['remote', 'projects', 'move'] as const;
 
 export const MachineInfoSchema = z.object({
   id: z.string(),
