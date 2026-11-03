@@ -554,10 +554,8 @@
                 role="alert"
                 aria-label="The old copy is still shown"
               >
-                <p class="min-w-0 flex-1">
-                  The old copy on {machineNameOf(machines, pendingMark.source)} is still shown{pendingMark.problem
-                    ? `: ${pendingMark.problem}`
-                    : ''}
+                <p class="min-w-0 flex-1" title={pendingMark.problem ?? undefined}>
+                  The old copy on {machineNameOf(machines, pendingMark.source)} is still shown
                 </p>
                 <button
                   type="button"
