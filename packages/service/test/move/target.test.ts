@@ -123,6 +123,13 @@ describe('move.target', () => {
     });
   });
 
+  it('a clone at createIn/repoName with no chats is found and matched', async () => {
+    const folder = join(CREATE_IN, 'app');
+    const d = deps([{ cwd: folder, url: 'git@github.com:me/app.git', git: clean('main') }]);
+    d.recentCwds = () => [];
+    expect(await pickTarget(d, ask)).toEqual({ folder, matched: true, inUse: null });
+  });
+
   it('null origin (not a repo) → createIn/<folder name>', async () => {
     const d = deps([{ cwd: '/w/a', url: 'https://github.com/me/app', git: clean('main') }]);
     expect(await pickTarget(d, { origin: null, repoName: 'notes', branch: null })).toEqual({

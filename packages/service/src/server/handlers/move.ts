@@ -87,7 +87,11 @@ export const pickTarget = async (
   const candidates: Candidate[] = [];
   if (p.origin !== null) {
     const want = repoOfUrl(p.origin);
-    for (const cwd of d.recentCwds()) {
+    // A clone where New project would put it may have no chats here yet.
+    const usual = path.join(d.createIn(), p.repoName);
+    const cwds = d.recentCwds();
+    if (!cwds.some((c) => path.resolve(c) === path.resolve(usual))) cwds.push(usual);
+    for (const cwd of cwds) {
       const url = await originUrlOf(d.tools, cwd).catch(() => null);
       if (url === null || repoOfUrl(url) !== want) continue;
       // A git failure only costs the folder its preference; it still matches.
