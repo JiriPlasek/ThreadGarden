@@ -145,6 +145,8 @@ These shaped the design; the builder should not have to rediscover them.
 
 ## 9. Moving a chat between machines
 
+> **Superseded (2026-11-03).** The move was designed again in [the move-chat design](2026-11-02-move-chat-design.md), and its spike results are in [the move-chat spike results](2026-11-02-move-chat-spike-results.md); where they differ from this section, they win. In short: Threadgarden does no git work for a move (Claude clones and checks out in the chat; a dirty project offers Ask Claude to commit and push, Move anyway or Cancel); a chat resumed from a store never lands in the target's own Claude Code history, so Threadgarden's store in its data dir is the moved chat's home there; and only scheduled sends and the draft follow the chat, not its title, bucket, pin or hold. What was built is described in [the architecture](../../architecture.md#moving-a-chat).
+
 Owner's intent: no automatic handoff; a manual **Move to…** mid-conversation, in both directions, keeping the conversation so Claude remembers everything.
 
 **Preconditions** (checked before anything moves):

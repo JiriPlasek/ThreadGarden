@@ -7,6 +7,7 @@ Thanks for helping. This file covers the workflow, local setup and the rules the
 Threadgarden must never write, rename, move or delete anything under the Claude config dir (`~/.claude`, or `CLAUDE_CONFIG_DIR` when set). A change that breaks this is not accepted, however useful the feature. In practice:
 
 - Read history only through the Agent SDK (`listSessions`, `getSessionInfo`, `getSessionMessages`, `forkSession`). Never open or parse transcript `.jsonl` files; their format is internal to Claude Code.
+- A chat moved to another machine never becomes a file under `~/.claude` there: it lives in Threadgarden's own session store, in the service's data dir (`threadgarden.db`), and is read and resumed through the SDK with `sessionStore`. The source side only reads, with `importSessionToStore`; its old transcript is hidden by Threadgarden, never changed or deleted ([Moving a chat](docs/architecture.md#moving-a-chat)).
 - File-system access under `~/.claude/projects` is limited to watching for changes (names, sizes, mtimes). Never read `~/.claude/jobs/`.
 - Never call the SDK's `renameSession()` or `tagSession()`; titles and tags live in Threadgarden's own database.
 - Read running sessions only from `claude agents --json`.

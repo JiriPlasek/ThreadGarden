@@ -4,7 +4,7 @@ Date: 2026-11-03. This covers the spike from `docs/superpowers/plans/2026-11-02-
 
 ## The test
 
-**Tool:** the throwaway spike in `spikes/move-session/`, run with SDK 0.3.314 and Claude Code 2.1.314. It uses only the official API: `importSessionToStore`, `query({ resume, sessionStore, cwd })`, `listSessions` and `getSessionMessages`, the last two with and without the store.
+**Tool:** the throwaway spike in `spikes/move-session/` (deleted once the move was built; it is in the git history), run with SDK 0.3.314 and Claude Code 2.1.314. It uses only the official API: `importSessionToStore`, `query({ resume, sessionStore, cwd })`, `listSessions` and `getSessionMessages`, the last two with and without the store.
 
 **The test chat:** made on This PC in `C:\tmp\tg-move-spike`, session `2230e968-…`. It read `README.md`, sent a subagent to list the folder, and was told to remember `ORNN-FORGE`. Its export holds the main transcript (55 entries) and the subagent's own (26 entries).
 

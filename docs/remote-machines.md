@@ -26,9 +26,11 @@ do the steps once, over SSH; after that everything happens in Threadgarden.
   Without it the PC simply stays on.
 - From the desktop you can start a new project there, clone a repo there,
   or start in any folder of it: see [Starting projects](#starting-projects).
-- Not yet: moving chats between machines, and showing a machine's chats
-  while it is off (an Off machine's group says "Its chats appear once it's
-  on."). Analytics and the usage meter show This PC only for now.
+- A chat can move from This PC to the Ubuntu PC and back, with its whole
+  conversation: see [Moving a chat](#moving-a-chat).
+- Not yet: showing a machine's chats while it is off (an Off machine's group
+  says "Its chats appear once it's on."). Analytics and the usage meter show
+  This PC only for now.
 
 > **Status of the installer.** `install.sh` has so far only been tested in
 > CI (on GitHub's Ubuntu runner, with stand-ins for `systemctl`, `loginctl`
@@ -328,6 +330,119 @@ Threadgarden only makes new folders here: it never removes a folder it
 didn't make, and never deletes a GitHub repo. A machine still on an older
 Threadgarden offers only Existing folder, without Browse…, and says "Update
 ‹machine› to use this" ([Upgrading](#upgrading)).
+
+### Moving a chat
+
+A chat can carry on on another machine: for example, hand a long task to the
+Ubuntu PC so This PC can be turned off, and bring the chat back later. It
+moves with its whole conversation, subagents included, so Claude remembers
+everything. Nothing moves on its own: only when you ask.
+
+**Start it** with **Move to…**: in the chat's **⋯** menu (Chat state) in its
+header, in the chat row's right-click menu, or with Ctrl+K. The dialog shows:
+
+- **Machine:** every paired machine except the chat's own, This PC included.
+  A machine on an older Threadgarden is listed with "Update ‹machine› to move
+  chats there" ([Upgrading](#upgrading)).
+- **Folder:** the folder the chat will use there. If that machine already has
+  a clone of the chat's repo, it is that clone (one on the chat's branch
+  first, then a clean one no chat is running in). Otherwise it is
+  `<Create in>/<repo name>`, with Create in as New project remembers it
+  (`~/threadgarden/projects` the first time on the Ubuntu PC); the folder
+  doesn't exist yet and Claude clones into it. **Browse…** picks another
+  folder; it needs the machine on.
+
+**The checks**, in this order:
+
+1. **The chat isn't busy.** A chat in the middle of a turn, waiting for your
+   answer to a permission prompt or a question, or with background agents
+   running can't move: moving would cut them off. **Stop the chat** stops it
+   (for background agents it ends the chat's process, like End session), or
+   wait; then **Check again**.
+2. **The project is clean** on the machine the chat is on: no uncommitted
+   changes (untracked files count, unless git ignores them) and no commits
+   that aren't pushed. If it isn't, the dialog lists what would stay behind,
+   for example "3 changed files · 2 commits not pushed on fix/usage", and
+   offers:
+   - **Ask Claude to commit and push:** sends that request in the chat and
+     closes the dialog. Move again once Claude has pushed (it may suggest a
+     WIP branch).
+   - **Move anyway:** the changes stay where they are. Claude's first note
+     on the other machine says what was left behind.
+   - **Cancel.**
+
+   A folder that isn't a git repo has nothing to check, but its files can't
+   come along either: "This folder isn't a git repo; its files stay on This
+   PC", with Move anyway and Cancel.
+3. **The other machine is on.** If it is Off and has [power
+   control](#4-power-control), the move turns it on first and shows
+   "Starting ‹machine›…" (for up to 10 minutes; Cancel gives up). Without
+   power control an Off machine can't be chosen. If it can't be reached, the
+   move fails and nothing changes.
+
+If the chosen folder there is on another branch while other chats run in it,
+the dialog says so, for example "kumbal-machine's threadgarden is on main; 1
+chat is running there". Pick another folder with Browse…, or move anyway:
+Claude is then told to stop and ask you instead of switching branches. If you
+want a worktree for the chat, make it first (in any chat) and pick it with
+Browse…; Claude never makes one for a move.
+
+Threadgarden only reads git for these checks (`git status`, `git rev-list`
+and the like). It never clones, fetches, checks out, pushes, stashes or makes
+worktrees for a move: that is Claude's work in the chat.
+
+**Click Move** (or Move anyway). The dialog stays open while it moves, and
+**Cancel** works until the last step. When it says **Moved to ‹machine›**:
+
+- the chat's tab now shows the chat on the other machine, and the chat is
+  listed under that machine, in its project;
+- **Claude's first note:** Threadgarden sends one message in the chat there,
+  starting `[Threadgarden] This chat moved from This PC to kumbal-machine.`,
+  shown with a small **Sent by Threadgarden** label. It tells Claude the
+  folder, the repo and the branch, to clone the repo if it is missing and
+  check out the branch, and never to stash, reset, overwrite or switch a
+  working copy that has changes or that other chats use: Claude stops and
+  asks you instead. Claude acts on it at once, so the repo is ready when you
+  look again (it uses one turn of that machine's limits). If the note
+  couldn't be sent, the chat there says so, with **Send again**;
+- **scheduled messages** for the chat move with it: a timed one keeps its
+  time, and one waiting for the limit reset waits for that machine's own
+  reset. The unsent text in the message box comes along too. The chat's own
+  name in Threadgarden, its bucket (On hold, Archived) and its pin stay with
+  the old copy;
+- **the old copy** stays on the first machine, read-only and hidden from its
+  lists. If you open it, from an old link or a search, it says "Moved to
+  ‹machine› — this copy is read-only." with **Open it on ‹machine›**.
+
+**Moving back** is the same, from the chat on the other machine. It gives one
+chat again, with the whole conversation, including what was said on the other
+machine.
+
+If something goes wrong:
+
+- A move that fails before it is done leaves the chat where it was, unchanged
+  and usable, with the reason in the dialog.
+- "The old copy on ‹machine› is still shown": the move is done, but the first
+  machine didn't hide its copy yet. Click **Retry**.
+- "The move took too long and ‹machine› went on with this chat, so it stays
+  there.": the first machine let go of the chat after 10 minutes and it was
+  used there meanwhile, so the move didn't happen. The copy on the other
+  machine is left as it was; move again if you still want to.
+- "The move may have reached ‹machine›; check there before moving again.":
+  the connection dropped at the last step. Look on that machine first.
+- While a chat is being moved, sending a message to it is refused ("This chat
+  is being moved to another machine").
+
+**Good to know:**
+
+- A moved chat lives in Threadgarden's own data on the machine it moved to,
+  not in Claude Code's history: **`claude --resume` in a terminal there
+  doesn't list it**. Continue it in Threadgarden. On the machine it came
+  from, `claude --resume` still finds the old copy as it was before the move.
+- **Fork** isn't available for a moved chat yet.
+- Uncommitted changes never travel: only what is pushed reaches the other
+  machine, through git.
+- Both machines need a Threadgarden that can move chats.
 
 ## 4. Power control
 
