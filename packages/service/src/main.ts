@@ -777,7 +777,6 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         timers: opts.sessionTimers ?? realTimers,
         titles: chatTitles,
       });
-      registerMoveHandlers(router, { host: sessionHost, db: opened, store: chatStore });
       const projectTools = opts.projectTools ?? systemTools;
       maker = new ProjectMaker({
         tools: projectTools,
@@ -786,6 +785,12 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         home: os.homedir(),
         recentCwds: () => opened.recentCwds().map((r) => r.cwd),
         requireRunnable: chatHandlers.requireRunnable,
+      });
+      registerMoveHandlers(router, {
+        host: sessionHost,
+        db: opened,
+        store: chatStore,
+        target: { tools: projectTools, createIn: () => maker!.createIn(), headless },
       });
       registerProjectHandlers(router, {
         maker,
