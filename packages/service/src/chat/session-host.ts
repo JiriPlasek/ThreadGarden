@@ -15,7 +15,7 @@
  * reported through `onError` and the remaining sessions carry on.
  */
 import type { ChatStatus, EventMsg, Settings } from '@threadgarden/protocol';
-import type { AgentAdapter } from '../sdk/adapter.js';
+import type { AgentAdapter, SessionStore } from '../sdk/adapter.js';
 import { EventLog, type ChatEvent } from './event-log.js';
 import {
   LiveSession,
@@ -119,8 +119,13 @@ export class SessionHost {
   /**
    * The live chat for `sessionId`, resuming it (same session id) when it is
    * paused, failed or history-only. Resume safety (§4.4) is checked by the caller.
+   * A chat moved here resumes from its `sessionStore`.
    */
-  ensureLive(sessionId: string, cwd: string): LiveSession {
+  ensureLive(
+    sessionId: string,
+    cwd: string,
+    from: { sessionStore?: SessionStore } = {},
+  ): LiveSession {
     const current = this.sessions.get(sessionId);
     if (current?.live) return current;
     const floor = this.seqFloor.get(sessionId);
@@ -129,7 +134,11 @@ export class SessionHost {
     const s = LiveSession.resume(
       sessionId,
       cwd,
-      this.options({ ...current?.choices, ...(log ? { log } : {}) }),
+      this.options({
+        ...current?.choices,
+        ...(log ? { log } : {}),
+        ...(from.sessionStore === undefined ? {} : { sessionStore: from.sessionStore }),
+      }),
     );
     this.sessions.set(sessionId, s);
     this.seqFloor.delete(sessionId);

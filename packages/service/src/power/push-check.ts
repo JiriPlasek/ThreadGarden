@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import type { Unpushed } from '@threadgarden/protocol';
 
-type Git = (args: string[], cwd: string) => Promise<string>;
+export type Git = (args: string[], cwd: string) => Promise<string>;
 
 /** A git failure with a short plain reason that is safe to show. */
 class GitFailure extends Error {
@@ -27,7 +27,7 @@ export const cleanEnv = (base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessE
   return env;
 };
 
-const defaultGit: Git = (args, cwd) =>
+export const defaultGit: Git = (args, cwd) =>
   new Promise((res, rej) => {
     execFile(
       'git',
@@ -58,7 +58,7 @@ const defaultGit: Git = (args, cwd) =>
   });
 
 /** Entries in `status --porcelain=v1 -z`; a rename or copy carries its original path as an extra field. */
-const countStatusEntries = (out: string): number => {
+export const countStatusEntries = (out: string): number => {
   const fields = out.split('\0');
   let n = 0;
   for (let i = 0; i < fields.length; i++) {

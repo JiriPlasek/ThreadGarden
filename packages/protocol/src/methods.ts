@@ -20,6 +20,7 @@ import {
   MachinePortSchema,
   PairedMachineSchema,
 } from './machines.js';
+import { GitStateSchema, MoveBusySchema, MoveKeySchema, MovePeerSchema } from './move.js';
 import {
   KeepAwakeSchema,
   MachinePowerStatusSchema,
@@ -216,6 +217,8 @@ export const methods = {
       seq: z.number(),
       /** Tasks of the chat's running process (empty unless Threadgarden runs it). */
       tasks: z.array(ChatTaskSchema),
+      /** Protocol 9: where the chat went when it was moved away; absent or null otherwise. */
+      movedTo: MovePeerSchema.nullable().optional(),
     }),
   ),
   'chat.older': def(
@@ -403,6 +406,8 @@ export const methods = {
         sessionId: z.string(),
         text: z.string(),
         images: z.array(ImageRefSchema).optional(),
+        /** Protocol 9: the id to use; creating the same id again (a move) changes nothing. */
+        id: z.string().optional(),
         ...when,
       })
       .refine((p) => p.sendAt !== undefined || p.whenLimitResets === true, {
@@ -532,6 +537,83 @@ export const methods = {
   'github.status': def(empty, GithubStatusSchema),
   /** The signed-in account's repositories, most recently updated first. Errors: `GH_NOT_READY`, `GH_FAILED`. */
   'github.repos': def(empty, z.object({ repos: z.array(RepoSchema) })),
+  // ── move (protocol 9) ──────────────────────────────────────────────────────
+  // Open to paired devices; the desktop drives the move. Errors: `MOVE_ERRORS`.
+  /** The chat's folder: its git state and whether the chat is busy. */
+  'move.check': def(
+    sessionIdOnly,
+    z.object({ cwd: z.string(), busy: MoveBusySchema.nullable(), git: GitStateSchema }),
+  ),
+  /** Where a chat of this repository would go on the target: the folder, and whether it is already there. */
+  'move.target': def(
+    z.object({
+      origin: z.string().nullable(),
+      repoName: z.string(),
+      branch: z.string().nullable(),
+    }),
+    z.object({
+      folder: z.string(),
+      matched: z.boolean(),
+      inUse: z.object({ branch: z.string().nullable(), running: z.number().int() }).nullable(),
+    }),
+  ),
+  /**
+   * Source: starts an export and locks the chat (`chat.send` answers `MOVING`).
+   * The desktop makes `exportId` (uuid): the same one again (a lost answer)
+   * gives the same answer.
+   */
+  'move.exportBegin': def(
+    z.object({ sessionId: z.string(), exportId: z.string() }),
+    z.object({ exportId: z.string(), parts: z.number().int(), bytes: z.number() }),
+  ),
+  'move.exportPart': def(
+    z.object({ exportId: z.string(), index: z.number().int() }),
+    z.object({ keys: z.array(MoveKeySchema) }),
+  ),
+  /** Source: ends the export and unlocks the chat. */
+  'move.abort': def(z.object({ exportId: z.string() }), empty),
+  /** Target: one part of the import; `importId` is made by the desktop. */
+  'move.importPart': def(
+    z.object({
+      importId: z.string(),
+      sessionId: z.string(),
+      index: z.number().int(),
+      parts: z.number().int(),
+      keys: z.array(MoveKeySchema),
+    }),
+    empty,
+  ),
+  /**
+   * Target: makes the chat's folder when it is missing (empty) and stores the
+   * chat as `here`. Refused (`ALREADY_HERE`) when the chat lives here, or is a
+   * local chat here that never moved away. `summary` is null when the chat is
+   * not indexed yet (a busy index queue); it is listed once it is.
+   */
+  'move.commit': def(
+    z.object({
+      importId: z.string(),
+      sessionId: z.string(),
+      cwd: z.string(),
+      from: MovePeerSchema,
+    }),
+    z.object({ summary: ChatSummarySchema.nullable() }),
+  ),
+  /**
+   * Source: the chat is away for good (`chat.send` answers `MOVED`); ends the
+   * lock. Works without the export (after a restart, or past the hour):
+   * `begunAt` is when the move began. A chat that came back here since is
+   * left as it is (`{}`); one that went on here after the lock ran out
+   * answers `EXPIRED`.
+   */
+  'move.markMoved': def(
+    z.object({
+      exportId: z.string(),
+      sessionId: z.string(),
+      begunAt: z.number(),
+      to: MovePeerSchema,
+    }),
+    empty,
+  ),
 } as const;
 
 export type MethodName = keyof typeof methods;

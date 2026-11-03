@@ -49,12 +49,27 @@
  * the fake's own address (`127.0.0.1:<port>`) on stderr. It is meant for
  * `--remote` (a headless machine, which offers power control). The mock never
  * powers anything off: its shutdown sequence ends in `mockPoweroff`.
+ *
+ * Moving a chat (protocol 9): the mock's folders are not on disk, so no real
+ * git runs for a move. A folder named after one of the mocks' projects
+ * (`proj-N`, `tg-cli`) is a clean clone of it on `main`, wherever it is (the
+ * folder a chat moved to as well, as if Claude had cloned it); any other
+ * folder is not a git repo. No folder is made for a chat moved here (every
+ * folder counts as existing). The
+ * remote's Create in is `<temp>/projects`, so a chat moved there goes to
+ * `<temp>/projects/<repo>`. Like the SDK, a chat resumed from Threadgarden's
+ * store records its turns in that store only. Threadgarden's first note in
+ * a moved chat gets the plain reply (its words would trigger "ask"). The
+ * mock-only method `mock.forgetMoves` (local callers only; no real service
+ * has it) forgets every move, so a spec that failed mid-move leaves no chat
+ * moved away for the specs after it.
  */
 import { randomUUID } from 'node:crypto';
 import { appendFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, posix } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import type { GitState } from '@threadgarden/protocol';
 import { readDiscovery } from '../discovery.js';
 import { findProjectIcon } from '../history/project-icons.js';
 import {
@@ -63,7 +78,9 @@ import {
   normalisePairingCode,
 } from '../machine/devices.js';
 import { startService, type ServiceHandle } from '../main.js';
+import { CREATE_IN_KEY } from '../projects/maker.js';
 import { startFakeTasmota, type FakeTasmota } from './fake-tasmota.js';
+import type { MoveGit } from '../server/handlers/move.js';
 import { REMOTE_PORT } from '../server/remote-server.js';
 import type {
   OneShotOptions,
@@ -110,6 +127,30 @@ const REMOTE_SESSIONS = 20;
  * expired code is back at once, so a spec can pair again right away.
  */
 const PAIRING_REFRESH_MS = 1_000;
+
+/** How Threadgarden's first note in a moved chat starts (desktop `move/note.ts`). */
+const THREADGARDEN_NOTE = '[Threadgarden] ';
+/** The mocks' projects: the corpus's `proj-N` and the remote's `tg-cli`. */
+const MOCK_REPO = /^(proj-\d+|tg-cli)$/;
+const mockOrigin = (repo: string): string => `https://github.com/owner/${repo}.git`;
+
+/** The mock project a folder is a clone of (by its name, wherever it is), else null. */
+const mockRepoOf = (cwd: string): string | null => {
+  const name = posix.basename(cwd.replace(/\\/g, '/'));
+  return MOCK_REPO.test(name) ? name : null;
+};
+
+/** The git a move reads, faked (see the file comment): no real git runs on the mock's folders. */
+const mockMoveGit: MoveGit = {
+  state: async (cwd): Promise<GitState> => {
+    const repo = mockRepoOf(cwd);
+    return repo ? { kind: 'clean', branch: 'main', origin: mockOrigin(repo) } : { kind: 'notRepo' };
+  },
+  originUrl: async (cwd) => {
+    const repo = mockRepoOf(cwd);
+    return repo ? mockOrigin(repo) : null;
+  },
+};
 
 const SENTENCES = [
   'This is the Threadgarden mock service answering.',
@@ -248,7 +289,8 @@ class ScriptedSession extends FakeSession {
     if (text.startsWith('/')) return; // e.g. `/effort high`: no turn
     this.abort = new AbortController();
     const started = Date.now();
-    const lower = text.toLowerCase();
+    // Threadgarden's first note in a moved chat gets the plain reply: it says "stop and ask".
+    const lower = text.startsWith(THREADGARDEN_NOTE) ? '' : text.toLowerCase();
     if (lower.includes('limit')) this.adapter.reachLimit();
     if (this.adapter.limited()) {
       await this.refusedTurn(started);
@@ -716,12 +758,21 @@ class ScriptedAdapter extends FakeAdapter {
   /**
    * Adds a message to the session's history (what `getSessionMessages` returns)
    * and touches a placeholder transcript in the fixture config dir, as the
-   * real CLI would, so the service's watcher re-indexes the chat.
+   * real CLI would, so the service's watcher re-indexes the chat. A session
+   * resumed from a store (a chat moved here) records into that store only, as
+   * the SDK does.
    */
   async record(
     s: ScriptedSession,
     m: { type: 'user' | 'assistant'; uuid: string; message: unknown },
   ): Promise<void> {
+    const store = s.options.sessionStore;
+    if (store) {
+      const { cwd } = s.options;
+      const line = { ...m, sessionId: s.id, timestamp: new Date().toISOString(), cwd };
+      await store.append({ projectKey: cwd, sessionId: s.id }, [line]);
+      return;
+    }
     const entry = this.sessions.get(s.id) ?? {
       info: {
         sessionId: s.id,
@@ -846,6 +897,19 @@ const fixedPairingRandom = (code: string): ((n: number) => Buffer) => {
   return (n) => Buffer.from(Array.from({ length: n }, (_, i) => indexes[i % indexes.length]!));
 };
 
+/** The mock's own test reset (see the file comment); not a protocol method. */
+export const MOCK_FORGET_MOVES = 'mock.forgetMoves';
+
+/** Answers `mock.forgetMoves` from local callers before the router sees it. */
+const addMockMethods = (svc: ServiceHandle): void => {
+  const dispatch = svc.router.dispatch.bind(svc.router);
+  svc.router.dispatch = async (req, ctx) => {
+    if (req.method !== MOCK_FORGET_MOVES || ctx.origin !== 'local') return dispatch(req, ctx);
+    await svc.forgetMoves();
+    return { id: req.id, result: {} };
+  };
+};
+
 /** Calls `method` as this machine's own desktop would (origin local); throws its error. */
 const callLocal = async (svc: ServiceHandle, method: string, params: unknown): Promise<void> => {
   const res = await svc.router.dispatch(
@@ -917,6 +981,7 @@ export const startMockService = async (o: MockOptions = {}): Promise<MockService
       externalRun: async () => JSON.stringify(externals),
       // The corpus's project folders (/work/proj-N) are not on disk: none is missing.
       folderStat: async () => true,
+      moveGit: mockMoveGit,
       projectIconSearch: async (projectPath) => {
         const dir = iconDirs.get(projectPath.replace(/\\/g, '/'));
         return dir ? findProjectIcon(dir) : null;
@@ -935,6 +1000,7 @@ export const startMockService = async (o: MockOptions = {}): Promise<MockService
           }
         : {}),
     });
+    addMockMethods(svc);
     if (remote) {
       // The real service retries a listener that failed to start; a test mock must say so at once.
       if (!svc.remote) {
@@ -944,6 +1010,11 @@ export const startMockService = async (o: MockOptions = {}): Promise<MockService
       // A recognisable name, and the code live from the start for as long as the mock runs
       // (as if the owner ran `threadgarden pair` again whenever it expired or was spent).
       await callLocal(svc, 'machine.rename', { name: REMOTE_MACHINE_NAME });
+      // Create in inside the mock's temp dir: a chat moved here (or a new project) never
+      // touches a folder outside it.
+      const createIn = join(root, 'projects');
+      await mkdir(createIn, { recursive: true });
+      await callLocal(svc, 'uiState.set', { key: CREATE_IN_KEY, value: createIn });
       const keepCodeLive = (): void =>
         void callLocal(svc, 'pairing.create', {}).catch((err: unknown) =>
           process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`),

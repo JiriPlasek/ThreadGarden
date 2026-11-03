@@ -205,16 +205,19 @@ service and the UI; the service validates every request.
   `chat.since`); **1001** when the local service stops. The UI also checks
   that the relayed `hello` names the paired machine's id: another id counts
   as a mismatch, like 4409, and the client stops.
-- **Versions across machines.** The protocol is 8 (v1.4 was 5; 6 added power
-  control, 7 projects, 8 the usage state's account). The desktop and its
-  local service still need the exact version; a remote service is accepted
-  one version either way (7, 8 or 9 for a desktop on 8,
-  `REMOTE_PROTOCOL_RANGE`). What a machine can do is read from the
+- **Versions across machines.** The protocol is 9 (v1.4 was 5; 6 added power
+  control, 7 projects, 8 the usage state's account, 9 moving a chat). The
+  desktop and its local service still need the exact version; a remote
+  service is accepted one version either way (8, 9 or 10 for a desktop on 9,
+  `REMOTE_PROTOCOL_RANGE`; the Rust shell keeps its own copy of the version in
+  `src-tauri/src/service.rs`). What a machine can do is read from the
   capabilities in its `hello`, not from its version: the desktop offers power
-  control only with `power`, and New project, Clone and Browse… only with
-  `projects`. On an older machine the New project and Clone tabs and Browse…
-  show disabled with "Update ‹machine› to use this"; power control without
-  `power` isn't offered at all. A method a service lacks still answers `METHOD_NOT_FOUND` (it
+  control only with `power`, New project, Clone and Browse… only with
+  `projects`, and a machine as a target of Move to… only with `move`. On an
+  older machine the New project and Clone tabs and Browse… show disabled with
+  "Update ‹machine› to use this", and Move to… lists it disabled with "Update
+  ‹machine› to move chats there"; power control without `power` isn't offered
+  at all. A method a service lacks still answers `METHOD_NOT_FOUND` (it
   surfaces as any failed request). A machine outside that window shows as
   needing attention ("Different Threadgarden version").
 - **Requests** `{id, method, params}` → `{id, result}` or `{id, error: {code,
@@ -240,6 +243,11 @@ service and the UI; the service validates every request.
   Protocol 7 adds `folders.list`, `.complete`, `.create`, `projects.createIn`,
   `.create`, `.clone`, `.job`, `.cancel`, `.origins` and `github.status`,
   `.repos` ([Projects](#projects)). Protocol 8 adds `account` to the usage state.
+  Protocol 9 adds `move.check`, `.target`, `.exportBegin`, `.exportPart`,
+  `.abort`, `.importPart`, `.commit` and `.markMoved`, `movedTo` on
+  `chat.open`, an optional `id` on `scheduled.create`, and the error codes
+  `MOVING`, `MOVED`, `BUSY`, `TOO_LARGE`, `EXPIRED` and `ALREADY_HERE`
+  ([Moving a chat](#moving-a-chat)).
 - **Local-only methods** (v1.4). Every request is dispatched with its
   origin, `local` (the loopback server) or `remote` (the TLS listener), and
   a method registered `localOnly` answers `FORBIDDEN` to a remote caller
@@ -280,13 +288,17 @@ new or whose `lastModified`/`fileSize` changed since they were indexed,
 maps every SDK message to protocol `ChatItem`s (`src/chat/normalize.ts`), the
 same mapping live sessions use. Unknown message types and content blocks
 become `unknown` items carrying the raw JSON, so a newer Claude Code degrades
-to a generic rendering instead of breaking.
+to a generic rendering instead of breaking. A chat moved here from another
+machine is read through the same SDK calls, given Threadgarden's own session
+store (`{ dir, sessionStore }`) instead of the local transcripts
+([Moving a chat](#moving-a-chat)).
 
 **Watcher.** The service watches `<config>/projects` recursively for
 file-system events and maps event names of the form
 `<project>/<session-id>.jsonl` to session ids (debounced 500 ms); it never
 opens or reads the files, and if the directory does not exist yet it retries.
-Changed ids go to the indexer's incremental refresh.
+Changed ids go to the indexer's incremental refresh. Chats moved here are not
+in that folder: every append to the store refreshes the chat instead.
 
 **Indexer and full-text search.** Index state lives in `threadgarden.db`: one row per
 session (metadata, the `lastModified`/`fileSize` it was indexed at, its
@@ -601,7 +613,9 @@ gone out): it becomes `failed` for the user to check.
 
 **Fork** calls the SDK's `forkSession(id, {upToMessageId})`, which writes a new
 session file next to the original and leaves the original untouched; the
-fork is indexed at once so it can be opened.
+fork is indexed at once so it can be opened. `forkSession` reads a local
+transcript, which a chat moved here does not have, so forking one answers
+`FORK_FAILED` "Not available for a moved chat yet".
 
 ## Machines
 
@@ -609,9 +623,10 @@ v1.4 lets the desktop run chats on another computer: a **machine** is one
 Threadgarden service. The design is
 [`2026-10-31-remote-machines-design.md`](superpowers/specs/2026-10-31-remote-machines-design.md);
 this release covers pairing, the connection, chats on a paired machine,
-[power control](#power) and [new projects and clones](#projects) (not yet
-moving chats, offline copies, or analytics and usage across machines). The owner's setup
-steps are in [Remote machines](remote-machines.md).
+[power control](#power), [new projects and clones](#projects) and
+[moving a chat](#moving-a-chat) (not yet offline copies, or analytics and
+usage across machines). The owner's setup steps are in
+[Remote machines](remote-machines.md).
 
 **Identity.** Every service has a machine id (random, made once, kept in
 `threadgarden.db`) and a name (the host name until renamed: Settings →
@@ -819,6 +834,149 @@ never touches a folder it did not make (it only reads `git remote get-url
 origin` there, to mark the repos This PC has and to recognise a clone already
 in place) and never deletes a GitHub repo.
 
+### Moving a chat
+
+**Move to…** carries a chat to another machine with its whole conversation,
+subagents included, and back again (protocol 9, capability `move`). The
+design is [`2026-11-02-move-chat-design.md`](superpowers/specs/2026-11-02-move-chat-design.md)
+and the spike that settled how it works is
+[`2026-11-02-move-chat-spike-results.md`](superpowers/specs/2026-11-02-move-chat-spike-results.md);
+the owner's steps are in [Remote machines](remote-machines.md#moving-a-chat).
+A move happens only when the owner asks for it; nothing moves on its own.
+
+**The store is the moved chat's home.** A chat is `{ machineId, sessionId }`,
+and a move changes only the machine: the session id is kept. The conversation
+travels through the Agent SDK's session store, never as a file copy. On the
+source, `importSessionToStore(sessionId, store, { includeSubagents: true })`
+reads the local transcript into a store in memory (only reading Claude Code's
+files). On the target, the entries go into Threadgarden's own `SessionStore`
+(`move/store.ts`), in `threadgarden.db`: `store_entries` holds them per
+session and `subpath` (`''` is the main transcript, others a subagent's), in
+order, deduplicated by `uuid` (an entry without one is appended as it is). The
+store answers `load` and `listSubkeys` for any `projectKey`, since the SDK asks
+with the key of the target's folder. Every later turn resumes with
+`query({ resume, sessionStore, cwd })`, and every read (index, chat view,
+resume) passes `{ dir, sessionStore }` to `listSessions`, `getSessionInfo` and
+`getSessionMessages` (`historyOf`). For a resume from a store the SDK runs
+Claude Code with a temporary `CLAUDE_CONFIG_DIR` and deletes it afterwards, so
+new turns reach only `store.append()`: a moved chat lives in Threadgarden's
+data dir on the target, never under `~/.claude`, and `claude --resume` in a
+terminal there does not list it. Each append refreshes the chat's index entry
+and moves its listed time, since the projects watcher never sees it.
+
+**Moved chats** (`moved_chats`) are `here` (it lives in this store, in the
+folder `cwd`, and came from the peer machine) or `away` (it went to the peer;
+this machine's copy is old). An away chat is left out of every list and
+count. `chat.open` answers it with `movedTo`, and the desktop shows it
+read-only: "Moved to ‹machine› — this copy is read-only." with **Open it on
+‹machine›**. `chat.send` to it answers `MOVED`. Claude Code's own transcript of
+it is never touched: Threadgarden hides it. A chat that comes back to a
+machine holding its away copy becomes `here` again, its store replaced by the
+returning entries, so the owner sees one chat with the whole history (the
+stale local transcript stays, untouched and shadowed). An away chat whose
+copy here is in the store (it lived here in the store, then moved on) is read
+from the store and stays indexed, so `chat.open` still shows it. Forking a
+`here` chat is refused (`forkSession` reads a local transcript).
+
+**Before anything moves** (`move.check` on the source, `move.target` on the
+target, both read-only):
+- **Busy:** a live chat mid-turn (`turn`), waiting on a permission prompt or a
+  question (`prompt`), or with background tasks running (`subagents`) can't
+  move. The dialog offers Stop the chat: the turn's stop, or for background
+  agents `chat.end`, which ends the chat's process. A chat Threadgarden does
+  not run that resume safety finds running in another Claude Code process
+  (`terminal`) can't move either: "This chat is running in a terminal".
+- **Git** (`move/git-state.ts`) runs only `rev-parse`, `symbolic-ref`,
+  `config --get remote.origin.url`, `status --porcelain`, `rev-list` and
+  `for-each-ref`. A missing folder or one outside a work tree is `notRepo`;
+  otherwise `clean` or `dirty` with the branch (null when detached), the
+  origin URL, the changed files (untracked, non-ignored ones included) and the
+  commits not pushed: those the upstream lacks, or with no upstream those on
+  no remote branch. A git failure is an error, never "clean".
+- **The folder there:** a recent folder (or `<Create in>/<repo name>`) whose
+  own `origin` is the same repository, preferring the one on the chat's branch,
+  then a clean one with no live chat; with none, `<Create in>/<repo name>`
+  (`matched: false`). `inUse` says when the chosen folder is on another branch
+  while chats run there, or (on a desktop) has the owner's uncommitted changes.
+- **The target is on.** An Off target with power control is turned on
+  (`power.turnOn`) and the move waits until its link is On, at most 10
+  minutes ("Starting ‹target›…"; Cancel gives up). One without power control
+  that is not On is refused: "‹target› is off".
+
+A dirty project, a folder that isn't a git repo or a folder in use moves only
+with **Move anyway**; **Ask Claude to commit and push** sends that request in
+the chat instead.
+
+**The move** is driven by the desktop (`apps/desktop/src/lib/move/move-chat.svelte.ts`),
+which talks to both services; neither service calls the other.
+1. `move.exportBegin {sessionId, exportId}` on the source. The desktop makes
+   `exportId`, and the same id again (a lost answer) gives the same answer. It
+   **locks** the chat first and only then checks it is not busy, so no turn
+   can start in between; while locked, `chat.send` answers `MOVING`. A chat
+   that is itself `here` is exported from the store. The export is cut into
+   parts of at most 4 MiB of JSON (a long key's entries are split between
+   parts); a chat over 512 MiB answers `TOO_LARGE`.
+2. `move.exportPart` from the source, `move.importPart` into the target, part
+   by part (the target holds open imports for 10 minutes, 512 MiB at most).
+3. `move.commit {importId, sessionId, cwd, from}` on the target takes the
+   chat only if the target has no copy of it or holds it `away`; one that
+   lives here, or a local chat here that never moved away, answers
+   `ALREADY_HERE` ("This chat is already on ‹target›") and nothing is stored,
+   so a duplicate import can never delete newer history. It creates the
+   chat's folder, empty, when it is missing (Claude Code starts in it; Claude
+   then clones the repo into it), never touches an existing one and never
+   makes one inside Claude Code's config dir. It ends any process it had for
+   the chat, stores the entries as the chat's whole history, marks it `here`
+   and answers its summary once indexed (waiting at most 5 seconds for a busy
+   index queue; `summary` is null past that, and the chat is listed once it
+   is indexed). **From here the move is done**; any
+   failure before it leaves the chat where it was, and the desktop sends
+   `move.abort` to unlock it. The transfer calls are idempotent: the desktop
+   asks again with the same ids after a lost answer (three tries, waiting up
+   to 2 minutes each for the machine to be On again). If the commit's answer
+   never comes, the dialog says "The move may have reached ‹target›; check
+   there before moving again."
+4. `move.markMoved {exportId, sessionId, begunAt, to}` on the source marks
+   the chat `away`, ends its process there and unlocks it. `begunAt` is when
+   the desktop began the move, so it works without the source's memory of the
+   export: after the 10-minute lock ran out, past the hour, or after a
+   restart. A chat that came back to the source since (its last commit there
+   is after `begunAt`) is left as it is (`{}`). One that went on on the source
+   after the lock ran out answers `EXPIRED`: the chat stays on the source (its
+   tab goes back there) and the desktop says "The move took too long and
+   ‹source› went on with this chat, so it stays there. The copy on ‹target› is
+   left as it was." A lost answer is asked again once the source is back (as
+   in step 3). A markMoved that still fails is kept in the app (by the chat on
+   the target): the dialog and the chat there both say "The old copy on
+   ‹source› is still shown" with Retry, so closing the dialog loses nothing.
+   A Retry that answers `EXPIRED` also brings the scheduled sends and the
+   draft back to the source. A lock nobody ends lets go after 10 minutes.
+5. The chat's pending **scheduled sends** are re-created on the target with
+   the same id (`scheduled.create` with that `id` again returns it unchanged,
+   or makes a failed one pending again with the new text and time), then
+   cancelled on the source: one waiting for the limit reset follows the
+   target's own reset, a timed one keeps its time. While a chat is locked or
+   away, its sends stay pending on the source rather than fire into it. The
+   **draft** follows too.
+   Threadgarden's other metadata (custom title, bucket, pin, hold) stays with
+   the old copy.
+6. The **tab** follows the chat to the target.
+7. **Claude's first note:** one user message sent in the chat on the target,
+   whose first line is `[Threadgarden] This chat moved from ‹source› to
+   ‹target›.` (`move/note.ts`). It names the folder, the repo and the branch,
+   asks Claude to clone the repo into the folder if it is empty (`git clone
+   ‹origin› .`), else fetch, and then check out the branch, never to stash, reset, overwrite or switch a working
+   copy with changes or one other chats use (stop and ask instead), and says
+   what Move anyway left behind. The chat shows it with a small **Sent by
+   Threadgarden** label and no Fork. If it fails to send, the chat on the
+   target says so with **Send again**.
+
+Threadgarden runs no git that writes for a move (no clone, fetch, checkout,
+push, stash or worktree): getting the repo ready is Claude's work in the
+chat. Its only filesystem write besides its data dir is the chat's empty
+folder in step 3. Tests and the mock service inject the git reads (`moveGit` in
+`startService`) and the folder check (`folderStat`).
+
 ## Security model
 
 - **Loopback and token.** The service binds `127.0.0.1` only, on a random port.
@@ -892,7 +1050,13 @@ in place) and never deletes a GitHub repo.
 - **Folders and git** ([Projects](#projects)). Threadgarden makes new folders
   and runs `git init` or `git clone` in them (New project, Clone), and never
   changes or removes a folder it did not make. `gh` and git never prompt, and
-  no GitHub token is stored.
+  no GitHub token is stored. A move ([Moving a chat](#moving-a-chat)) only
+  reads git, and makes at most the chat's new folder, empty, when it is
+  missing.
+- **Moved chats** live in Threadgarden's own data dir (`threadgarden.db`) on
+  the machine they moved to. On the way a transcript passes through the
+  desktop: over loopback for This PC's service, over the pinned TLS link for
+  a paired machine.
 - **Permissions.** Threadgarden offers the default, acceptEdits, plan and auto
   permission modes, never `bypassPermissions`, and it filters out "always
   allow" suggestions that would switch a session to bypass.

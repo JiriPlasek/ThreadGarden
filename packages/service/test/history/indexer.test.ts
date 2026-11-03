@@ -157,7 +157,10 @@ describe('Indexer', () => {
     for (const [id] of spy.mock.calls) perSession.set(id, (perSession.get(id) ?? 0) + 1);
     expect(perSession.get('session-big')).toBe(1);
     expect([...perSession.values()].every((n) => n === 1)).toBe(true);
-    expect(spy.mock.calls.every((c) => c[1] === undefined)).toBe(true);
+    // No paging: only where the history is (here the local transcripts).
+    expect(
+      spy.mock.calls.every((c) => c[1]?.limit === undefined && c[1]?.offset === undefined),
+    ).toBe(true);
     expect(db.searchFts('parity', 5).map((h) => h.sessionId)).toContain('session-big');
   });
 

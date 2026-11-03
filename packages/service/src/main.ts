@@ -35,10 +35,12 @@ import { createQuickSearch } from './history/search.js';
 import { watchProjects } from './history/watcher.js';
 import { createLogger, type Logger } from './logger.js';
 import { DB_FILE, migrateDataDir } from './migrate-data-dir.js';
+import { ChatStore } from './move/store.js';
 import type { AgentAdapter } from './sdk/adapter.js';
 import type { ClaudeFound, ClaudeProblem } from './sdk/claude-path.js';
 import { buildSessionEnv } from './sdk/real-adapter.js';
 import { registerChatHandlers } from './server/handlers/chat.js';
+import { MoveLocks, registerMoveHandlers, type MoveGit } from './server/handlers/move.js';
 import { makeResumeChecker, registerExternalHandlers } from './server/handlers/external.js';
 import { registerFileHandlers } from './server/handlers/files.js';
 import { registerProjectHandlers } from './server/handlers/projects.js';
@@ -129,6 +131,10 @@ export type StartOptions = {
   claudeRunner?: (claudePath: string) => (args: string[]) => Promise<string>;
   /** Approximate size budget (characters) of the chat history cache; see `registerChatHandlers`. */
   historyCacheChars?: number;
+  /** The largest chat a move carries, and what imports hold together (default 512 MiB). */
+  moveMaxBytes?: number;
+  /** The git a move reads (`move.check`, `move.target`); default the real git. The mock fakes it. */
+  moveGit?: MoveGit;
   /** Runs `git` and `gh` for New project and Clone (default: the real ones); tests inject a fake. */
   projectTools?: Tools;
   /** Base environment of session processes (default `process.env`); the API key is added on top. */
@@ -138,7 +144,10 @@ export type StartOptions = {
    * index wait; default Node timers.
    */
   sessionTimers?: Timers;
-  /** Whether a project folder exists (v1.1 §4); default one `fs.stat` per folder. */
+  /**
+   * Whether a folder exists: a project's (v1.1 §4), and the parent of a chat
+   * moved here (made when missing); default one `fs.stat` per folder.
+   */
   folderStat?: (path: string) => Promise<boolean>;
   /** Where a project's icon is looked up (v1.3 §5); default the project folder itself. */
   projectIconSearch?: (projectPath: string) => Promise<FoundIcon | null>;
@@ -189,6 +198,13 @@ export type ServiceHandle = {
   /** v1.3 B: plan usage and scheduled sends (present when an adapter was given). */
   usage?: UsageTracker;
   scheduled?: ScheduledSends;
+  /** Protocol 9: the chats locked while a move exports them. */
+  moveLocks: MoveLocks;
+  /**
+   * Forgets every move, as if none had happened (moved chats, their store,
+   * the locks). For the mock service's test reset only: no method calls it.
+   */
+  forgetMoves(): Promise<void>;
   /** v1.4: where paired devices reach this service (headless, with a private address only). */
   remote?: { addresses: string[]; port: number };
   /** Sends an event to every local client and paired device. */
@@ -258,6 +274,10 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   let db: Db | undefined;
   let power: PowerHub | undefined;
   let host: SessionHost | undefined;
+  /** Chats being moved to another machine (protocol 9). */
+  const moveLocks = new MoveLocks(clock);
+  /** The move methods (with a database); `close` stops their sweep. */
+  let moveHandlers: { close(): void; forgetAll(): Promise<void> } | undefined;
   let indexing = { done: 0, total: 0 };
   let indexer: Indexer | undefined;
   let watcher: { close(): void } | undefined;
@@ -631,6 +651,12 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       usageTracker.autoRefresh(() => sessionHost.usageReader());
 
       const catalogRef: { current?: Catalog } = {};
+      // Chats moved here live in Threadgarden's own store. Every history read
+      // of a session (index, chat view, resume) goes through `historyOf`.
+      const chatStore = new ChatStore(opened, (id) => {
+        void index.refresh([id]).catch((err: unknown) => log.error(`refresh: ${String(err)}`));
+      });
+      const historyOf = (id: string) => chatStore.historyOf(id);
       const index = new Indexer(
         adapter,
         opened,
@@ -650,6 +676,12 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
             const s = sessionHost.get(id);
             return s !== undefined && s.live && s.status !== 'idle';
           },
+          historyOf,
+          // An away copy that lived here in the store stays indexed: `chat.open` shows it.
+          storeBacked: () => [
+            ...chatStore.here().map((c) => c.sessionId),
+            ...chatStore.awayInStore(),
+          ],
         },
       );
       indexer = index;
@@ -681,6 +713,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         live: live() ?? sessionHost,
         externals: opts.externals ?? (() => poller?.snapshot() ?? []),
         folderExists: (p) => folders.exists(p),
+        isAway: (id) => chatStore.isAway(id),
       });
       catalogRef.current = cat;
       const routing = new RoutingSettingsCheck();
@@ -749,6 +782,9 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         located: whenLocated,
         apiKeyMissing: () => opts.apiKeyOnly === true && apiKey === null,
         resumeCheck,
+        historyOf,
+        awayTo: (id) => chatStore.awayTo(id),
+        isMoving: (id) => moveLocks.isLocked(id),
         indexNow: (ids) => index.refresh(ids),
         ...(opts.historyCacheChars === undefined
           ? {}
@@ -768,6 +804,26 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         recentCwds: () => opened.recentCwds().map((r) => r.cwd),
         requireRunnable: chatHandlers.requireRunnable,
       });
+      moveHandlers = registerMoveHandlers(router, {
+        host: sessionHost,
+        db: opened,
+        store: chatStore,
+        adapter,
+        locks: moveLocks,
+        catalog: cat,
+        index,
+        release: chatHandlers.release,
+        changed: (sessionIds) => emitChat({ event: 'sessions.changed', data: { sessionIds } }),
+        resumeCheck,
+        machineName: () => machineOf(opened).name,
+        claudeConfigDir: claudeDir,
+        now: clock,
+        timers: opts.sessionTimers ?? realTimers,
+        ...(opts.moveMaxBytes === undefined ? {} : { maxBytes: opts.moveMaxBytes }),
+        ...(opts.moveGit ? { git: opts.moveGit } : {}),
+        ...(opts.folderStat ? { folderExists: opts.folderStat } : {}),
+        target: { tools: projectTools, createIn: () => maker!.createIn(), headless },
+      });
       registerProjectHandlers(router, {
         maker,
         tools: projectTools,
@@ -780,6 +836,8 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         emit: (e) => broadcastRef.fn(e),
         send: (sessionId, text, images) => chatHandlers.send({ sessionId, text, images }),
         busy: (id) => {
+          // A chat being moved, or moved away, keeps its sends pending: they move with it.
+          if (moveLocks.isLocked(id) || chatStore.isAway(id)) return true;
           const s = sessionHost.get(id);
           return s !== undefined && s.live && IN_TURN.has(s.status);
         },
@@ -865,6 +923,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     // Clients can connect now; `claude` is found in the background (§8 cold start).
     if (!claude.current && opts.locateClaude) void relocate();
   } catch (err) {
+    await step('moves', () => moveHandlers?.close());
     await step('poller', () => poller?.stop());
     await step('watcher', () => watcher?.close());
     await step('indexer', () => indexer?.stop());
@@ -932,6 +991,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       try {
         clearTimer(timer);
         await step('scheduled sends', () => scheduled?.dispose());
+        await step('moves', () => moveHandlers?.close());
         await step('usage', () => usage?.dispose());
         // Live sessions end with the process; the registry still lists them,
         // so the next start shows them as interrupted (§4.2).
@@ -1028,6 +1088,8 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     port: wsServer.port,
     token,
     router,
+    moveLocks,
+    forgetMoves: async () => moveHandlers?.forgetAll(),
     ...(host ? { host } : {}),
     ...(usage ? { usage } : {}),
     ...(scheduled ? { scheduled } : {}),

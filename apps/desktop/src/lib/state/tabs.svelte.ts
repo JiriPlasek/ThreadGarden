@@ -177,6 +177,22 @@ export class TabsState {
     this.changed();
   };
 
+  /**
+   * The chat `from` is now `to` (it moved to another machine): its tab keeps
+   * its place and, if it was the active one, stays active. A tab already open
+   * on `to` (e.g. an old copy's) gives way to it.
+   */
+  retarget = (from: ChatRef, to: ChatRef): void => {
+    const a = chatKey(from);
+    const b = chatKey(to);
+    if (a === b || !this.open.includes(a)) return;
+    const swap = (key: string | null): string | null => (key === a ? b : key);
+    this.open = this.open.filter((k) => k !== b).map((k) => swap(k)!);
+    this.active = swap(this.active);
+    this.behindAnalytics = swap(this.behindAnalytics);
+    this.changed();
+  };
+
   /** A stored entry's key now: the `local` fallback becomes This PC's real id. */
   private storedKey = (stored: string): string => {
     const ref = parseChatKey(stored);

@@ -9,6 +9,7 @@ import type {
   ChatSummary,
   ChatTask,
   ChatTasksEvent,
+  MovePeer,
   Result,
 } from '@threadgarden/protocol';
 import { SvelteMap } from 'svelte/reactivity';
@@ -100,6 +101,11 @@ export class ChatState {
    * the list). Empty for chats Threadgarden does not run.
    */
   tasks = $state.raw<ChatTask[]>([]);
+  /**
+   * Where the chat went when it was moved away (protocol 9): this copy is
+   * read-only. Null for a chat that is here.
+   */
+  movedTo = $state.raw<MovePeer | null>(null);
   /** Running tasks, for the "N running" badges. */
   running = $derived(runningTasks(this.tasks));
   /** Message list geometry, kept while the chat is resident. */
@@ -307,6 +313,7 @@ export class ChatsState {
       chat.hasMore = r.hasMore;
       // An older service has no task tracking: no tasks.
       chat.tasks = Array.isArray(r.tasks) ? r.tasks : [];
+      chat.movedTo = r.movedTo ?? null;
       chat.seq = r.seq;
       chat.loaded = true;
       // Queued items at or below the snapshot are already part of it; applying a stale

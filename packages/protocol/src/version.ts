@@ -12,5 +12,6 @@
  * 6 — power: switching a machine on and off through a Tasmota switch.
  * 7 — projects: folders, New project, Clone.
  * 8 — usage per account: the signed-in account on the usage state.
+ * 9 — move a chat: `move.*`, the `move` capability, `movedTo` on `chat.open`.
  */
-export const PROTOCOL_VERSION = 8;
+export const PROTOCOL_VERSION = 9;

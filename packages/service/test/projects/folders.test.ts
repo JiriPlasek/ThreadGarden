@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   completeFolder,
   listFolders,
+  makeChatFolder,
   makeFolder,
   nameRefusal,
   validName,
@@ -30,6 +31,28 @@ const codeOf = async (run: () => Promise<unknown>): Promise<string> => {
   }
   return 'NO_ERROR';
 };
+
+describe('makeChatFolder', () => {
+  it('makes a missing folder with its parents, empty', async () => {
+    const cwd = path.join(tmp, 'home', 'projects', 'repo');
+    await makeChatFolder(cwd, path.join(tmp, 'claude'));
+    expect(existsSync(cwd)).toBe(true);
+  });
+
+  it("refuses Claude Code's config dir and anything in it, even a name starting with ..", async () => {
+    const claude = path.join(tmp, 'claude');
+    for (const cwd of [claude, path.join(claude, 'projects'), path.join(claude, '..foo')]) {
+      expect(await codeOf(() => makeChatFolder(cwd, claude))).toBe('INVALID_PARAMS');
+      expect(existsSync(cwd)).toBe(false);
+    }
+  });
+
+  it('a sibling of the config dir is not inside it', async () => {
+    const cwd = path.join(tmp, 'claude-work');
+    await makeChatFolder(cwd, path.join(tmp, 'claude'));
+    expect(existsSync(cwd)).toBe(true);
+  });
+});
 
 describe('listFolders', () => {
   it('lists only visible folders with git marks', async () => {

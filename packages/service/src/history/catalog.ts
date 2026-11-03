@@ -94,6 +94,8 @@ export type CatalogOptions = {
   now?: () => number;
   /** Whether a project folder exists (a cached check, see `FolderCheck`); default: always. */
   folderExists?: (path: string) => boolean;
+  /** A chat that moved to another machine: kept for reading, never listed or counted. */
+  isAway?: (sessionId: string) => boolean;
 };
 
 type Entry = { summary: ChatSummary; indexed: boolean };
@@ -242,6 +244,7 @@ export class Catalog {
   private readonly gitCommonDir: GitCommonDir;
   private readonly now: () => number;
   private readonly folderExists: (path: string) => boolean;
+  private readonly isAway: (sessionId: string) => boolean;
   private readonly projectIds = new Map<string, string>();
   private cache: Snapshot | undefined;
   /** The project order `projects()` last returned (ids, joined), for `projectOrderChanged`. */
@@ -255,6 +258,7 @@ export class Catalog {
     this.gitCommonDir = o.gitCommonDir ?? defaultGitCommonDir;
     this.now = o.now ?? Date.now;
     this.folderExists = o.folderExists ?? (() => true);
+    this.isAway = o.isAway ?? (() => false);
   }
 
   /** Drops the cached titles/project names; call after anything that changes them. */
@@ -312,11 +316,15 @@ export class Catalog {
 
   /** One chat's summary (live/external overlay first, else the index); undefined if unknown. */
   summary(sessionId: string): ChatSummary | undefined {
-    return this.summaries([sessionId])[0];
+    return this.summariesOf([sessionId])[0];
   }
 
-  /** The summaries of `sessionIds` in that order (see `summary`); unknown ids are left out. */
+  /** The summaries of `sessionIds` in that order (see `summary`); unknown and away chats are left out. */
   summaries(sessionIds: readonly string[]): ChatSummary[] {
+    return this.summariesOf(sessionIds.filter((id) => !this.isAway(id)));
+  }
+
+  private summariesOf(sessionIds: readonly string[]): ChatSummary[] {
     const turns = this.db.unreadTurns();
     const overlay = this.overlay(turns);
     return sessionIds.flatMap((id) => {
@@ -473,11 +481,11 @@ export class Catalog {
    * or failed Threadgarden chat, which has no process — it is running in a terminal.
    */
   private overlay(turns: Turns): Map<string, Entry> {
-    const owned = this.live.list();
+    const owned = this.live.list().filter((l) => !this.isAway(l.sessionId));
     const liveIds = new Set(owned.filter((l) => l.live).map((l) => l.sessionId));
     // Only sessions with an id can be listed (and opened); the rest are visible via the poller.
     const ext = this.externals().flatMap((e) =>
-      e.sessionId !== undefined && !liveIds.has(e.sessionId)
+      e.sessionId !== undefined && !liveIds.has(e.sessionId) && !this.isAway(e.sessionId)
         ? [{ ...e, sessionId: e.sessionId }]
         : [],
     );
@@ -561,7 +569,7 @@ export class Catalog {
     if (turns.size === 0 && backs.size === 0) return waiting;
     const since = new Map(turns);
     for (const [id, at] of backs) since.set(id, Math.max(at, since.get(id) ?? at));
-    const missing = [...since.keys()].filter((id) => !overlay.has(id));
+    const missing = [...since.keys()].filter((id) => !overlay.has(id) && !this.isAway(id));
     const rows = new Map(
       missing.length === 0
         ? []

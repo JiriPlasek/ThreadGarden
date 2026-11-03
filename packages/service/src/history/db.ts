@@ -143,6 +143,35 @@ export const chunkText = (text: string, size = FTS_CHUNK_CHARS): string[] => {
 
 type Row = Record<string, unknown>;
 
+/** One session-store entry: its JSON and its `uuid` (null when it has none). */
+export type StoreRow = { uuid: string | null; entry: string };
+
+export type MovedChatRow = {
+  sessionId: string;
+  state: 'here' | 'away';
+  cwd: string | null;
+  peerMachineId: string | null;
+  peerName: string | null;
+  /** Its last activity (the store's `mtime`). */
+  at: number;
+  /** When it last came here (`move.commit`); null when it never did. */
+  cameAt: number | null;
+};
+
+/** A moved chat with when it last came here (`moved_chat_arrivals`). */
+const MOVED_CHATS = `SELECT m.*, a.came_at FROM moved_chats m
+  LEFT JOIN moved_chat_arrivals a ON a.session_id = m.session_id`;
+
+const toMovedChat = (r: Row): MovedChatRow => ({
+  sessionId: r.session_id as string,
+  state: r.state as 'here' | 'away',
+  cwd: (r.cwd as string | null) ?? null,
+  peerMachineId: (r.peer_machine_id as string | null) ?? null,
+  peerName: (r.peer_name as string | null) ?? null,
+  at: r.at as number,
+  cameAt: (r.came_at as number | null) ?? null,
+});
+
 const toSession = (r: Row): SessionRow => ({
   sessionId: r.session_id as string,
   projectId: r.project_id as string,
@@ -178,6 +207,9 @@ const toBucketState = (r: Row | undefined): BucketState => {
 
 /** Sessions with their bucket (v1.2) as `b`. */
 const WITH_BUCKET = `sessions s LEFT JOIN chat_buckets b ON b.session_id = s.session_id`;
+
+/** A chat that moved away is kept for reading only: lists and counts leave it out. */
+const NOT_AWAY = `NOT EXISTS (SELECT 1 FROM moved_chats mv WHERE mv.session_id = s.session_id AND mv.state = 'away')`;
 
 const SESSION_SELECT = `SELECT s.*, m.custom_title AS custom_title, COALESCE(m.pinned, 0) AS pinned,
     b.bucket AS bucket, b.hold_until AS hold_until, b.hold_note AS hold_note, b.back_at AS back_at,
@@ -242,7 +274,7 @@ export class Db implements LiveRegistry {
       if (filter.ids.length === 0) return { items: [] };
       where.push(`s.session_id IN (${filter.ids.map(() => '?').join(',')})`);
       params.push(...filter.ids);
-    }
+    } else where.push(NOT_AWAY); // a lookup by id still finds an away chat
     notIn('s.project_id', filter.excludeProjectIds, where, params as string[]);
     notIn('s.session_id', filter.excludeIds, where, params as string[]);
     if (filter.buckets) where.push(bucketIn('b.bucket', filter.buckets));
@@ -270,6 +302,7 @@ export class Db implements LiveRegistry {
   countBuckets(excludeProjectIds: string[] = []): Record<Bucket, number> {
     const where: string[] = [];
     const params: string[] = [];
+    where.push(NOT_AWAY);
     notIn('s.project_id', excludeProjectIds, where, params);
     const rows = this.raw
       .prepare(
@@ -1025,6 +1058,130 @@ export class Db implements LiveRegistry {
       )
       .all();
     return new Map(rows.map((r) => [r.session_id as string, r.last_turn_ended_at as number]));
+  }
+
+  // --- move a chat: session store (see `move/store.ts`) ---------------------------
+
+  /**
+   * Appends entries to a key (`subpath` '' = the main transcript) in one
+   * transaction. An entry whose `uuid` the key already holds is skipped; one
+   * without a `uuid` is always added.
+   */
+  storeAppend(sessionId: string, subpath: string, entries: StoreRow[]): void {
+    this.inTransaction(() => this.storeInsert(sessionId, subpath, entries));
+  }
+
+  /** Appends the entries of several keys of one session in one transaction. */
+  storeAppendKeys(sessionId: string, keys: { subpath: string; entries: StoreRow[] }[]): void {
+    this.inTransaction(() => {
+      for (const k of keys) this.storeInsert(sessionId, k.subpath, k.entries);
+    });
+  }
+
+  /** Replaces every entry of a session with these keys, in one transaction (a move's import). */
+  storeReplaceKeys(sessionId: string, keys: { subpath: string; entries: StoreRow[] }[]): void {
+    this.inTransaction(() => {
+      this.raw.prepare('DELETE FROM store_entries WHERE session_id = ?').run(sessionId);
+      for (const k of keys) this.storeInsert(sessionId, k.subpath, k.entries);
+    });
+  }
+
+  private storeInsert(sessionId: string, subpath: string, entries: StoreRow[]): void {
+    if (entries.length === 0) return;
+    const top = this.raw
+      .prepare(
+        'SELECT COALESCE(MAX(seq), 0) AS seq FROM store_entries WHERE session_id = ? AND subpath = ?',
+      )
+      .get(sessionId, subpath);
+    let seq = top?.seq as number;
+    const insert = this.raw.prepare(
+      'INSERT OR IGNORE INTO store_entries (session_id, subpath, seq, uuid, entry) VALUES (?, ?, ?, ?, ?)',
+    );
+    for (const e of entries) {
+      const r = insert.run(sessionId, subpath, seq + 1, e.uuid, e.entry);
+      if (Number(r.changes) > 0) seq++;
+    }
+  }
+
+  /** The entries (JSON) of a key in order; empty when there are none. */
+  storeLoad(sessionId: string, subpath: string): string[] {
+    return this.raw
+      .prepare('SELECT entry FROM store_entries WHERE session_id = ? AND subpath = ? ORDER BY seq')
+      .all(sessionId, subpath)
+      .map((r) => r.entry as string);
+  }
+
+  /** The subpaths of a session that hold entries ('' is the main transcript), sorted. */
+  storeSubpaths(sessionId: string): string[] {
+    return this.raw
+      .prepare('SELECT DISTINCT subpath FROM store_entries WHERE session_id = ? ORDER BY subpath')
+      .all(sessionId)
+      .map((r) => r.subpath as string);
+  }
+
+  getMovedChat(sessionId: string): MovedChatRow | undefined {
+    const r = this.raw.prepare(`${MOVED_CHATS} WHERE m.session_id = ?`).get(sessionId);
+    return r ? toMovedChat(r) : undefined;
+  }
+
+  /** The moved chats in `state`, oldest first. */
+  listMovedChats(state: MovedChatRow['state']): MovedChatRow[] {
+    return this.raw
+      .prepare(`${MOVED_CHATS} WHERE m.state = ? ORDER BY m.at, m.session_id`)
+      .all(state)
+      .map(toMovedChat);
+  }
+
+  /** Sets a chat's state; the folder and `cameAt` are kept when undefined. */
+  setMovedChat(row: {
+    sessionId: string;
+    state: MovedChatRow['state'];
+    cwd?: string;
+    peerMachineId: string | null;
+    peerName: string | null;
+    at: number;
+    cameAt?: number;
+  }): void {
+    this.inTransaction(() => {
+      this.raw
+        .prepare(
+          `INSERT INTO moved_chats (session_id, state, cwd, peer_machine_id, peer_name, at)
+           VALUES (?, ?, ?, ?, ?, ?)
+           ON CONFLICT(session_id) DO UPDATE SET state = excluded.state,
+             cwd = COALESCE(excluded.cwd, cwd), peer_machine_id = excluded.peer_machine_id,
+             peer_name = excluded.peer_name, at = excluded.at`,
+        )
+        .run(row.sessionId, row.state, row.cwd ?? null, row.peerMachineId, row.peerName, row.at);
+      if (row.cameAt !== undefined) {
+        this.raw
+          .prepare('INSERT OR REPLACE INTO moved_chat_arrivals (session_id, came_at) VALUES (?, ?)')
+          .run(row.sessionId, row.cameAt);
+      }
+    });
+  }
+
+  /** The sessions whose store holds entries. */
+  storeSessionIds(): string[] {
+    return this.raw
+      .prepare('SELECT DISTINCT session_id FROM store_entries ORDER BY session_id')
+      .all()
+      .map((r) => r.session_id as string);
+  }
+
+  /** Forgets that a chat moved: its row and its store entries (the mock's test reset). */
+  forgetMovedChat(sessionId: string): void {
+    this.inTransaction(() => {
+      this.raw.prepare('DELETE FROM store_entries WHERE session_id = ?').run(sessionId);
+      this.raw.prepare('DELETE FROM moved_chats WHERE session_id = ?').run(sessionId);
+      this.raw.prepare('DELETE FROM moved_chat_arrivals WHERE session_id = ?').run(sessionId);
+    });
+  }
+
+  /** A chat that lives here had activity at `at` (its store `mtime`). */
+  touchMovedChat(sessionId: string, at: number): void {
+    this.raw
+      .prepare("UPDATE moved_chats SET at = ? WHERE session_id = ? AND state = 'here'")
+      .run(at, sessionId);
   }
 
   // --- LiveRegistry ---------------------------------------------------------------

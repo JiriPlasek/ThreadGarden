@@ -1,5 +1,10 @@
 import type { EventMsg } from '@threadgarden/protocol';
-import type { AgentAdapter, SDKSessionInfo, SessionMessage } from '../sdk/adapter.js';
+import type {
+  AgentAdapter,
+  HistoryOptions,
+  SDKSessionInfo,
+  SessionMessage,
+} from '../sdk/adapter.js';
 import { chunkText, type Db } from './db.js';
 import {
   defaultGitCommonDir,
@@ -63,6 +68,15 @@ export type IndexerOptions = {
    * `resumeDeferred()`; the chat view never depends on the index.
    */
   deferWhile?: (sessionId: string) => boolean;
+  /** Where a session's history is read (a chat moved here: Threadgarden's store); default local. */
+  historyOf?: (sessionId: string) => HistoryOptions;
+  /**
+   * The chats whose history is in the store: moved here, or an away copy
+   * that lived here in the store. The SDK's listing of local transcripts
+   * does not have them; a local copy of one is stale. They are never removed
+   * as vanished.
+   */
+  storeBacked?: () => string[];
 };
 
 /** Thrown inside a sync that `stop()` ended; never reported. */
@@ -74,6 +88,8 @@ export class Indexer {
   private readonly maxText: number;
   private readonly onError: NonNullable<IndexerOptions['onError']>;
   private readonly deferWhile: (sessionId: string) => boolean;
+  private readonly historyOf: (sessionId: string) => HistoryOptions;
+  private readonly storeBacked: () => string[];
   /** Sessions whose refresh waits until `deferWhile` lets go of them. */
   private readonly deferred = new Set<string>();
   private running: Promise<void> = Promise.resolve();
@@ -96,6 +112,8 @@ export class Indexer {
     this.maxText = options.maxTextChars ?? MAX_TEXT_CHARS;
     this.onError = options.onError ?? (() => {});
     this.deferWhile = options.deferWhile ?? (() => false);
+    this.historyOf = options.historyOf ?? ((): HistoryOptions => ({}));
+    this.storeBacked = options.storeBacked ?? (() => []);
   }
 
   /**
@@ -114,10 +132,24 @@ export class Indexer {
    */
   fullSync(): Promise<void> {
     const done = this.serial(async () => {
-      const all = await this.adapter.listSessions();
+      const local = await this.adapter.listSessions();
       this.check();
+      // A chat moved here is read from the store; that copy replaces a local one.
+      const moved = this.storeBacked();
+      const fromStore: SDKSessionInfo[] = [];
+      for (const id of moved) {
+        this.check();
+        try {
+          const info = await this.infoOf(id);
+          if (info) fromStore.push(info);
+        } catch (e) {
+          this.onError(e, { sessionId: id, step: 'sync' });
+        }
+      }
+      const skip = new Set(moved);
+      const all = [...local.filter((i) => !skip.has(i.sessionId)), ...fromStore];
       await this.process(all, true);
-      this.removeVanished(new Set(all.map((i) => i.sessionId)));
+      this.removeVanished(new Set([...all.map((i) => i.sessionId), ...moved]));
       this.backfillDue = this.db.sessionsNeedingStats(STATS_VERSION, 1).length > 0;
     });
     void done.then(
@@ -184,7 +216,7 @@ export class Indexer {
   private async gatherStats(sessionId: string): Promise<void> {
     const row = this.db.getSession(sessionId);
     if (!row) return;
-    const messages = await this.adapter.getSessionMessages(sessionId);
+    const messages = await this.adapter.getSessionMessages(sessionId, this.historyOf(sessionId));
     const stats = new StatsCollector(row.createdAt ?? row.lastModified);
     for (let start = 0; start < messages.length; start += SLICE) {
       this.check();
@@ -220,7 +252,7 @@ export class Indexer {
         }
         this.deferred.delete(id);
         try {
-          const info = await this.adapter.getSessionInfo(id);
+          const info = await this.infoOf(id);
           if (info) infos.push(info);
         } catch (e) {
           this.onError(e, { sessionId: id, step: 'refresh' });
@@ -236,6 +268,16 @@ export class Indexer {
     if (ready.length === 0) return this.running;
     for (const id of ready) this.deferred.delete(id);
     return this.refresh(ready);
+  }
+
+  /**
+   * A session's info from where its history is. A moved chat's transcript
+   * names the source machine's folder; here it lives in its store `dir`.
+   */
+  private async infoOf(sessionId: string): Promise<SDKSessionInfo | undefined> {
+    const where = this.historyOf(sessionId);
+    const info = await this.adapter.getSessionInfo(sessionId, where);
+    return info && where.sessionStore && where.dir ? { ...info, cwd: where.dir } : info;
   }
 
   private serial(fn: () => Promise<void>): Promise<void> {
@@ -334,7 +376,7 @@ export class Indexer {
     const id = info.sessionId;
     const parts: string[] = [];
     let total = 0;
-    const messages = await this.adapter.getSessionMessages(id);
+    const messages = await this.adapter.getSessionMessages(id, this.historyOf(id));
     // v1.3 analytics: statistics come from the same walk, no second read.
     const stats = new StatsCollector(info.createdAt ?? info.lastModified);
     for (let start = 0; start < messages.length; start += SLICE) {

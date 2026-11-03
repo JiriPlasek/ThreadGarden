@@ -20,7 +20,9 @@ import type {
   ChatTask,
   EventMsg,
   ImageRef,
+  MovePeer,
 } from '@threadgarden/protocol';
+import { MOVE_ERRORS } from '@threadgarden/protocol';
 import {
   realTimers,
   type LiveSession,
@@ -36,6 +38,7 @@ import type { Db } from '../../history/db.js';
 import type {
   AgentAdapter,
   Effort,
+  HistoryOptions,
   ModelInfo,
   PermissionMode,
   SlashCommand,
@@ -80,6 +83,15 @@ export type ChatHandlerDeps = {
    */
   apiKeyMissing?: () => boolean;
   resumeCheck: (sessionId: string) => Promise<ResumeCheck>;
+  /**
+   * Where a chat's history is read and resumed from: Threadgarden's store for a
+   * chat moved here, else Claude Code's local transcripts (default).
+   */
+  historyOf?: (sessionId: string) => HistoryOptions;
+  /** Where a chat went when it moved away from here (protocol 9); null when it did not. */
+  awayTo?: (sessionId: string) => MovePeer | null;
+  /** True while a move is exporting the chat: `chat.send` answers `MOVING`. */
+  isMoving?: (sessionId: string) => boolean;
   /**
    * Indexes sessions now: a fork Threadgarden just made, so it can be opened at
    * once, and a chat that ends (its index may have waited for its turn).
@@ -191,10 +203,16 @@ export type ChatHandlers = {
   }) => Promise<{ queued: boolean }>;
   /** Throws `CLAUDE_MISSING` and the like when a Claude Code process may not be started. */
   requireRunnable: () => Promise<void>;
+  /**
+   * Ends the host's session of the chat, if any (its process closes), and
+   * drops its cached view, so the next read starts afresh (a move).
+   */
+  release: (sessionId: string) => void;
 };
 
 export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): ChatHandlers => {
   const { host, adapter, db, catalog } = deps;
+  const historyOf = deps.historyOf ?? ((): HistoryOptions => ({}));
   const historyCache = new Map<string, CacheEntry>();
   const cacheBudget = deps.historyCacheChars ?? HISTORY_CACHE_CHARS;
   let cachedChars = 0;
@@ -293,7 +311,7 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
       historyCache.set(sessionId, hit);
       return hit.items;
     }
-    const messages = await adapter.getSessionMessages(sessionId);
+    const messages = await adapter.getSessionMessages(sessionId, historyOf(sessionId));
     const normalizer = new Normalizer();
     const byId = new Map<string, ChatItem>();
     for (const m of messages) for (const item of normalizer.push(m).items) byId.set(item.id, item);
@@ -362,6 +380,7 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
       hasMore: v.items.length > items.length,
       seq: v.seq,
       tasks: v.tasks,
+      movedTo: deps.awayTo?.(p.sessionId) ?? null,
     };
   });
 
@@ -405,21 +424,33 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
    * the chat when Threadgarden is not running it (behind the resume-safety check).
    */
   const send = async (p: { sessionId: string; text: string; images?: ImageRef[] | undefined }) => {
+    if (deps.isMoving?.(p.sessionId)) {
+      throw new ServiceError(MOVE_ERRORS.moving, 'This chat is being moved to another machine');
+    }
+    const away = deps.awayTo?.(p.sessionId);
+    if (away) throw new ServiceError(MOVE_ERRORS.moved, `This chat moved to ${away.name}`);
     const input = toInput(p);
     let s = host.get(p.sessionId);
     if (!s?.live) {
       await requireRunnable();
+      const history = historyOf(p.sessionId);
+      // A chat moved here runs in its store row's folder, wherever an earlier process ran.
       const cwd =
+        history.dir ??
         s?.cwd ??
         db.getSession(p.sessionId)?.cwd ??
-        (await adapter.getSessionInfo(p.sessionId))?.cwd;
+        (await adapter.getSessionInfo(p.sessionId, history))?.cwd;
       if (!cwd) throw new ServiceError('NOT_FOUND', `Unknown chat ${p.sessionId}`);
       // §4.4: never continue a session another process is running. `unverified`
       // is allowed; the UI asked the user to confirm before sending.
       const check = await deps.resumeCheck(p.sessionId);
       if (check.status === 'blocked') throw new ServiceError('RESUME_BLOCKED', check.reason);
       forget(p.sessionId); // the resumed process's view starts from a fresh read
-      s = host.ensureLive(p.sessionId, cwd);
+      s = host.ensureLive(
+        p.sessionId,
+        cwd,
+        history.sessionStore === undefined ? {} : { sessionStore: history.sessionStore },
+      );
       changed([p.sessionId]);
     }
     // Nothing gets lost in the archive or on hold: a chat being sent a message
@@ -443,6 +474,13 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
     return {};
   });
 
+  const release = (sessionId: string): void => {
+    forget(sessionId); // the next read sees the live turns, or the chat's new history
+    if (!host.get(sessionId)) return;
+    host.end(sessionId);
+    changed([sessionId]);
+  };
+
   /**
    * Indexing waits while a turn runs, so a chat ended mid-turn may not be
    * indexed yet. It is indexed before this answers (for at most
@@ -452,10 +490,8 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
    */
   router.register('chat.end', async (p) => {
     if (host.get(p.sessionId)) {
-      forget(p.sessionId); // the transcript now holds the live turns
       deps.titles?.forget(p.sessionId); // a first turn cut short gets no generated title
-      host.end(p.sessionId);
-      changed([p.sessionId]);
+      release(p.sessionId);
       const timers = deps.timers ?? realTimers;
       let timer: unknown;
       const capped = new Promise<void>((resolve) => {
@@ -515,6 +551,10 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
   });
 
   router.register('chat.fork', async (p) => {
+    // Ruling R5: the SDK forks a local transcript; a moved chat has none here.
+    if (historyOf(p.sessionId).sessionStore !== undefined) {
+      throw new ServiceError('FORK_FAILED', 'Not available for a moved chat yet');
+    }
     const s = host.get(p.sessionId);
     const uuid = s ? s.messageUuidOf(p.upToItemId) : (p.upToItemId.split(':')[0] ?? '');
     if (!uuid) throw new ServiceError('INVALID_PARAMS', 'upToItemId must name a message');
@@ -576,5 +616,5 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
     return lastModels ?? [];
   });
 
-  return { send, requireRunnable };
+  return { send, requireRunnable, release };
 };

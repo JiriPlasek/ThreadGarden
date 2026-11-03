@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { ImageRef, ScheduledSend } from '@threadgarden/protocol';
+  import ArrowRightLeftIcon from '@lucide/svelte/icons/arrow-right-left';
   import CheckIcon from '@lucide/svelte/icons/check';
   import GaugeIcon from '@lucide/svelte/icons/gauge';
   import HandIcon from '@lucide/svelte/icons/hand';
@@ -10,11 +11,13 @@
   import SetupScreen from '#lib/components/SetupScreen.svelte';
   import { clockTime, sendTimeText } from '#lib/format/usage.js';
   import { rowPx } from '#lib/interface-scale.js';
+  import { retryOldCopy } from '#lib/move/move-chat.svelte.js';
   import { copyText } from '#lib/native.js';
   import { RequestError } from '#lib/service/client.js';
   import type { ResumeCheck } from '#lib/state/chats.svelte.js';
   import { useApp, useScope } from '#lib/state/context.js';
-  import type { ChatRef } from '#lib/state/refs.js';
+  import { machineNameOf } from '#lib/state/machines.svelte.js';
+  import { chatKey, type ChatRef } from '#lib/state/refs.js';
   import type { SendWhen } from '#lib/state/scheduled.svelte.js';
   import ActivityPanel from './ActivityPanel.svelte';
   import ChatHeader from './ChatHeader.svelte';
@@ -39,10 +42,14 @@
    * than SIDE_PANEL_MIN_REM it would squeeze the messages, so there it is an
    * overlay drawer instead, opened on request in this view only (ruling R30):
    * one that covered the chat on every chat switch would be in the way.
+   *
+   * A chat moved away (move-chat §6) is this machine's read-only old copy:
+   * instead of the composer it says where it went, with a link to it there.
    */
   let { ref }: { ref: ChatRef } = $props();
 
-  const { tabs, settings, usageAccounts } = useApp();
+  const app = useApp();
+  const { tabs, settings, usageAccounts, machines, interaction: appInteraction } = app;
   /** The chat's machine (`ChatPane` shows it inside that machine's scope). */
   const scope = useScope();
   const { chats, interaction, scheduled } = scope;
@@ -50,6 +57,45 @@
   /** A chat just created from the new-chat dialog starts with its composer focused. */
   const focusComposer = untrack(() => interaction.takeComposerFocus(sessionId));
   const chat = $derived(chats.get(sessionId));
+  /** Where a moved-away chat went, named as this app names it (never the stored name). */
+  const movedTo = $derived(
+    chat?.movedTo
+      ? { machineId: chat.movedTo.machineId, name: machineNameOf(machines, chat.movedTo.machineId) }
+      : null,
+  );
+
+  /** Threadgarden's first note after a move here didn't send (move-chat §6): Send again. */
+  const pendingNote = $derived(appInteraction.pendingNotes[chatKey(ref)]);
+  const machineName = $derived(machineNameOf(machines, scope.machineId));
+  let noteSending = $state(false);
+  const sendNoteAgain = async (): Promise<void> => {
+    const note = pendingNote;
+    if (!note || noteSending) return;
+    noteSending = true;
+    try {
+      await chats.send(sessionId, note.text);
+      appInteraction.noteSent(ref);
+    } catch (err) {
+      const problem = err instanceof Error ? err.message : String(err);
+      appInteraction.notePending(ref, { text: note.text, problem });
+    } finally {
+      noteSending = false;
+    }
+  };
+
+  /** The source still lists its old copy of this moved chat (`move.markMoved` failed, R2): Retry. */
+  const pendingMark = $derived(appInteraction.pendingMarks[chatKey(ref)]);
+  const moveNoticeText = $derived(appInteraction.moveNotices[chatKey(ref)]);
+  let marking = $state(false);
+  const retryMark = async (): Promise<void> => {
+    if (marking) return;
+    marking = true;
+    try {
+      await retryOldCopy(app, ref);
+    } finally {
+      marking = false;
+    }
+  };
 
   let root = $state<HTMLDivElement | null>(null);
   let composerBox = $state<HTMLTextAreaElement | null>(null);
@@ -464,109 +510,180 @@
           />
         {/if}
 
-        <div class="mx-auto w-full max-w-4xl shrink-0 space-y-1.5 px-4 pt-1 pb-3">
-          {#if setupItem && setupItem.kind === 'system' && setupItem.id !== dismissedSetup}
-            <SetupScreen
-              kind="update"
-              problem={setupItem.text}
-              compact
-              onDismiss={() => (dismissedSetup = setupItem.id)}
-            />
-          {/if}
-          {#if pending.length > 0}
+        {#if movedTo}
+          <div class="mx-auto w-full max-w-4xl shrink-0 px-4 pt-1 pb-3">
             <div
-              class="flex items-center gap-2 rounded-md bg-amber-500/10 px-3 py-1 text-xs text-amber-900 dark:text-amber-200"
+              class="bg-muted/60 flex items-center gap-2 rounded-md border px-3 py-2 text-xs"
+              role="status"
+              aria-label="Moved to {movedTo.name}"
             >
-              <HandIcon class="size-4 shrink-0" aria-hidden="true" />
+              <ArrowRightLeftIcon class="size-4 shrink-0" aria-hidden="true" />
               <span class="flex-1"
-                >Claude is waiting for you{pending.length > 1
-                  ? ` (${pending.length} requests)`
-                  : ''}</span
+                ><span class="font-medium">Moved to {movedTo.name}</span> — this copy is read-only.</span
               >
               <button
                 type="button"
                 class="font-medium underline-offset-2 hover:underline"
-                onclick={showRequest}>Show</button
+                onclick={() => tabs.openTab({ machineId: movedTo.machineId, sessionId })}
+                >Open it on {movedTo.name}</button
               >
             </div>
-          {/if}
-          {#if blocked}
-            <div
-              class="border-destructive/40 bg-destructive/5 rounded-md border px-3 py-2 text-xs"
-              role="alert"
-            >
-              <div class="flex items-start gap-2">
+          </div>
+        {:else}
+          <div class="mx-auto w-full max-w-4xl shrink-0 space-y-1.5 px-4 pt-1 pb-3">
+            {#if pendingNote}
+              <div
+                class="border-destructive/40 bg-destructive/5 flex items-center gap-2 rounded-md border px-3 py-1.5 text-xs"
+                role="alert"
+                aria-label="Claude's first note didn't send"
+              >
                 <p class="text-destructive min-w-0 flex-1">
-                  <span class="font-medium">This chat can't be continued here.</span>
-                  {blocked.reason}
+                  Claude's first note on {machineName} didn't send: {pendingNote.problem}
                 </p>
                 <button
                   type="button"
-                  class="text-muted-foreground hover:text-foreground shrink-0"
-                  aria-label="Dismiss"
-                  onclick={() => (blocked = null)}
-                  ><XIcon class="size-4" aria-hidden="true" /></button
+                  class="bg-background hover:bg-muted inline-flex h-6 shrink-0 items-center rounded border px-2 disabled:opacity-50"
+                  disabled={noteSending}
+                  onclick={() => void sendNoteAgain()}>Send again</button
                 >
               </div>
-              <div class="mt-1.5 flex flex-wrap items-center gap-2">
+            {/if}
+            {#if pendingMark}
+              <div
+                class="flex items-center gap-2 rounded-md border px-3 py-1.5 text-xs"
+                role="alert"
+                aria-label="The old copy is still shown"
+              >
+                <p class="min-w-0 flex-1" title={pendingMark.problem ?? undefined}>
+                  The old copy on {machineNameOf(machines, pendingMark.source)} is still shown
+                </p>
                 <button
                   type="button"
-                  class="bg-background hover:bg-muted inline-flex h-6 items-center gap-1 rounded border px-2"
-                  onclick={() => void copyResume()}
+                  class="bg-background hover:bg-muted inline-flex h-6 shrink-0 items-center rounded border px-2 disabled:opacity-50"
+                  disabled={marking}
+                  onclick={() => void retryMark()}>Retry</button
                 >
-                  {#if blocked.copied}<CheckIcon class="size-3.5" aria-hidden="true" />{/if}
-                  Copy resume command
-                </button>
-                {#if blocked.command}
-                  <code class="bg-muted rounded px-1.5 py-0.5 font-mono">{blocked.command}</code>
-                {/if}
               </div>
-            </div>
-          {/if}
-          {#if refusal}
-            <div
-              class="flex items-center gap-2 rounded-md bg-red-500/10 px-3 py-1 text-xs text-red-900 dark:text-red-200"
-              role="status"
-            >
-              <GaugeIcon class="size-4 shrink-0" aria-hidden="true" />
-              <span class="flex-1"
-                >Usage limit reached{refusal.resetsAt !== undefined
-                  ? ` — resets at ${clockTime(refusal.resetsAt)}`
-                  : ''}</span
+            {/if}
+            {#if moveNoticeText}
+              <div
+                class="flex items-center gap-2 rounded-md border px-3 py-1.5 text-xs"
+                role="status"
+                aria-label="About the move"
               >
-              <button
-                type="button"
-                class="font-medium underline-offset-2 hover:underline"
-                onclick={() => usageAccounts.open()}>Usage</button
+                <p class="min-w-0 flex-1">{moveNoticeText}</p>
+                <button
+                  type="button"
+                  class="hover:bg-muted inline-flex size-6 shrink-0 items-center justify-center rounded"
+                  aria-label="Dismiss"
+                  onclick={() => appInteraction.dismissMoveNotice(ref)}
+                  ><XIcon class="size-3.5" aria-hidden="true" /></button
+                >
+              </div>
+            {/if}
+            {#if setupItem && setupItem.kind === 'system' && setupItem.id !== dismissedSetup}
+              <SetupScreen
+                kind="update"
+                problem={setupItem.text}
+                compact
+                onDismiss={() => (dismissedSetup = setupItem.id)}
+              />
+            {/if}
+            {#if pending.length > 0}
+              <div
+                class="flex items-center gap-2 rounded-md bg-amber-500/10 px-3 py-1 text-xs text-amber-900 dark:text-amber-200"
               >
-            </div>
-          {/if}
-          <ScheduledSends
-            {sessionId}
-            editingId={editingSend?.id}
-            onEdit={(s) => void startEdit(s)}
-          />
-          {#if sendError}
-            <p class="text-destructive text-xs" role="alert">{sendError}</p>
-          {/if}
-          <Composer
-            bind:this={composer}
-            bind:textarea={composerBox}
-            draftKey={sessionId}
-            cwd={chat.summary?.cwd ?? ''}
-            commandScope={{ sessionId }}
-            {working}
-            queued={chat.queuedMessages}
-            onSubmit={submit}
-            onInterrupt={interrupt}
-            {onControl}
-            onSchedule={schedule}
-            {resetAt}
-            limited={refusal !== undefined}
-            {editing}
-            autofocus={focusComposer}
-          />
-        </div>
+                <HandIcon class="size-4 shrink-0" aria-hidden="true" />
+                <span class="flex-1"
+                  >Claude is waiting for you{pending.length > 1
+                    ? ` (${pending.length} requests)`
+                    : ''}</span
+                >
+                <button
+                  type="button"
+                  class="font-medium underline-offset-2 hover:underline"
+                  onclick={showRequest}>Show</button
+                >
+              </div>
+            {/if}
+            {#if blocked}
+              <div
+                class="border-destructive/40 bg-destructive/5 rounded-md border px-3 py-2 text-xs"
+                role="alert"
+              >
+                <div class="flex items-start gap-2">
+                  <p class="text-destructive min-w-0 flex-1">
+                    <span class="font-medium">This chat can't be continued here.</span>
+                    {blocked.reason}
+                  </p>
+                  <button
+                    type="button"
+                    class="text-muted-foreground hover:text-foreground shrink-0"
+                    aria-label="Dismiss"
+                    onclick={() => (blocked = null)}
+                    ><XIcon class="size-4" aria-hidden="true" /></button
+                  >
+                </div>
+                <div class="mt-1.5 flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    class="bg-background hover:bg-muted inline-flex h-6 items-center gap-1 rounded border px-2"
+                    onclick={() => void copyResume()}
+                  >
+                    {#if blocked.copied}<CheckIcon class="size-3.5" aria-hidden="true" />{/if}
+                    Copy resume command
+                  </button>
+                  {#if blocked.command}
+                    <code class="bg-muted rounded px-1.5 py-0.5 font-mono">{blocked.command}</code>
+                  {/if}
+                </div>
+              </div>
+            {/if}
+            {#if refusal}
+              <div
+                class="flex items-center gap-2 rounded-md bg-red-500/10 px-3 py-1 text-xs text-red-900 dark:text-red-200"
+                role="status"
+              >
+                <GaugeIcon class="size-4 shrink-0" aria-hidden="true" />
+                <span class="flex-1"
+                  >Usage limit reached{refusal.resetsAt !== undefined
+                    ? ` — resets at ${clockTime(refusal.resetsAt)}`
+                    : ''}</span
+                >
+                <button
+                  type="button"
+                  class="font-medium underline-offset-2 hover:underline"
+                  onclick={() => usageAccounts.open()}>Usage</button
+                >
+              </div>
+            {/if}
+            <ScheduledSends
+              {sessionId}
+              editingId={editingSend?.id}
+              onEdit={(s) => void startEdit(s)}
+            />
+            {#if sendError}
+              <p class="text-destructive text-xs" role="alert">{sendError}</p>
+            {/if}
+            <Composer
+              bind:this={composer}
+              bind:textarea={composerBox}
+              draftKey={sessionId}
+              cwd={chat.summary?.cwd ?? ''}
+              commandScope={{ sessionId }}
+              {working}
+              queued={chat.queuedMessages}
+              onSubmit={submit}
+              onInterrupt={interrupt}
+              {onControl}
+              onSchedule={schedule}
+              {resetAt}
+              limited={refusal !== undefined}
+              {editing}
+              autofocus={focusComposer}
+            />
+          </div>
+        {/if}
       {/if}
     </div>
     {#if chat && activityShown}

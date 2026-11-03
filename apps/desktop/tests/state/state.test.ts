@@ -277,6 +277,29 @@ describe('tabs', () => {
     expect(seen).toEqual([[k('s3'), k('s2')]]);
   });
 
+  it('retarget swaps a tab to another machine in place, keeps it active and persists', async () => {
+    const t = new TabsState();
+    t.init(client);
+    t.openTab({ machineId: 'pc', sessionId: 's1' });
+    t.openTab({ machineId: 'pc', sessionId: 's2' });
+    t.activate({ machineId: 'pc', sessionId: 's1' });
+    t.retarget({ machineId: 'pc', sessionId: 's1' }, { machineId: 'ubuntu', sessionId: 's1' });
+    expect(t.open).toEqual(['ubuntu/s1', 'pc/s2']);
+    expect(t.active).toBe('ubuntu/s1');
+    await flushAsync();
+    expect(store.get('tabs')).toEqual({ open: ['ubuntu/s1', 'pc/s2'], active: 'ubuntu/s1' });
+  });
+
+  it('retarget onto a tab already open leaves one tab', () => {
+    const t = new TabsState();
+    t.init(client);
+    t.openTab({ machineId: 'ubuntu', sessionId: 's1' });
+    t.openTab({ machineId: 'pc', sessionId: 's1' });
+    t.retarget({ machineId: 'pc', sessionId: 's1' }, { machineId: 'ubuntu', sessionId: 's1' });
+    expect(t.open).toEqual(['ubuntu/s1']);
+    expect(t.active).toBe('ubuntu/s1');
+  });
+
   it('closing the active tab activates a neighbour', () => {
     const t = new TabsState();
     t.init(client);

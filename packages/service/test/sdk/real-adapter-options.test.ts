@@ -88,6 +88,17 @@ describe('buildQueryOptions', () => {
     expect(o).not.toHaveProperty('forkSession');
   });
 
+  it('resumes a moved chat from its store, and never passes one otherwise', () => {
+    const sessionStore = { append: async () => {}, load: async () => null };
+    expect(buildQueryOptions(start({ resume: 'abc', sessionStore })).sessionStore).toBe(
+      sessionStore,
+    );
+    expect(buildQueryOptions(start({ resume: 'abc' }))).not.toHaveProperty('sessionStore');
+    expect(buildQueryOptions(start({ sessionId: 'abc', sessionStore }))).not.toHaveProperty(
+      'sessionStore',
+    );
+  });
+
   it('passes the session env and asks the CLI to report startup failures as results', () => {
     const o = buildQueryOptions(start({ env: { PATH: '/x', ANTHROPIC_API_KEY: 'k' } }));
     expect(o.env).toEqual({

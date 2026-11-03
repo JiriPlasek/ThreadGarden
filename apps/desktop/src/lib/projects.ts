@@ -3,6 +3,7 @@
  * calls on one machine's client, so components and tests need not know the wire shape.
  */
 import {
+  MOVE_CAPABILITY,
   PROJECTS_CAPABILITY,
   ProjectNameSchema,
   type CloneJob,
@@ -33,6 +34,10 @@ export const nameProblem = (name: string): string | null => {
 /** The machine's service can browse folders and create or clone projects. */
 export const supportsProjects = (m: MachineEntry | undefined): boolean =>
   !!m?.info?.capabilities.includes(PROJECTS_CAPABILITY);
+
+/** The machine's service can export and import a chat (Move to…). */
+export const supportsMove = (m: MachineEntry | undefined): boolean =>
+  !!m?.info?.capabilities.includes(MOVE_CAPABILITY);
 
 export const projectsApi = (api: Api) => ({
   list: (path: string): Promise<FolderListing> => api.request('folders.list', { path }),

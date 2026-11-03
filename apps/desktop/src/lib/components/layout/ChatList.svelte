@@ -8,6 +8,7 @@
   import XIcon from '@lucide/svelte/icons/x';
   import { Button } from '#lib/components/ui/button/index.js';
   import { rowPx } from '#lib/interface-scale.js';
+  import { supportsMove } from '#lib/projects.js';
   import { ARCHIVE_OLDER_DAYS } from '#lib/state/buckets.svelte.js';
   import { useApp } from '#lib/state/context.js';
   import {
@@ -56,7 +57,8 @@
    */
   let { onCollapse }: { onCollapse?: () => void } = $props();
 
-  const { sessions, places, tabs, agents, settings, machines, scopes, power } = useApp();
+  const { sessions, places, tabs, agents, settings, machines, scopes, power, interaction } =
+    useApp();
   const local = scopes.local();
 
   /** The scope of a machine (This PC's for a project without one). */
@@ -651,6 +653,13 @@
           onRename={() => (renaming = chat)}
           onTogglePin={() => togglePin(chat)}
           onMove={(_, bucket) => moveFromMenu(chat, bucket)}
+          onMoveMachine={machines.several && supportsMove(machines.get(chat.machineId))
+            ? () =>
+                interaction.openMoveChat(
+                  { machineId: chat.machineId, sessionId: chat.sessionId },
+                  chat,
+                )
+            : undefined}
         />
       {/if}
     {/snippet}

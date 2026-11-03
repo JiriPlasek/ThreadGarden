@@ -12,6 +12,7 @@
   import BucketDialogs from '#lib/components/BucketDialogs.svelte';
   import SettingsIcon from '@lucide/svelte/icons/settings';
   import KeyboardShortcutsDialog from '#lib/components/KeyboardShortcutsDialog.svelte';
+  import MoveChatDialog from '#lib/components/MoveChatDialog.svelte';
   import NewChatDialog from '#lib/components/NewChatDialog.svelte';
   import QuickSwitcher from '#lib/components/QuickSwitcher.svelte';
   import ServiceBanner from '#lib/components/ServiceBanner.svelte';
@@ -177,6 +178,7 @@
 </div>
 
 <NewChatDialog />
+<MoveChatDialog />
 <QuickSwitcher />
 <SettingsDialog />
 <KeyboardShortcutsDialog />

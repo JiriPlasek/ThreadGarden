@@ -13,6 +13,7 @@ import {
   forkSession,
   getSessionInfo,
   getSessionMessages,
+  importSessionToStore,
   listSessions,
   query,
 } from '@anthropic-ai/claude-agent-sdk';
@@ -20,6 +21,8 @@ import type {
   AccountInfo,
   AgentAdapter,
   AgentSession,
+  HistoryOptions,
+  ImportOptions,
   ModelInfo,
   OneShotOptions,
   Options,
@@ -29,6 +32,7 @@ import type {
   SDKSessionInfo,
   SDKUserMessage,
   SessionMessage,
+  SessionStore,
   SlashCommand,
   StartOptions,
 } from './adapter.js';
@@ -40,9 +44,17 @@ export type SdkApi = {
   getSessionInfo: typeof getSessionInfo;
   getSessionMessages: typeof getSessionMessages;
   forkSession: typeof forkSession;
+  importSessionToStore: typeof importSessionToStore;
 };
 
-const realSdk: SdkApi = { query, listSessions, getSessionInfo, getSessionMessages, forkSession };
+const realSdk: SdkApi = {
+  query,
+  listSessions,
+  getSessionInfo,
+  getSessionMessages,
+  forkSession,
+  importSessionToStore,
+};
 
 /**
  * The environment for a session's `claude` process. The SDK's `env` option
@@ -82,8 +94,10 @@ export const buildQueryOptions = (o: StartOptions): Options => {
     canUseTool: o.canUseTool,
     env: { ...o.env, CLAUDE_CODE_STARTUP_FAILURE_RESULTS: '1' },
   };
-  if (o.resume !== undefined) opts.resume = o.resume;
-  else if (o.sessionId !== undefined) opts.sessionId = o.sessionId;
+  if (o.resume !== undefined) {
+    opts.resume = o.resume;
+    if (o.sessionStore !== undefined) opts.sessionStore = o.sessionStore;
+  } else if (o.sessionId !== undefined) opts.sessionId = o.sessionId;
   if (o.model !== undefined) opts.model = o.model;
   if (o.effort !== undefined) opts.effort = o.effort;
   if (o.permissionMode !== undefined) opts.permissionMode = o.permissionMode;
@@ -239,11 +253,20 @@ class RealSession implements AgentSession {
   }
 }
 
-/** Copies only the paging keys that are set (no `dir`: Threadgarden reads all projects). */
-const paging = (o: PageOptions = {}): PageOptions => ({
+/**
+ * Copies only the keys that are set. Local history is read without `dir`
+ * (Threadgarden reads all projects); a store read keeps its `dir`.
+ */
+const paging = (o: PageOptions & HistoryOptions = {}): PageOptions & HistoryOptions => ({
   ...(o.limit === undefined ? {} : { limit: o.limit }),
   ...(o.offset === undefined ? {} : { offset: o.offset }),
+  ...from(o),
 });
+
+const from = (o: HistoryOptions = {}): HistoryOptions =>
+  o.sessionStore === undefined
+    ? {}
+    : { sessionStore: o.sessionStore, ...(o.dir === undefined ? {} : { dir: o.dir }) };
 
 export class RealAdapter implements AgentAdapter {
   constructor(private readonly sdk: SdkApi = realSdk) {}
@@ -254,15 +277,18 @@ export class RealAdapter implements AgentAdapter {
     return new RealSession(q, input);
   }
 
-  listSessions(o?: PageOptions): Promise<SDKSessionInfo[]> {
+  listSessions(o?: PageOptions & HistoryOptions): Promise<SDKSessionInfo[]> {
     return this.sdk.listSessions(paging(o));
   }
 
-  getSessionInfo(id: string): Promise<SDKSessionInfo | undefined> {
-    return this.sdk.getSessionInfo(id);
+  getSessionInfo(id: string, o?: HistoryOptions): Promise<SDKSessionInfo | undefined> {
+    const where = from(o);
+    return where.sessionStore === undefined
+      ? this.sdk.getSessionInfo(id)
+      : this.sdk.getSessionInfo(id, where);
   }
 
-  getSessionMessages(id: string, o?: PageOptions): Promise<SessionMessage[]> {
+  getSessionMessages(id: string, o?: PageOptions & HistoryOptions): Promise<SessionMessage[]> {
     return this.sdk.getSessionMessages(id, paging(o));
   }
 
@@ -271,6 +297,22 @@ export class RealAdapter implements AgentAdapter {
       id,
       o.upToMessageId === undefined ? {} : { upToMessageId: o.upToMessageId },
     );
+  }
+
+  /**
+   * With `dir` the SDK looks only in that folder's project; a session it does
+   * not find there (a chat whose recorded folder is not its project's) is
+   * looked for in every project.
+   */
+  async importSession(id: string, store: SessionStore, o: ImportOptions): Promise<void> {
+    const everywhere = { includeSubagents: o.includeSubagents };
+    if (o.dir === undefined) return this.sdk.importSessionToStore(id, store, everywhere);
+    try {
+      await this.sdk.importSessionToStore(id, store, { ...everywhere, dir: o.dir });
+    } catch (err) {
+      if (!(err instanceof Error) || !/not found/i.test(err.message)) throw err;
+      await this.sdk.importSessionToStore(id, store, everywhere);
+    }
   }
 
   /**

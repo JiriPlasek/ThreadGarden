@@ -13,6 +13,7 @@ import type {
   SDKSessionInfo,
   SDKUserMessage,
   SessionMessage,
+  SessionStore,
   SlashCommand,
 } from '@anthropic-ai/claude-agent-sdk';
 
@@ -32,6 +33,8 @@ export type {
   SDKSystemMessage,
   SDKUserMessage,
   SessionMessage,
+  SessionStore,
+  SessionStoreEntry,
   SlashCommand,
 } from '@anthropic-ai/claude-agent-sdk';
 
@@ -46,6 +49,11 @@ export type StartOptions = {
    */
   sessionId?: string;
   resume?: string;
+  /**
+   * With `resume`: the store a moved chat lives in (`move/store.ts`). The SDK
+   * reads the transcript from it and mirrors the new turns back into it.
+   */
+  sessionStore?: SessionStore;
   model?: string;
   effort?: Effort;
   permissionMode?: PermissionMode;
@@ -55,6 +63,16 @@ export type StartOptions = {
 };
 
 export type PageOptions = { limit?: number; offset?: number };
+
+/**
+ * Where a session's history is read. Empty: Claude Code's local transcripts
+ * (all projects). A chat moved here: Threadgarden's store, with `dir` its
+ * folder on this machine.
+ */
+export type HistoryOptions = { dir?: string; sessionStore?: SessionStore };
+
+/** Which local transcript `importSession` copies (SDK `importSessionToStore`). */
+export type ImportOptions = { dir?: string; includeSubagents: boolean };
 
 // ── v1.2 C1: chat titles ──
 
@@ -103,10 +121,15 @@ export interface AgentSession {
 
 export interface AgentAdapter {
   start(o: StartOptions): AgentSession;
-  listSessions(o?: PageOptions): Promise<SDKSessionInfo[]>;
-  getSessionInfo(id: string): Promise<SDKSessionInfo | undefined>;
-  getSessionMessages(id: string, o?: PageOptions): Promise<SessionMessage[]>;
+  listSessions(o?: PageOptions & HistoryOptions): Promise<SDKSessionInfo[]>;
+  getSessionInfo(id: string, o?: HistoryOptions): Promise<SDKSessionInfo | undefined>;
+  getSessionMessages(id: string, o?: PageOptions & HistoryOptions): Promise<SessionMessage[]>;
   forkSession(id: string, o: { upToMessageId?: string }): Promise<{ sessionId: string }>;
+  /**
+   * Protocol 9: copies a chat's local transcript (and its subagents') into
+   * `store` (a move's export). Only reads Claude Code's files.
+   */
+  importSession(id: string, store: SessionStore, o: ImportOptions): Promise<void>;
   /** v1.2 C1: the model's answer to a one-shot question; rejects on any failure. */
   oneShot(o: OneShotOptions): Promise<string>;
 }

@@ -112,3 +112,37 @@ export const makeFolder = async (parent: string, name: string, home?: string): P
   }
   return target;
 };
+
+/** `p` is `dir` or inside it (case-insensitive on Windows, as `path.relative` is there). */
+const isInside = (dir: string, p: string): boolean => {
+  const rel = path.relative(path.resolve(dir), path.resolve(p));
+  // `..foo` is a folder inside `dir`; only `..` and `../…` step out of it.
+  const outside = rel === '..' || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel);
+  return !outside;
+};
+
+/**
+ * A chat moved here into `cwd`: makes that folder, empty, when it is missing
+ * (with its missing parents). Claude Code starts in it, so it must exist;
+ * Claude then clones the repo into it. An existing folder is never touched.
+ * Nothing is ever made in Claude Code's own config dir (`claudeConfigDir`).
+ * `folderExists` is a seam: the mock service's folders are not on disk.
+ */
+export const makeChatFolder = async (
+  cwd: string,
+  claudeConfigDir: string,
+  folderExists: (p: string) => Promise<boolean> = exists,
+): Promise<void> => {
+  if (!path.isAbsolute(cwd)) {
+    throw new ServiceError('INVALID_PARAMS', 'The folder must be a full path');
+  }
+  if (isInside(claudeConfigDir, cwd)) {
+    throw new ServiceError('INVALID_PARAMS', "A chat can't live in Claude Code's own folder");
+  }
+  if (await folderExists(cwd)) return;
+  try {
+    await mkdir(cwd, { recursive: true });
+  } catch (err) {
+    throw fsError(err);
+  }
+};

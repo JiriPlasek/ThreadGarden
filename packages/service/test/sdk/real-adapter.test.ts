@@ -37,6 +37,7 @@ const setup = (messages: SDKMessage[] = []) => {
     getSessionInfo: vi.fn(async () => undefined),
     getSessionMessages: vi.fn(async () => []),
     forkSession: vi.fn(async () => ({ sessionId: 'new' })),
+    importSessionToStore: vi.fn(async () => {}),
   };
   return { q, calls, sdk, adapter: new RealAdapter(sdk) };
 };
@@ -134,6 +135,20 @@ describe('RealAdapter session functions', () => {
     expect(sdk.getSessionInfo).toHaveBeenCalledWith('s1');
   });
 
+  it('reads a moved chat from its store, in its dir', async () => {
+    const { sdk, adapter } = setup();
+    const sessionStore = { append: async () => {}, load: async () => null };
+    await adapter.listSessions({ limit: 5, dir: '/work/a', sessionStore });
+    expect(sdk.listSessions).toHaveBeenCalledWith({ limit: 5, dir: '/work/a', sessionStore });
+    await adapter.getSessionMessages('s1', { dir: '/work/a', sessionStore });
+    expect(sdk.getSessionMessages).toHaveBeenCalledWith('s1', { dir: '/work/a', sessionStore });
+    await adapter.getSessionInfo('s1', { dir: '/work/a', sessionStore });
+    expect(sdk.getSessionInfo).toHaveBeenCalledWith('s1', { dir: '/work/a', sessionStore });
+    // Without a store the local history is read across all projects.
+    await adapter.getSessionMessages('s2', { dir: '/work/a' });
+    expect(sdk.getSessionMessages).toHaveBeenLastCalledWith('s2', {});
+  });
+
   it('forkSession passes upToMessageId only when given', async () => {
     const { sdk, adapter } = setup();
     await expect(adapter.forkSession('s1', { upToMessageId: 'u1' })).resolves.toEqual({
@@ -142,6 +157,43 @@ describe('RealAdapter session functions', () => {
     await adapter.forkSession('s1', {});
     expect(sdk.forkSession).toHaveBeenNthCalledWith(1, 's1', { upToMessageId: 'u1' });
     expect(sdk.forkSession).toHaveBeenNthCalledWith(2, 's1', {});
+  });
+
+  it('importSession copies through importSessionToStore, dir only when given', async () => {
+    const { sdk, adapter } = setup();
+    const store = { append: async () => {}, load: async () => null };
+    await adapter.importSession('s1', store, { dir: '/work/a', includeSubagents: true });
+    await adapter.importSession('s2', store, { includeSubagents: true });
+    expect(sdk.importSessionToStore).toHaveBeenNthCalledWith(1, 's1', store, {
+      dir: '/work/a',
+      includeSubagents: true,
+    });
+    expect(sdk.importSessionToStore).toHaveBeenNthCalledWith(2, 's2', store, {
+      includeSubagents: true,
+    });
+  });
+
+  it('importSession looks in every project when the session is not in its dir', async () => {
+    const { sdk, adapter } = setup();
+    const store = { append: async () => {}, load: async () => null };
+    vi.mocked(sdk.importSessionToStore).mockImplementation(async (id, _s, o) => {
+      if (o?.dir !== undefined)
+        throw new Error(`Session ${id} not found in project directory for ${o.dir}`);
+    });
+    await adapter.importSession('s1', store, { dir: '/work/a', includeSubagents: true });
+    expect(sdk.importSessionToStore).toHaveBeenLastCalledWith('s1', store, {
+      includeSubagents: true,
+    });
+  });
+
+  it('importSession passes on any other failure', async () => {
+    const { sdk, adapter } = setup();
+    const store = { append: async () => {}, load: async () => null };
+    vi.mocked(sdk.importSessionToStore).mockRejectedValue(new Error('EACCES: permission denied'));
+    await expect(
+      adapter.importSession('s1', store, { dir: '/work/a', includeSubagents: true }),
+    ).rejects.toThrow(/EACCES/);
+    expect(sdk.importSessionToStore).toHaveBeenCalledTimes(1);
   });
 });
 
