@@ -1144,6 +1144,14 @@ export class Db implements LiveRegistry {
       .run(row.sessionId, row.state, row.cwd ?? null, row.peerMachineId, row.peerName, row.at);
   }
 
+  /** Forgets that a chat moved: its row and its store entries (the mock's test reset). */
+  forgetMovedChat(sessionId: string): void {
+    this.inTransaction(() => {
+      this.raw.prepare('DELETE FROM store_entries WHERE session_id = ?').run(sessionId);
+      this.raw.prepare('DELETE FROM moved_chats WHERE session_id = ?').run(sessionId);
+    });
+  }
+
   /** A chat that lives here had activity at `at` (its store `mtime`). */
   touchMovedChat(sessionId: string, at: number): void {
     this.raw

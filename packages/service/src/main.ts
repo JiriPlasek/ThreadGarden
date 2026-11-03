@@ -40,7 +40,7 @@ import type { AgentAdapter } from './sdk/adapter.js';
 import type { ClaudeFound, ClaudeProblem } from './sdk/claude-path.js';
 import { buildSessionEnv } from './sdk/real-adapter.js';
 import { registerChatHandlers } from './server/handlers/chat.js';
-import { MoveLocks, registerMoveHandlers } from './server/handlers/move.js';
+import { MoveLocks, registerMoveHandlers, type MoveGit } from './server/handlers/move.js';
 import { makeResumeChecker, registerExternalHandlers } from './server/handlers/external.js';
 import { registerFileHandlers } from './server/handlers/files.js';
 import { registerProjectHandlers } from './server/handlers/projects.js';
@@ -133,6 +133,8 @@ export type StartOptions = {
   historyCacheChars?: number;
   /** The largest chat a move carries, and what imports hold together (default 512 MiB). */
   moveMaxBytes?: number;
+  /** The git a move reads (`move.check`, `move.target`); default the real git. The mock fakes it. */
+  moveGit?: MoveGit;
   /** Runs `git` and `gh` for New project and Clone (default: the real ones); tests inject a fake. */
   projectTools?: Tools;
   /** Base environment of session processes (default `process.env`); the API key is added on top. */
@@ -142,7 +144,10 @@ export type StartOptions = {
    * index wait; default Node timers.
    */
   sessionTimers?: Timers;
-  /** Whether a project folder exists (v1.1 §4); default one `fs.stat` per folder. */
+  /**
+   * Whether a folder exists: a project's (v1.1 §4), and the parent of a chat
+   * moved here (made when missing); default one `fs.stat` per folder.
+   */
   folderStat?: (path: string) => Promise<boolean>;
   /** Where a project's icon is looked up (v1.3 §5); default the project folder itself. */
   projectIconSearch?: (projectPath: string) => Promise<FoundIcon | null>;
@@ -195,6 +200,11 @@ export type ServiceHandle = {
   scheduled?: ScheduledSends;
   /** Protocol 9: the chats locked while a move exports them. */
   moveLocks: MoveLocks;
+  /**
+   * Forgets every move, as if none had happened (moved chats, their store,
+   * the locks). For the mock service's test reset only: no method calls it.
+   */
+  forgetMoves(): Promise<void>;
   /** v1.4: where paired devices reach this service (headless, with a private address only). */
   remote?: { addresses: string[]; port: number };
   /** Sends an event to every local client and paired device. */
@@ -267,7 +277,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   /** Chats being moved to another machine (protocol 9). */
   const moveLocks = new MoveLocks(clock);
   /** The move methods (with a database); `close` stops their sweep. */
-  let moveHandlers: { close(): void } | undefined;
+  let moveHandlers: { close(): void; forgetAll(): Promise<void> } | undefined;
   let indexing = { done: 0, total: 0 };
   let indexer: Indexer | undefined;
   let watcher: { close(): void } | undefined;
@@ -804,6 +814,8 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         now: clock,
         timers: opts.sessionTimers ?? realTimers,
         ...(opts.moveMaxBytes === undefined ? {} : { maxBytes: opts.moveMaxBytes }),
+        ...(opts.moveGit ? { git: opts.moveGit } : {}),
+        ...(opts.folderStat ? { folderExists: opts.folderStat } : {}),
         target: { tools: projectTools, createIn: () => maker!.createIn(), headless },
       });
       registerProjectHandlers(router, {
@@ -1069,6 +1081,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     token,
     router,
     moveLocks,
+    forgetMoves: async () => moveHandlers?.forgetAll(),
     ...(host ? { host } : {}),
     ...(usage ? { usage } : {}),
     ...(scheduled ? { scheduled } : {}),

@@ -329,8 +329,14 @@ export class MoveTransfers {
   }
 }
 
+/** The read-only git a move runs: a folder's state, and its own repo's origin URL (null: none). */
+export type MoveGit = {
+  state(cwd: string): Promise<GitState>;
+  originUrl(cwd: string): Promise<string | null>;
+};
+
 export type TargetDeps = {
-  tools: Tools;
+  originUrl: MoveGit['originUrl'];
   recentCwds(): string[];
   /** The remembered Create in (`ProjectMaker.createIn`). */
   createIn(): string;
@@ -364,7 +370,7 @@ export const pickTarget = async (
     const cwds = d.recentCwds();
     if (!cwds.some((c) => path.resolve(c) === path.resolve(usual))) cwds.push(usual);
     for (const cwd of cwds) {
-      const url = await originUrlOf(d.tools, cwd).catch(() => null);
+      const url = await d.originUrl(cwd).catch(() => null);
       if (url === null || repoOfUrl(url) !== want) continue;
       // A git failure only costs the folder its preference; it still matches.
       const git = await d.gitState(cwd).catch(() => null);
@@ -410,7 +416,12 @@ export type MoveHandlerDeps = {
   timers?: Timers;
   /** The largest chat a move carries, and what all imports here hold together. */
   maxBytes?: number;
-  target: Omit<TargetDeps, 'liveChats' | 'recentCwds' | 'gitState'>;
+  /** `tools` runs git for the default `git`. */
+  target: { tools: Tools } & Pick<TargetDeps, 'createIn' | 'headless'>;
+  /** Git as a move reads it (default: the real git, read-only); the mock service fakes it. */
+  git?: MoveGit;
+  /** Whether a folder exists, before a moved chat's parent folder is made (default `fs.stat`). */
+  folderExists?: (p: string) => Promise<boolean>;
 };
 
 type Begun = { exportId: string; parts: number; bytes: number };
@@ -421,8 +432,15 @@ const BUSY_TEXT: Record<MoveBusy, string> = {
   subagents: 'This chat has background tasks running',
 };
 
-/** Registers the move methods; `close` stops the sweep (service shutdown). */
-export const registerMoveHandlers = (router: Router, deps: MoveHandlerDeps): { close(): void } => {
+/**
+ * Registers the move methods; `close` stops the sweep (service shutdown).
+ * `forgetAll` forgets every move, as if none had happened: the mock service's
+ * test reset, never reached by a client of the real service.
+ */
+export const registerMoveHandlers = (
+  router: Router,
+  deps: MoveHandlerDeps,
+): { close(): void; forgetAll(): Promise<void> } => {
   const { host, db, store, adapter, locks, catalog, index, release } = deps;
   const now = deps.now ?? Date.now;
   const maxBytes = deps.maxBytes ?? MOVE_IMPORT_MAX_BYTES;
@@ -445,11 +463,17 @@ export const registerMoveHandlers = (router: Router, deps: MoveHandlerDeps): { c
     );
     return latest > since;
   };
+  const git: MoveGit = deps.git ?? {
+    state: (cwd) => gitState(cwd),
+    originUrl: (cwd) => originUrlOf(deps.target.tools, cwd),
+  };
   const targetDeps: TargetDeps = {
-    ...deps.target,
+    createIn: deps.target.createIn,
+    headless: deps.target.headless,
+    originUrl: git.originUrl,
     recentCwds: () => db.recentCwds().map((r) => r.cwd),
     liveChats: () => host.list().filter((l) => l.live),
-    gitState: (cwd) => gitState(cwd),
+    gitState: git.state,
   };
 
   /** A chat's local transcript and its subagents', through the SDK's import into memory. */
@@ -479,7 +503,7 @@ export const registerMoveHandlers = (router: Router, deps: MoveHandlerDeps): { c
     const s = host.get(p.sessionId);
     const cwd = store.historyOf(p.sessionId).dir ?? s?.cwd ?? db.getSession(p.sessionId)?.cwd;
     if (!cwd) throw new ServiceError('NOT_FOUND', `Unknown chat ${p.sessionId}`);
-    return { cwd, busy: s ? busyOf(s) : null, git: await gitState(cwd) };
+    return { cwd, busy: s ? busyOf(s) : null, git: await git.state(cwd) };
   });
 
   router.register('move.target', (p) => pickTarget(targetDeps, p));
@@ -595,7 +619,7 @@ export const registerMoveHandlers = (router: Router, deps: MoveHandlerDeps): { c
     const id = p.sessionId;
     if (!imports.wasCommitted(p.importId, id)) {
       const keys = imports.complete(p.importId, id);
-      await makeParentFolder(p.cwd, deps.claudeConfigDir);
+      await makeParentFolder(p.cwd, deps.claudeConfigDir, deps.folderExists);
       // A process started from an older copy here must not keep writing it.
       release(id);
       store.replace(id, keys);
@@ -612,5 +636,26 @@ export const registerMoveHandlers = (router: Router, deps: MoveHandlerDeps): { c
     return { summary };
   });
 
-  return { close: () => transfers.close() };
+  const forgetAll = async (): Promise<void> => {
+    const ids = [...db.listMovedChats('here'), ...db.listMovedChats('away')].map(
+      (c) => c.sessionId,
+    );
+    for (const id of ids) {
+      locks.unlock(id);
+      release(id);
+      db.forgetMovedChat(id);
+    }
+    if (ids.length === 0) return;
+    // A chat that only ever lived here in the store is gone; the others are local chats again.
+    const local: string[] = [];
+    for (const id of ids) {
+      if (await adapter.getSessionInfo(id)) local.push(id);
+      else db.deleteSession(id);
+    }
+    await index.refresh(local);
+    catalog.invalidate();
+    deps.changed(ids);
+  };
+
+  return { close: () => transfers.close(), forgetAll };
 };

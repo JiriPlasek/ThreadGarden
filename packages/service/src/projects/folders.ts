@@ -123,8 +123,13 @@ const isInside = (dir: string, p: string): boolean => {
  * A chat moved here into `cwd`: makes the folder that holds it when missing
  * (with its own missing parents), never `cwd` itself (Claude clones into it).
  * Nothing is ever made in Claude Code's own config dir (`claudeConfigDir`).
+ * `folderExists` is a seam: the mock service's folders are not on disk.
  */
-export const makeParentFolder = async (cwd: string, claudeConfigDir: string): Promise<void> => {
+export const makeParentFolder = async (
+  cwd: string,
+  claudeConfigDir: string,
+  folderExists: (p: string) => Promise<boolean> = exists,
+): Promise<void> => {
   if (!path.isAbsolute(cwd)) {
     throw new ServiceError('INVALID_PARAMS', 'The folder must be a full path');
   }
@@ -132,7 +137,7 @@ export const makeParentFolder = async (cwd: string, claudeConfigDir: string): Pr
     throw new ServiceError('INVALID_PARAMS', "A chat can't live in Claude Code's own folder");
   }
   const parent = path.dirname(cwd);
-  if (await exists(parent)) return;
+  if (await folderExists(parent)) return;
   try {
     await mkdir(parent, { recursive: true });
   } catch (err) {

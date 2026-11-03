@@ -1,8 +1,11 @@
+import { existsSync } from 'node:fs';
 import { createServer } from 'node:net';
+import { dirname, join } from 'node:path';
 import type { ChatItem, EventMsg } from '@threadgarden/protocol';
 import { afterEach, describe, expect, it } from 'vitest';
 import { pairWithMachine } from '../../src/machine/pairing-client.js';
 import {
+  MOCK_FORGET_MOVES,
   REMOTE_MACHINE_NAME,
   REMOTE_PROJECT_PATH,
   startMockService,
@@ -364,4 +367,139 @@ describe('mock service --fake-tasmota', () => {
       process.stderr.write = write;
     }
   });
+});
+
+describe('mock service: moving a chat (protocol 9)', () => {
+  const started: MockService[] = [];
+  afterEach(async () => {
+    for (const m of started.splice(0)) {
+      await m.svc.close();
+      await m.removed;
+    }
+  });
+
+  const ok = async <T = unknown>(m: MockService, method: string, params: unknown): Promise<T> => {
+    const r = await m.svc.router.dispatch(
+      { id: 1, method, params },
+      { clientId: 't', origin: 'local' },
+    );
+    if ('error' in r) throw new Error(`${method}: ${r.error.code} ${r.error.message}`);
+    return r.result as T;
+  };
+  const active = async (m: MockService) => (await ok<{ all: number }>(m, 'places.counts', {})).all;
+
+  type Key = { subpath?: string; entries: { type: string; message?: { content?: unknown } }[] };
+  /** A chat's export from `m`, every key of every part (then let go of). */
+  const exported = async (m: MockService, sessionId: string, exportId: string): Promise<Key[]> => {
+    const begun = await ok<{ parts: number }>(m, 'move.exportBegin', { sessionId, exportId });
+    const keys: Key[] = [];
+    for (let index = 0; index < begun.parts; index++) {
+      keys.push(...(await ok<{ keys: Key[] }>(m, 'move.exportPart', { exportId, index })).keys);
+    }
+    return keys;
+  };
+
+  it('fakes clean git, moves a chat to the remote mock and keeps its first note’s plain reply in the store', async () => {
+    const here = await startMockService({
+      sessions: 30,
+      projects: 3,
+      bigSessionMessages: 4,
+      port: await freePort(),
+      token: 'mock-token',
+      installSignalHandlers: false,
+    });
+    started.push(here);
+    const there = await startMockService({
+      remote: { port: 0, pairingCode: 'TEST-TEST-TEST' },
+      installSignalHandlers: false,
+    });
+    started.push(there);
+    await eventually(async () => (await active(here)) === 31);
+    await eventually(async () => (await active(there)) === 20);
+
+    // No real git runs on the mocks' folders (not on disk): each project is a clean clone on main.
+    const id = 'session-25';
+    expect(await ok(here, 'move.check', { sessionId: id })).toEqual({
+      cwd: '/work/proj-1',
+      busy: null,
+      git: { kind: 'clean', branch: 'main', origin: 'https://github.com/owner/proj-1.git' },
+    });
+    expect(await ok(there, 'move.check', { sessionId: 'session-3' })).toMatchObject({
+      git: { kind: 'clean', branch: 'main', origin: 'https://github.com/owner/tg-cli.git' },
+    });
+
+    // On the remote, a chat of that repo goes where New project would put it: in the mock's temp dir.
+    const target = await ok<{ folder: string }>(there, 'move.target', {
+      origin: 'https://github.com/owner/proj-1.git',
+      repoName: 'proj-1',
+      branch: 'main',
+    });
+    const createIn = join(dirname(there.dataDir), 'projects');
+    expect(target).toEqual({ folder: join(createIn, 'proj-1'), matched: true, inUse: null });
+
+    // The transfer, as the desktop drives it.
+    const keys = await exported(here, id, 'export-1');
+    await ok(there, 'move.importPart', {
+      importId: 'i-1',
+      sessionId: id,
+      index: 0,
+      parts: 1,
+      keys,
+    });
+    await ok(there, 'move.commit', {
+      importId: 'i-1',
+      sessionId: id,
+      cwd: target.folder,
+      from: { machineId: 'this-pc', name: 'This PC' },
+    });
+    await ok(here, 'move.markMoved', {
+      exportId: 'export-1',
+      to: { machineId: 'ubuntu', name: REMOTE_MACHINE_NAME },
+    });
+    // The mock makes no folder for it.
+    expect(existsSync(target.folder)).toBe(false);
+    expect(await active(here)).toBe(30);
+    await eventually(async () => (await active(there)) === 21);
+
+    // The first note says "ask", yet gets the plain reply: no question blocks a move back.
+    await ok(there, 'chat.send', {
+      sessionId: id,
+      text: '[Threadgarden] This chat moved from This PC to Ubuntu.\n\nIf so, stop and ask the owner.',
+    });
+    const reply = 'This is the Threadgarden mock service answering.';
+    type Items = { items: { kind: string; markdown?: string; streaming?: boolean }[] };
+    const items = await eventually(async () => {
+      const { items } = await ok<Items>(there, 'chat.open', { sessionId: id, tail: 50 });
+      const last = items.filter((i) => i.kind === 'assistantText').at(-1);
+      const done = !!last?.markdown?.includes(reply) && !last.streaming;
+      const idle = async () =>
+        (await ok<{ busy: unknown }>(there, 'move.check', { sessionId: id })).busy === null;
+      return done && (await idle()) ? items : null;
+    }, 10_000);
+    expect(items!.some((i) => i.kind === 'permissionRequest')).toBe(false);
+    expect(items!.filter((i) => i.kind === 'assistantText').at(-1)?.markdown).toContain(reply);
+
+    // Like the SDK, a store-backed turn is recorded in the store only: the move back carries it.
+    expect(there.adapter.sessions.has(id)).toBe(false);
+    const back = await exported(there, id, 'export-2');
+    const said = (back[0]?.entries ?? []).map((e) => JSON.stringify(e.message?.content ?? ''));
+    expect(said.some((s) => s.includes('[Threadgarden] This chat moved'))).toBe(true);
+    expect(said.some((s) => s.includes(reply))).toBe(true);
+    await ok(there, 'move.abort', { exportId: 'export-2' });
+
+    // The mock's test reset: the chat is This PC's own again, and the remote lets go of its copy.
+    expect(await ok(here, MOCK_FORGET_MOVES, {})).toEqual({});
+    expect(await active(here)).toBe(31);
+    expect(await ok(here, 'chat.open', { sessionId: id, tail: 1 })).toMatchObject({
+      movedTo: null,
+    });
+    await ok(there, MOCK_FORGET_MOVES, {});
+    await eventually(async () => (await active(there)) === 20);
+    // A paired device can't call it.
+    const remote = await there.svc.router.dispatch(
+      { id: 2, method: MOCK_FORGET_MOVES, params: {} },
+      { clientId: 't', origin: 'remote', deviceId: 'd' },
+    );
+    expect(remote).toMatchObject({ error: { code: 'METHOD_NOT_FOUND' } });
+  }, 30_000);
 });

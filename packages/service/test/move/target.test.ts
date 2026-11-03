@@ -4,7 +4,7 @@
 import { join } from 'node:path';
 import type { GitState } from '@threadgarden/protocol';
 import { describe, expect, it } from 'vitest';
-import { repoOfUrl } from '../../src/projects/github.js';
+import { originUrlOf, repoOfUrl } from '../../src/projects/github.js';
 import { pickTarget, type TargetDeps } from '../../src/server/handlers/move.js';
 import { fakeTools, type Reply } from '../projects/fake-tools.js';
 
@@ -46,8 +46,9 @@ const deps = (
       },
     },
   ];
+  const tools = fakeTools(replies);
   return {
-    tools: fakeTools(replies),
+    originUrl: (cwd) => originUrlOf(tools, cwd),
     recentCwds: () => clones.map((c) => c.cwd),
     createIn: () => CREATE_IN,
     liveChats: () => (over.live ?? []).map((l) => ({ cwd: l.cwd })),
