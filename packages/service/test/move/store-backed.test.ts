@@ -160,6 +160,7 @@ describe('store-backed chats', () => {
   it('resume of a store-backed chat starts the adapter with sessionStore and its cwd', async () => {
     await seedStore();
     const adapter = new FakeAdapter();
+    addLocal(adapter, S1); // a stale local copy: the store still wins
     addLocal(adapter, 'h1');
     await start(adapter, 2);
 
@@ -171,6 +172,28 @@ describe('store-backed chats', () => {
 
     await ok('chat.send', { sessionId: 'h1', text: 'hi' });
     expect(adapter.lastSession().options.sessionStore).toBeUndefined();
+  });
+
+  it("a chat that came back into another folder resumes in the store row's folder", async () => {
+    const adapter = new FakeAdapter();
+    addLocal(adapter, S1, join(dir, 'local'));
+    await start(adapter, 1);
+    // Threadgarden ran the local chat here once; its process crashed, the host keeps it.
+    await ok('chat.send', { sessionId: S1, text: 'hi' });
+    adapter.lastSession().end(new Error('crashed'));
+    await eventually(() => svc!.host!.get(S1)?.status === 'failed');
+
+    // The chat moved away and came back, into another folder: it lives in the store now.
+    const db = openDb(join(dataDir(), DB_FILE));
+    const store = new ChatStore(db, () => {});
+    store.put(S1, [{ entries: movedEntries() }]);
+    store.markHere(S1, movedCwd(), FROM);
+    db.close();
+
+    await ok('chat.send', { sessionId: S1, text: 'go on' });
+    const resumed = adapter.lastSession().options;
+    expect(resumed).toMatchObject({ resume: S1, cwd: movedCwd() });
+    expect(resumed.sessionStore).toBeDefined();
   });
 
   it('an append refreshes the index (lastModified moves)', async () => {

@@ -417,9 +417,10 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
     if (!s?.live) {
       await requireRunnable();
       const history = historyOf(p.sessionId);
+      // A chat moved here runs in its store row's folder, wherever an earlier process ran.
       const cwd =
-        s?.cwd ??
         history.dir ??
+        s?.cwd ??
         db.getSession(p.sessionId)?.cwd ??
         (await adapter.getSessionInfo(p.sessionId, history))?.cwd;
       if (!cwd) throw new ServiceError('NOT_FOUND', `Unknown chat ${p.sessionId}`);
