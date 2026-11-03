@@ -37,6 +37,7 @@ import {
   RepoSchema,
 } from './projects.js';
 import { ChatTaskSchema } from './tasks.js';
+import { UpdateStartResultSchema, UpdateStatusSchema } from './update.js';
 import { ScheduledSendSchema, UsageStateSchema } from './usage.js';
 
 const empty = z.object({});
@@ -614,6 +615,16 @@ export const methods = {
     }),
     empty,
   ),
+  // ── update (protocol 10) ── frozen: only optional additions ───────────────
+  // Errors: `UPDATE_ERRORS`.
+  /** Local only: the latest release version, asked of GitHub by this machine's service. */
+  'update.latest': def(empty, z.object({ version: z.string() })),
+  /** Updates this machine to `version`; `force` goes on although chats run (`busy` says how many). */
+  'update.start': def(
+    z.object({ version: z.string(), force: z.boolean() }),
+    UpdateStartResultSchema,
+  ),
+  'update.status': def(empty, UpdateStatusSchema),
 } as const;
 
 export type MethodName = keyof typeof methods;

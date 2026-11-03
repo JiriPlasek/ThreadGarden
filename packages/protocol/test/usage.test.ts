@@ -138,8 +138,8 @@ describe('usage per account (protocol 8)', () => {
     expect(UsageAccountSchema.parse({ kind: 'sso' }).kind).toBe('login');
   });
 
-  it('is protocol 9, accepting remotes at 8 to 10', () => {
-    expect(PROTOCOL_VERSION).toBe(9);
-    expect(REMOTE_PROTOCOL_RANGE).toEqual({ min: 8, max: 10 });
+  it('is protocol 10, accepting remotes at 9 to 11', () => {
+    expect(PROTOCOL_VERSION).toBe(10);
+    expect(REMOTE_PROTOCOL_RANGE).toEqual({ min: 9, max: 11 });
   });
 });

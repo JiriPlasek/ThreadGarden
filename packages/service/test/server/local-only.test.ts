@@ -115,6 +115,10 @@ describe('methods a paired device may not call', () => {
     }
   });
 
+  // Task 5 registers the update handlers; then 'update.latest' joins `forbidden` above and these run.
+  it.todo('answers update.latest with FORBIDDEN');
+  it.todo('does not forbid update.start and update.status to a paired device');
+
   it('lets a device revoke itself, never another device', async () => {
     const ws = await open(svc.remote!.port, device.token);
     expect(await call(ws, 'devices.revoke', { deviceId: other.id })).toMatchObject({
