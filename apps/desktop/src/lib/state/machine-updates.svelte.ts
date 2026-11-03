@@ -38,6 +38,9 @@ type Versioned = Pick<MachineEntry, 'version' | 'canUpdate'>;
 /** What the card shows while updating. */
 type Stage = 'turningOn' | UpdateStage;
 
+/** How an update ended. */
+export type UpdateOutcome = Extract<UpdateStatus, { state: 'done' | 'failed' }>;
+
 /** Which update it is. */
 type Target = { version: string; from: string };
 
@@ -60,7 +63,7 @@ export class MachineUpdatesState {
   latest = $state<string | null>(null);
 
   private stages = $state<Record<string, Stage>>({});
-  private outcomes = $state<Record<string, UpdateStatus>>({});
+  private outcomes = $state<Record<string, UpdateOutcome>>({});
 
   private deps = $state.raw<MachineUpdatesDeps | null>(null);
   /** Machines whose `update.start` is under way: what they say meanwhile is not read yet. */
@@ -89,8 +92,20 @@ export class MachineUpdatesState {
   /** How far the machine's update is (null: none running here). */
   stage = (id: string): Stage | null => this.stages[id] ?? null;
 
-  /** How the machine's last update ended (done or failed), until a new one starts or the machine says idle. */
-  outcome = (id: string): UpdateStatus | null => this.outcomes[id] ?? null;
+  /**
+   * How the machine's last update ended (done or failed), until a new one
+   * starts or the machine says idle. The machine keeps saying it for good, also
+   * once it was updated by hand, so it counts only while it fits the version
+   * running now: a failure while the machine is still older, a done for that very version.
+   */
+  outcome = (id: string): UpdateOutcome | null => {
+    const s = this.outcomes[id];
+    const running = this.deps?.machines.get(id)?.version;
+    if (!s || !running) return null;
+    const holds =
+      s.state === 'done' ? s.version === running : compareVersions(running, s.version) < 0;
+    return holds ? s : null;
+  };
 
   /**
    * Update can do something for the machine now: it answers, or its power

@@ -591,6 +591,7 @@ describe('MachineUpdatesState: following an update', () => {
     expect(state.outcome(ID)).toBeNull();
 
     r.service.status = done;
+    r.m.version = LATEST;
     r.client.emit('update.progress', done);
     expect(state.stage(ID)).toBeNull();
     expect(state.outcome(ID)).toEqual(done);
@@ -607,9 +608,45 @@ describe('MachineUpdatesState: following an update', () => {
 
   describe('what the machine says when nobody pressed anything', () => {
     it("restores a finished update's outcome after a desktop restart", async () => {
-      await rig({ service: done });
+      await rig({ service: done, version: LATEST });
       expect(state.outcome(ID)).toEqual(done);
       expect(state.stage(ID)).toBeNull();
+    });
+
+    it('a failure for a version the machine has since reached is not shown', async () => {
+      // Updated by hand after a rollback: `last.json` still says it failed, and nothing clears it.
+      const r = await rig({ service: failed, version: LATEST });
+      expect(state.outcome(ID)).toBeNull();
+
+      r.m.version = '0.9.0';
+      expect(state.outcome(ID)).toBeNull();
+    });
+
+    it('a failure stops showing as soon as the machine reaches its version', async () => {
+      const r = await rig({ service: failed });
+      expect(state.outcome(ID)).toEqual(failed);
+
+      r.m.version = LATEST;
+      expect(state.outcome(ID)).toBeNull();
+    });
+
+    it('a done for another version is not shown', async () => {
+      const r = await rig({ service: done, version: '0.9.0' });
+      expect(state.outcome(ID)).toBeNull();
+
+      r.m.version = FROM;
+      expect(state.outcome(ID)).toBeNull();
+    });
+
+    it("a real rollback's failure still shows while the machine is older", async () => {
+      const r = await rig({ service: failed });
+      expect(r.m.version).toBe(FROM);
+      expect(state.outcome(ID)).toEqual(failed);
+    });
+
+    it("a done for the machine's own version still shows after a desktop restart", async () => {
+      await rig({ service: done, version: LATEST });
+      expect(state.outcome(ID)).toEqual(done);
     });
 
     it('reads the outcome on each reconnect', async () => {
@@ -634,6 +671,7 @@ describe('MachineUpdatesState: following an update', () => {
       expect(state.stage(ID)).toBe('installing');
 
       r.service.status = done;
+      r.m.version = LATEST;
       await vi.advanceTimersByTimeAsync(2_000);
       expect(state.stage(ID)).toBeNull();
       expect(state.outcome(ID)).toEqual(done);
@@ -653,6 +691,7 @@ describe('MachineUpdatesState: following an update', () => {
       expect(state.outcome(ID)).toMatchObject({ state: 'failed', detail: expect.any(String) });
 
       r.service.status = done;
+      r.m.version = LATEST;
       back(r);
       await flush();
       expect(state.outcome(ID)).toEqual(done);
@@ -692,7 +731,7 @@ describe('MachineUpdatesState: following an update', () => {
     });
 
     it('follows a machine paired later, and forgets a removed one', async () => {
-      const r = await rig({ service: done, paired: false });
+      const r = await rig({ service: done, version: LATEST, paired: false });
       expect(state.outcome(ID)).toBeNull();
 
       r.machines.added(r.m as never);
@@ -743,6 +782,7 @@ describe('MachineUpdatesState: following an update', () => {
       expect(state.stage(ID)).toBe('installing');
 
       r.service.status = done;
+      r.m.version = LATEST;
       side.emit('update.progress', done);
       expect(state.stage(ID)).toBeNull();
       expect(state.outcome(ID)).toEqual(done);
@@ -802,9 +842,13 @@ describe('MachineUpdatesState: following an update', () => {
       r.service.status = done;
       await vi.advanceTimersByTimeAsync(2_000);
       expect(r.sides).toHaveLength(2);
-      expect(state.outcome(ID)).toEqual(done);
       expect(r.sides[1]!.close).toHaveBeenCalled();
       expect(r.machines.reconnect).toHaveBeenCalledWith(ID);
+
+      // The entry learns the new version from the hello of that reconnect.
+      expect(state.outcome(ID)).toBeNull();
+      r.m.version = LATEST;
+      expect(state.outcome(ID)).toEqual(done);
     });
 
     it('polling keeps one client while it stays open', async () => {
@@ -866,7 +910,7 @@ describe('MachineUpdatesState: following an update', () => {
     });
 
     it('restores the outcome through a client it closes at once, without reconnecting', async () => {
-      const r = await rig({ ...incompatible, service: done });
+      const r = await rig({ ...incompatible, service: done, version: LATEST });
 
       expect(state.outcome(ID)).toEqual(done);
       expect(r.sides).toHaveLength(1);
