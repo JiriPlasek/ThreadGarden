@@ -110,6 +110,16 @@ describe.skipIf(!hasGit)('gitState', () => {
     await expect(gitState(repo, failing)).rejects.toThrow();
   });
 
+  it('a failing HEAD probe that is not an empty repository rejects', async () => {
+    const failing = (args: string[], cwd: string) =>
+      args[0] === 'rev-parse' && args.includes('HEAD')
+        ? Promise.reject(new Error('git failed'))
+        : args[0] === 'for-each-ref'
+          ? Promise.reject(new Error('git failed'))
+          : Promise.resolve(execFileSync('git', args, { cwd, encoding: 'utf8' }));
+    await expect(gitState(repo, failing)).rejects.toThrow();
+  });
+
   it('a repository without commits has nothing unpushed', async () => {
     const empty = join(root, 'empty');
     mkdirSync(empty);

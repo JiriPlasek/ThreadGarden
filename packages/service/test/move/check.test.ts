@@ -76,6 +76,7 @@ const start = async (away: string[], seed?: (db: ReturnType<typeof openDb>) => v
   const adapter = new FakeAdapter();
   addLocal(adapter, 'gone', folder);
   addLocal(adapter, 'kept', folder);
+  if (away.includes('back')) addLocal(adapter, 'back', folder);
   svc = await startService({
     dataDir: dataDir(),
     claudeConfigDir: join(dir, 'claude'),

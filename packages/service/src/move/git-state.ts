@@ -42,10 +42,15 @@ export const gitState = async (cwd: string, git: Git = defaultGit): Promise<GitS
     () => true,
     () => false,
   );
-  // A repository without commits has nothing to push; any other git failure is not "clean".
+  // A repository without commits has nothing to push. Any other git failure is not "clean":
+  // when HEAD cannot be resolved, only a repository with no refs at all counts as empty.
   const hasHead = await git(['rev-parse', '--verify', '-q', 'HEAD'], cwd).then(
     () => true,
-    () => false,
+    async () => {
+      const refs = await git(['for-each-ref', '--count=1', '--format=%(refname)'], cwd);
+      if (refs.trim() !== '') throw new Error('git failed');
+      return false;
+    },
   );
   const unpushed = !hasHead
     ? 0
