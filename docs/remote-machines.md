@@ -14,11 +14,15 @@ do the steps once, over SSH; after that everything happens in Threadgarden.
   projects and its state; its chats open in tabs like any other, and Needs
   you, Running, the agents strip, notifications and Ctrl+K include it, each
   row with a machine chip.
-- The connection stays on your home network. The Ubuntu PC listens only on
-  its private network addresses (port 47380), over TLS, and Threadgarden on
-  the desktop pins its certificate when pairing, so a different device that
-  later gets the same address is never trusted. Nothing goes through a cloud
-  service.
+- The connection is direct, with no cloud service in between. The Ubuntu PC
+  listens only on its private network addresses (port 47380), over TLS, and
+  Threadgarden on the desktop pins its certificate when pairing, so a different
+  device that later gets the same address is never trusted. Private includes
+  the 100.64.0.0/10 range that VPNs such as Tailscale use, so if you set up a
+  VPN yourself that puts both computers on one network, you can pair with the
+  address the VPN gives the Ubuntu PC and use it away from home. Threadgarden
+  does not set up or manage that, and nothing in it is exposed to the
+  internet.
 - Every paired device has **full control** of the Ubuntu PC's chats (send,
   answer permissions, stop). Pairing can be revoked from either side.
 - Optionally, Threadgarden turns the PC on and shuts it down through a
@@ -33,12 +37,6 @@ do the steps once, over SSH; after that everything happens in Threadgarden.
 - Not yet: showing a machine's chats while it is off (an Off machine's group
   says "Its chats appear once it's on."). The usage meter shows each
   account's usage, the Ubuntu PC's too; Analytics shows This PC only for now.
-
-> **Status of the installer.** `install.sh` has so far only been tested in
-> CI (on GitHub's Ubuntu runner, with stand-ins for `systemctl`, `loginctl`
-> and `sudo`), never on a real machine. Your first install is its first real
-> run: if a step behaves differently from what this guide says, note what it
-> printed.
 
 You need: the Ubuntu PC (Ubuntu 22.04 or newer, x64), its Wi-Fi password,
 access to your router's admin page, and a Claude subscription or API key
@@ -248,7 +246,7 @@ Check that it runs and listens:
 threadgarden status
 ```
 
-It should say `Threadgarden <version> is running (protocol 6, headless).` and
+It should say `Threadgarden <version> is running (protocol <n>, headless).` and
 `Listening for devices on 192.168.1.50:47380`. Optionally give the machine
 the name Threadgarden should show (the host name until you do):
 
