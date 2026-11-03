@@ -80,17 +80,17 @@
   };
 </script>
 
-<div class="grid gap-1 text-xs">
+<div class="grid min-w-0 gap-1 text-xs">
   {#if stageText}
-    <p role="status">{stageText}</p>
+    <p class="break-words" role="status">{stageText}</p>
   {:else}
     {#if outcome?.state === 'done'}
-      <p role="status">Threadgarden {outcome.version} ✓</p>
+      <p class="break-words" role="status">Threadgarden {outcome.version} ✓</p>
       {#each skipNotes as note (note)}
-        <p class="text-muted-foreground">{note}</p>
+        <p class="text-muted-foreground break-words">{note}</p>
       {/each}
     {:else if failureText}
-      <p class="text-destructive" role="alert">{failureText}</p>
+      <p class="text-destructive break-words" role="alert">{failureText}</p>
     {/if}
     {#if behind && latest}
       <!-- The group names the machine; the label says so to assistive technology only. -->
@@ -127,6 +127,8 @@
   onConfirm={() => machineUpdates.update(machine.id)}
 >
   {#if updates.available}
-    <p class="text-sm">This PC has an update too; install it as well so they keep talking.</p>
+    <p class="text-sm break-words">
+      This PC has an update too; install it as well so they keep talking.
+    </p>
   {/if}
 </ConfirmDialog>

@@ -240,6 +240,35 @@ describe('Settings → Machines → updating', () => {
     expect(card.getByText('Turn it on to update')).toBeTruthy();
   });
 
+  it('an Off machine with power control shows an enabled Update', async () => {
+    const env = await start();
+    env.app.machines.get(M1)!.status = 'unreachable';
+    // What power control makes of a machine whose plug reads off.
+    env.app.machines.deriveWith(() => 'off');
+    const card = await openSettings(env);
+    expect((card.getByRole('button', { name: updateButton }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+    expect(card.queryByText('Turn it on to update')).toBeNull();
+  });
+
+  // jsdom cannot measure layout: the classes are asserted, the real check is by eye.
+  it('long machine names wrap instead of widening Settings', async () => {
+    const env = await start({
+      status: { state: 'failed', version: '0.7.1', from: '0.7.0', reason: 'install' },
+      busy: 1,
+    });
+    const card = await openSettings(env);
+    const line = await card.findByText(/Installing 0\.7\.1 failed/);
+    expect(line.className).toContain('break-words');
+    expect(line.parentElement!.className).toContain('min-w-0');
+    expect(card.getByText('Threadgarden 0.7.0').parentElement!.className).toContain('break-words');
+    expect(line.closest('[role="group"]')!.className).toContain('min-w-0');
+    await userEvent.click(card.getByRole('button', { name: updateButton }));
+    const prompt = await screen.findByRole('alertdialog');
+    expect(within(prompt).getByText(/working in 1 chat/).className).toContain('break-words');
+  });
+
   it('an Off machine shows its remembered version', async () => {
     const env = await start();
     env.app.machines.get(M1)!.status = 'unreachable';

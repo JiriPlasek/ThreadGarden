@@ -128,7 +128,7 @@
   {#each paired as m (m.id)}
     {@const shown = machineState({ name: m.name, status: machines.shown(m) })}
     {@const d = draftOf(m)}
-    <div class="grid gap-2 rounded-md border p-2" role="group" aria-label={m.name}>
+    <div class="grid min-w-0 gap-2 rounded-md border p-2" role="group" aria-label={m.name}>
       <div class="flex items-center justify-between gap-2 text-xs">
         <span class={cn('font-medium', shown.tone === 'red' && 'text-red-700 dark:text-red-400')}
           >{shown.label}</span
@@ -136,7 +136,7 @@
         {#if shown.reason}<span class="text-muted-foreground">{shown.reason}</span>{/if}
       </div>
       {#if m.version}
-        <p class="text-muted-foreground text-xs">
+        <p class="text-muted-foreground text-xs break-words">
           <span>Threadgarden {m.version}</span>
           {#if machineUpdates.behind(m) && machineUpdates.latest}
             <span>· {machineUpdates.latest} available</span>
