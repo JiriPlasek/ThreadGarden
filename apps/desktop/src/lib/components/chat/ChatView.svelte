@@ -9,6 +9,7 @@
   import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
   import Composer from '#lib/components/composer/Composer.svelte';
   import SetupScreen from '#lib/components/SetupScreen.svelte';
+  import { imageCountText } from '#lib/format/images.js';
   import { agoText, clockTime, sendTimeText } from '#lib/format/usage.js';
   import { rowPx } from '#lib/interface-scale.js';
   import { retryOldCopy } from '#lib/move/move-chat.svelte.js';
@@ -814,7 +815,12 @@
                 aria-label="Waiting for {machineName}"
                 data-away-item
               >
-                <p class="text-sm break-words whitespace-pre-wrap">{w.text}</p>
+                {#if w.text}
+                  <p class="text-sm break-words whitespace-pre-wrap">{w.text}</p>
+                {/if}
+                {#if w.imageCount > 0}
+                  <p class="text-muted-foreground">{imageCountText(w.imageCount)}</p>
+                {/if}
                 <div class="flex items-center gap-2">
                   <p
                     class={w.state === 'failed'

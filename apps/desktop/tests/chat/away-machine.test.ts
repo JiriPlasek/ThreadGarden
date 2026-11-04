@@ -253,6 +253,25 @@ describe('a machine that is away', () => {
     expect(env.server.calls('away.cancel')[0]!.params).toEqual({ id: 'row-1' });
   });
 
+  it('a waiting message says how many images it has, and one of images only is not an empty row', async () => {
+    const env = await start({
+      waiting: [
+        awayItem({ id: 'row-1', text: 'See these', imageCount: 1 }),
+        awayItem({ id: 'row-2', text: '', imageCount: 3 }),
+      ],
+    });
+    await openChat(env);
+    const rows = await waitFor(() => {
+      const found = [...document.querySelectorAll<HTMLElement>('[data-away-item]')];
+      expect(found).toHaveLength(2);
+      return found;
+    });
+    expect(within(rows[0]!).getByText('See these')).toBeTruthy();
+    expect(within(rows[0]!).getByText('1 image')).toBeTruthy();
+    expect(within(rows[1]!).getByText('3 images')).toBeTruthy();
+    for (const p of rows[1]!.querySelectorAll('p')) expect(p.textContent?.trim()).not.toBe('');
+  });
+
   it("without a plug that reads off, the line says it sends when it's reachable", async () => {
     const env = await start({ power: false });
     const composer = await openChat(env);
