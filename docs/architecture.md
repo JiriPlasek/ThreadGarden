@@ -849,14 +849,20 @@ the machine, and are reached only by local callers.
 **The copy** (`away/copies.ts`; `copies.saveLists`, `.saveChat`, `.get`,
 `.chat`, `.tails`). While connected, the desktop saves a machine's projects,
 info and chat list, and the last 10 items of each chat (user text, assistant
-text and permission requests), at most 500 chats. A stored row that no longer
-parses reads as no copy. The UI marks everything read from it, shows no chat on
-it as running, and never opens a link to the machine to look.
+text and permission requests), at most 500 chats. The whole list is read again
+at most every 30 s while connected, and at once when the link opens. The copy is
+text only, whatever the client sends: a user message keeps how many images it
+had (`imageCount`), never their data, and a permission request's long strings
+are cut to 4,000 characters. A stored row that no longer parses reads as no
+copy. The UI marks everything read from it, shows no chat on it as running, and
+never opens a link to the machine to look.
 
 **The queue** (`away/queue.ts`, `away/deliverer.ts`; `away.queue`, `.list`,
 `.cancel`, `.retry`, event `away.changed`). A message is written to disk before
 the composer clears. The deliverer runs in the local service, so the window can
-be closed. For each machine with rows waiting:
+be closed. Every 5 s while rows wait (once a minute when every machine waited on
+has been unreachable for 3 minutes with no start running; a new row, Retry,
+unlock or an opened link looks fast again), for each machine with rows waiting:
 
 - If the plug reads Off (or below `offWatts`), it calls `power.turnOn`. A
   machine that may be running is never turned on, and without power control the
@@ -864,17 +870,24 @@ be closed. For each machine with rows waiting:
 - A start has 5 minutes. A gap of more than 90 s between two looks means the
   device slept, and the window begins again. Running the whole window without
   an answer fails the rows with reason `start`, and they wait for `away.retry`;
-  a new message for that machine counts as a retry.
+  a new message for that machine counts as a retry, and so does the relay's
+  link to it opening (the machine came up late).
+  Refused rows still wait for Retry.
 - When the link opens, rows go out in order per chat. A chat's later rows fail
   with an earlier refused one, which keeps the order, and go again on Retry.
 - **Exactly once:** the row id is the `messageId` of `chat.send`, and a new
   chat's id is the `sessionId` of `chat.create`, chosen by the desktop. The
-  machine remembers both, so a resend after a lost answer does nothing twice. A
-  machine without the `away` capability refuses (`AWAY`), and the desktop shows
-  "Update ‹machine› to send while it's off".
-- While a chat's create row waits, later messages for it also go to the queue,
-  even if the link is open. A new chat on an away machine opens at once under
-  its final id, with "Starting ‹machine›…".
+  machine remembers both, so a resend after a lost answer does nothing twice
+  (a remembered `messageId` reads as accepted before any move check). For a
+  machine without the `away` capability, the desktop's copy API refuses with
+  `AWAY` and the machine is never asked; the desktop shows "Update ‹machine› to
+  send while it's off". It also refuses for a machine known neither from a hello
+  nor from its copy ("‹machine› hasn't been seen yet"), and for one whose link
+  can't open (`mismatch`, `incompatible`), whose message would wait forever.
+- While a chat has a row still to go (any but a refused one), later messages
+  for it also go to the queue, even if the link is open, so none overtakes it;
+  Schedule is hidden meanwhile. A new chat on an away machine opens at once
+  under its final id, with "Starting ‹machine›…".
 
 ### Updating a machine
 

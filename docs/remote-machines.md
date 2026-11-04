@@ -457,18 +457,21 @@ If something goes wrong:
 
 While this PC isn't connected to the machine (Off, Unreachable or Connecting),
 its group keeps its projects and chats, marked "last seen ‹time›", and a chat
-opens with a note: "‹machine› is off: showing its last few messages". Looking
-never turns the machine on.
+opens with a note: "‹machine› is off: showing its last few messages" ("isn't
+connected" when it doesn't show as Off). Looking never turns the machine on.
 
 **The copy** is Threadgarden's own data on this PC, refreshed while the two are
-connected. It holds the lists and the last 10 or so messages of each chat. It is
-read-only, and nothing on it shows as running, since the machine runs nothing
+connected. It holds the lists and the last 10 or so messages of each chat, as
+text: a pasted image shows as "1 image". It is read-only, and nothing on it shows as running, since the machine runs nothing
 while it is off. Every PC you pair keeps its own copy.
 
 **Replying.** Send as usual. The message is saved on this PC at once and shows
 under the chat as "Waiting for ‹machine›", with **Cancel**. If the plug reads
 Off, Threadgarden turns the machine on. When it is up, the messages go out in
-order, once each, and the chat goes live.
+order, once each, and the chat goes live. A message sent while one of the chat's
+still waits goes behind it, even once the machine is connected. A waiting reply
+skips the "Continue this chat here?" question, but the machine still refuses a
+chat that another program is running.
 
 - **Keep this PC awake, with Threadgarden running.** The waiting messages live
   here, and only this PC sends them. If it sleeps or Threadgarden is closed, they
@@ -476,8 +479,9 @@ order, once each, and the chat goes live.
   begun again.
 - If the machine doesn't answer within 5 minutes, the message says "‹machine›
   didn't come up", with **Retry** and Cancel. It waits for Retry so that a PC that
-  won't boot isn't power-cycled again and again; a new message counts as a Retry.
-  A message the machine refuses also waits for Retry.
+  won't boot isn't power-cycled again and again; a new message counts as a Retry,
+  and if the machine comes up later and connects, it goes by itself. A message
+  the machine refuses waits for Retry.
 - A machine already running is never switched off and on to send. Without power
   control, or while the plug can't be read, the line says "sends when it's
   reachable" and waits for you to turn the machine on.
