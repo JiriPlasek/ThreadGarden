@@ -28,7 +28,7 @@
    * facts: where Claude Code was found, whether external sessions are
    * available (spec §6.3) and the history indexing progress.
    */
-  const { settings, interaction, connection } = useApp();
+  const { settings, interaction, connection, machineUpdates } = useApp();
 
   type Form = Omit<Settings, 'claudePath' | 'idleReclaimMinutes' | 'codeFont'> & {
     claudePath: string;
@@ -82,6 +82,7 @@
       keyInput = '';
       keyError = null;
       interaction.loadStatus().catch(() => {});
+      void machineUpdates.refresh();
       settings.checkApiKey().catch(() => {});
       showSection();
     }

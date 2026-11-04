@@ -17,6 +17,7 @@ import { ConnectionState } from '../../src/lib/state/connection.svelte';
 import { InteractionState } from '../../src/lib/state/interaction.svelte';
 import { LifecycleState } from '../../src/lib/state/lifecycle.svelte';
 import { APP_CONTEXT, type AppState } from '../../src/lib/state/context';
+import { MachineUpdatesState } from '../../src/lib/state/machine-updates.svelte';
 import { machineNameOf, MachinesState } from '../../src/lib/state/machines.svelte';
 import { PlacesState } from '../../src/lib/state/places.svelte';
 import { PowerState } from '../../src/lib/state/power.svelte';
@@ -185,6 +186,7 @@ const wire = (
     analytics: new AnalyticsState(),
     updates: new UpdatesState(),
     machines,
+    machineUpdates: new MachineUpdatesState(),
     power: new PowerState(),
     scopes,
   };

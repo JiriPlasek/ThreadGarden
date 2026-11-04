@@ -8,6 +8,11 @@ set -eu
 SYSTEMCTL=${SYSTEMCTL-systemctl}
 LOGINCTL=${LOGINCTL-loginctl}
 SUDO=${SUDO-sudo}
+PKCHECK=${PKCHECK-pkcheck}
+
+# An unattended caller (the service updating itself) can't read the printed
+# advice, so it names each sudo step that didn't happen, one per line, in this file.
+skip() { [ -z "${THREADGARDEN_SKIPPED_FILE-}" ] || echo "$1" >> "$THREADGARDEN_SKIPPED_FILE"; }
 
 if [ "$(id -u)" -eq 0 ]; then
   echo "Run install.sh as your own user, not root." >&2
@@ -96,6 +101,7 @@ case $linger in
     skipped=0
     trap 'skipped=1; echo "Skipped lingering."' INT
     $SUDO $LOGINCTL enable-linger "$user" || {
+      skip linger
       [ "$skipped" = 1 ] ||
         echo "Could not enable lingering; run 'sudo loginctl enable-linger $user' later."
     }
@@ -121,12 +127,39 @@ polkit.addRule(function (action, subject) {
 EOF
 }
 
+# Whether the rule is in place: "yes", "no", or "unknown" when it can't be told.
+# Ubuntu keeps the rules directory from users (750 root:polkitd). Then polkit itself
+# is asked, by its exit code: without --allow-user-interaction it never prompts, and
+# 1, 2 and 3 are its ways of saying no. Anything else (127, or no pkcheck to run at
+# all, which not every shell reports as 127) says nothing about the rule. Its answer also covers whatever else allows this
+# user to power off, so it is asked only about a file that can't be read, and only
+# unattended: polkit says yes to an active console session even with no rule.
+polkit_rule_state() {
+  if [ -r "$polkit_rule" ]; then
+    if [ "$(cat "$polkit_rule")" = "$(polkit_rule_text)" ]; then echo yes; else echo no; fi
+  elif [ -x "$polkit_rules_dir" ] && [ ! -e "$polkit_rule" ]; then
+    echo no
+  elif [ -z "${THREADGARDEN_SKIPPED_FILE-}" ]; then
+    echo unknown
+  elif ! command -v $PKCHECK >/dev/null 2>&1; then
+    echo unknown
+  else
+    answer=0
+    $PKCHECK --action-id org.freedesktop.login1.power-off --process $$ >/dev/null 2>&1 || answer=$?
+    case $answer in
+      0) echo yes ;;
+      1 | 2 | 3) echo no ;;
+      *) echo unknown ;;
+    esac
+  fi
+}
+
 echo
 if [ ! -d "$polkit_rules_dir" ]; then
   echo "This system has no polkit rules directory ($polkit_rules_dir), so it is" >&2
   echo "probably too old for JavaScript rules. Threadgarden won't be able to power" >&2
   echo "this machine off for idle shutdown; everything else works." >&2
-elif [ "$(cat "$polkit_rule" 2>/dev/null || true)" = "$(polkit_rule_text)" ]; then
+elif polkit_state=$(polkit_rule_state) && [ "$polkit_state" = yes ]; then
   echo "The rule that lets Threadgarden power this machine off is already in place."
 else
   echo "Threadgarden can shut this machine down when it has been idle, and a"
@@ -142,6 +175,8 @@ else
   {
     polkit_rule_text | $SUDO tee "$polkit_rule" >/dev/null && $SUDO chmod 644 "$polkit_rule"
   } || {
+    # Unknown is not a skip: the note would claim a gap that may well not be there.
+    [ "$polkit_state" != no ] || skip polkit
     [ "$skipped" = 1 ] ||
       echo "Could not write $polkit_rule; idle shutdown will fail to power the machine off."
   }

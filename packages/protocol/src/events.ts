@@ -4,6 +4,7 @@ import { ChatItemSchema } from './items.js';
 import { PairedMachineSchema } from './machines.js';
 import { MachinePowerStatusSchema } from './power.js';
 import { ChatTaskSchema } from './tasks.js';
+import { UpdateStatusSchema } from './update.js';
 import { ScheduledSendSchema, UsageStateSchema } from './usage.js';
 
 export const ChatItemsEventSchema = z.object({
@@ -85,6 +86,8 @@ export const events = {
   'machines.changed': z.array(PairedMachineSchema),
   /** Power: this machine's power status changed (machines that advertise `power`). */
   'power.changed': MachinePowerStatusSchema,
+  /** Protocol 10: this machine's update changed stage or ended. */
+  'update.progress': UpdateStatusSchema,
 } as const;
 
 export type EventName = keyof typeof events;

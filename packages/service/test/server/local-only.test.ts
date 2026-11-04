@@ -69,6 +69,7 @@ describe('methods a paired device may not call', () => {
     'pairing.create',
     'devices.list',
     'machine.rename',
+    'update.latest',
     ...powerClient,
     ...machinesMethods,
   ];
@@ -110,6 +111,29 @@ describe('methods a paired device may not call', () => {
       const res = await call(ws, method, {});
       expect(res).not.toMatchObject({ error: { code: 'FORBIDDEN' } });
       expect(res).not.toMatchObject({ error: { code: 'METHOD_NOT_FOUND' } });
+    } finally {
+      ws.close();
+    }
+  });
+
+  it.each(['update.start', 'update.status'])(
+    'does not forbid %s to a paired device',
+    async (method) => {
+      const ws = await open(svc.remote!.port, device.token);
+      try {
+        const res = await call(ws, method, {});
+        expect(res).not.toMatchObject({ error: { code: 'FORBIDDEN' } });
+        expect(res).not.toMatchObject({ error: { code: 'METHOD_NOT_FOUND' } });
+      } finally {
+        ws.close();
+      }
+    },
+  );
+
+  it('answers update.status to a paired device', async () => {
+    const ws = await open(svc.remote!.port, device.token);
+    try {
+      expect(await call(ws, 'update.status', {})).toMatchObject({ result: { state: 'idle' } });
     } finally {
       ws.close();
     }

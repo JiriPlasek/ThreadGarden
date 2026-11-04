@@ -71,7 +71,7 @@
     <AlertDialog.Header>
       <AlertDialog.Title class="text-base">{title}</AlertDialog.Title>
       {#if description}
-        <AlertDialog.Description class="text-sm">{description}</AlertDialog.Description>
+        <AlertDialog.Description class="text-sm break-words">{description}</AlertDialog.Description>
       {/if}
     </AlertDialog.Header>
     {@render children?.()}

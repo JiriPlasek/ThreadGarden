@@ -6,6 +6,7 @@ import {
   CAPABILITIES,
   POWER_CAPABILITY,
   PROTOCOL_VERSION,
+  UPDATE_CAPABILITY,
   type ChatStatus,
   type EventMsg,
   type MachineInfo,
@@ -40,7 +41,7 @@ import type { AgentAdapter } from './sdk/adapter.js';
 import type { ClaudeFound, ClaudeProblem } from './sdk/claude-path.js';
 import { buildSessionEnv } from './sdk/real-adapter.js';
 import { registerChatHandlers } from './server/handlers/chat.js';
-import { MoveLocks, registerMoveHandlers, type MoveGit } from './server/handlers/move.js';
+import { busyOf, MoveLocks, registerMoveHandlers, type MoveGit } from './server/handlers/move.js';
 import { makeResumeChecker, registerExternalHandlers } from './server/handlers/external.js';
 import { registerFileHandlers } from './server/handlers/files.js';
 import { registerProjectHandlers } from './server/handlers/projects.js';
@@ -55,7 +56,10 @@ import {
 import { IdleMonitor } from './power/idle.js';
 import { ShutdownSequence } from './power/shutdown.js';
 import { PowerStore } from './power/store.js';
+import { registerUpdateHandlers } from './server/handlers/update.js';
 import { registerUsageHandlers } from './server/handlers/usage.js';
+import { LatestRelease, type Fetch } from './update/github.js';
+import { MachineUpdater, type Run, type Updater } from './update/updater.js';
 import { PowerHub } from './power/hub.js';
 import { REMOTE_PORT, startRemoteServer } from './server/remote-server.js';
 import { Router } from './server/router.js';
@@ -184,6 +188,26 @@ export type StartOptions = {
    * `bin.ts` never sets it.
    */
   pairingRandom?: (n: number) => Buffer;
+  /**
+   * The version `hello` reports (default the package's). The mock service
+   * changes it when it pretends to have updated.
+   */
+  serviceVersion?: () => string;
+  /**
+   * Updating (protocol 10). `fetch` is how GitHub is asked for the newest
+   * release and for its files (default the global one); `latest` replaces that
+   * lookup outright. `updater` replaces the machine's updater outright (the mock
+   * service); otherwise `installBase`, `platform`, `arch` and `run` go to the real one.
+   */
+  update?: {
+    fetch?: Fetch;
+    latest?: Pick<LatestRelease, 'get'>;
+    updater?: Updater;
+    installBase?: string;
+    platform?: NodeJS.Platform;
+    arch?: NodeJS.Architecture;
+    run?: Run;
+  };
 };
 
 /** How long shutdown waits for a running index pass to reach a stopping point. */
@@ -205,6 +229,11 @@ export type ServiceHandle = {
    * the locks). For the mock service's test reset only: no method calls it.
    */
   forgetMoves(): Promise<void>;
+  /**
+   * Closes every paired device's sockets, as a restart would; the devices stay
+   * paired. For the mock service's pretend update restart only: no method calls it.
+   */
+  dropDevices(): void;
   /** v1.4: where paired devices reach this service (headless, with a private address only). */
   remote?: { addresses: string[]; port: number };
   /** Sends an event to every local client and paired device. */
@@ -246,6 +275,33 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     }
   };
 
+  const updateFetch = opts.update?.fetch ?? fetch;
+  // Sessions and the poller exist later; read them lazily.
+  const updater: Updater =
+    opts.update?.updater ??
+    new MachineUpdater({
+      dataDir,
+      currentVersion: pkg.version,
+      ...(opts.update?.installBase === undefined ? {} : { installBase: opts.update.installBase }),
+      ...(opts.update?.platform === undefined ? {} : { platform: opts.update.platform }),
+      ...(opts.update?.arch === undefined ? {} : { arch: opts.update.arch }),
+      ...(opts.update?.run === undefined ? {} : { run: opts.update.run }),
+      fetch: updateFetch,
+      busyCount: async () => {
+        const chats = (host?.list() ?? []).filter((c) => {
+          const s = host?.get(c.sessionId);
+          return s !== undefined && busyOf(s) !== null;
+        });
+        const external = (opts.externals ?? (() => poller?.snapshot() ?? []))().filter(
+          (e) => e.status === 'busy' || e.state === 'working',
+        );
+        return chats.length + external.length;
+      },
+      emit: (s) => broadcastRef.fn({ event: 'update.progress', data: s }),
+      log,
+    });
+  /** A desktop's own updater looks after a desktop, whatever else is on the machine. */
+  const canUpdate = (): boolean => headless && updater.supported();
   /** This machine's identity; it lives in the database, so there is none without one. */
   const machineOf = (d: Db): MachineInfo => {
     const { id, name } = loadMachineIdentity(d, os.hostname());
@@ -256,11 +312,19 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       headless,
       home: os.homedir(),
       // `power` is for headless machines only (a desktop is never switched off this way).
-      capabilities: headless ? [...CAPABILITIES, POWER_CAPABILITY] : [...CAPABILITIES],
+      capabilities: headless
+        ? [...CAPABILITIES, POWER_CAPABILITY, ...(canUpdate() ? [UPDATE_CAPABILITY] : [])]
+        : [...CAPABILITIES],
     };
   };
+  // None of these needs a database, so they are there whatever else is.
+  registerUpdateHandlers(router, {
+    latest: opts.update?.latest ?? new LatestRelease({ fetch: updateFetch, now: clock }),
+    updater,
+    supported: canUpdate,
+  });
   router.register('hello', async (_p, ctx) => ({
-    serviceVersion: pkg.version,
+    serviceVersion: (opts.serviceVersion ?? (() => pkg.version))(),
     protocolVersion: PROTOCOL_VERSION,
     ...(db ? { machine: machineFor(ctx, machineOf(db)) } : {}),
   }));
@@ -377,6 +441,22 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   };
   /** Counts of a replaced listener's sockets closing late must not count. */
   let remoteGeneration = 0;
+  let startupFinished = false;
+  let reconciled = false;
+  /**
+   * An update counts as done only now: `done` is the apply script's cue to exit for
+   * good, so a version that dies before this point has to be rolled back by it
+   * (ruling R6). Runs once, when startup has finished and devices can reach this
+   * version, whichever comes last. Not waited for: it can ask systemd, which has
+   * no business holding up startup or a move of the listener.
+   */
+  const reconcileOnce = (): void => {
+    if (reconciled || !startupFinished || !remote || closing) return;
+    reconciled = true;
+    void updater
+      .reconcile()
+      .catch((err: unknown) => log.error(`update reconcile: ${errorText(err)}`));
+  };
   /**
    * Puts the remote listener on `addresses` (sorted; none stops it): the
    * current one is closed and a new one started with the same port, identity,
@@ -423,7 +503,9 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       log.info(`listening for devices on ${where}`);
     } catch (err) {
       log.error(`listening for devices on ${addresses.join(', ')} failed: ${errorText(err)}`);
+      return;
     }
+    reconcileOnce();
   };
   /** The move in progress, if any (one at a time; `close()` waits for it). */
   let following: Promise<void> | undefined;
@@ -1083,6 +1165,9 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     for (const sig of ['SIGINT', 'SIGTERM'] as const) process.once(sig, () => void close());
   }
 
+  // Last: nothing may be left that could fail once an update has been called done.
+  startupFinished = true;
+  reconcileOnce();
   log.info(`service started on 127.0.0.1:${wsServer.port}`);
   return {
     port: wsServer.port,
@@ -1090,6 +1175,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     router,
     moveLocks,
     forgetMoves: async () => moveHandlers?.forgetAll(),
+    dropDevices: () => remote?.dropDevices(),
     ...(host ? { host } : {}),
     ...(usage ? { usage } : {}),
     ...(scheduled ? { scheduled } : {}),

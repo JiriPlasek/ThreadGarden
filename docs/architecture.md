@@ -99,7 +99,7 @@ them to the service it starts (`THREADGARDEN_DATA_DIR`,
 `THREADGARDEN_LEGACY_DATA_DIR`), so the two never disagree. It looks for
 `service.json` in the new dir first, then in the old one: a pahub service
 still running there is reached (both subprotocols are offered), its `hello`
-reports an older protocol than the app's (8), so the UI shows the
+reports an older protocol than the app's (10), so the UI shows the
 incompatible screen, and **Restart service** stops it (the shell stops a
 service recorded in either dir). At start, before it takes its own lock, the
 service migrates once (`src/migrate-data-dir.ts`): when the new dir has no
@@ -124,10 +124,10 @@ a burst of more than 10 uncaught exceptions in a minute ends the process.
 Shutdown runs every step even if one fails, and always releases the lock.
 
 **Versions.** `hello` exchanges the protocol version and the service version.
-The local service must speak exactly the app's protocol (8); any other
+The local service must speak exactly the app's protocol (10); any other
 version is incompatible: the UI shows a blocking screen that offers to
 restart the service. A paired machine's service is accepted one version
-either way (7–9, `REMOTE_PROTOCOL_RANGE`; see Versions across machines
+either way (9–11, `REMOTE_PROTOCOL_RANGE`; see Versions across machines
 under [Protocol](#protocol)). The same protocol with a different
 service version (an app update while the old service still runs) shows a thin
 "older version" bar instead; Threadgarden never restarts the service on its own,
@@ -205,10 +205,11 @@ service and the UI; the service validates every request.
   `chat.since`); **1001** when the local service stops. The UI also checks
   that the relayed `hello` names the paired machine's id: another id counts
   as a mismatch, like 4409, and the client stops.
-- **Versions across machines.** The protocol is 9 (v1.4 was 5; 6 added power
-  control, 7 projects, 8 the usage state's account, 9 moving a chat). The
+- **Versions across machines.** The protocol is 10 (v1.4 was 5; 6 added power
+  control, 7 projects, 8 the usage state's account, 9 moving a chat, 10
+  updating a machine). The
   desktop and its local service still need the exact version; a remote
-  service is accepted one version either way (8, 9 or 10 for a desktop on 9,
+  service is accepted one version either way (9, 10 or 11 for a desktop on 10,
   `REMOTE_PROTOCOL_RANGE`; the Rust shell keeps its own copy of the version in
   `src-tauri/src/service.rs`). What a machine can do is read from the
   capabilities in its `hello`, not from its version: the desktop offers power
@@ -833,6 +834,29 @@ items; only those folders may later be changed more freely. Threadgarden
 never touches a folder it did not make (it only reads `git remote get-url
 origin` there, to mark the repos This PC has and to recognise a clone already
 in place) and never deletes a GitHub repo.
+
+### Updating a machine
+
+**Update** brings a headless machine to the newest release from Settings →
+Machines (protocol 10; the design is
+[`2026-11-03-machine-update-design.md`](superpowers/specs/2026-11-03-machine-update-design.md)).
+The machine updates itself: `update.start {version, force}` makes its service
+download the release from GitHub, check the checksum and unpack it
+(`update/updater.ts`), then hand the install to a script in a transient
+systemd unit of its own (`update/apply-script.ts`), because the install
+restarts the service. The script runs with `sudo -n`, so a step that needs a
+password (lingering, the polkit rule) is skipped and recorded, not waited on,
+and it puts the previous version back if the new one does not answer within
+about 90 seconds. What must outlive the restart (the pending update, the
+skipped steps, how the last update ended, `install.log`) is in
+`<data dir>/update/`. Progress reaches the desktop as `update.progress`
+events and `update.status`. `update.latest` (local only) asks GitHub, on This
+PC, for the newest release; the desktop compares it with each machine's
+version from `hello`, shows the button and puts a dot on Settings while one
+is behind. With chats working, `update.start` answers `{started: false,
+busy}` unless `force` is set. The mock service pretends all of it
+(`mock.failNextUpdate`, `mock.setBusy`, `mock.resetUpdate`; local callers
+only), so the Playwright spec needs no systemd or GitHub.
 
 ### Moving a chat
 

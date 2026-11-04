@@ -1,5 +1,5 @@
 import type { MachineInfo, PairedMachine } from '@threadgarden/protocol';
-import { PROTOCOL_VERSION } from '@threadgarden/protocol';
+import { PROTOCOL_VERSION, UPDATE_CAPABILITY } from '@threadgarden/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { ServiceClient } from '../../src/lib/service/client';
 import { MachinesState } from '../../src/lib/state/machines.svelte';
@@ -39,6 +39,7 @@ let tokens: {
   clear: Mock<(id: string) => Promise<void>>;
 };
 let impl: typeof WebSocket;
+let uiStore: Map<string, unknown>;
 
 const remote = (id: string): FakeServer => {
   let s = remotes.get(id);
@@ -88,6 +89,15 @@ beforeEach(() => {
   local.handlers['machines.list'] = () => pairedList;
   local.handlers['machines.unlock'] = () => ({});
   local.handlers['machines.remove'] = () => ({ revoked: true });
+  uiStore = new Map();
+  local.handlers['uiState.get'] = (p) => ({
+    value: uiStore.get((p as { key: string }).key) ?? null,
+  });
+  local.handlers['uiState.set'] = (p) => {
+    const { key, value } = p as { key: string; value: unknown };
+    uiStore.set(key, value);
+    return {};
+  };
   impl = routedImpl((url) =>
     url.includes('/relay?machine=') ? remote(url.split('=')[1]!) : local,
   );
@@ -184,7 +194,7 @@ describe('MachinesState', () => {
   });
 
   it('accepts a hello without a machine (an older service) and the right id', async () => {
-    remote(M1).handlers.hello = () => ({ serviceVersion: 'x', protocolVersion: 8 });
+    remote(M1).handlers.hello = () => ({ serviceVersion: 'x', protocolVersion: 9 });
     await setup([paired(M1, 'A'), paired(M2, 'B')], { [M1]: 't1', [M2]: 't2' });
     await vi.advanceTimersByTimeAsync(0);
     expect(machines.get(M1)?.status).toBe('on');
@@ -203,25 +213,122 @@ describe('MachinesState', () => {
     expect(remote(M2).sockets).toHaveLength(1);
   });
 
-  it('accepts a remote on protocol 8 or 10 but not 7 or 11', async () => {
+  it('accepts a remote on protocol 9 or 11 but not 8 or 12', async () => {
     const proto = (id: string, v: number) => {
       remote(id).handlers.hello = () => ({ serviceVersion: 'x', protocolVersion: v });
     };
-    proto('m8', 8);
-    proto('m10', 10);
-    proto('m7', 7);
+    proto('m9', 9);
     proto('m11', 11);
-    await setup([paired('m8', 'a'), paired('m10', 'b'), paired('m7', 'c'), paired('m11', 'd')], {
-      m8: 't',
-      m10: 't',
-      m7: 't',
+    proto('m8', 8);
+    proto('m12', 12);
+    await setup([paired('m9', 'a'), paired('m11', 'b'), paired('m8', 'c'), paired('m12', 'd')], {
+      m9: 't',
       m11: 't',
+      m8: 't',
+      m12: 't',
     });
     await vi.advanceTimersByTimeAsync(0);
-    expect(machines.get('m8')?.status).toBe('on');
-    expect(machines.get('m10')?.status).toBe('on');
-    expect(machines.get('m7')?.status).toBe('incompatible');
-    expect(machines.get('m11')?.status).toBe('incompatible');
+    expect(machines.get('m9')?.status).toBe('on');
+    expect(machines.get('m11')?.status).toBe('on');
+    expect(machines.get('m8')?.status).toBe('incompatible');
+    expect(machines.get('m12')?.status).toBe('incompatible');
+  });
+
+  it('an incompatible hello still records version and updatability', async () => {
+    remote(M1).handlers.hello = () => ({
+      serviceVersion: '0.9.0',
+      protocolVersion: 12,
+      machine: { ...info(M1, M1), capabilities: ['remote', UPDATE_CAPABILITY] },
+    });
+    await setup([paired(M1, 'Ubuntu PC')], { [M1]: 'tok' });
+    await vi.advanceTimersByTimeAsync(0);
+    const entry = machines.get(M1)!;
+    expect(entry.status).toBe('incompatible');
+    expect(entry.version).toBe('0.9.0');
+    expect(entry.canUpdate).toBe(true);
+  });
+
+  it('a machine on a normal open records version; one without the capability cannot update', async () => {
+    await setup([paired(M1, 'Ubuntu PC')], { [M1]: 'tok' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(machines.get(M1)).toMatchObject({ version: '1.4.0', canUpdate: false });
+  });
+
+  it("a machine's version survives a desktop restart via machines.versions", async () => {
+    remote(M1).handlers.hello = () => ({
+      serviceVersion: '0.9.0',
+      protocolVersion: PROTOCOL_VERSION,
+      machine: { ...info(M1, M1), capabilities: ['remote', UPDATE_CAPABILITY] },
+    });
+    await setup([paired(M1, 'Ubuntu PC')], { [M1]: 'tok' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(uiStore.get('machines.versions')).toEqual({
+      [M1]: { version: '0.9.0', canUpdate: true },
+    });
+    localClient.close();
+    machines.get(M1)!.client.close();
+    // The machine is off now; a fresh desktop still shows what it last saw.
+    remote(M1).refuse = true;
+    await setup([paired(M1, 'Ubuntu PC')], { [M1]: 'tok' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(machines.get(M1)).toMatchObject({ version: '0.9.0', canUpdate: true });
+  });
+
+  it('forgets the version of a removed machine', async () => {
+    await setup([paired(M1, 'Ubuntu PC')], { [M1]: 'tok' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(uiStore.get('machines.versions')).toHaveProperty(M1);
+    await machines.remove(M1);
+    expect(uiStore.get('machines.versions')).toEqual({});
+  });
+
+  it('openForUpdate connects despite an out-of-range protocol, apart from the entry', async () => {
+    remote(M1).handlers.hello = () => ({
+      serviceVersion: '0.9.0',
+      protocolVersion: 12,
+      machine: info(M1, M1),
+    });
+    await setup([paired(M1, 'Ubuntu PC')], { [M1]: 'tok' });
+    await vi.advanceTimersByTimeAsync(0);
+    const entry = machines.get(M1)!;
+    expect(entry.status).toBe('incompatible');
+    const p = machines.openForUpdate(M1);
+    await vi.advanceTimersByTimeAsync(0);
+    const c = await p;
+    expect(c.status).toBe('open');
+    expect(c).not.toBe(entry.client);
+    expect(entry.status).toBe('incompatible');
+    expect(remote(M1).url).toBe(`ws://127.0.0.1:${LOCAL_PORT}/relay?machine=${M1}`);
+    c.close();
+  });
+
+  it('openForUpdate rejects when the connection fails', async () => {
+    await setup([paired(M1, 'Ubuntu PC')], { [M1]: 'tok' });
+    await vi.advanceTimersByTimeAsync(0);
+    remote(M1).refuse = true;
+    const p = machines.openForUpdate(M1);
+    const assertion = expect(p).rejects.toBeInstanceOf(Error);
+    await vi.advanceTimersByTimeAsync(0);
+    await assertion;
+    expect(machines.get(M1)?.status).toBe('on');
+  });
+
+  it('reconnect tries a client that gave up on an incompatible machine again', async () => {
+    const hello = (protocolVersion: number, serviceVersion: string) => () => ({
+      serviceVersion,
+      protocolVersion,
+      machine: { ...info(M1, M1), capabilities: ['remote', UPDATE_CAPABILITY] },
+    });
+    remote(M1).handlers.hello = hello(12, '0.9.0');
+    await setup([paired(M1, 'Ubuntu PC')], { [M1]: 'tok' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(machines.get(M1)?.status).toBe('incompatible');
+
+    remote(M1).handlers.hello = hello(PROTOCOL_VERSION, '1.0.0');
+    machines.reconnect(M1);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(machines.get(M1)).toMatchObject({ status: 'on', version: '1.0.0' });
   });
 
   it('pairs: keychain first, then connect', async () => {

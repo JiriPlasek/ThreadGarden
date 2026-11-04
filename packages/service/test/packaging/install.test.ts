@@ -101,6 +101,13 @@ describe.skipIf(process.platform === 'win32' || isRoot)('headless install.sh', (
     });
   };
 
+  /** A pkcheck that says this, and prints what the real one prints when it allows. */
+  const pkcheck = (exit: number) =>
+    stub(
+      'pkcheck',
+      `echo "pkcheck $*" >> "$LOG"\n[ ${exit} -ne 0 ] || printf '%s\\n' 'polkit\\56result=yes'\nexit ${exit}`,
+    );
+
   const data = join('.local', 'share', 'threadgarden-headless');
 
   it('installs into a temp HOME and enables the user unit', async () => {
@@ -156,6 +163,199 @@ describe.skipIf(process.platform === 'win32' || isRoot)('headless install.sh', (
     expect(stderr).toContain("won't be able to power");
     expect((await calls()).some((l) => l.startsWith('sudo tee'))).toBe(false);
     expect(await calls()).toContain('systemctl --user restart threadgarden');
+  });
+
+  describe('skipped sudo steps', () => {
+    const skippedLines = async (file: string) =>
+      (await readFile(file, 'utf8').catch(() => '')).split('\n').filter(Boolean);
+
+    it('a sudo that fails for lingering writes linger to THREADGARDEN_SKIPPED_FILE', async () => {
+      const rules = join(root, 'rules.d');
+      await mkdir(rules);
+      // The first run puts the rule in place, so only lingering is left to skip.
+      expect((await install({ POLKIT_RULES_DIR: rules })).code).toBe(0);
+      const skipped = join(root, 'skipped');
+      const { code } = await install({
+        POLKIT_RULES_DIR: rules,
+        SUDO: 'false',
+        THREADGARDEN_SKIPPED_FILE: skipped,
+      });
+      expect(code).toBe(0);
+      expect(await skippedLines(skipped)).toEqual(['linger']);
+    });
+
+    it('a sudo that fails for the polkit rule writes polkit', async () => {
+      const rules = join(root, 'rules.d');
+      await mkdir(rules);
+      const skipped = join(root, 'skipped');
+      const { code } = await install({
+        POLKIT_RULES_DIR: rules,
+        LINGER: 'yes',
+        SUDO: 'false',
+        THREADGARDEN_SKIPPED_FILE: skipped,
+      });
+      expect(code).toBe(0);
+      expect(await skippedLines(skipped)).toEqual(['polkit']);
+    });
+
+    // install.sh explains it on stderr; a note would promise a fix that can't work.
+    it('a missing polkit rules directory writes no marker', async () => {
+      const skipped = join(root, 'skipped');
+      const { code, stderr } = await install({
+        POLKIT_RULES_DIR: join(root, 'missing'),
+        LINGER: 'yes',
+        THREADGARDEN_SKIPPED_FILE: skipped,
+      });
+      expect(code).toBe(0);
+      expect(stderr).toContain("won't be able to power");
+      expect(await skippedLines(skipped)).toEqual([]);
+    });
+
+    it('a readable rule that differs, with a failing sudo, writes polkit without asking polkit', async () => {
+      const rules = join(root, 'rules.d');
+      await mkdir(rules);
+      await writeFile(join(rules, '49-threadgarden-power.rules'), '// an older rule\n');
+      const skipped = join(root, 'skipped');
+      const { code } = await install({
+        POLKIT_RULES_DIR: rules,
+        PKCHECK: await pkcheck(0),
+        LINGER: 'yes',
+        SUDO: 'false',
+        THREADGARDEN_SKIPPED_FILE: skipped,
+      });
+      expect(code).toBe(0);
+      expect(await skippedLines(skipped)).toEqual(['polkit']);
+      expect((await calls()).some((l) => l.startsWith('pkcheck'))).toBe(false);
+    });
+
+    it('a rule plainly not there is not asked of polkit, which may allow it for other reasons', async () => {
+      const rules = join(root, 'rules.d');
+      await mkdir(rules);
+      const skipped = join(root, 'skipped');
+      const { code } = await install({
+        POLKIT_RULES_DIR: rules,
+        PKCHECK: await pkcheck(0),
+        LINGER: 'yes',
+        SUDO: 'false',
+        THREADGARDEN_SKIPPED_FILE: skipped,
+      });
+      expect(code).toBe(0);
+      expect(await skippedLines(skipped)).toEqual(['polkit']);
+      expect((await calls()).some((l) => l.startsWith('pkcheck'))).toBe(false);
+    });
+
+    describe('a rule it cannot read', () => {
+      let rules: string;
+      const skipped = () => join(root, 'skipped');
+
+      // As on Ubuntu, where the directory is 750 root:polkitd. Opened again for the
+      // cleanup. The suite above never runs as root, for whom this would do nothing.
+      const installByHandClosed = async (extra: Record<string, string>) => {
+        rules = join(root, 'rules.d');
+        await mkdir(rules);
+        await writeFile(join(rules, '49-threadgarden-power.rules'), '// the rule\n');
+        await chmod(rules, 0o000);
+        try {
+          return await install({ POLKIT_RULES_DIR: rules, LINGER: 'yes', ...extra });
+        } finally {
+          await chmod(rules, 0o755);
+        }
+      };
+
+      /** Unattended, as an update runs it: the variable is what says so. */
+      const installClosed = (extra: Record<string, string>) =>
+        installByHandClosed({ THREADGARDEN_SKIPPED_FILE: skipped(), ...extra });
+
+      it('by hand, an unreadable rule is offered through sudo and pkcheck is not asked', async () => {
+        const { code, stdout } = await installByHandClosed({ PKCHECK: await pkcheck(0) });
+        expect(code).toBe(0);
+        expect(stdout).not.toContain('already in place');
+        const c = await calls();
+        expect(c.some((l) => l.startsWith('pkcheck'))).toBe(false);
+        expect(c.some((l) => l.startsWith('sudo tee '))).toBe(true);
+        expect(await readdir(root)).not.toContain('skipped');
+      });
+
+      it('an unreadable rule that polkit allows asks for nothing and writes no marker', async () => {
+        const { code, stdout } = await installClosed({ PKCHECK: await pkcheck(0) });
+        expect(code).toBe(0);
+        expect(stdout).toContain('already in place');
+        expect(stdout).not.toContain('polkit\\56result');
+        expect(await skippedLines(skipped())).toEqual([]);
+        const c = await calls();
+        expect(c.some((l) => l.startsWith('sudo'))).toBe(false);
+        const asked = c.filter((l) => l.startsWith('pkcheck'));
+        expect(asked).toHaveLength(1);
+        expect(asked[0]).toMatch(
+          /^pkcheck --action-id org\.freedesktop\.login1\.power-off --process \d+$/,
+        );
+        expect(await readFile(join(rules, '49-threadgarden-power.rules'), 'utf8')).toBe(
+          '// the rule\n',
+        );
+      });
+
+      it.each([1, 2, 3])(
+        'an unreadable rule that polkit refuses (exit %i), with a failing sudo, writes polkit',
+        async (refusal) => {
+          const { code } = await installClosed({
+            PKCHECK: await pkcheck(refusal),
+            SUDO: 'false',
+          });
+          expect(code).toBe(0);
+          expect(await skippedLines(skipped())).toEqual(['polkit']);
+        },
+      );
+
+      it('an unreadable rule that polkit refuses still offers to write it with sudo', async () => {
+        const { code, stdout } = await installClosed({ PKCHECK: await pkcheck(1) });
+        expect(code).toBe(0);
+        expect(stdout).toContain('Could not write');
+        expect((await calls()).some((l) => l.startsWith('sudo tee '))).toBe(true);
+      });
+
+      it('an unreadable rule without pkcheck, with a failing sudo, writes no marker', async () => {
+        const { code, stdout } = await installClosed({
+          PKCHECK: join(root, 'no-pkcheck-here'),
+          SUDO: 'false',
+        });
+        expect(code).toBe(0);
+        expect(stdout).toContain('Could not write');
+        expect(await skippedLines(skipped())).toEqual([]);
+      });
+
+      it('an unreadable rule and a pkcheck that errors, with a failing sudo, writes no marker', async () => {
+        const { code, stdout } = await installClosed({
+          PKCHECK: await pkcheck(127),
+          SUDO: 'false',
+        });
+        expect(code).toBe(0);
+        expect(stdout).toContain('Could not write');
+        expect(await skippedLines(skipped())).toEqual([]);
+      });
+    });
+
+    it('a matching polkit rule and Linger=yes write nothing', async () => {
+      const rules = join(root, 'rules.d');
+      await mkdir(rules);
+      expect((await install({ POLKIT_RULES_DIR: rules })).code).toBe(0);
+      const skipped = join(root, 'skipped');
+      const { code } = await install({
+        POLKIT_RULES_DIR: rules,
+        LINGER: 'yes',
+        SUDO: 'false',
+        THREADGARDEN_SKIPPED_FILE: skipped,
+      });
+      expect(code).toBe(0);
+      expect(await skippedLines(skipped)).toEqual([]);
+    });
+
+    it('without THREADGARDEN_SKIPPED_FILE nothing is written and output is unchanged', async () => {
+      const { code, stdout, stderr } = await install({ SUDO: 'false' });
+      expect(code).toBe(0);
+      expect(stdout).toContain("Could not enable lingering; run 'sudo loginctl enable-linger");
+      expect(stderr).toContain("won't be able to power");
+      expect(await readdir(root)).not.toContain('skipped');
+    });
   });
 
   it('works with USER unset and skips sudo when lingering is already on', async () => {

@@ -1,8 +1,9 @@
 import { existsSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { dirname, join } from 'node:path';
-import type { ChatItem, EventMsg } from '@threadgarden/protocol';
+import { PROTOCOL_VERSION, type ChatItem, type EventMsg } from '@threadgarden/protocol';
 import { afterEach, describe, expect, it } from 'vitest';
+import { WebSocket } from 'ws';
 import { pairWithMachine } from '../../src/machine/pairing-client.js';
 import {
   MOCK_FORGET_MOVES,
@@ -32,6 +33,8 @@ const itemsOf = (events: EventMsg[], sessionId: string): ChatItem[] => {
   }
   return [...map.values()];
 };
+
+const HELLO = { protocolVersion: PROTOCOL_VERSION, client: 'test' };
 
 let mock: MockService | undefined;
 let client: TestClient | undefined;
@@ -329,6 +332,138 @@ describe('mock service --remote (v1.4)', () => {
         installSignalHandlers: false,
       }),
     ).rejects.toThrow(/Invalid pairing code/);
+  });
+});
+
+describe('mock service: updating a machine (protocol 10)', () => {
+  type Progress = {
+    state: string;
+    version?: string;
+    from?: string;
+    stage?: string;
+    reason?: string;
+  };
+  const progress = (c: TestClient): Progress[] =>
+    c.events.filter((e) => e.event === 'update.progress').map((e) => e.data as Progress);
+  const start = async () => {
+    mock = await startMockService({
+      remote: { port: 0, pairingCode: 'TEST-TEST-TEST' },
+      sessions: 3,
+      installSignalHandlers: false,
+    });
+    return (client = await TestClient.connect(mock.svc.port, mock.svc.token));
+  };
+  const deviceSocket = async (token: string): Promise<WebSocket> =>
+    new Promise((resolve, reject) => {
+      const ws = new WebSocket(
+        `wss://127.0.0.1:${mock!.svc.remote!.port}`,
+        [`threadgarden-device.${token}`],
+        {
+          rejectUnauthorized: false,
+        },
+      );
+      ws.once('open', () => resolve(ws));
+      ws.once('error', reject);
+    });
+  const helloOf = (ws: WebSocket): Promise<{ serviceVersion: string }> =>
+    new Promise((resolve) => {
+      const onMessage = (d: unknown) => {
+        const m = JSON.parse(String(d)) as { id?: number; result?: { serviceVersion: string } };
+        if (m.id !== 1) return;
+        ws.off('message', onMessage);
+        resolve(m.result!);
+      };
+      ws.on('message', onMessage);
+      ws.send(JSON.stringify({ id: 1, method: 'hello', params: HELLO }));
+    });
+
+  it('the remote mock updates to 0.99.0 and reports it in hello after the pretend restart', async () => {
+    const c = await start();
+    expect(
+      (await c.call<{ machine: { capabilities: string[] } }>('hello', HELLO)).machine.capabilities,
+    ).toContain('update');
+    const paired = await pairWithMachine({
+      address: '127.0.0.1',
+      port: mock!.svc.remote!.port,
+      code: 'TEST-TEST-TEST',
+      deviceName: 'Desk',
+    });
+    const device = await deviceSocket(paired.token);
+    const before = (await helloOf(device)).serviceVersion;
+    expect(before).not.toBe('0.99.0');
+    const dropped = new Promise<void>((r) => device.once('close', () => r()));
+
+    expect(await c.call('update.latest', {})).toEqual({ version: '0.99.0' });
+    expect(await c.call('update.start', { version: '0.99.0', force: false })).toEqual({
+      started: true,
+    });
+    await dropped;
+    await eventually(
+      async () => (await c.call<{ state: string }>('update.status', {})).state === 'done',
+    );
+
+    expect(progress(c).map((p) => p.stage ?? p.state)).toEqual([
+      'downloading',
+      'installing',
+      'restarting',
+      'done',
+    ]);
+    expect(await c.call('update.status', {})).toMatchObject({
+      state: 'done',
+      version: '0.99.0',
+      from: before,
+    });
+    const again = await deviceSocket(paired.token);
+    expect((await helloOf(again)).serviceVersion).toBe('0.99.0');
+    again.close();
+  }, 30_000);
+
+  it('failNextUpdate(checksum) makes the next update fail with checksum', async () => {
+    const c = await start();
+    await c.call('mock.failNextUpdate', { reason: 'checksum' });
+    await c.call('update.start', { version: '0.99.0', force: true });
+    await eventually(
+      async () => (await c.call<{ state: string }>('update.status', {})).state === 'failed',
+    );
+    expect(progress(c).at(-1)).toMatchObject({
+      state: 'failed',
+      version: '0.99.0',
+      reason: 'checksum',
+    });
+    expect(await c.call('update.status', {})).toMatchObject({
+      state: 'failed',
+      reason: 'checksum',
+    });
+    // The version didn't change, and the failure was for that one update only.
+    expect((await c.call<{ serviceVersion: string }>('hello', HELLO)).serviceVersion).not.toBe(
+      '0.99.0',
+    );
+    await c.call('update.start', { version: '0.99.0', force: true });
+    await eventually(
+      async () => (await c.call<{ state: string }>('update.status', {})).state === 'done',
+    );
+  }, 30_000);
+
+  it('a busy machine is not updated without force, and a second start is refused while running', async () => {
+    const c = await start();
+    await c.call('mock.setBusy', { count: 2 });
+    expect(await c.call('update.start', { version: '0.99.0', force: false })).toEqual({
+      started: false,
+      busy: 2,
+    });
+    expect(await c.call('update.status', {})).toEqual({ state: 'idle' });
+    expect(await c.call('update.start', { version: '0.99.0', force: true })).toEqual({
+      started: true,
+    });
+    await expect(c.call('update.start', { version: '0.99.0', force: true })).rejects.toMatchObject({
+      code: 'UPDATE_RUNNING',
+    });
+  }, 30_000);
+
+  it('the main mock answers update.latest from THREADGARDEN_MOCK_LATEST', async () => {
+    mock = await startMockService({ sessions: 3, installSignalHandlers: false });
+    const c = (client = await TestClient.connect(mock.svc.port, mock.svc.token));
+    expect(await c.call('update.latest', {})).toEqual({ version: '0.99.0' });
   });
 });
 

@@ -13,5 +13,6 @@
  * 7 — projects: folders, New project, Clone.
  * 8 — usage per account: the signed-in account on the usage state.
  * 9 — move a chat: `move.*`, the `move` capability, `movedTo` on `chat.open`.
+ * 10 — update a machine: update.*, the update capability, update.progress.
  */
-export const PROTOCOL_VERSION = 9;
+export const PROTOCOL_VERSION = 10;

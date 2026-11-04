@@ -14,11 +14,15 @@ do the steps once, over SSH; after that everything happens in Threadgarden.
   projects and its state; its chats open in tabs like any other, and Needs
   you, Running, the agents strip, notifications and Ctrl+K include it, each
   row with a machine chip.
-- The connection stays on your home network. The Ubuntu PC listens only on
-  its private network addresses (port 47380), over TLS, and Threadgarden on
-  the desktop pins its certificate when pairing, so a different device that
-  later gets the same address is never trusted. Nothing goes through a cloud
-  service.
+- The connection is direct, with no cloud service in between. The Ubuntu PC
+  listens only on its private network addresses (port 47380), over TLS, and
+  Threadgarden on the desktop pins its certificate when pairing, so a different
+  device that later gets the same address is never trusted. Private includes
+  the 100.64.0.0/10 range that VPNs such as Tailscale use, so if you set up a
+  VPN yourself that puts both computers on one network, you can pair with the
+  address the VPN gives the Ubuntu PC and use it away from home. Threadgarden
+  does not set up or manage that, and nothing in it is exposed to the
+  internet.
 - Every paired device has **full control** of the Ubuntu PC's chats (send,
   answer permissions, stop). Pairing can be revoked from either side.
 - Optionally, Threadgarden turns the PC on and shuts it down through a
@@ -28,15 +32,11 @@ do the steps once, over SSH; after that everything happens in Threadgarden.
   or start in any folder of it: see [Starting projects](#starting-projects).
 - A chat can move from This PC to the Ubuntu PC and back, with its whole
   conversation: see [Moving a chat](#moving-a-chat).
+- The Ubuntu PC can update itself to the newest release from Settings: see
+  [Upgrading](#upgrading).
 - Not yet: showing a machine's chats while it is off (an Off machine's group
   says "Its chats appear once it's on."). The usage meter shows each
   account's usage, the Ubuntu PC's too; Analytics shows This PC only for now.
-
-> **Status of the installer.** `install.sh` has so far only been tested in
-> CI (on GitHub's Ubuntu runner, with stand-ins for `systemctl`, `loginctl`
-> and `sudo`), never on a real machine. Your first install is its first real
-> run: if a step behaves differently from what this guide says, note what it
-> printed.
 
 You need: the Ubuntu PC (Ubuntu 22.04 or newer, x64), its Wi-Fi password,
 access to your router's admin page, and a Claude subscription or API key
@@ -218,7 +218,9 @@ install. The installer:
   power control, everything else works without it. If the installer warns
   that there is "no polkit rules directory", the system is too old for the
   rule: idle shutdown cannot power the machine off there, and everything else
-  works;
+  works. Where the directory is closed to users (Ubuntu keeps it to root and
+  polkit), the installer can't read the rule, so it offers to write it every
+  time you run it, even if it is there;
 - enables and starts the service, and prints what to do next.
 
 The service runs with `PATH=~/.local/bin:/usr/local/bin:/usr/bin:/bin`. If
@@ -246,7 +248,7 @@ Check that it runs and listens:
 threadgarden status
 ```
 
-It should say `Threadgarden <version> is running (protocol 6, headless).` and
+It should say `Threadgarden <version> is running (protocol <n>, headless).` and
 `Listening for devices on 192.168.1.50:47380`. Optionally give the machine
 the name Threadgarden should show (the host name until you do):
 
@@ -689,7 +691,7 @@ under the heading's **Open settings** and in Settings → Machines.
 | **Shutdown paused: unpushed work** | Needs you shows "Unpushed work on ‹machine›": a repository there has changes, commits or stashes that are on no remote branch, or it could not be checked. | **Ask Claude to push it**, or push over SSH, then shut down again. **Shut down anyway** leaves the work on the machine's disk. |
 | **The power switch refused the password** | The switch rejected `admin` with the saved password, so the machine stays on. | Set the password again in Settings → Power (remove power control and set it up again). On Tasmota 16, if requests are refused even with the right password, enter `SetOption128 1` on the switch's console. |
 | **Stays Off after Turn on** | The plug is on but the PC does not boot. | Check the BIOS "Restore on AC power loss" = On (4.3), and that **Wait before switching on** is long enough: a PC cut for less than about 10 s may not notice the power return. To change it, start the PC by hand (its power button) and wait until it shows On, then remove power control and set it up again with a longer wait (90 s is proven). |
-| **Needs attention:** Different Threadgarden version | The two versions are too far apart (more than one protocol version). | Install the matching release on the Ubuntu PC (see [Upgrading](#upgrading)) or update the desktop app. |
+| **Needs attention:** Different Threadgarden version | The two versions are too far apart (more than one protocol version). | If the machine runs 0.8.0 or newer, press **Update to ‹version›** on its card in Settings → Machines. Older ones need the manual steps in [Upgrading](#upgrading). Or update the desktop app. |
 
 ### When pairing fails
 
@@ -732,7 +734,51 @@ tail -n 50 ~/.local/share/threadgarden/logs/service.log   # the service's own lo
 
 ## Upgrading
 
-Download the new release as in [the install step](#the-threadgarden-headless-service)
+### From Settings
+
+Open Settings → Machines. When a paired machine runs an older release than
+the newest one on GitHub, its card says "‹new version› available" and has an
+**Update to ‹version›** button; the **Settings** button in the left column
+shows a small dot while any machine is behind. Press the button and the
+machine updates itself:
+
+1. It downloads the release from GitHub and checks it against the published
+   checksum.
+2. It installs it next to the old version and restarts. The card shows
+   Downloading, Installing and Restarting while it goes, and ends with
+   "Threadgarden ‹version› ✓". The desktop reconnects by itself.
+3. If the new version does not answer within about 90 seconds, the machine
+   goes back to the previous one and the card says what failed.
+
+If chats are working on the machine, Threadgarden asks first: the restart
+stops them (they become resumable afterwards, as after any restart).
+**Update anyway** goes ahead. A machine that is Off can be updated too: the
+button turns it on first, if it has power control. Without power control the
+button is disabled, and the card says "Turn it on to update".
+
+Two steps of the install need `sudo`: lingering (so the service starts at
+boot) and the rule that lets idle shutdown power the machine off. An update
+cannot ask for a password, so it skips such a step when it is not already in
+place (where it can't read the rule, it asks polkit whether your user may
+power off). The update still counts as done, and the card says which step was
+skipped and what to run: `~/.local/share/threadgarden-headless/current/install.sh`
+once over SSH. The card says so only when the step is known to be missing: on
+a system with no polkit rules directory, or where neither the rule nor polkit
+can tell, the only word is in `install.log`.
+
+If an update fails, the card says why (the download, the checksum, the
+unpacking, the install or the start) and the machine is on, or back on, its
+old version. Try again, or use the manual steps below. Two logs on the
+Ubuntu PC have the details:
+
+- `~/.local/share/threadgarden/update/install.log`: what the install printed.
+- `~/.local/share/threadgarden/logs/service.log`: the service's own log.
+
+### By hand
+
+This is the way for a machine older than 0.8.0 (the release that brings
+Update; its card says "Update it over SSH this once") and for one whose
+update failed. Download the new release as in [the install step](#the-threadgarden-headless-service)
 (a fresh, empty folder), check it with `sha256sum -c`, unpack it, and run its
 `./install.sh`. It installs the new version next to the old one, points
 `current` at it and restarts the service; running chats become resumable,

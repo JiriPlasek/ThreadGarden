@@ -59,6 +59,11 @@ export class ServiceClient {
   status: ClientStatus = 'connecting';
   /** The last successful `hello` answer (null before the first). */
   hello: Result<'hello'> | null = null;
+  /**
+   * The last `hello` the service answered, even one whose protocol was refused
+   * (`hello` stays empty then): enough to show which version it runs.
+   */
+  lastHello: Result<'hello'> | null = null;
 
   private readonly Impl: typeof WebSocket;
   private readonly timeoutMs: number;
@@ -241,6 +246,7 @@ export class ServiceClient {
       }).then(
         (r) => {
           if (this.ws !== ws) return;
+          this.lastHello = r as Result<'hello'>;
           if (!this.acceptProtocol((r as { protocolVersion?: number }).protocolVersion ?? -1)) {
             return this.fail(ws);
           }

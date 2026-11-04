@@ -1,6 +1,7 @@
 import {
   acceptsRemoteProtocol,
   RELAY_CLOSE,
+  UPDATE_CAPABILITY,
   type MachineInfo,
   type PairedMachine,
 } from '@threadgarden/protocol';
@@ -34,8 +35,15 @@ export type MachineEntry = {
   local: boolean;
   status: MachineStatus;
   info: MachineInfo | null;
+  /** The Threadgarden version it last reported, also while it is off or incompatible (null: never seen). */
+  version: string | null;
+  /** The last hello said the machine can update itself (`update` capability). */
+  canUpdate: boolean;
   client: ServiceClient;
 };
+
+/** What the desktop remembers of a machine's last hello. */
+type SeenVersion = { version: string; canUpdate: boolean };
 
 export type MachinesOptions = {
   /** The local relay's URL for a machine (`ws://127.0.0.1:<port>/relay?machine=<id>`). */
@@ -50,6 +58,8 @@ export type MachinesOptions = {
 export const COLLAPSED_KEY = 'machines.collapsed';
 /** `uiState` key: the paired machines whose "Missing folders" group is expanded (their ids). */
 export const MISSING_OPEN_KEY = 'machines.missingOpen';
+/** `uiState` key: each paired machine's last seen version and updatability, by machine id. */
+export const VERSIONS_KEY = 'machines.versions';
 
 /** How the UI names a machine: This PC for the local one. */
 export const machineLabel = (m: Pick<MachineEntry, 'local' | 'name'>): string =>
@@ -93,6 +103,9 @@ export class MachinesState {
    * local `uiState`; This PC's keeps its own `places.missingOpen`).
    */
   missingOpen = $state<string[]>([]);
+
+  /** Last seen version of each paired machine (kept in the local `uiState`, so an Off machine still shows it). */
+  private versions: Record<string, SeenVersion> = {};
 
   private localApi!: Api;
   private localClient!: ServiceClient;
@@ -245,6 +258,71 @@ export class MachinesState {
     return next;
   };
 
+  /**
+   * A separate, connected client to machine `id` for `update.*`: it accepts any
+   * protocol, since an incompatible machine is exactly what needs updating. The
+   * caller closes it. Rejects when the connection fails; the entry is untouched.
+   */
+  openForUpdate = async (id: string): Promise<ServiceClient> => {
+    const client = this.makeClient({
+      acceptProtocol: () => true,
+      // No retrying: a failed connection is the caller's to report.
+      onClose: () => 'stop',
+      acceptHello: (hello) => hello.machine?.id === undefined || hello.machine.id === id,
+    });
+    try {
+      await client.connect(this.opts.relayUrl(id), this.opts.localToken());
+    } catch (e) {
+      client.close();
+      throw e;
+    }
+    return client;
+  };
+
+  /** Connects machine `id` again after its client gave up on it as incompatible (it has updated since). */
+  reconnect = (id: string): void => this.connectEntry(id);
+
+  /** Loads the remembered versions; what this run already saw wins. */
+  private restoreVersions = async (): Promise<void> => {
+    let stored: unknown;
+    try {
+      stored = (await this.localApi.request('uiState.get', { key: VERSIONS_KEY })).value;
+    } catch {
+      return;
+    }
+    if (typeof stored !== 'object' || stored === null) return;
+    for (const [id, v] of Object.entries(stored)) {
+      const seen = v as Partial<SeenVersion> | null;
+      if (typeof seen?.version !== 'string' || id in this.versions) continue;
+      this.versions[id] = { version: seen.version, canUpdate: seen.canUpdate === true };
+      const e = this.paired.find((x) => x.id === id);
+      if (e && e.version === null) {
+        e.version = seen.version;
+        e.canUpdate = seen.canUpdate === true;
+      }
+    }
+  };
+
+  /** Notes the version a machine's last hello reported, and keeps it. */
+  private recordHello = (id: string, hello: ServiceClient['lastHello']): void => {
+    const e = this.paired.find((x) => x.id === id);
+    if (!e || !hello || typeof hello.serviceVersion !== 'string') return;
+    const seen = {
+      version: hello.serviceVersion,
+      canUpdate: hello.machine?.capabilities.includes(UPDATE_CAPABILITY) ?? false,
+    };
+    e.version = seen.version;
+    e.canUpdate = seen.canUpdate;
+    const before = this.versions[id];
+    if (before?.version === seen.version && before.canUpdate === seen.canUpdate) return;
+    this.versions[id] = seen;
+    this.saveVersions();
+  };
+
+  private saveVersions = (): void => {
+    quietly(this.localApi.request('uiState.set', { key: VERSIONS_KEY, value: this.versions }));
+  };
+
   rename = async (id: string, name: string): Promise<void> => {
     const m = await this.localApi.request('machines.update', { machineId: id, name });
     this.applyOne(m);
@@ -298,6 +376,8 @@ export class MachinesState {
         local: true,
         status: 'on',
         info: machine,
+        version: null,
+        canUpdate: false,
         client: this.localClient,
       };
     } else {
@@ -308,6 +388,8 @@ export class MachinesState {
       }
       this.localEntry.status = 'on';
     }
+    // Not awaited: the list must not wait for it; entries pick the versions up when it lands.
+    void this.restoreVersions();
     try {
       this.apply(await this.localApi.request('machines.list', {}), true);
       this.everListed = true;
@@ -365,12 +447,16 @@ export class MachinesState {
       if (s === 'open') {
         this.everOn.add(id);
         e.status = 'on';
-      } else if (s === 'incompatible') e.status = 'incompatible';
-      else if (s !== 'closed' && e.status === 'on') e.status = 'unreachable';
+      } else if (s === 'incompatible') {
+        e.status = 'incompatible';
+        // onOpen never runs for it, but its hello still says the version.
+        this.recordHello(id, client.lastHello);
+      } else if (s !== 'closed' && e.status === 'on') e.status = 'unreachable';
     });
     client.onOpen(() => {
       const e = this.paired.find((x) => x.id === id);
       if (e) e.info = client.hello?.machine ?? null;
+      this.recordHello(id, client.hello);
     });
     this.paired.push({
       id,
@@ -380,6 +466,8 @@ export class MachinesState {
       local: false,
       status: 'connecting',
       info: null,
+      version: this.versions[id]?.version ?? null,
+      canUpdate: this.versions[id]?.canUpdate ?? false,
       client,
     });
     const entry = this.paired.find((e) => e.id === id)!;
@@ -402,6 +490,10 @@ export class MachinesState {
     this.paired[i]!.client.close();
     this.paired.splice(i, 1);
     this.everOn.delete(id);
+    if (id in this.versions) {
+      delete this.versions[id];
+      this.saveVersions();
+    }
     for (const cb of this.removedCbs) cb(id);
   };
 

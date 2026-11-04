@@ -3,9 +3,11 @@
   import PlusIcon from '@lucide/svelte/icons/plus';
   import AddMachineDialog from '#lib/components/AddMachineDialog.svelte';
   import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
+  import MachineUpdate from '#lib/components/MachineUpdate.svelte';
   import { machineState } from '#lib/components/layout/MachineHeading.svelte';
   import PowerSettings from '#lib/components/PowerSettings.svelte';
   import { Button } from '#lib/components/ui/button/index.js';
+  import { appVersion } from '#lib/native.js';
   import { useApp } from '#lib/state/context.js';
   import type { MachineEntry } from '#lib/state/machines.svelte.js';
   import { THIS_PC } from '#lib/state/refs.js';
@@ -18,7 +20,7 @@
    * is still refused), and Remove, which also asks the machine to forget this
    * PC when it can be reached.
    */
-  const { machines, interaction } = useApp();
+  const { machines, interaction, machineUpdates } = useApp();
 
   const paired = $derived(machines.list.filter((m) => !m.local));
 
@@ -121,18 +123,26 @@
     Machines
   </h3>
 
-  <p class="text-sm">{THIS_PC}</p>
+  <p class="text-sm">{THIS_PC} · Threadgarden {appVersion}</p>
 
   {#each paired as m (m.id)}
     {@const shown = machineState({ name: m.name, status: machines.shown(m) })}
     {@const d = draftOf(m)}
-    <div class="grid gap-2 rounded-md border p-2" role="group" aria-label={m.name}>
+    <div class="grid min-w-0 gap-2 rounded-md border p-2" role="group" aria-label={m.name}>
       <div class="flex items-center justify-between gap-2 text-xs">
         <span class={cn('font-medium', shown.tone === 'red' && 'text-red-700 dark:text-red-400')}
           >{shown.label}</span
         >
         {#if shown.reason}<span class="text-muted-foreground">{shown.reason}</span>{/if}
       </div>
+      {#if m.version}
+        <p class="text-muted-foreground text-xs break-words">
+          <span>Threadgarden {m.version}</span>
+          {#if machineUpdates.behind(m) && machineUpdates.latest}
+            <span>· {machineUpdates.latest} available</span>
+          {/if}
+        </p>
+      {/if}
       <div class="grid gap-1">
         <label for="machine-name-{m.id}" class="text-muted-foreground text-xs">Name</label>
         <input
@@ -192,6 +202,7 @@
           }}>Remove</Button
         >
       </div>
+      <MachineUpdate machine={m} />
       <PowerSettings machine={m} />
     </div>
   {/each}

@@ -51,8 +51,8 @@ const sampleItems = [
 
 describe('protocol schemas', () => {
   it('exposes the protocol version', () => {
-    expect(PROTOCOL_VERSION).toBe(9);
-    expect([7, 8, 9, 10, 11].map(acceptsRemoteProtocol)).toEqual([false, true, true, true, false]);
+    expect(PROTOCOL_VERSION).toBe(10);
+    expect([8, 9, 10, 11, 12].map(acceptsRemoteProtocol)).toEqual([false, true, true, true, false]);
   });
 
   it('accepts every ChatItem kind', () => {
@@ -184,6 +184,9 @@ describe('protocol schemas', () => {
       'move.importPart',
       'move.commit',
       'move.markMoved',
+      'update.latest',
+      'update.start',
+      'update.status',
     ];
     expect(Object.keys(methods).sort()).toEqual([...expected].sort());
     for (const name of expected) {
@@ -215,6 +218,7 @@ describe('protocol schemas', () => {
         // v1.4: machines
         'machines.changed',
         'power.changed',
+        'update.progress',
       ].sort(),
     );
   });

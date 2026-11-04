@@ -2,6 +2,8 @@ import { defineConfig, devices } from '@playwright/test';
 import {
   MOCK_PORT,
   MOCK_TOKEN,
+  REMOTE_LOCAL_PORT,
+  REMOTE_LOCAL_TOKEN,
   REMOTE_MOCK_PORT,
   REMOTE_PAIRING_CODE,
   FAKE_SWITCH_PORT,
@@ -56,8 +58,15 @@ export default defineConfig({
     },
     {
       command: `pnpm --filter @threadgarden/service mock --remote --remote-port ${REMOTE_MOCK_PORT} --pairing-code ${REMOTE_PAIRING_CODE} --fake-tasmota --fake-tasmota-port ${FAKE_SWITCH_PORT}`,
-      // Its own local port and token: never the first mock's.
-      env: { THREADGARDEN_MOCK_PORT: '', THREADGARDEN_MOCK_TOKEN: '' },
+      // Its own local port and token: never the first mock's. Fixed, so a spec can reach its
+      // test-only methods (`remoteCall`).
+      env: {
+        THREADGARDEN_MOCK_PORT: String(REMOTE_LOCAL_PORT),
+        THREADGARDEN_MOCK_TOKEN: REMOTE_LOCAL_TOKEN,
+        // Long enough that a slow CI runner still sees each stage of a pretend update
+        // (three steps fit well within `expect.timeout`).
+        THREADGARDEN_MOCK_UPDATE_STEP_MS: '1500',
+      },
       // The device listener speaks TLS; the port opening is the signal.
       port: REMOTE_MOCK_PORT,
       reuseExistingServer: false,

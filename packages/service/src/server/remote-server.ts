@@ -30,6 +30,8 @@ const UNAUTHORIZED = 4401;
 const REVOKED = 4403;
 const PAIRING_TIMEOUT = 4408;
 const INTERNAL_ERROR = 1011;
+/** 1012: the standard "service restart" close code. */
+const SERVICE_RESTART = 1012;
 /** A paired device: `threadgarden-device.<token>`, the full protocol. */
 const DEVICE_PREFIX = 'threadgarden-device.';
 /** A device being paired: only the methods below, no events. */
@@ -130,6 +132,8 @@ export const startRemoteServer = async (opts: {
   addresses: string[];
   port: number;
   broadcast(e: EventMsg): void;
+  /** Closes the paired devices' sockets without revoking anything (a pretend restart). */
+  dropDevices(): void;
   close(): Promise<void>;
 }> => {
   for (const address of opts.addresses) {
@@ -296,6 +300,9 @@ export const startRemoteServer = async (opts: {
     port,
     broadcast: (e) => {
       for (const ws of deviceSockets.keys()) sendFrame(ws, e);
+    },
+    dropDevices: () => {
+      for (const ws of deviceSockets.keys()) ws.close(SERVICE_RESTART, 'restarting');
     },
     close: async () => {
       unsubscribe();

@@ -9,6 +9,9 @@
  * `dist-headless/threadgarden-headless-<version>-linux-<arch>.tar.gz` plus a
  * `.sha256` file beside it. `--arch` defaults to x64; the Node download is the
  * only network access.
+ *
+ * Old machines update themselves from what this builds: its names and layout are
+ * frozen (`packages/protocol/src/update.ts`; `updater.test.ts` compares them).
  */
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';

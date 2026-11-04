@@ -10,6 +10,7 @@ import { chats, type ChatsState } from './chats.svelte';
 import { connection, type ConnectionState } from './connection.svelte';
 import { interaction, type InteractionState } from './interaction.svelte';
 import { lifecycle, type LifecycleState } from './lifecycle.svelte';
+import { machineUpdates, type MachineUpdatesState } from './machine-updates.svelte';
 import { machines, type MachinesState } from './machines.svelte';
 import { places, type PlacesState } from './places.svelte';
 import { power, type PowerState } from './power.svelte';
@@ -44,6 +45,8 @@ export type AppState = {
   updates: UpdatesState;
   /** Remote machines: This PC plus the paired ones. */
   machines: MachinesState;
+  /** Updating paired machines: the latest release, who is behind it, each update's stage and outcome. */
+  machineUpdates: MachineUpdatesState;
   /** Power control of paired machines: plug readings, power status, Off / Starting… / Shutting down. */
   power: PowerState;
   /**
@@ -72,6 +75,7 @@ const singletons: AppState = {
   analytics,
   updates,
   machines,
+  machineUpdates,
   power,
   scopes,
 };
