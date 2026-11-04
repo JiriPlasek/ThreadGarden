@@ -135,6 +135,7 @@ const make = (
     busy?: number | (() => Promise<number>);
     current?: string;
     platform?: NodeJS.Platform;
+    arch?: NodeJS.Architecture;
   } = {},
 ) => {
   const emitted: UpdateStatus[] = [];
@@ -145,6 +146,7 @@ const make = (
     currentVersion: o.current ?? CURRENT,
     installBase,
     platform: o.platform ?? 'linux',
+    arch: o.arch ?? 'x64',
     fetch: o.fetch ?? releaseFetch(NEXT).fetch,
     run: o.run ?? fakeRun().run,
     busyCount: typeof busy === 'function' ? busy : async () => busy,
@@ -188,6 +190,11 @@ describe('MachineUpdater.supported', () => {
     expect(make({ platform: 'darwin' }).updater.supported()).toBe(false);
     await rm(join(installBase, 'current'), { recursive: true });
     expect(make().updater.supported()).toBe(false);
+  });
+
+  it('is x64 only: no other architecture is published', () => {
+    expect(make({ arch: 'x64' }).updater.supported()).toBe(true);
+    expect(make({ arch: 'arm64' }).updater.supported()).toBe(false);
   });
 });
 
@@ -290,6 +297,25 @@ describe('MachineUpdater.start', () => {
     expect(r.atLaunch.files).toContain('pending.json');
     expect(r.atLaunch.files).not.toContain('last.json');
     expect(r.atLaunch.files).not.toContain('skipped');
+  });
+
+  it('deletes an old last.json as the download starts: a service dying now must not show it', async () => {
+    await writeUpdateFiles({
+      'last.json': JSON.stringify({
+        state: 'failed',
+        version: '0.6.9',
+        from: '0.6.8',
+        reason: 'start',
+      }),
+    });
+    const stalled = stalledFetch();
+    const { updater } = make({ fetch: stalled.fetch });
+    await updater.start(NEXT, false);
+    await eventually(() => !existsSync(join(updateDir, 'last.json')));
+    // What comes back after dying here: this update never happened, and no earlier one speaks for it.
+    expect(make({ fetch: stalled.fetch }).updater.status()).toEqual({ state: 'idle' });
+    stalled.answer(new Response('', { status: 404 }));
+    await settled(updater);
   });
 
   it('a checksum mismatch fails with checksum and removes the download', async () => {
@@ -895,13 +921,17 @@ describe('the service', () => {
     expect(await capabilities(yes)).toContain('update');
     await yes.close();
 
-    const otherOs = await start({ update: { installBase, platform: 'darwin' } });
+    const otherOs = await start({ update: { installBase, platform: 'darwin', arch: 'x64' } });
     expect(await capabilities(otherOs)).not.toContain('update');
     await otherOs.close();
 
+    const otherArch = await start({ update: { installBase, platform: 'linux', arch: 'arm64' } });
+    expect(await capabilities(otherArch)).not.toContain('update');
+    await otherArch.close();
+
     const notHeadless = await start({
       headless: false,
-      update: { installBase, platform: 'linux' },
+      update: { installBase, platform: 'linux', arch: 'x64' },
     });
     expect(await capabilities(notHeadless)).not.toContain('update');
     await notHeadless.close();
@@ -912,7 +942,7 @@ describe('the service', () => {
   });
 
   it('update.start throws NOT_SUPPORTED where the capability is not offered', async () => {
-    const otherOs = await start({ update: { installBase, platform: 'darwin' } });
+    const otherOs = await start({ update: { installBase, platform: 'darwin', arch: 'x64' } });
     await expect(
       (await connect(otherOs)).call('update.start', { version: NEXT, force: true }),
     ).rejects.toMatchObject({ code: 'NOT_SUPPORTED' });
@@ -920,7 +950,7 @@ describe('the service', () => {
 
     const notHeadless = await start({
       headless: false,
-      update: { installBase, platform: 'linux' },
+      update: { installBase, platform: 'linux', arch: 'x64' },
     });
     await expect(
       (await connect(notHeadless)).call('update.start', { version: NEXT, force: true }),
@@ -985,6 +1015,7 @@ describe('the service', () => {
       update: {
         installBase,
         platform: 'linux',
+        arch: 'x64',
         run: fakeRun().run,
         fetch: async () => new Response('', { status: 404 }),
       },

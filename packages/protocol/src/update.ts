@@ -4,11 +4,11 @@ import { z } from 'zod';
 export const UPDATE_CAPABILITY = 'update';
 
 export const UPDATE_ERRORS = {
-  /** The machine cannot update itself (not a Linux install made by the installer). */
+  /** The machine cannot update itself (not an x64 Linux install made by the installer). */
   NOT_SUPPORTED: 'NOT_SUPPORTED',
   /** An update is already running. */
   UPDATE_RUNNING: 'UPDATE_RUNNING',
-  /** The machine already runs that version (and `force` was not set). */
+  /** The machine already runs that version; `force` makes no difference. */
   ALREADY_CURRENT: 'ALREADY_CURRENT',
   INVALID_VERSION: 'INVALID_VERSION',
   /** The release could not be looked up (no network, or GitHub did not answer). */

@@ -115,10 +115,14 @@ export class MachineUpdater {
     this.run = deps.run ?? runCommand;
   }
 
-  /** An install this updater can replace: on Linux, with install.sh's `current` in place. */
+  /**
+   * An install this updater can replace: on x64 Linux, the only package released,
+   * with install.sh's `current` in place.
+   */
   supported(): boolean {
     return (
       (this.deps.platform ?? process.platform) === 'linux' &&
+      (this.deps.arch ?? process.arch) === 'x64' &&
       existsSync(path.join(this.installBase, 'current'))
     );
   }
@@ -229,6 +233,8 @@ export class MachineUpdater {
     const url = `${RELEASES}/v${version}/${tarName}`;
     let reason: UpdateFailure = 'download';
     try {
+      // A service that dies from here on would come back showing it as this update's end.
+      await rm(this.file('last.json'), { force: true });
       await rm(download, { recursive: true, force: true });
       await mkdir(download, { recursive: true });
       const actual = await this.downloadTo(url, tarball);

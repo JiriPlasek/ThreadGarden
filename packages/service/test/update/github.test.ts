@@ -63,6 +63,38 @@ describe('fetchChecked', () => {
     });
   });
 
+  it.each(['x.githubusercontent.com.evil.com', 'github.com.evil.com'])(
+    'refuses the lookalike host %s, at the start and in a redirect',
+    async (host) => {
+      const direct = scripted(json({}));
+      await expect(
+        fetchChecked(`https://${host}/latest.json`, { fetch: direct.fetch }),
+      ).rejects.toMatchObject({ code: 'UNREACHABLE' });
+      expect(direct.urls).toHaveLength(0);
+
+      const hop = scripted(redirect(`https://${host}/latest.json`), json({}));
+      await expect(fetchChecked(LATEST, { fetch: hop.fetch })).rejects.toMatchObject({
+        code: 'UNREACHABLE',
+      });
+      expect(hop.urls).toEqual([LATEST]);
+    },
+  );
+
+  it('follows a relative redirect on the same host', async () => {
+    const s = scripted(redirect('/elsewhere/latest.json'), json({ version: '1.0.0' }));
+    const res = await fetchChecked(LATEST, { fetch: s.fetch });
+    expect(await res.json()).toEqual({ version: '1.0.0' });
+    expect(s.urls[1]).toBe('https://github.com/elsewhere/latest.json');
+  });
+
+  it('refuses a 3xx with no location', async () => {
+    const s = scripted(new Response(null, { status: 302 }), json({}));
+    await expect(fetchChecked(LATEST, { fetch: s.fetch })).rejects.toMatchObject({
+      code: 'UNREACHABLE',
+    });
+    expect(s.urls).toHaveLength(1);
+  });
+
   it('stops after 5 redirects', async () => {
     const hop = () => redirect('https://github.com/next');
     const six = scripted(hop(), hop(), hop(), hop(), hop(), hop(), json({}));
