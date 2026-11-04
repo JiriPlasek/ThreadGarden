@@ -31,7 +31,7 @@
     stage === 'turningOn'
       ? 'Turning on…'
       : stage === 'downloading'
-        ? `Downloading ${latest}…`
+        ? `Downloading ${machineUpdates.target(machine.id)}…`
         : stage === 'installing'
           ? 'Installing…'
           : stage === 'restarting'

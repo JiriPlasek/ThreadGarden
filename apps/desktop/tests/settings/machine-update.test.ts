@@ -193,6 +193,45 @@ describe('Settings → Machines → updating', () => {
     await card.findByText('Threadgarden 0.7.1 ✓');
   });
 
+  it('Downloading names the running update, not the latest release', async () => {
+    const env = await start({
+      latest: '0.7.2',
+      status: { state: 'running', version: '0.7.1', from: '0.7.0', stage: 'downloading' },
+    });
+    const card = await openSettings(env);
+    await card.findByText('Downloading 0.7.1…');
+    expect(card.queryByText('Downloading 0.7.2…')).toBeNull();
+  });
+
+  it('Downloading still names it while the latest release is not known', async () => {
+    // A desktop restarted mid-download: it hears of the update before GitHub answers.
+    const env = await start({
+      status: { state: 'running', version: '0.7.1', from: '0.7.0', stage: 'downloading' },
+    });
+    env.app.machineUpdates.latest = null;
+    const card = await openSettings(env);
+    await card.findByText('Downloading 0.7.1…');
+    expect(card.queryByText(/null/)).toBeNull();
+  });
+
+  it('Downloading follows the version the machine says it is updating to', async () => {
+    const env = await start();
+    env.say.status = { state: 'running', version: '0.7.1', from: '0.7.0', stage: 'downloading' };
+    const card = await openSettings(env);
+    await userEvent.click(card.getByRole('button', { name: updateButton }));
+    await card.findByText('Downloading 0.7.1…');
+    // Another desktop's update, to a newer one, is what actually runs there.
+    const other: UpdateStatus = {
+      state: 'running',
+      version: '0.7.2',
+      from: '0.7.0',
+      stage: 'downloading',
+    };
+    env.say.status = other;
+    env.remote.push('update.progress', other);
+    await card.findByText('Downloading 0.7.2…');
+  });
+
   const failures: [UpdateFailure, string | undefined, string][] = [
     ['download', undefined, "Couldn't download 0.7.1 from GitHub"],
     ['checksum', undefined, "The download's checksum didn't match"],

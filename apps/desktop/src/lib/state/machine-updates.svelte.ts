@@ -63,6 +63,8 @@ export class MachineUpdatesState {
   latest = $state<string | null>(null);
 
   private stages = $state<Record<string, Stage>>({});
+  /** The version each followed update goes to; `latest` may be another, or not known. */
+  private targets = $state<Record<string, string>>({});
   private outcomes = $state<Record<string, UpdateOutcome>>({});
 
   private deps = $state.raw<MachineUpdatesDeps | null>(null);
@@ -91,6 +93,9 @@ export class MachineUpdatesState {
 
   /** How far the machine's update is (null: none running here). */
   stage = (id: string): Stage | null => this.stages[id] ?? null;
+
+  /** The version the machine's running update goes to (null: none followed here). */
+  target = (id: string): string | null => this.targets[id] ?? null;
 
   /**
    * How the machine's last update ended (done or failed), until a new one
@@ -198,6 +203,7 @@ export class MachineUpdatesState {
       if (!w) return this.watch(id, s, null);
       w.version = s.version;
       w.from = s.from;
+      this.targets[id] = s.version;
       return;
     }
     const followed = this.watches.has(id);
@@ -216,6 +222,7 @@ export class MachineUpdatesState {
     delete this.outcomes[id];
     const w: Watch = { version: target.version, from: target.from, side, giveUpAt: null };
     this.watches.set(id, w);
+    this.targets[id] = target.version;
     void this.poll(id, w);
   };
 
@@ -286,6 +293,7 @@ export class MachineUpdatesState {
   /** No update to follow any more. */
   private end = (id: string): void => {
     delete this.stages[id];
+    delete this.targets[id];
     this.watches.get(id)?.side?.close();
     this.watches.delete(id);
   };
