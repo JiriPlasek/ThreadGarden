@@ -71,10 +71,14 @@ function Remove-TgFirewallRule {
 }
 function Test-TgTask { param([string]$Name) Test-Path -LiteralPath (Get-StubPath 'task') }
 function Register-TgTask {
-  param([string]$Name, [string]$Execute, [string]$Argument, [string]$User)
-  $line = "Register-ScheduledTask $Name" + ": $Execute $Argument as $User"
+  param([string]$Name, [string]$Execute, [string]$Argument, [string]$User, [int]$RepeatMinutes)
+  $line = "Register-ScheduledTask $Name" + ": $Execute $Argument as $User, at startup and every $RepeatMinutes min"
   Write-StubCall $line
   Set-Content -LiteralPath (Get-StubPath 'task') -Value $line
+}
+function Start-TgTask {
+  param([string]$Name)
+  Write-StubCall "Start-ScheduledTask $Name"
 }
 function Unregister-TgTask {
   param([string]$Name)
@@ -106,7 +110,8 @@ if (-not (Test-Path -LiteralPath (Get-StubPath 'real-read'))) {
 const RULE =
   'New-NetFirewallHyperVRule ThreadgardenWorker {40E0AC32-46A5-438A-A0B2-2B479E8F2E90} TCP 47380';
 const TASK =
-  'Register-ScheduledTask Threadgarden worker: wsl.exe -d threadgarden --exec sleep infinity as PC\\owner';
+  'Register-ScheduledTask Threadgarden worker: wsl.exe -d threadgarden --exec sleep infinity as PC\\owner, at startup and every 5 min';
+const START = 'Start-ScheduledTask Threadgarden worker';
 const MARKED = ['# added by Threadgarden', 'networkingMode=mirrored'];
 
 // Each PowerShell start takes 2 to 3 s, more with CI's test files in parallel.
@@ -187,6 +192,66 @@ describe.skipIf(!shell)('the Windows setup script', { timeout: 60_000 }, () => {
     expect(bytes.findIndex((b) => b > 0x7f)).toBe(-1);
   });
 
+  // The real task definition, built by the script's own Register-TgTask with Windows'
+  // cmdlets (they only make objects), and handed to a stand-in instead of
+  // Register-ScheduledTask: nothing is registered.
+  it.skipIf(process.platform !== 'win32')(
+    'the real task starts at boot and repeats every 5 minutes for good, one at a time',
+    async () => {
+      const probe = String.raw`
+$ErrorActionPreference = 'Stop'
+$ast = [System.Management.Automation.Language.Parser]::ParseFile($env:TG_SCRIPT, [ref]$null, [ref]$null)
+$fn = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Register-TgTask' }, $true)
+# The call is renamed in the text itself, so the real cmdlet can never be reached (an
+# override would lose to the ScheduledTasks module, imported on first use).
+$text = $fn.Extent.Text -replace '\bRegister-ScheduledTask\b', 'Show-TgTaskForTest'
+if ($text -match 'Register-ScheduledTask|Start-ScheduledTask') { throw 'still calls the real cmdlet' }
+. ([scriptblock]::Create($text))
+function Show-TgTaskForTest {
+  param($TaskName, $Action, $Trigger, $Principal, $Settings, $Description, [switch]$Force)
+  $t = @($Trigger)
+  # Kept aside: Register-TgTask sends what it is handed back to Out-Null.
+  $global:TgTask = [pscustomobject]@{
+    Name = $TaskName
+    Execute = $Action.Execute
+    Arguments = $Action.Arguments
+    Triggers = $t.Count
+    Boot = $t[0].CimClass.CimClassName
+    Every = $t[1].Repetition.Interval
+    For = [string]$t[1].Repetition.Duration
+    LogonType = [string]$Principal.LogonType
+    RunLevel = [string]$Principal.RunLevel
+    Instances = [string]$Settings.MultipleInstances
+    Limit = $Settings.ExecutionTimeLimit
+  }
+}
+Register-TgTask -Name 'Threadgarden worker' -Execute 'wsl.exe' -Argument '-d threadgarden --exec sleep infinity' -User 'PC\owner' -RepeatMinutes 5
+$global:TgTask | ConvertTo-Json -Compress
+`;
+      const r = spawnSync(shell!, ['-NoProfile', '-NonInteractive', '-Command', probe], {
+        env: { ...process.env, TG_SCRIPT: script },
+        encoding: 'utf8',
+        timeout: 60_000,
+      });
+      expect(r.stderr).toBe('');
+      expect(JSON.parse(r.stdout.trim())).toEqual({
+        Name: 'Threadgarden worker',
+        Execute: 'wsl.exe',
+        Arguments: '-d threadgarden --exec sleep infinity',
+        Triggers: 2,
+        Boot: 'MSFT_TaskBootTrigger',
+        Every: 'PT5M',
+        // No duration: it repeats indefinitely.
+        For: '',
+        LogonType: 'S4U',
+        RunLevel: 'Limited',
+        // A repeat while the last run still holds the distro is skipped.
+        Instances: 'IgnoreNew',
+        Limit: 'PT0S',
+      });
+    },
+  );
+
   it('-DryRun prints every change as would: and changes nothing', async () => {
     await writeFile(join(state, 'sleep-ac'), '0x00000708');
     const { code, stdout } = await run(['-DryRun']);
@@ -196,8 +261,9 @@ describe.skipIf(!shell)('the Windows setup script', { timeout: 60_000 }, () => {
       'would: wsl --install -d Ubuntu-24.04 --name threadgarden',
       `would: add networkingMode=mirrored under [wsl2] in ${config()}`,
       "would: add the Hyper-V firewall rule 'ThreadgardenWorker' for TCP 47380",
-      "would: add the scheduled task 'Threadgarden worker' (at startup, as PC\\owner): wsl.exe -d threadgarden --exec sleep infinity",
+      "would: add the scheduled task 'Threadgarden worker' (at startup and every 5 minutes, as PC\\owner): wsl.exe -d threadgarden --exec sleep infinity",
       'would: ask whether to run wsl --shutdown (default no)',
+      "would: start the scheduled task 'Threadgarden worker' now",
     ]);
     // Sleep after 30 minutes on mains power is pointed out.
     expect(stdout).toContain('after 30 minutes');
@@ -304,14 +370,17 @@ describe.skipIf(!shell)('the Windows setup script', { timeout: 60_000 }, () => {
     expect(first).toContain('wsl --install -d Ubuntu-24.04 --name threadgarden');
     expect(first).toContain(RULE);
     expect(first).toContain(TASK);
+    // Held now, not only from the next boot: started last.
+    expect(first.at(-1)).toBe(START);
     const configAfter = await read(config());
     const backupAfter = await read(backup());
     const taskAfter = await read(join(state, 'task'));
 
     const dry = await run(['-DryRun']);
     expect(dry.stdout.split(/\r?\n/).filter((l) => l.startsWith('would: '))).toEqual([
-      "would: replace the scheduled task 'Threadgarden worker' (at startup, as PC\\owner): wsl.exe -d threadgarden --exec sleep infinity",
+      "would: replace the scheduled task 'Threadgarden worker' (at startup and every 5 minutes, as PC\\owner): wsl.exe -d threadgarden --exec sleep infinity",
       'would: ask whether to run wsl --shutdown (default no)',
+      "would: start the scheduled task 'Threadgarden worker' now",
     ]);
 
     const again = await run();
@@ -320,7 +389,7 @@ describe.skipIf(!shell)('the Windows setup script', { timeout: 60_000 }, () => {
     expect(again.stdout).toContain("The firewall rule 'ThreadgardenWorker' is already there.");
     expect(again.stdout).toContain("The WSL distro 'threadgarden' is already there.");
     const second = await calls(first.length);
-    expect(second.filter((l) => !l.startsWith('ask: '))).toEqual([TASK]);
+    expect(second.filter((l) => !l.startsWith('ask: '))).toEqual([TASK, START]);
     // The same line once, the same backup, and the task replaced by an identical one.
     expect(await read(config())).toBe(configAfter);
     expect((configAfter ?? '').split('networkingMode=mirrored').length).toBe(2);
@@ -391,7 +460,8 @@ describe.skipIf(!shell)('the Windows setup script', { timeout: 60_000 }, () => {
     let from = c.length;
     await run([], { answer: 'y' });
     c = await calls(from);
-    expect(c.slice(-2)).toEqual(['ask: Run wsl --shutdown now? [y/N]', 'wsl --shutdown']);
+    // The worker is held again once WSL restarted: the task is started after the shutdown.
+    expect(c.slice(-3)).toEqual(['ask: Run wsl --shutdown now? [y/N]', 'wsl --shutdown', START]);
 
     // With no console to ask, the answer is the default.
     await writeFile(join(state, 'real-read'), '');

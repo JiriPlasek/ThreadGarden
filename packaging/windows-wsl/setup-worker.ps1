@@ -45,6 +45,7 @@ $ErrorActionPreference = 'Stop'
 
 $RuleName = 'ThreadgardenWorker'
 $TaskName = 'Threadgarden worker'
+$RepeatMinutes = 5
 $Port = 47380
 # The Hyper-V firewall's id for WSL's virtual machine.
 $VmCreatorId = '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}'
@@ -117,17 +118,28 @@ function Test-TgTask {
   $null -ne (Get-ScheduledTask -TaskName $Name -ErrorAction SilentlyContinue)
 }
 
-# At startup, as this user without a stored password (S4U), not elevated, never stopped.
+# At startup, and again every $RepeatMinutes minutes for good, as this user without a
+# stored password (S4U), not elevated, never stopped. A repeat while the last run still
+# holds the distro is skipped (IgnoreNew); once WSL was stopped (wsl --shutdown, an
+# update), the next repeat starts it again. A -Once trigger with no repetition duration
+# repeats indefinitely.
 function Register-TgTask {
-  param([string]$Name, [string]$Execute, [string]$Argument, [string]$User)
+  param([string]$Name, [string]$Execute, [string]$Argument, [string]$User, [int]$RepeatMinutes)
   $action = New-ScheduledTaskAction -Execute $Execute -Argument $Argument
-  $trigger = New-ScheduledTaskTrigger -AtStartup
+  $boot = New-ScheduledTaskTrigger -AtStartup
+  $repeat = New-ScheduledTaskTrigger -Once -At (Get-Date) `
+    -RepetitionInterval (New-TimeSpan -Minutes $RepeatMinutes)
   $principal = New-ScheduledTaskPrincipal -UserId $User -LogonType S4U -RunLevel Limited
   $settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) `
-    -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
-  Register-ScheduledTask -TaskName $Name -Action $action -Trigger $trigger -Principal $principal `
-    -Settings $settings -Description 'Keeps the Threadgarden worker in WSL running from boot.' `
-    -Force | Out-Null
+    -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+  Register-ScheduledTask -TaskName $Name -Action $action -Trigger @($boot, $repeat) `
+    -Principal $principal -Settings $settings `
+    -Description 'Keeps the Threadgarden worker in WSL running from boot.' -Force | Out-Null
+}
+
+function Start-TgTask {
+  param([string]$Name)
+  Start-ScheduledTask -TaskName $Name
 }
 
 function Unregister-TgTask {
@@ -392,7 +404,10 @@ if (@(Get-TgDistros) -contains $Distro) {
   }
   Invoke-TgChange "wsl --install -d Ubuntu-24.04 --name $Distro" {
     $code = Invoke-TgWsl @('--install', '-d', 'Ubuntu-24.04', '--name', $Distro)
-    if ($code -ne 0) { Fail "wsl --install -d Ubuntu-24.04 --name $Distro failed (exit code $code)." }
+    if ($code -ne 0) {
+      Fail ("wsl --install -d Ubuntu-24.04 --name $Distro failed (exit code $code). If WSL " +
+        'is older than 2.4, run wsl --update and run this again.')
+    }
   }
 }
 
@@ -443,13 +458,16 @@ if (Test-TgFirewallRule -Name $RuleName) {
   }
 }
 
-# 7. Start the distro at boot, with nobody signed in. Its systemd and lingering then
-#    start the worker; the task keeps one wsl.exe attached so interop stays up.
+# 7. Start the distro at boot, with nobody signed in, and again whenever WSL was stopped
+#    while Windows kept running. Its systemd and lingering then start the worker; the
+#    task keeps one wsl.exe attached so interop stays up.
 $verb = 'add'
 if (Test-TgTask -Name $TaskName) { $verb = 'replace' }
-Invoke-TgChange "$verb the scheduled task '$TaskName' (at startup, as $user): wsl.exe -d $Distro --exec sleep infinity" {
-  Register-TgTask -Name $TaskName -Execute 'wsl.exe' -Argument "-d $Distro --exec sleep infinity" -User $user
-  Say "The scheduled task '$TaskName' starts the worker at boot, as $user."
+Invoke-TgChange "$verb the scheduled task '$TaskName' (at startup and every $RepeatMinutes minutes, as $user): wsl.exe -d $Distro --exec sleep infinity" {
+  Register-TgTask -Name $TaskName -Execute 'wsl.exe' -Argument "-d $Distro --exec sleep infinity" `
+    -User $user -RepeatMinutes $RepeatMinutes
+  Say "The scheduled task '$TaskName' starts the worker at boot, as $user, and again within"
+  Say "$RepeatMinutes minutes whenever WSL was stopped."
 }
 
 # 8. A sleeping PC can't be woken by the worker or the power switch.
@@ -482,6 +500,12 @@ if ($DryRun) {
   } else {
     Say 'Left WSL running: the change applies after the next restart of Windows.'
   }
+}
+
+# Hold the worker now, not only from the next boot (after the shutdown above, if any).
+Invoke-TgChange "start the scheduled task '$TaskName' now" {
+  Start-TgTask -Name $TaskName
+  Say "Started the scheduled task '$TaskName'."
 }
 
 # 10. The rest happens inside the distro, as on Ubuntu (see the README).
