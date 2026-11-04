@@ -4,11 +4,12 @@ Readies this Windows PC to be a Threadgarden worker: the worker runs in its own
 WSL distro, reached on the PC's own address.
 
 .DESCRIPTION
-Run once in PowerShell as administrator. It installs WSL and an Ubuntu distro for
-the worker, turns on mirrored networking in your .wslconfig (backed up first),
-lets port 47380 through the Hyper-V firewall, and starts the distro at boot with
-nobody signed in. Inside the distro you then install Claude Code and Threadgarden
-as on Ubuntu; the script prints those commands at the end.
+Run once in PowerShell as administrator, from the session of the Windows user who
+will own the worker. It installs WSL and an Ubuntu distro for the worker, turns on
+mirrored networking in your .wslconfig (backed up first), lets port 47380 through
+the Hyper-V firewall, and starts the distro at boot with nobody signed in. Inside
+the distro you then install Claude Code and Threadgarden as on Ubuntu; the script
+prints those commands at the end.
 
 It never changes your setup silently: a different networkingMode stops it, it asks
 before wsl --shutdown, and -Remove takes out only what it added.
@@ -17,7 +18,7 @@ before wsl --shutdown, and -Remove takes out only what it added.
 The worker's WSL distro (default threadgarden).
 
 .PARAMETER Remove
-Undoes the setup: the scheduled task, the firewall rule and the .wslconfig line it
+Undoes the setup: the scheduled task, the firewall rule and the .wslconfig lines it
 added, then offers to unregister the distro (default no).
 
 .PARAMETER DryRun
@@ -32,7 +33,10 @@ param(
   [string]$Distro = 'threadgarden',
   [switch]$Remove,
   [switch]$DryRun,
-  [switch]$Yes
+  [switch]$Yes,
+  # Tests only: a file that replaces the functions touching Windows. A parameter, not
+  # an environment variable, so nothing inherited can slip code into an elevated run.
+  [Parameter(DontShow)][string]$StubsPath
 )
 
 # Windows PowerShell 5.1 runs this too: no ??, ?. or ternaries, and ASCII only.
@@ -47,10 +51,8 @@ $VmCreatorId = '{40E0AC32-46A5-438A-A0B2-2B479E8F2E90}'
 $MinBuild = 22621
 $Marker = '# added by Threadgarden'
 $OurLine = 'networkingMode=mirrored'
-$ConfigPath = Join-Path $env:USERPROFILE '.wslconfig'
-$BackupPath = Join-Path $env:USERPROFILE '.wslconfig.bak-threadgarden'
 
-# --- What touches Windows. Tests replace these through THREADGARDEN_SETUP_STUBS. ---
+# --- What touches Windows. Tests replace these through -StubsPath. ---
 
 function Test-TgAdmin {
   $id = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -60,7 +62,14 @@ function Test-TgAdmin {
 
 function Get-TgBuild { [Environment]::OSVersion.Version.Build }
 
+# Whom this elevated run belongs to: WSL distros, the task and .wslconfig are per user.
 function Get-TgUser { [Security.Principal.WindowsIdentity]::GetCurrent().Name }
+
+# Who is signed in at the console ($null over Remote Desktop, or when nobody is).
+function Get-TgSignedInUser { (Get-CimInstance -ClassName Win32_ComputerSystem).UserName }
+
+# The elevated user's own folder, whatever the environment's USERPROFILE says.
+function Get-TgProfile { [Environment]::GetFolderPath('UserProfile') }
 
 # A native program's stderr would be a terminating error under 'Stop' in 5.1.
 function Test-TgWsl {
@@ -131,12 +140,21 @@ function Get-TgSleepQuery {
   & powercfg.exe /query SCHEME_CURRENT SUB_SLEEP STANDBYIDLE 2> $null
 }
 
+# With no console to ask (-NonInteractive), the answer is the default: no.
 function Read-TgAnswer {
   param([string]$Prompt)
-  Read-Host $Prompt
+  try {
+    Read-Host $Prompt
+  } catch {
+    ''
+  }
 }
 
-if ($env:THREADGARDEN_SETUP_STUBS) { . $env:THREADGARDEN_SETUP_STUBS }
+if ($StubsPath) { . $StubsPath }
+
+$ProfileDir = Get-TgProfile
+$ConfigPath = Join-Path $ProfileDir '.wslconfig'
+$BackupPath = Join-Path $ProfileDir '.wslconfig.bak-threadgarden'
 
 # --- Helpers ---
 
@@ -154,7 +172,7 @@ function Invoke-TgChange([string]$What, [scriptblock]$Do) {
 
 function Confirm-Tg([string]$Prompt) {
   $answer = Read-TgAnswer "$Prompt [y/N]"
-  ($null -ne $answer) -and ($answer.Trim() -match '^(y|yes)$')
+  ($null -ne $answer) -and ([string]$answer).Trim() -match '^(y|yes)$'
 }
 
 # The file's lines, its line ending and its encoding (kept as they were, BOM or not).
@@ -180,18 +198,25 @@ function Write-TgConfig($Config) {
   [System.IO.File]::WriteAllText($ConfigPath, $text, $Config.Encoding)
 }
 
+# A section header's name ("wsl2" for "[wsl2]  # a comment"), or $null for any other line.
+function Get-TgSection([string]$Line) {
+  if ($Line.Trim() -match '^\[([^\]]*)\]\s*([#;].*)?$') { return $Matches[1].Trim() }
+  $null
+}
+
 # The first [wsl2] header's index (-1: none), and networkingMode's value there ($null: unset).
 function Find-TgMode($Lines) {
   $inWsl2 = $false
   $header = -1
   $value = $null
   for ($i = 0; $i -lt $Lines.Count; $i++) {
-    $t = $Lines[$i].Trim()
-    if ($t -match '^\[(.*)\]$') {
-      $inWsl2 = $Matches[1].Trim() -ieq 'wsl2'
+    $section = Get-TgSection $Lines[$i]
+    if ($null -ne $section) {
+      $inWsl2 = $section -ieq 'wsl2'
       if ($inWsl2 -and $header -lt 0) { $header = $i }
       continue
     }
+    $t = $Lines[$i].Trim()
     if (-not $inWsl2 -or $t -match '^[#;]') { continue }
     if ($t -match '^networkingMode\s*=\s*(.*)$') {
       $value = ($Matches[1] -replace '\s+[#;].*$', '').Trim().Trim('"')
@@ -208,6 +233,37 @@ function Find-TgOurLine($Lines) {
   -1
 }
 
+# Whether a marker sits above a line that is neither ours nor a section header.
+function Test-TgChangedLine($Lines) {
+  for ($i = 0; $i -lt $Lines.Count - 1; $i++) {
+    if ($Lines[$i].Trim() -ne $Marker) { continue }
+    if ($null -eq (Get-TgSection $Lines[$i + 1]) -and $Lines[$i + 1].Trim() -ine $OurLine) { return $true }
+  }
+  $false
+}
+
+# Takes out a [wsl2] header this script added, once its section holds nothing else,
+# with the blank line it put before it at the end of the file.
+function Remove-TgOurSection($Lines) {
+  for ($i = 0; $i -lt $Lines.Count - 1; $i++) {
+    if ($Lines[$i].Trim() -ne $Marker -or (Get-TgSection $Lines[$i + 1]) -ine 'wsl2') { continue }
+    $end = $i + 2
+    while ($end -lt $Lines.Count -and $null -eq (Get-TgSection $Lines[$end])) {
+      if ($Lines[$end].Trim() -ne '') { return }
+      $end++
+    }
+    $last = $end -eq $Lines.Count
+    $Lines.RemoveRange($i, $end - $i)
+    if ($last) {
+      while ($Lines.Count -gt 0 -and $Lines[$Lines.Count - 1].Trim() -eq '') {
+        $Lines.RemoveAt($Lines.Count - 1)
+      }
+      if ($Lines.Count -gt 0) { $Lines.Add('') }
+    }
+    return
+  }
+}
+
 # --- Start ---
 
 if ($Distro -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*$') {
@@ -220,6 +276,19 @@ if (-not (Test-TgAdmin)) {
   } else {
     Fail 'Run this in PowerShell as administrator (right-click PowerShell, Run as administrator).'
   }
+}
+# Elevated as another account (a UAC prompt answered with an admin's password), this
+# would set up that account's WSL, .wslconfig and task: not the one signed in here.
+$user = Get-TgUser
+$signedIn = Get-TgSignedInUser
+if ($signedIn -and $signedIn -ine $user) {
+  Fail ("This runs as $user, but $signedIn is signed in on this PC. The worker belongs " +
+    'to the Windows user who sets it up: sign in as that user, open PowerShell there with ' +
+    'Run as administrator, and run this again.')
+}
+if (-not $signedIn) {
+  Say "This runs as $user. (Who is signed in at the console couldn't be told, so make sure"
+  Say 'that is the Windows user who will own the worker.)'
 }
 
 if ($Remove) {
@@ -252,10 +321,11 @@ if ($Remove) {
     $found = $true
     Invoke-TgChange "remove $OurLine (added by Threadgarden) from $ConfigPath" {
       $config.Lines.RemoveRange($at, 2)
+      Remove-TgOurSection $config.Lines
       Write-TgConfig $config
       Say "Removed $OurLine from $ConfigPath. Your other settings there are unchanged."
     }
-  } elseif ($null -ne $config -and ($config.Lines | Where-Object { $_.Trim() -eq $Marker })) {
+  } elseif ($null -ne $config -and (Test-TgChangedLine $config.Lines)) {
     Say "The line under '$Marker' in $ConfigPath was changed since, so it stays as it is."
   } else {
     Say "No line added by Threadgarden in $ConfigPath."
@@ -289,30 +359,8 @@ if ($build -lt $MinBuild) {
   Fail "This needs Windows 11 22H2 (build $MinBuild) or newer; this PC is build $build."
 }
 
-# 3. WSL itself. A fresh install needs a restart before a distro can be added.
-if (-not (Test-TgWsl)) {
-  Say 'WSL is not installed yet. Installing it (this can take a few minutes).'
-  Invoke-TgChange 'wsl --install --no-distribution' {
-    $code = Invoke-TgWsl @('--install', '--no-distribution')
-    if ($code -ne 0) { Fail "wsl --install --no-distribution failed (exit code $code)." }
-  }
-  Say 'Restart Windows, then run this script again.'
-  exit 0
-}
-
-# 4. The worker's own distro, so the user's other distros stay as they are.
-if (@(Get-TgDistros) -contains $Distro) {
-  Say "The WSL distro '$Distro' is already there."
-} else {
-  Say "Installing Ubuntu 24.04 as the WSL distro '$Distro'. When it asks, create your"
-  Say 'Linux user; then type exit to come back here.'
-  Invoke-TgChange "wsl --install -d Ubuntu-24.04 --name $Distro" {
-    $code = Invoke-TgWsl @('--install', '-d', 'Ubuntu-24.04', '--name', $Distro)
-    if ($code -ne 0) { Fail "wsl --install -d Ubuntu-24.04 --name $Distro failed (exit code $code)." }
-  }
-}
-
-# 5. Mirrored networking: the worker listens on the PC's own address.
+# A networkingMode of the user's own stops everything, so it is read before anything
+# is installed.
 $config = Read-TgConfig
 $mode = @{ Header = -1; Value = $null }
 if ($null -ne $config) { $mode = Find-TgMode $config.Lines }
@@ -321,28 +369,61 @@ if ($null -ne $mode.Value -and $mode.Value -ine 'mirrored') {
     "networkingMode=mirrored, and this script won't overwrite your setting. Change it " +
     'yourself if you can (it applies to all your distros and Docker Desktop), then run this again.')
 }
+
+# 3. WSL itself. A fresh install needs a restart before a distro can be added.
+if (-not (Test-TgWsl)) {
+  if (-not $DryRun) { Say 'WSL is not installed yet. Installing it (this can take a few minutes).' }
+  Invoke-TgChange 'wsl --install --no-distribution' {
+    $code = Invoke-TgWsl @('--install', '--no-distribution')
+    if ($code -ne 0) { Fail "wsl --install --no-distribution failed (exit code $code)." }
+    Say 'Restart Windows, then run this script again. If it still says WSL is not'
+    Say 'installed after the restart, run wsl --update first.'
+  }
+  exit 0
+}
+
+# 4. The worker's own distro, so the user's other distros stay as they are.
+if (@(Get-TgDistros) -contains $Distro) {
+  Say "The WSL distro '$Distro' is already there."
+} else {
+  if (-not $DryRun) {
+    Say "Installing Ubuntu 24.04 as the WSL distro '$Distro'. When it asks, create your"
+    Say 'Linux user; then type exit to come back here.'
+  }
+  Invoke-TgChange "wsl --install -d Ubuntu-24.04 --name $Distro" {
+    $code = Invoke-TgWsl @('--install', '-d', 'Ubuntu-24.04', '--name', $Distro)
+    if ($code -ne 0) { Fail "wsl --install -d Ubuntu-24.04 --name $Distro failed (exit code $code)." }
+  }
+}
+
+# 5. Mirrored networking: the worker listens on the PC's own address.
 if ($mode.Value -ieq 'mirrored') {
   Say "Mirrored networking is already on in $ConfigPath."
 } else {
   Say 'Mirrored networking applies to all your WSL distros and to Docker Desktop, not only the worker.'
   if ($null -ne $config) {
-    Invoke-TgChange "back up $ConfigPath to $BackupPath" {
-      Copy-Item -LiteralPath $ConfigPath -Destination $BackupPath -Force
-      Say "Backed up $ConfigPath to $BackupPath."
+    if (Test-Path -LiteralPath $BackupPath) {
+      Say "Keeping the earlier backup $BackupPath."
+    } else {
+      Invoke-TgChange "back up $ConfigPath to $BackupPath" {
+        Copy-Item -LiteralPath $ConfigPath -Destination $BackupPath
+        Say "Backed up $ConfigPath to $BackupPath."
+      }
     }
   }
   Invoke-TgChange "add $OurLine under [wsl2] in $ConfigPath" {
+    # A [wsl2] header made here is marked too, so -Remove can take it out again.
+    $section = @($Marker, '[wsl2]', $Marker, $OurLine)
     if ($null -eq $config) {
       $lines = New-Object System.Collections.Generic.List[string]
-      foreach ($line in @('[wsl2]', $Marker, $OurLine, '')) { $lines.Add($line) }
+      foreach ($line in ($section + '')) { $lines.Add($line) }
       $config = @{ Lines = $lines; Newline = "`r`n"; Encoding = (New-Object System.Text.UTF8Encoding -ArgumentList $false) }
     } elseif ($mode.Header -ge 0) {
       $config.Lines.InsertRange($mode.Header + 1, [string[]]@($Marker, $OurLine))
     } else {
-      # A new [wsl2] section at the end, after a blank line, before the final line ending.
+      # At the end, after a blank line, before the final line ending.
       $end = $config.Lines.Count
       if ($end -gt 0 -and $config.Lines[$end - 1] -eq '') { $end-- }
-      $section = @('[wsl2]', $Marker, $OurLine)
       if ($end -gt 0 -and $config.Lines[$end - 1].Trim() -ne '') { $section = @('') + $section }
       $config.Lines.InsertRange($end, [string[]]$section)
       if ($config.Lines[$config.Lines.Count - 1] -ne '') { $config.Lines.Add('') }
@@ -364,7 +445,6 @@ if (Test-TgFirewallRule -Name $RuleName) {
 
 # 7. Start the distro at boot, with nobody signed in. Its systemd and lingering then
 #    start the worker; the task keeps one wsl.exe attached so interop stays up.
-$user = Get-TgUser
 $verb = 'add'
 if (Test-TgTask -Name $TaskName) { $verb = 'replace' }
 Invoke-TgChange "$verb the scheduled task '$TaskName' (at startup, as $user): wsl.exe -d $Distro --exec sleep infinity" {

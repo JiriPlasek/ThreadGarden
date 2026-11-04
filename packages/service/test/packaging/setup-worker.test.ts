@@ -1,5 +1,5 @@
 import { execFile, spawnSync } from 'node:child_process';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -37,6 +37,11 @@ function Get-TgBuild {
   if (Test-Path -LiteralPath $p) { [int](Get-Content -LiteralPath $p) } else { 26200 }
 }
 function Get-TgUser { 'PC\owner' }
+function Get-TgSignedInUser {
+  $p = Get-StubPath 'signed-in'
+  if (Test-Path -LiteralPath $p) { (Get-Content -LiteralPath $p | Out-String).Trim() } else { 'PC\Owner' }
+}
+function Get-TgProfile { $env:TG_STUB_PROFILE }
 function Test-TgWsl { -not (Test-Path -LiteralPath (Get-StubPath 'no-wsl')) }
 function Get-TgDistros {
   $p = Get-StubPath 'distros'
@@ -88,10 +93,13 @@ function Get-TgSleepQuery {
   "    Current AC Power Setting Index: $ac"
   '    Current DC Power Setting Index: 0x00000384'
 }
-function Read-TgAnswer {
-  param([string]$Prompt)
-  Write-StubCall "ask: $Prompt"
-  $env:TG_STUB_ANSWER
+# With this file there, the script's own Read-TgAnswer runs (Read-Host, with no console).
+if (-not (Test-Path -LiteralPath (Get-StubPath 'real-read'))) {
+  function Read-TgAnswer {
+    param([string]$Prompt)
+    Write-StubCall "ask: $Prompt"
+    $env:TG_STUB_ANSWER
+  }
 }
 `;
 
@@ -101,18 +109,22 @@ const TASK =
   'Register-ScheduledTask Threadgarden worker: wsl.exe -d threadgarden --exec sleep infinity as PC\\owner';
 const MARKED = ['# added by Threadgarden', 'networkingMode=mirrored'];
 
-describe.skipIf(!shell)('the Windows setup script', () => {
+// Each PowerShell start takes 2 to 3 s, more with CI's test files in parallel.
+describe.skipIf(!shell)('the Windows setup script', { timeout: 60_000 }, () => {
   let root: string;
   let home: string;
+  let decoy: string;
   let state: string;
   let stubs: string;
 
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), 'tg-setup-worker-'));
     home = join(root, 'home');
+    decoy = join(root, 'decoy');
     state = join(root, 'state');
     stubs = join(root, 'stubs.ps1');
     await mkdir(home);
+    await mkdir(decoy);
     await mkdir(state);
     await writeFile(stubs, STUBS);
   });
@@ -131,12 +143,23 @@ describe.skipIf(!shell)('the Windows setup script', () => {
     new Promise<{ code: number; stdout: string; stderr: string }>((done) => {
       execFile(
         shell!,
-        ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', script, ...args],
+        [
+          '-NoProfile',
+          '-NonInteractive',
+          '-ExecutionPolicy',
+          'Bypass',
+          '-File',
+          script,
+          '-StubsPath',
+          stubs,
+          ...args,
+        ],
         {
           env: {
             ...process.env,
-            USERPROFILE: home,
-            THREADGARDEN_SETUP_STUBS: stubs,
+            // Never read for the profile folder: the stub's Get-TgProfile says home.
+            USERPROFILE: decoy,
+            TG_STUB_PROFILE: home,
             TG_STUB_DIR: state,
             TG_STUB_ANSWER: o.answer ?? '',
           },
@@ -182,8 +205,30 @@ describe.skipIf(!shell)('the Windows setup script', () => {
     // The next steps start in the home folder.
     expect(stdout).toMatch(/^ {2}cd ~\r?$/m);
     expect(stdout).toContain('./install.sh');
+    expect(stdout).not.toContain('Installing');
     expect(await calls()).toEqual([]);
     expect(await read(config())).toBeNull();
+    // PowerShell itself may write its caches there; the script never does.
+    expect((await readdir(decoy)).filter((f) => f.startsWith('.wslconfig'))).toEqual([]);
+  });
+
+  it('the stubs come only from a hidden -StubsPath, never from the environment', async () => {
+    const r = spawnSync(
+      shell!,
+      [
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        "(Get-Command -Name $env:TG_SCRIPT).Parameters['StubsPath'].Attributes | " +
+          'Where-Object { $_ -is [System.Management.Automation.ParameterAttribute] } | ' +
+          'ForEach-Object { $_.DontShow }',
+      ],
+      { env: { ...process.env, TG_SCRIPT: script }, encoding: 'utf8', timeout: 60_000 },
+    );
+    expect(r.stdout.trim()).toBe('True');
+    const text = await readFile(script, 'utf8');
+    expect(text).not.toContain('$env:THREADGARDEN_SETUP_STUBS');
+    expect(text).not.toContain('$env:USERPROFILE');
   });
 
   it('adds mirrored under an existing [wsl2] and keeps its other lines', async () => {
@@ -198,23 +243,46 @@ describe.skipIf(!shell)('the Windows setup script', () => {
     );
     expect(await read(backup())).toBe(before);
     expect(stdout).toContain('applies to all your WSL distros and to Docker Desktop');
+    // The environment's USERPROFILE (the decoy) is never where it looks.
+    expect(await read(join(decoy, '.wslconfig'))).toBeNull();
   });
 
-  it('adds a [wsl2] section to a file without one, and makes the file when there is none', async () => {
+  it('adds a marked [wsl2] section to a file without one, and -Remove takes it out again', async () => {
     await writeFile(config(), '[experimental]\nhostAddressLoopback=true');
     expect((await run()).code).toBe(0);
     expect(await read(config())).toBe(
-      '[experimental]\nhostAddressLoopback=true\n\n[wsl2]\n# added by Threadgarden\nnetworkingMode=mirrored\n',
+      '[experimental]\nhostAddressLoopback=true\n\n# added by Threadgarden\n[wsl2]\n' +
+        '# added by Threadgarden\nnetworkingMode=mirrored\n',
     );
+    expect((await run(['-Remove'])).code).toBe(0);
+    expect(await read(config())).toBe('[experimental]\nhostAddressLoopback=true\n');
+  });
 
-    await rm(config());
-    await rm(backup());
+  it('makes the file when there is none, with nothing to back up', async () => {
     expect((await run()).code).toBe(0);
     expect(await read(config())).toBe(
-      '[wsl2]\r\n# added by Threadgarden\r\nnetworkingMode=mirrored\r\n',
+      '# added by Threadgarden\r\n[wsl2]\r\n# added by Threadgarden\r\nnetworkingMode=mirrored\r\n',
     );
-    // Nothing to back up.
     expect(await read(backup())).toBeNull();
+  });
+
+  it('finds a [wsl2] header with a comment after it', async () => {
+    await writeFile(config(), '[wsl2] # mine\r\nmemory=8GB\r\n');
+    expect((await run()).code).toBe(0);
+    expect(await read(config())).toBe(
+      '[wsl2] # mine\r\n# added by Threadgarden\r\nnetworkingMode=mirrored\r\nmemory=8GB\r\n',
+    );
+    await writeFile(config(), '[wsl2] ; mine\r\nnetworkingMode=nat\r\n');
+    expect((await run()).stderr).toContain('networkingMode=nat');
+  });
+
+  it('keeps an earlier backup rather than overwrite it', async () => {
+    await writeFile(backup(), 'the first backup\r\n');
+    await writeFile(config(), '[wsl2]\r\nmemory=8GB\r\n');
+    const { code, stdout } = await run();
+    expect(code).toBe(0);
+    expect(stdout).toContain('Keeping the earlier backup');
+    expect(await read(backup())).toBe('the first backup\r\n');
   });
 
   it('stops when networkingMode is already something else', async () => {
@@ -225,10 +293,8 @@ describe.skipIf(!shell)('the Windows setup script', () => {
     expect(stderr).toContain('networkingMode=nat');
     expect(await read(config())).toBe(before);
     expect(await read(backup())).toBeNull();
-    // It stopped there: no firewall rule, no task.
-    const c = await calls();
-    expect(c.some((l) => l.startsWith('New-NetFirewallHyperVRule'))).toBe(false);
-    expect(c.some((l) => l.startsWith('Register-ScheduledTask'))).toBe(false);
+    // It stopped before installing anything: no distro, no firewall rule, no task.
+    expect(await calls()).toEqual([]);
   });
 
   it('running setup twice changes nothing the second time', async () => {
@@ -310,7 +376,8 @@ describe.skipIf(!shell)('the Windows setup script', () => {
     expect(second.stdout).toContain("No firewall rule 'ThreadgardenWorker' to remove.");
     expect(second.stdout).toContain("No WSL distro 'threadgarden' to unregister.");
     expect(await calls(from)).toEqual([]);
-    expect(await read(config())).toBe('[wsl2]\r\n');
+    // The file it made is empty again: its section went with its line.
+    expect(await read(config())).toBe('');
   });
 
   it('asks before wsl --shutdown and defaults to no', async () => {
@@ -326,12 +393,39 @@ describe.skipIf(!shell)('the Windows setup script', () => {
     c = await calls(from);
     expect(c.slice(-2)).toEqual(['ask: Run wsl --shutdown now? [y/N]', 'wsl --shutdown']);
 
+    // With no console to ask, the answer is the default.
+    await writeFile(join(state, 'real-read'), '');
+    from = (await calls()).length;
+    const unattended = await run();
+    expect(unattended.code).toBe(0);
+    expect(unattended.stdout).toContain('Left WSL running');
+    expect(await calls(from)).not.toContain('wsl --shutdown');
+    await rm(join(state, 'real-read'));
+
     // -Yes answers for an unattended run, without asking.
     from = (await calls()).length;
     await run(['-Yes']);
     c = await calls(from);
     expect(c).toContain('wsl --shutdown');
     expect(c.some((l) => l.startsWith('ask: '))).toBe(false);
+  });
+
+  it('stops when elevated as another account than the one signed in', async () => {
+    await writeFile(join(state, 'signed-in'), 'PC\\child');
+    for (const args of [[], ['-Remove']]) {
+      const r = await run(args);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain('This runs as PC\\owner, but PC\\child is signed in on this PC.');
+      expect(r.stderr).toContain('Run as administrator');
+    }
+    expect(await calls()).toEqual([]);
+    expect(await read(config())).toBeNull();
+
+    // Nobody at the console (Remote Desktop): it carries on and says whom it is for.
+    await writeFile(join(state, 'signed-in'), '');
+    const remote = await run(['-DryRun']);
+    expect(remote.code).toBe(0);
+    expect(remote.stdout).toContain('This runs as PC\\owner.');
   });
 
   it('needs administrator, Windows 11 22H2 and WSL, and installs WSL first when missing', async () => {
@@ -352,6 +446,7 @@ describe.skipIf(!shell)('the Windows setup script', () => {
     const noWsl = await run();
     expect(noWsl.code).toBe(0);
     expect(noWsl.stdout).toContain('Restart Windows, then run this script again.');
+    expect(noWsl.stdout).toContain('wsl --update');
     // Nothing past WSL itself: the distro needs the restart first.
     expect(await calls()).toEqual(['wsl --install --no-distribution']);
   });
