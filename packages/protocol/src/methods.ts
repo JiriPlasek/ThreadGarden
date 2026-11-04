@@ -482,7 +482,15 @@ export const methods = {
   ),
   'power.status': def(empty, MachinePowerStatusSchema),
   'power.keepAwake': def(KeepAwakeSchema, MachinePowerStatusSchema),
-  'power.shutdown': def(z.object({ force: z.boolean() }), MachinePowerStatusSchema),
+  /**
+   * `force`: despite unpushed work. `despiteSignedIn`: despite someone signed in at a
+   * Windows worker (`SIGNED_IN`), closing their apps; optional, so a machine from
+   * before it strips it and a desktop from before it never sends it.
+   */
+  'power.shutdown': def(
+    z.object({ force: z.boolean(), despiteSignedIn: z.boolean().optional() }),
+    MachinePowerStatusSchema,
+  ),
   // ── projects (protocol 7) ──────────────────────────────────────────────────
   // All run on the machine the project lives on, open to paired devices.
   /** Lists the sub-folders of `path` (`~` allowed). Errors: `NOT_FOUND`, `NOT_A_FOLDER`, `PERMISSION`. */

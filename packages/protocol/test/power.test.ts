@@ -74,6 +74,17 @@ describe('power protocol', () => {
     expect(SIGNED_IN).toBe('Someone is signed in on this PC');
   });
 
+  it('power.shutdown takes despiteSignedIn as an optional second confirm', () => {
+    const params = methods['power.shutdown'].params;
+    // An older desktop sends only force.
+    expect(params.parse({ force: true })).toEqual({ force: true });
+    expect(params.parse({ force: false, despiteSignedIn: true })).toEqual({
+      force: false,
+      despiteSignedIn: true,
+    });
+    expect(params.safeParse({ force: false, despiteSignedIn: 'yes' }).success).toBe(false);
+  });
+
   it('is protocol 10 and accepts machines at 9 to 11', () => {
     expect(PROTOCOL_VERSION).toBe(10);
     expect([8, 9, 10, 11, 12].map(acceptsRemoteProtocol)).toEqual([false, true, true, true, false]);

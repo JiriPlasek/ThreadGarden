@@ -1,6 +1,7 @@
 import {
   POWER_CAPABILITY,
   RELAY_CLOSE,
+  SIGNED_IN,
   type MachinePowerStatus,
   type Unpushed,
 } from '@threadgarden/protocol';
@@ -122,6 +123,28 @@ describe('unpushed work in Needs you', () => {
     expect(screen.getByRole('region', { name: 'Unpushed work on Ubuntu PC' })).toBeTruthy();
     remote.push('power.changed', status());
     await waitFor(() => expect(screen.queryByRole('region', { name: /Unpushed work/ })).toBeNull());
+  });
+
+  it('Shut down anyway from the unpushed notice then asks about the signed-in person', async () => {
+    const { remote } = await start();
+    // A Windows worker: past the unpushed work, someone is signed in.
+    remote.handlers['power.shutdown'] = (p: unknown) =>
+      (p as { despiteSignedIn?: boolean }).despiteSignedIn
+        ? status({ phase: 'shuttingDown' })
+        : status({ problem: SIGNED_IN });
+    await userEvent.click(await screen.findByRole('button', { name: 'Shut down anyway' }));
+    const dialog = await screen.findByRole('alertdialog');
+    expect(
+      within(dialog).getByText('Someone is signed in on Ubuntu PC. Shut it down anyway?'),
+    ).toBeTruthy();
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Shut down' }));
+    // The same force as before, plus the second confirm.
+    await waitFor(() =>
+      expect(remote.calls('power.shutdown').map((c) => c.params)).toEqual([
+        { force: true },
+        { force: true, despiteSignedIn: true },
+      ]),
+    );
   });
 
   it('notification fires once per blocked transition', async () => {

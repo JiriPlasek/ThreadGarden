@@ -72,8 +72,9 @@ export type ShutdownOptions = {
   poweroff?: () => Promise<void>;
   /**
    * A worker in WSL: Windows powers the PC off (`shutdown.exe`, replacing `poweroff`),
-   * an idle shutdown never goes ahead under a signed-in person, and a pending restart
-   * leaves the 15-minute cut unarmed (a shutdown that installs updates can take longer).
+   * a shutdown never goes ahead under a signed-in person unless the run says
+   * `despiteSignedIn` (an idle one never does), and a pending restart leaves the
+   * 15-minute cut unarmed (a shutdown that installs updates can take longer).
    */
   windows?: WindowsHost;
   makeSwitch?: typeof createSwitch;
@@ -175,9 +176,14 @@ export class ShutdownSequence {
   /**
    * One sequence at a time: a call while one runs, or once the machine is going
    * down, returns the current status. Whatever goes wrong, the phase never stays
-   * `checking`.
+   * `checking`. `force` goes ahead despite unpushed work; `despiteSignedIn`, despite
+   * someone signed in at a Windows worker. Each is its own confirm in the app.
    */
-  run(r: { force: boolean; reason: 'idle' | 'manual' }): Promise<MachinePowerStatus> {
+  run(r: {
+    force: boolean;
+    despiteSignedIn?: boolean;
+    reason: 'idle' | 'manual';
+  }): Promise<MachinePowerStatus> {
     if (this.inFlight || this.state.phase === 'shuttingDown') return Promise.resolve(this.status());
     this.inFlight = this.sequence(r)
       .catch(async (err: unknown) => {
@@ -348,6 +354,7 @@ export class ShutdownSequence {
 
   private async sequence(r: {
     force: boolean;
+    despiteSignedIn?: boolean;
     reason: 'idle' | 'manual';
   }): Promise<MachinePowerStatus> {
     const startedAt = this.now();
@@ -355,12 +362,7 @@ export class ShutdownSequence {
     // A machine at work when asked (manual only: idle never is) goes down as asked.
     const busyAtStart = this.o.idle.busy;
     const windows = this.o.windows;
-
-    // 0. A person at the Windows PC keeps it on; Shut down now was confirmed (forced).
-    if (windows && !r.force && (await windows.signedIn())) {
-      this.o.log?.info(`power: ${r.reason} shutdown stopped, someone is signed in on Windows`);
-      return this.settle({ ...RUNNING, problem: SIGNED_IN });
-    }
+    const despiteSignedIn = r.despiteSignedIn === true;
 
     // 1. Work that never reached GitHub, or that could not be checked, keeps the machine on.
     if (!r.force) {
@@ -375,6 +377,13 @@ export class ShutdownSequence {
         this.o.log?.info(`power: ${r.reason} shutdown blocked by ${found.length} unpushed item(s)`);
         return this.settle({ phase: 'blocked', unpushed: found, problem: null });
       }
+    }
+
+    // 1b. A person at the Windows PC keeps it on, unless the owner confirmed shutting
+    // it down under them. Asked after the push check, so the app asks both in turn.
+    if (windows && !despiteSignedIn && (await windows.signedIn())) {
+      this.o.log?.info(`power: ${r.reason} shutdown stopped, someone is signed in on Windows`);
+      return this.settle({ ...RUNNING, problem: SIGNED_IN });
     }
 
     // 2. The next scheduled send: one due soon keeps the machine on; a far one goes out late.
@@ -457,7 +466,8 @@ export class ShutdownSequence {
     // Powering off: from here the cut must stay armed, whatever happens to this process.
     this.armed = null;
     try {
-      await (windows ? windows.shutdown({ force: r.force }) : this.poweroff());
+      // Only a confirmed shutdown under a signed-in person closes their apps (/f).
+      await (windows ? windows.shutdown({ force: despiteSignedIn }) : this.poweroff());
     } catch (err) {
       const reason = poweroffReason(err);
       if (!refused(err)) {

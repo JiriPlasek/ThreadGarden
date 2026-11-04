@@ -961,16 +961,16 @@ describe('ShutdownSequence.run on a worker in WSL', () => {
     const r = await rig({ windows: { signedIn: true } });
     const s = await r.seq.run({ force: false, reason: 'idle' });
     expect(s).toMatchObject({ phase: 'running', unpushed: [], problem: SIGNED_IN });
-    // Asked first: nothing else ran, not even the push check.
+    // Asked after the push check, and before anything is armed.
+    expect(r.checked).toHaveLength(1);
     expect(r.order).toEqual(['quser']);
-    expect(r.checked).toEqual([]);
     expect(r.f.commands).toEqual([]);
     expect(r.emitted.at(-1)).toEqual(s);
   });
 
-  it('forced Shut down now with someone signed in runs shutdown.exe /s /f /t 0', async () => {
+  it('Shut down now confirmed despite someone signed in runs shutdown.exe /s /f /t 0', async () => {
     const r = await rig({ windows: { signedIn: true } });
-    const s = await r.seq.run({ force: true, reason: 'manual' });
+    const s = await r.seq.run({ force: false, despiteSignedIn: true, reason: 'manual' });
     expect(s).toMatchObject({ phase: 'shuttingDown', problem: null });
     expect(r.order).toEqual([
       'reg',
@@ -981,6 +981,66 @@ describe('ShutdownSequence.run on a worker in WSL', () => {
       'stopAll',
       'shutdown.exe /s /f /t 0',
     ]);
+  });
+
+  it('manual run with unpushed work and someone signed in asks both, in that order', async () => {
+    const r = await rig({ windows: { signedIn: true }, found: [unpushed] });
+    // First the unpushed work, without asking Windows anything.
+    const first = await r.seq.run({ force: false, reason: 'manual' });
+    expect(first).toMatchObject({ phase: 'blocked', unpushed: [unpushed], problem: null });
+    expect(r.order).toEqual([]);
+    // Shut down anyway (force): now the signed-in person.
+    const second = await r.seq.run({ force: true, reason: 'manual' });
+    expect(second).toMatchObject({ phase: 'running', unpushed: [], problem: SIGNED_IN });
+    expect(r.order).toEqual(['quser']);
+    expect(r.f.commands).toEqual([]);
+    // Both confirmed.
+    const third = await r.seq.run({ force: true, despiteSignedIn: true, reason: 'manual' });
+    expect(third).toMatchObject({ phase: 'shuttingDown', problem: null });
+    expect(r.order.at(-1)).toBe('shutdown.exe /s /f /t 0');
+  });
+
+  it('despiteSignedIn without force still stops for unpushed work', async () => {
+    const r = await rig({ windows: { signedIn: true }, found: [unpushed] });
+    const s = await r.seq.run({ force: false, despiteSignedIn: true, reason: 'manual' });
+    expect(s).toMatchObject({ phase: 'blocked', unpushed: [unpushed] });
+    expect(r.order).toEqual([]);
+    expect(r.f.commands).toEqual([]);
+  });
+
+  it('/f only with despiteSignedIn', async () => {
+    // force alone (despite unpushed work) with nobody signed in: a plain shutdown.
+    const forced = await rig({ windows: {} });
+    expect((await forced.seq.run({ force: true, reason: 'manual' })).phase).toBe('shuttingDown');
+    expect(forced.order).toContain('quser');
+    expect(forced.order.at(-1)).toBe('shutdown.exe /s /t 0');
+
+    const despite = await rig({ windows: {} });
+    await despite.seq.run({ force: false, despiteSignedIn: true, reason: 'manual' });
+    expect(despite.order).not.toContain('quser');
+    expect(despite.order.at(-1)).toBe('shutdown.exe /s /f /t 0');
+  });
+
+  it('power.shutdown passes despiteSignedIn through to the sequence', async () => {
+    const r = await rig({ windows: { signedIn: true } });
+    const router = new Router({ debug() {}, info() {}, warn() {}, error() {} } as never);
+    registerPowerMachineHandlers(router, {
+      store: r.store,
+      idle: r.idle,
+      shutdown: r.seq,
+      emit: () => {},
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- loosely typed results in tests
+    const call = async (params: unknown): Promise<any> =>
+      router.dispatch(
+        { id: 1, method: 'power.shutdown', params } as never,
+        { clientId: 'p', origin: 'remote', deviceId: 'd' } as never,
+      );
+    expect((await call({ force: false })).result).toMatchObject({ problem: SIGNED_IN });
+    expect((await call({ force: false, despiteSignedIn: true })).result).toMatchObject({
+      phase: 'shuttingDown',
+    });
+    expect(r.order.at(-1)).toBe('shutdown.exe /s /f /t 0');
   });
 
   it('a pending restart arms the cut and then sends RuleTimer8 0', async () => {

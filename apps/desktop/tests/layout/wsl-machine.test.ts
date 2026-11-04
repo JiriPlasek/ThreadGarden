@@ -44,7 +44,8 @@ afterEach(() => {
 
 /**
  * M1 ("Ubuntu PC") with power control; `wsl` makes it a worker in WSL. Its
- * `power.shutdown` answers SIGNED_IN to an unforced call while `signedIn` holds.
+ * `power.shutdown` answers SIGNED_IN, while `signedIn` holds, to a call without
+ * `despiteSignedIn`.
  */
 const start = async (o: { wsl?: boolean; signedIn?: boolean } = {}) => {
   const env = await setupTwoMachines({
@@ -61,7 +62,7 @@ const start = async (o: { wsl?: boolean; signedIn?: boolean } = {}) => {
       s.handlers['power.status'] = () => status();
       s.handlers['power.adopt'] = () => ({});
       s.handlers['power.shutdown'] = (p: unknown) =>
-        o.signedIn && !(p as { force: boolean }).force
+        o.signedIn && !(p as { despiteSignedIn?: boolean }).despiteSignedIn
           ? status({ problem: SIGNED_IN })
           : status({ phase: 'shuttingDown' });
     },
@@ -121,7 +122,8 @@ describe('a Windows PC as a worker (WSL)', () => {
     await waitFor(() =>
       expect(env.remote.calls('power.shutdown').map((c) => c.params)).toEqual([
         { force: false },
-        { force: true },
+        // force keeps its meaning (despite unpushed work): only the second confirm is added.
+        { force: false, despiteSignedIn: true },
       ]),
     );
   });

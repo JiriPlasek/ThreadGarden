@@ -8,6 +8,7 @@
 import {
   POWER_CAPABILITY,
   POWER_ERRORS,
+  SIGNED_IN,
   type KeepAwake,
   type MachinePowerStatus,
   type PlugReading,
@@ -76,6 +77,11 @@ export class PowerState {
   private readings = $state<Record<string, PlugReading>>({});
   private statuses = $state<Record<string, MachinePowerStatus>>({});
   private errors = $state<Record<string, string>>({});
+  /**
+   * Shutdowns the machine answered with "someone is signed in" (a Windows worker),
+   * by machine: the `force` they were sent with, for the confirm to send again.
+   */
+  private signedInAsks = $state<Record<string, { force: boolean }>>({});
   /** When a `turnOn` began, by machine (cleared once the machine is on). */
   private startedAt = $state<Record<string, number>>({});
   /** When the machine last said `shuttingDown`, by machine (cleared once the plug reads off). */
@@ -252,9 +258,31 @@ export class PowerState {
     return true;
   };
 
-  /** Asks the machine to shut down (`force`: despite unpushed work); null (see `error`) on failure. */
-  shutDown = (id: string, force: boolean): Promise<MachinePowerStatus | null> =>
-    this.onMachine(id, (m) => m.client.request('power.shutdown', { force }));
+  /**
+   * Asks the machine to shut down (`force`: despite unpushed work; `despiteSignedIn`:
+   * despite someone signed in at it); null (see `error`) on failure. An answer that
+   * someone is signed in is kept for the heading to ask about (`signedInAsk`).
+   */
+  shutDown = async (
+    id: string,
+    force: boolean,
+    despiteSignedIn = false,
+  ): Promise<MachinePowerStatus | null> => {
+    delete this.signedInAsks[id];
+    const s = await this.onMachine(id, (m) =>
+      m.client.request('power.shutdown', despiteSignedIn ? { force, despiteSignedIn } : { force }),
+    );
+    if (!despiteSignedIn && s?.problem === SIGNED_IN) this.signedInAsks[id] = { force };
+    return s;
+  };
+
+  /** A shutdown of `id` waiting on "shut it down anyway?", with the `force` it was sent with. */
+  signedInAsk = (id: string): { force: boolean } | null => this.signedInAsks[id] ?? null;
+
+  /** The owner answered (or dismissed) the question. */
+  clearSignedInAsk = (id: string): void => {
+    delete this.signedInAsks[id];
+  };
 
   keepAwake = (id: string, k: KeepAwake): Promise<MachinePowerStatus | null> =>
     this.onMachine(id, (m) => m.client.request('power.keepAwake', k));

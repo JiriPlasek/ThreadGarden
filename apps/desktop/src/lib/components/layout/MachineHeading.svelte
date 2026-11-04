@@ -137,16 +137,14 @@
   const quiet = (p: Promise<unknown>): void => void p.catch(() => {});
   /** Asking whether to shut down a machine that is at work. */
   let confirmShutDown = $state(false);
-  /** Asking whether to shut down a Windows PC that someone is signed in at. */
-  let confirmSignedIn = $state(false);
-  /** Asks the machine to shut down; one with someone signed in at it says so first. */
-  const ask = async (): Promise<void> => {
-    const s = await power.shutDown(machine.id, false);
-    if (s?.problem === SIGNED_IN) confirmSignedIn = true;
-  };
+  /**
+   * Asking whether to shut down a Windows PC that someone is signed in at: open while
+   * a shutdown from here or from the unpushed notice waits on it (see `signedInAsk`).
+   */
+  const signedInAsk = $derived(power.signedInAsk(machine.id));
   const shutDown = (): void => {
     if (power.machine(machine.id)?.busy) confirmShutDown = true;
-    else quiet(ask());
+    else quiet(power.shutDown(machine.id, false));
   };
   const keepAwake = (mode: 'until' | 'always' | 'off', ms?: number): void =>
     quiet(
@@ -283,14 +281,23 @@
     title="{name} is working on something. Shut it down anyway?"
     confirmLabel="Shut down"
     destructive
-    onConfirm={() => quiet(ask())}
+    onConfirm={() => quiet(power.shutDown(machine.id, false))}
   />
   <ConfirmDialog
-    bind:open={confirmSignedIn}
+    bind:open={
+      () => signedInAsk !== null,
+      (open) => {
+        if (!open) power.clearSignedInAsk(machine.id);
+      }
+    }
     title="Someone is signed in on {name}. Shut it down anyway?"
     confirmLabel="Shut down"
     destructive
-    onConfirm={() => quiet(power.shutDown(machine.id, true))}
+    onConfirm={() => {
+      // The same force as the request it answers (despite unpushed work, or not).
+      const force = signedInAsk?.force ?? false;
+      quiet(power.shutDown(machine.id, force, true));
+    }}
   />
   <!-- Always present, so assistive technology announces what is put in it. -->
   <p class="px-2 text-xs text-red-700 empty:hidden dark:text-red-400" role="status">
