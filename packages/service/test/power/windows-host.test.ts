@@ -32,13 +32,39 @@ const QUSER_HEADER =
   ' USERNAME              SESSIONNAME        ID  STATE   IDLE TIME  LOGON TIME\r\n';
 
 describe('detectWsl', () => {
-  it('detectWsl is true with WSLInterop or WSL_DISTRO_NAME, false otherwise', () => {
-    const interop = '/proc/sys/fs/binfmt_misc/WSLInterop';
-    expect(detectWsl({ exists: (p) => p === interop, env: {} })).toBe(true);
-    expect(detectWsl({ exists: () => false, env: { WSL_DISTRO_NAME: 'threadgarden' } })).toBe(true);
-    expect(detectWsl({ exists: () => false, env: {} })).toBe(false);
+  const OSRELEASE = '/proc/sys/kernel/osrelease';
+  /** A machine where only `files` exist, with their contents, and `env`. */
+  const machine = (files: Record<string, string>, env: NodeJS.ProcessEnv = {}) => ({
+    exists: (p: string) => p in files,
+    readFile: (p: string) => {
+      if (!(p in files)) throw Object.assign(new Error(`ENOENT: ${p}`), { code: 'ENOENT' });
+      return files[p]!;
+    },
+    env,
+  });
+  const UBUNTU = { [OSRELEASE]: '6.8.0-45-generic\n' };
+
+  it('detectWsl is true with WSLInterop, WSLInterop-late, a microsoft osrelease or WSL_DISTRO_NAME, false otherwise', () => {
+    expect(detectWsl(machine({ ...UBUNTU, '/proc/sys/fs/binfmt_misc/WSLInterop': '' }))).toBe(true);
+    // systemd in WSL can register interop again under this name, with the plain one gone.
+    expect(detectWsl(machine({ ...UBUNTU, '/proc/sys/fs/binfmt_misc/WSLInterop-late': '' }))).toBe(
+      true,
+    );
+    expect(detectWsl(machine(UBUNTU, { WSL_DISTRO_NAME: 'threadgarden' }))).toBe(true);
+    // An Ubuntu PC.
+    expect(detectWsl(machine(UBUNTU))).toBe(false);
     // Set but empty is not a distro name.
-    expect(detectWsl({ exists: () => false, env: { WSL_DISTRO_NAME: '' } })).toBe(false);
+    expect(detectWsl(machine(UBUNTU, { WSL_DISTRO_NAME: '' }))).toBe(false);
+  });
+
+  it('the kernel alone says WSL: a user service with no interop entry and no distro name', () => {
+    expect(detectWsl(machine({ [OSRELEASE]: '6.6.87.2-microsoft-standard-WSL2\n' }))).toBe(true);
+    // WSL 1's kernel string, in its own case.
+    expect(detectWsl(machine({ [OSRELEASE]: '4.4.0-19041-Microsoft\n' }))).toBe(true);
+  });
+
+  it('an unreadable osrelease is not WSL by itself', () => {
+    expect(detectWsl(machine({}))).toBe(false);
   });
 });
 

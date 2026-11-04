@@ -23,7 +23,7 @@ const START_RETRY_MS = 10_000;
 /** …this many times (about 5 minutes); after that, on every minute tick. */
 const START_RETRIES = 30;
 /**
- * A service still running this long after `systemctl poweroff` was accepted is on
+ * A service still running this long after its poweroff was accepted is on
  * a machine that is not going down: a real shutdown stops it within seconds. Well
  * inside the switch's 15 min arming, after which the switch cuts (rules.ts).
  */
@@ -95,16 +95,17 @@ const switchProblem = (err: unknown): string =>
   err instanceof PowerError ? err.message : 'The power switch could not be driven.';
 
 /**
- * Whether `systemctl poweroff` was refused. One ended by an outside signal is not:
- * systemd stops this service, and its children, once the shutdown is under way.
- * One killed by our own timeout (`killed`) is: the machine is not going down.
+ * Whether the poweroff was refused. One ended by an outside signal is not: the
+ * shutdown stops this service, and its children, once it is under way. One killed
+ * by our own timeout (`killed`) is: the machine is not going down. (Windows'
+ * `shutdown.exe` throws neither: see `windowsHost`.)
  */
 const refused = (err: unknown): boolean => {
   const e = err as { signal?: unknown; killed?: unknown } | null;
   return e?.killed === true || !(typeof e?.signal === 'string' && e.signal !== '');
 };
 
-/** The first line of what went wrong (stderr first: `systemctl poweroff` explains itself there). */
+/** The first line of what went wrong (stderr first: a refused poweroff explains itself there). */
 const firstLine = (err: unknown): string => {
   const e = err as { stderr?: unknown; message?: unknown } | null;
   const text =
@@ -114,7 +115,10 @@ const firstLine = (err: unknown): string => {
   return text.split('\n')[0]!.trim();
 };
 
-/** Why `systemctl poweroff` failed, in a few words. */
+/**
+ * Why the poweroff failed, in a few words. Only `systemctl poweroff` is ever `killed`
+ * (Windows' timeout says "shutdown.exe timed out" itself).
+ */
 const poweroffReason = (err: unknown): string =>
   (err as { killed?: unknown } | null)?.killed === true ? 'systemctl timed out' : firstLine(err);
 
@@ -458,7 +462,7 @@ export class ShutdownSequence {
       const reason = poweroffReason(err);
       if (!refused(err)) {
         this.o.log?.info(
-          `power: systemctl poweroff ended by a signal (${reason}); the machine is going down`,
+          `power: the poweroff ended by a signal (${reason}); the machine is going down`,
         );
         this.watchPoweroff();
         return this.status();

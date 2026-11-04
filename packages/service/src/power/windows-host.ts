@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 
 /**
  * A worker running in WSL on a Windows PC: Windows does the powering off. Its
@@ -10,8 +10,13 @@ export const SHUTDOWN_EXE = '/mnt/c/Windows/System32/shutdown.exe';
 export const REG = '/mnt/c/Windows/System32/reg.exe';
 export const QUSER = '/mnt/c/Windows/System32/quser.exe';
 
-/** Present in every WSL distro with interop on (WSL 1 and 2). */
-const WSL_INTEROP = '/proc/sys/fs/binfmt_misc/WSLInterop';
+/** WSL's interop entry; with systemd on, it may be registered again under the second name. */
+const WSL_INTEROP = [
+  '/proc/sys/fs/binfmt_misc/WSLInterop',
+  '/proc/sys/fs/binfmt_misc/WSLInterop-late',
+];
+/** The kernel's release: WSL's own kernels name Microsoft in it. */
+const OSRELEASE = '/proc/sys/kernel/osrelease';
 
 /** quser and reg answer at once; one that takes this long is stuck. */
 const QUERY_TIMEOUT_MS = 15_000;
@@ -52,14 +57,31 @@ export interface WindowsHost {
   shutdown(opts: { force: boolean }): Promise<void>;
 }
 
-/** Whether this process runs in WSL: the interop entry, or the distro name WSL sets. */
+/**
+ * Whether this process runs in WSL. Any one sign is enough, because a miss makes a
+ * Windows PC act as Ubuntu: `systemctl poweroff` stops only the distro, and the
+ * 15-minute cut then cuts a running PC. A systemd user service may not inherit
+ * `WSL_DISTRO_NAME`, and systemd can register interop again as `WSLInterop-late`,
+ * so the kernel's own release string (`…-microsoft-standard-WSL2`) is asked too.
+ */
 export function detectWsl(
-  deps: { exists(p: string): boolean; env: NodeJS.ProcessEnv } = {
+  deps: {
+    exists(p: string): boolean;
+    readFile(p: string): string;
+    env: NodeJS.ProcessEnv;
+  } = {
     exists: existsSync,
+    readFile: (p) => readFileSync(p, 'utf8'),
     env: process.env,
   },
 ): boolean {
-  return deps.exists(WSL_INTEROP) || (deps.env.WSL_DISTRO_NAME ?? '') !== '';
+  if (WSL_INTEROP.some((p) => deps.exists(p))) return true;
+  if ((deps.env.WSL_DISTRO_NAME ?? '') !== '') return true;
+  try {
+    return /microsoft/i.test(deps.readFile(OSRELEASE));
+  } catch {
+    return false; // not Linux, or no /proc: not WSL either
+  }
 }
 
 class TimedOut extends Error {}
