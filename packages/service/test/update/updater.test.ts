@@ -1192,9 +1192,11 @@ describe('the service', () => {
       { id: 2, method: 'pair.claim', params: { code: created.result.code, deviceName: 'Laptop' } },
       { clientId: 'p', origin: 'remote' },
     )) as { result: { token: string } };
-    const device = new WebSocket(`wss://127.0.0.1:${svc.remote!.port}`, [
-      `threadgarden-device.${claimed.result.token}`,
-    ], { rejectUnauthorized: false });
+    const device = new WebSocket(
+      `wss://127.0.0.1:${svc.remote!.port}`,
+      [`threadgarden-device.${claimed.result.token}`],
+      { rejectUnauthorized: false },
+    );
     try {
       await new Promise((resolve, reject) => {
         device.once('open', resolve);

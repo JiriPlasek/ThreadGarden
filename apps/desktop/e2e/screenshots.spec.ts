@@ -109,10 +109,8 @@ test('the pictures', async ({ page }) => {
   await heading.scrollIntoViewIfNeeded();
   const add = settings.getByRole('button', { name: 'Add machine…' });
   await add.scrollIntoViewIfNeeded();
-  const [d, h, a] = [settings, heading, add].map((l) => l.boundingBox());
-  const [dBox, hBox, aBox] = (await Promise.all([d, h, a])) as NonNullable<
-    Awaited<ReturnType<Locator['boundingBox']>>
-  >[];
+  const box = async (l: Locator) => (await l.boundingBox())!;
+  const [dBox, hBox, aBox] = await Promise.all([box(settings), box(heading), box(add)]);
   await page.screenshot({
     path: `${OUT}settings-machines.png`,
     animations: 'disabled',
