@@ -88,7 +88,7 @@
   const starting = $derived(power.turningOn(machine.id));
   // What failed when asked (turning on, shutting down), else why the machine stopped a shutdown.
   const problem = $derived(power.machine(machine.id)?.problem ?? null);
-  // "this PC" is the machine's own word for itself; here, This PC is the desktop.
+  // The wire's wording is generic; here the machine has a name.
   const failure = $derived(
     power.error(machine.id) ??
       (problem === SIGNED_IN ? `Someone is signed in on ${name}` : problem),

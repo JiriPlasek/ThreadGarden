@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  CONSOLE_USER_ARGS,
+  POWERSHELL,
   QUSER,
   REG,
   RESTART_KEYS,
@@ -89,14 +91,71 @@ describe('windowsHost', () => {
   it('signedIn: any other failure counts as nobody, and is logged', async () => {
     const warnings: string[] = [];
     const log = { warn: (m: string) => void warnings.push(m) };
-    const missing = fakeRun(() => {
-      throw Object.assign(new Error(`spawn ${QUSER} ENOENT`), { code: 'ENOENT' });
+    const refused = fakeRun(() => {
+      throw Object.assign(new Error(`spawn ${QUSER} EACCES`), { code: 'EACCES' });
     });
-    expect(await windowsHost({ run: missing.run, log }).signedIn()).toBe(false);
+    expect(await windowsHost({ run: refused.run, log }).signedIn()).toBe(false);
+    // Not the Home fallback: quser is there, it just failed.
+    expect(refused.calls.map((c) => c.file)).toEqual([QUSER]);
     const odd = fakeRun(() => exit(5, 'Access is denied.\r\n'));
     expect(await windowsHost({ run: odd.run, log }).signedIn()).toBe(false);
     expect(warnings).toHaveLength(2);
     expect(warnings[1]).toContain('Access is denied.');
+  });
+
+  describe('Windows Home, which has no quser', () => {
+    const noQuser = (console: () => Promise<RunResult> | RunResult) =>
+      fakeRun((file) => {
+        if (file === QUSER) {
+          throw Object.assign(new Error(`spawn ${QUSER} ENOENT`), { code: 'ENOENT' });
+        }
+        return console();
+      });
+
+    it('asks Windows who is at the console: a name means someone is signed in', async () => {
+      const signed = noQuser(() => ok('HOME-PC\\owner\r\n'));
+      expect(await windowsHost({ run: signed.run }).signedIn()).toBe(true);
+      expect(signed.calls).toEqual([
+        { file: QUSER, args: [], timeoutMs: 15_000 },
+        { file: POWERSHELL, args: CONSOLE_USER_ARGS, timeoutMs: 15_000 },
+      ]);
+      expect(CONSOLE_USER_ARGS).toEqual([
+        '-NoProfile',
+        '-NonInteractive',
+        '-Command',
+        '(Get-CimInstance Win32_ComputerSystem).UserName',
+      ]);
+      expect(POWERSHELL).toBe('/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe');
+
+      const nobody = noQuser(() => ok('\r\n'));
+      expect(await windowsHost({ run: nobody.run }).signedIn()).toBe(false);
+    });
+
+    it('a console query that fails counts as nobody, and is logged', async () => {
+      const warnings: string[] = [];
+      const log = { warn: (m: string) => void warnings.push(m) };
+      const failing = noQuser(() => exit(1, 'Get-CimInstance : Access denied\r\n'));
+      expect(await windowsHost({ run: failing.run, log }).signedIn()).toBe(false);
+      const missing = noQuser(() => {
+        throw Object.assign(new Error(`spawn ${POWERSHELL} ENOENT`), { code: 'ENOENT' });
+      });
+      expect(await windowsHost({ run: missing.run, log }).signedIn()).toBe(false);
+      expect(warnings).toHaveLength(2);
+      expect(warnings[0]).toContain('Access denied');
+    });
+
+    it('a console query that hangs counts as nobody after its timeout', async () => {
+      vi.useFakeTimers();
+      const hang = noQuser(() => new Promise<RunResult>(() => {}));
+      let answer: boolean | undefined;
+      void windowsHost({ run: hang.run })
+        .signedIn()
+        .then((v) => (answer = v));
+      await vi.advanceTimersByTimeAsync(14_999);
+      expect(answer).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(answer).toBe(false);
+    });
   });
 
   it('a quser that hangs counts as nobody after its timeout', async () => {

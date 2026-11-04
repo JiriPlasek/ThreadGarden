@@ -71,7 +71,7 @@ describe('power protocol', () => {
   });
 
   it('names a signed-in person as the problem', () => {
-    expect(SIGNED_IN).toBe('Someone is signed in on this PC');
+    expect(SIGNED_IN).toBe('Someone is signed in on the machine');
   });
 
   it('power.shutdown takes despiteSignedIn as an optional second confirm', () => {

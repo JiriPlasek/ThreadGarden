@@ -9,6 +9,15 @@ import { existsSync, readFileSync } from 'node:fs';
 export const SHUTDOWN_EXE = '/mnt/c/Windows/System32/shutdown.exe';
 export const REG = '/mnt/c/Windows/System32/reg.exe';
 export const QUSER = '/mnt/c/Windows/System32/quser.exe';
+/** Asked instead of quser where Windows has none (Home). */
+export const POWERSHELL = '/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe';
+/** Who is signed in at the console: a name, or nothing. */
+export const CONSOLE_USER_ARGS = [
+  '-NoProfile',
+  '-NonInteractive',
+  '-Command',
+  '(Get-CimInstance Win32_ComputerSystem).UserName',
+];
 
 /** WSL's interop entry; with systemd on, it may be registered again under the second name. */
 const WSL_INTEROP = [
@@ -18,7 +27,7 @@ const WSL_INTEROP = [
 /** The kernel's release: WSL's own kernels name Microsoft in it. */
 const OSRELEASE = '/proc/sys/kernel/osrelease';
 
-/** quser and reg answer at once; one that takes this long is stuck. */
+/** quser, reg and the console-user query answer at once; one that takes this long is stuck. */
 const QUERY_TIMEOUT_MS = 15_000;
 /** shutdown.exe only schedules the shutdown, so it returns quickly too. */
 const SHUTDOWN_TIMEOUT_MS = 30_000;
@@ -126,13 +135,33 @@ export function windowsHost(
     return Promise.race([run(file, args, { timeoutMs }), late]).finally(() => clearTimeout(timer));
   };
 
+  /**
+   * Windows Home has no quser: there the console's user is asked of Windows itself
+   * (it misses only Remote Desktop sessions, which Home cannot host). A name means
+   * someone is signed in; a failure counts as nobody, logged.
+   */
+  const consoleUser = async (): Promise<boolean> => {
+    try {
+      const r = await bounded(POWERSHELL, [...CONSOLE_USER_ARGS], QUERY_TIMEOUT_MS);
+      if (r.code === 0) return r.stdout.trim() !== '';
+      deps.log?.warn(
+        `power: the console user query exited with ${r.code ?? 'a signal'}, counting nobody as signed in: ${firstLine(r.stderr)}`,
+      );
+    } catch (err) {
+      deps.log?.warn(
+        `power: the console user query failed, counting nobody as signed in: ${errorText(err)}`,
+      );
+    }
+    return false;
+  };
+
   return {
     async signedIn() {
       let r: RunResult;
       try {
         r = await bounded(QUSER, [], QUERY_TIMEOUT_MS);
       } catch (err) {
-        // Windows Home has no quser: nobody can be seen, so nobody counts as signed in.
+        if ((err as { code?: unknown } | null)?.code === 'ENOENT') return consoleUser();
         deps.log?.warn(`power: quser failed, counting nobody as signed in: ${errorText(err)}`);
         return false;
       }
