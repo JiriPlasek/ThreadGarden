@@ -107,6 +107,19 @@ threadgarden status
 
 **Updating:** from 0.8.0 on, use **Update to ‹version›** in Settings → Machines. It rolls back by itself if the new version doesn't start. Older machines repeat step 5.
 
+**Or a Windows PC (through WSL).** On Windows 11 22H2 or newer, signed in as the Windows user who'll own the worker, open PowerShell with **Run as administrator**. The script sets up WSL, a `threadgarden` distro, networking and a start-at-boot task; the check must print `True`.
+
+```powershell
+mkdir ~\threadgarden-setup -Force | Out-Null; cd ~\threadgarden-setup
+$base = 'https://github.com/JiriPlasek/ThreadGarden/releases/latest/download'
+curl.exe -fL -O "$base/threadgarden-setup-worker.ps1" -O "$base/threadgarden-setup-worker.ps1.sha256"
+(Get-FileHash .\threadgarden-setup-worker.ps1).Hash -eq (Get-Content .\threadgarden-setup-worker.ps1.sha256).Split(' ')[0]
+Unblock-File .\threadgarden-setup-worker.ps1
+powershell -ExecutionPolicy Bypass -File .\threadgarden-setup-worker.ps1
+```
+
+Then open the distro with `wsl -d threadgarden`, run `cd ~`, and do steps 3 to 6 above inside it. The [guide](docs/remote-machines.md#a-windows-pc-as-the-worker-wsl) explains what the script changes, power control and removal.
+
 ## Your data
 
 Threadgarden never writes to `~/.claude`; the only things there are Claude Code's own transcripts of your chats. A chat moved to another machine is kept in Threadgarden's data on that machine.
