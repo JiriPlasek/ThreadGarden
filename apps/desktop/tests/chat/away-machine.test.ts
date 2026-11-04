@@ -326,10 +326,7 @@ describe('a machine that is away', () => {
     await waitFor(() => expect(screen.queryByText(NOTE_AWAY)).toBeNull());
     // No Schedule send while one waits: it could go out first.
     expect(screen.queryByRole('button', { name: 'More send options' })).toBeNull();
-    await userEvent.type(
-      screen.getByRole('textbox', { name: /message/i }),
-      'And the docs{Enter}',
-    );
+    await userEvent.type(screen.getByRole('textbox', { name: /message/i }), 'And the docs{Enter}');
     await waitFor(() => expect(queued(env)).toHaveLength(1));
     expect(queued(env)[0]).toMatchObject({ sessionId: 'r1', kind: 'send', text: 'And the docs' });
     expect(env.remote.calls('chat.send')).toHaveLength(0);

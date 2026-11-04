@@ -81,9 +81,7 @@
             {/if}
             <span class="min-w-0 flex-1 truncate" title={s.text}>
               {preview(s)}{#if s.imageCount > 0 && s.text.trim()}
-                <span class="text-muted-foreground">
-                  · {imageCountText(s.imageCount)}</span
-                >{/if}
+                <span class="text-muted-foreground"> · {imageCountText(s.imageCount)}</span>{/if}
             </span>
             <button
               type="button"

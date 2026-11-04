@@ -204,9 +204,7 @@ test('an away machine shows its copied chats and the last messages', async ({ pa
   await expect(page.getByRole('tab', { selected: true })).toHaveAttribute('data-tab', chat);
   const messages = page.getByRole('region', { name: 'Messages' });
   await expect(
-    page.getByText(
-      new RegExp(`^${MACHINE} isn't connected: showing its last few messages, from `),
-    ),
+    page.getByText(new RegExp(`^${MACHINE} isn't connected: showing its last few messages, from `)),
   ).toBeVisible();
   await expect(page.getByText(`… earlier messages are on ${MACHINE}`)).toBeVisible();
   await expect(messages.getByText(said)).toBeVisible();

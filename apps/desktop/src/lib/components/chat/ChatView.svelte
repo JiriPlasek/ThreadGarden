@@ -623,10 +623,7 @@
         {:else if copiedAt !== null}
           <div class="mx-auto w-full max-w-4xl shrink-0 space-y-1 px-4 pt-2 text-xs">
             <p class="bg-muted/60 rounded-md border px-3 py-1.5" role="status">
-              {awayAs}: showing its last few messages, from {agoText(
-                copiedAt,
-                copyNow,
-              )}.
+              {awayAs}: showing its last few messages, from {agoText(copiedAt, copyNow)}.
             </p>
             <p class="text-muted-foreground px-1">… earlier messages are on {machineName}</p>
           </div>
