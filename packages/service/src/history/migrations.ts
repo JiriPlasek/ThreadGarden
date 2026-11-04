@@ -291,6 +291,23 @@ const steps: string[] = [
     PRIMARY KEY (machine_id, session_id)
   );
   `,
+  // a machine that is away: messages written for a machine this desktop is not
+  // connected to, waiting here until it accepts them (`away/queue.ts`). `payload`
+  // is what the machine is sent; the row's `id` is the message's id there.
+  `
+  CREATE TABLE IF NOT EXISTS away_queue (
+    id TEXT PRIMARY KEY,
+    machine_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    state TEXT NOT NULL,
+    reason TEXT,
+    error TEXT
+  );
+  CREATE INDEX IF NOT EXISTS away_queue_machine ON away_queue (machine_id, created_at);
+  `,
 ];
 
 /** Runs the steps not run yet; `upTo` stops early (tests build older schemas with it). */

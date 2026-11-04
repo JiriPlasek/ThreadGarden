@@ -77,6 +77,26 @@ describe('the copy store', () => {
     expect(store.tails('nobody')).toEqual({});
   });
 
+  it('a stored copy that no longer reads back is skipped and logged, not thrown', () => {
+    const store = fresh();
+    const warnings: string[] = [];
+    const logged = new CopyStore(db.raw, () => 5_000, { warn: (m) => warnings.push(m) });
+    db.raw
+      .prepare('INSERT INTO machine_copies (machine_id, json, copied_at) VALUES (?, ?, ?)')
+      .run('m-1', '{"machineId":"m-1"}', 1);
+    db.raw
+      .prepare(
+        'INSERT INTO chat_copies (machine_id, session_id, json, last_activity, copied_at) VALUES (?, ?, ?, ?, ?)',
+      )
+      .run('m-1', 's-1', 'not json', 1, 1);
+    expect(logged.get('m-1')).toBeNull();
+    expect(logged.chat('m-1', 's-1')).toBeNull();
+    expect(warnings).toHaveLength(2);
+    expect(warnings.join('\n')).toContain('m-1');
+    // Without a log it still answers null.
+    expect(store.get('m-1')).toBeNull();
+  });
+
   it('forget drops the lists and chats of one machine', () => {
     const store = fresh();
     store.saveLists(lists([summary(1)]));

@@ -7,6 +7,7 @@ import { WebSocket } from 'ws';
 import { PROTOCOL_VERSION } from '@threadgarden/protocol';
 import { acquireInstanceLock, readDiscovery } from '../src/discovery.js';
 import { openDb } from '../src/history/db.js';
+import { PairedMachines } from '../src/machine/paired-machines.js';
 import { createLogger } from '../src/logger.js';
 import { SessionHost } from '../src/chat/session-host.js';
 import { startService, type ServiceHandle } from '../src/main.js';
@@ -407,6 +408,62 @@ describe('startService', () => {
     timers[0]!(); // idle clock restarted at last live observation
     expect(await readDiscovery(dir)).not.toBeNull();
     await svc.close();
+  });
+
+  it("the local service doesn't idle-exit while rows wait", async () => {
+    let now = 0;
+    const timers: (() => void)[] = [];
+    const stopped = vi.fn();
+    const svc = await startService({
+      dataDir: dir,
+      claudeConfigDir: join(dir, 'claude-missing'),
+      adapter: generateCorpus({ sessions: 1, projects: 1, bigSessionMessages: 0 }),
+      installSignalHandlers: false,
+      logger: quietLogger(),
+      liveCount: () => 0,
+      clock: () => now,
+      setInterval: (fn) => {
+        timers.push(fn);
+        return 1 as unknown as NodeJS.Timeout;
+      },
+      // Closing begins by stopping the idle timer: seen at once, before the close settles.
+      clearInterval: stopped,
+    });
+    // A paired machine, locked (no token): its message waits.
+    const other = openDb(join(dir, 'threadgarden.db'));
+    new PairedMachines(other.raw).add({
+      id: 'm-1',
+      name: 'Ubuntu PC',
+      address: '127.0.0.1',
+      port: 1,
+      certPem: 'pem',
+      fingerprint: 'fp',
+      deviceId: 'd-1',
+      addedAt: 0,
+    });
+    other.close();
+    const local = { clientId: 't', origin: 'local' as const };
+    const queued = (await svc.router.dispatch(
+      {
+        id: 1,
+        method: 'away.queue',
+        params: { machineId: 'm-1', sessionId: 's-1', kind: 'send', text: 'hi' },
+      },
+      local,
+    )) as { result: { id: string } };
+    now = 31 * 60_000;
+    timers[0]!();
+    expect(stopped).not.toHaveBeenCalled();
+    // Taken back: nothing waits, and the idle clock runs from the last waiting tick.
+    await svc.router.dispatch(
+      { id: 2, method: 'away.cancel', params: { id: queued.result.id } },
+      local,
+    );
+    const done = new Promise<void>((r) => svc.onClosed(r));
+    now = 62 * 60_000;
+    timers[0]!();
+    expect(stopped).toHaveBeenCalled();
+    await done;
   });
 
   it('never exits on idle when headless', async () => {

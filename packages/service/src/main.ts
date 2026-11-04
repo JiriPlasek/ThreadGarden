@@ -42,6 +42,9 @@ import type { AgentAdapter } from './sdk/adapter.js';
 import type { ClaudeFound, ClaudeProblem } from './sdk/claude-path.js';
 import { buildSessionEnv } from './sdk/real-adapter.js';
 import { CopyStore } from './away/copies.js';
+import { AwayDeliverer, connectToMachine } from './away/deliverer.js';
+import { AwayQueue } from './away/queue.js';
+import { registerAwayHandlers } from './server/handlers/away.js';
 import { registerCopyHandlers } from './server/handlers/copies.js';
 import { registerChatHandlers } from './server/handlers/chat.js';
 import { busyOf, MoveLocks, registerMoveHandlers, type MoveGit } from './server/handlers/move.js';
@@ -349,6 +352,8 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   let apiKey: string | null = null;
   let db: Db | undefined;
   let power: PowerHub | undefined;
+  /** Messages waiting for paired machines that are away (protocol 11; with a database). */
+  let away: AwayDeliverer | undefined;
   let host: SessionHost | undefined;
   /** Chats being moved to another machine (protocol 9). */
   const moveLocks = new MoveLocks(clock);
@@ -569,11 +574,29 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       relay = machineRelay;
       // machine.*, pairing, devices and machines.* (v1.4); none of them without a database.
       // What the desktop keeps of each paired machine, for when it is off (protocol 11).
-      const copies = new CopyStore(opened.raw);
+      const copies = new CopyStore(opened.raw, clock, { warn: (m) => log.warn(m) });
       registerCopyHandlers(router, { store: copies });
+      // Power switches of the paired machines (v1.4): local only, never polled.
+      const hub = new PowerHub(opened, { log: { warn: (m) => log.warn(m) } });
+      power = hub;
+      // Messages written while a paired machine is away go out from here (protocol 11).
+      const deliverer = new AwayDeliverer({
+        queue: new AwayQueue(opened.raw, clock),
+        machines: paired,
+        power: hub,
+        connect: connectToMachine(paired),
+        // This desktop's own business: never told to its devices.
+        emit: (e) => server?.broadcast(e),
+        now: clock,
+        timers: opts.sessionTimers ?? realTimers,
+        log,
+      });
+      away = deliverer;
+      registerAwayHandlers(router, { deliverer, machines: paired });
       registerMachineHandlers(router, {
         db: opened,
         copies,
+        away: deliverer,
         devices,
         identity: () => machineOf(opened),
         ...(tls ? { tls } : {}),
@@ -582,9 +605,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         // Paired machines are this machine's business: never told to its devices.
         emitLocal: (e) => server?.broadcast(e),
       });
-      // Power switches of the paired machines (v1.4): local only, never polled.
-      power = new PowerHub(opened, { log: { warn: (m) => log.warn(m) } });
-      registerPowerClientHandlers(router, { hub: power });
+      registerPowerClientHandlers(router, { hub });
       // This machine's own power control: open to paired devices, announced to all.
       if (idle) {
         // Keep awake outlives a restart (an expired `until` comes back as off).
@@ -1022,6 +1043,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     // Clients can connect now; `claude` is found in the background (§8 cold start).
     if (!claude.current && opts.locateClaude) void relocate();
   } catch (err) {
+    await step('away', () => away?.close());
     await step('moves', () => moveHandlers?.close());
     await step('poller', () => poller?.stop());
     await step('watcher', () => watcher?.close());
@@ -1063,6 +1085,8 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   };
   // Sends due while the service was not running go out now (marked late).
   checkScheduled(true);
+  // Messages left waiting for an away machine: tried now, and its start begins again.
+  away?.start();
   startSync?.();
   poller?.start();
 
@@ -1090,6 +1114,8 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       try {
         clearTimer(timer);
         await step('scheduled sends', () => scheduled?.dispose());
+        // Its links close, and the rows going out wait for the next run.
+        await step('away', () => away?.close());
         await step('moves', () => moveHandlers?.close());
         await step('usage', () => usage?.dispose());
         // Live sessions end with the process; the registry still lists them,
@@ -1134,6 +1160,15 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       return true; // when unsure, stay: exiting would miss a send
     }
   };
+  /** Messages waiting for an away machine keep the service running (protocol 11). */
+  const awayWaiting = (): boolean => {
+    try {
+      return away?.waiting() ?? false;
+    } catch (err) {
+      log.error(`away: ${errorText(err)}`);
+      return true; // when unsure, stay: exiting would leave a message behind
+    }
+  };
   // A headless service belongs to its machine: it never exits on its own.
   const timer = setTimer(() => {
     sweepHolds();
@@ -1148,7 +1183,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     if (!closing) {
       shutdown?.idleTick().catch((err: unknown) => log.error(`idle shutdown: ${errorText(err)}`));
     }
-    if (liveCount() > 0 || localClients + remoteClients > 0 || sendsPending()) {
+    if (liveCount() > 0 || localClients + remoteClients > 0 || sendsPending() || awayWaiting()) {
       lastActive = clock();
     } else if (!headless && clock() - lastActive >= IDLE_EXIT_MS) {
       log.info('idle for 30 minutes, exiting');

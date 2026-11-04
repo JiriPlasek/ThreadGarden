@@ -64,12 +64,6 @@ describe('methods a paired device may not call', () => {
   const machinesMethods = Object.keys(methods).filter((m) => m.startsWith('machines.'));
   // Protocol 11: the desktop's own copies and waiting messages, never a device's.
   const awayMethods = Object.keys(methods).filter((m) => /^(copies|away)\./.test(m));
-  // away.* is held until its handlers exist (no handler answers METHOD_NOT_FOUND, not
-  // FORBIDDEN); Task 4 turns those into real cases.
-  for (const m of awayMethods.filter((m) => m.startsWith('away.'))) {
-    it.todo(`answers ${m} with FORBIDDEN`);
-  }
-  const copiesMethods = awayMethods.filter((m) => m.startsWith('copies.'));
   const forbidden = [
     'service.shutdown',
     'ui.error',
@@ -80,7 +74,7 @@ describe('methods a paired device may not call', () => {
     'update.latest',
     ...powerClient,
     ...machinesMethods,
-    ...copiesMethods,
+    ...awayMethods,
   ];
 
   it('covers every copies.* and away.* method', () => {

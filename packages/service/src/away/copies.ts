@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite';
+import type { z } from 'zod';
 import {
   ChatCopySchema,
   CopyItemSchema,
@@ -25,6 +26,8 @@ export class CopyStore {
   constructor(
     private readonly raw: DatabaseSync,
     private readonly now: () => number = Date.now,
+    /** Where a stored copy that no longer reads back is reported. */
+    private readonly log?: { warn(message: string): void },
   ) {}
 
   /** Replaces the machine's lists; chat copies no longer listed go with them. */
@@ -98,14 +101,33 @@ export class CopyStore {
     const row = this.raw
       .prepare('SELECT json FROM machine_copies WHERE machine_id = ?')
       .get(machineId) as { json: string } | undefined;
-    return row ? MachineCopySchema.parse(JSON.parse(row.json)) : null;
+    return row ? this.read(row.json, MachineCopySchema, `machine ${machineId}`) : null;
   }
 
   chat(machineId: string, sessionId: string): ChatCopy | null {
     const row = this.raw
       .prepare('SELECT json FROM chat_copies WHERE machine_id = ? AND session_id = ?')
       .get(machineId, sessionId) as { json: string } | undefined;
-    return row ? ChatCopySchema.parse(JSON.parse(row.json)) : null;
+    return row ? this.read(row.json, ChatCopySchema, `chat ${sessionId} of ${machineId}`) : null;
+  }
+
+  /**
+   * A stored copy, or null when it no longer reads back (written by another
+   * version, or damaged): the copy is only a convenience, and the next refresh
+   * replaces it, so it is skipped rather than failing the caller.
+   */
+  private read<T>(json: string, schema: z.ZodType<T>, what: string): T | null {
+    let value: unknown;
+    try {
+      value = JSON.parse(json);
+    } catch {
+      this.log?.warn(`copies: the copy of ${what} is not JSON; skipped`);
+      return null;
+    }
+    const parsed = schema.safeParse(value);
+    if (parsed.success) return parsed.data;
+    this.log?.warn(`copies: the copy of ${what} no longer reads back; skipped`);
+    return null;
   }
 
   /** Each copied chat's `lastActivity`, by session id: what the copy already has. */
