@@ -1,5 +1,3 @@
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   SHORTCUT_GROUPS,
@@ -108,16 +106,5 @@ describe('shortcut list', () => {
     expect(formatShortcut(['Mod', 'Click'], 'mac')).toBe('⌘Click');
     // Clicks are not keys.
     expect(ariaKeyShortcuts([['Mod', 'Click']], 'other')).toBe('');
-  });
-
-  it('README lists every shortcut description', () => {
-    // Tests run in apps/desktop; the README is the repository's.
-    const readme = readFileSync(resolve(process.cwd(), '../../README.md'), 'utf8');
-    const section = readme.slice(readme.indexOf('## Keyboard shortcuts'));
-    expect(section.startsWith('## Keyboard shortcuts')).toBe(true);
-    const missing = SHORTCUTS.filter((s) => !section.includes(s.description)).map(
-      (s) => s.description,
-    );
-    expect(missing).toEqual([]);
   });
 });

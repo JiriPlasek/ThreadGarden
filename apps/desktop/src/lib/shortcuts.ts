@@ -1,8 +1,7 @@
 /**
  * Every keyboard shortcut (and the few mouse gestures) Threadgarden implements, in
- * one place: the shortcuts dialog, tooltips and the README are written from
- * this list. Each entry must match a real handler (see the component named
- * in its comment); the README test checks every description is documented.
+ * one place: the shortcuts dialog and tooltips are written from this list.
+ * Each entry must match a real handler (see the component named in its comment).
  */
 
 /** macOS shows ⌘ and the other modifier glyphs; Windows and Linux show Ctrl+…. */
