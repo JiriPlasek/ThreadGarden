@@ -327,7 +327,9 @@ export class MergedList {
         }),
         api.onOpen(refetch),
         api.onStatus((s) => {
-          if (s !== 'open' && this.feeds.has(scope.machineId)) refetch();
+          // Any drop, even one before its first answer was taken in: a list in
+          // flight would leave out what it said live, and its copy must be asked.
+          if (s !== 'open') refetch();
         }),
       ];
       // A machine that appears later is named in `skipped` until it connects.

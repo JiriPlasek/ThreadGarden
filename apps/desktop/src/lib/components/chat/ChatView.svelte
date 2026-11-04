@@ -1,10 +1,5 @@
 <script lang="ts">
-  import {
-    AWAY_CAPABILITY,
-    type AwayItem,
-    type ImageRef,
-    type ScheduledSend,
-  } from '@threadgarden/protocol';
+  import type { AwayItem, ImageRef, ScheduledSend } from '@threadgarden/protocol';
   import ArrowRightLeftIcon from '@lucide/svelte/icons/arrow-right-left';
   import CheckIcon from '@lucide/svelte/icons/check';
   import GaugeIcon from '@lucide/svelte/icons/gauge';
@@ -21,7 +16,8 @@
   import { RequestError } from '#lib/service/client.js';
   import type { ResumeCheck } from '#lib/state/chats.svelte.js';
   import { useApp, useScope } from '#lib/state/context.js';
-  import { machineNameOf } from '#lib/state/machines.svelte.js';
+  import { takesAway } from '#lib/state/copy-api.js';
+  import { machineAway as isAway, machineNameOf } from '#lib/state/machines.svelte.js';
   import { chatKey, type ChatRef } from '#lib/state/refs.js';
   import type { SendWhen } from '#lib/state/scheduled.svelte.js';
   import ActivityPanel from './ActivityPanel.svelte';
@@ -100,7 +96,7 @@
 
   const entry = $derived(machines.get(scope.machineId));
   /** Not connected to the chat's machine: messages wait on this device. */
-  const machineAway = $derived(!!entry && !entry.local && entry.status !== 'on');
+  const machineAway = $derived(isAway(machines, scope.machineId));
   /** When the copy this chat shows was made (null: the chat is the machine's own). */
   const copiedAt = $derived(chat?.copiedAt ?? null);
   /**
@@ -109,10 +105,8 @@
    * the next message), and it has no Stop, no fork and no live pickers.
    */
   const readOnly = $derived(copiedAt !== null || machineAway);
-  /** The machine takes a message exactly once (as its copy says, else its last hello). */
-  const canQueue = $derived(
-    (scope.copy?.info ?? entry?.info)?.capabilities.includes(AWAY_CAPABILITY) === true,
-  );
+  /** The machine takes a message exactly once (its last hello, else its copy, says so). */
+  const canQueue = $derived(takesAway(entry?.info, scope.copy?.info));
   /** Its plug reads off, or this device is turning it on. */
   const turningOn = $derived.by((): boolean => {
     const shown = entry ? machines.shown(entry) : 'on';

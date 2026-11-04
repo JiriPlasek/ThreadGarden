@@ -37,6 +37,16 @@ export type CopyApiOptions = {
 };
 
 /**
+ * Whether a machine takes a message exactly once (`away`), so one may wait
+ * for it here. Its hello from this run is the newer word (it may have been
+ * updated since its copy was made), else its copy's info; knowing nothing, no.
+ */
+export const takesAway = (
+  hello: MachineInfo | null | undefined,
+  copied: MachineInfo | null | undefined,
+): boolean => (hello ?? copied)?.capabilities.includes(AWAY_CAPABILITY) === true;
+
+/**
  * Ruling R10: a machine that is away runs nothing, whatever its chats were
  * doing when it was last seen. What waits on the user (Needs you, unread,
  * back from hold) still does.
@@ -159,12 +169,10 @@ export const copyApi = (
   /**
    * Every message for the machine passes here (the composer, Send again, a
    * Move's note, a new chat): one that can't take a message exactly once
-   * (no `away`, as its copy says, else its last hello) is never queued, as a
-   * retry could reach it twice.
+   * (no `away`: `takesAway`) is never queued, as a retry could reach it twice.
    */
   const mayQueue = async (): Promise<void> => {
-    const info = (await read())?.info ?? o.hello?.() ?? null;
-    if (info?.capabilities.includes(AWAY_CAPABILITY)) return;
+    if (takesAway(o.hello?.(), (await read())?.info)) return;
     throw new RequestError(AWAY_ERROR, `Update ${o.name()} to send while it's off`);
   };
 

@@ -248,9 +248,18 @@ describe('the copy API of a machine that is away', () => {
     await refused(old.api.request('chat.send', { sessionId: 'old', text: 'hi' }), UPDATE);
     await refused(old.api.request('chat.create', { cwd: '/work/alpha', text: 'Start' }), UPDATE);
     expect(queuedOf(old.local)).toHaveLength(0);
-    // The copy's info wins over the last hello.
-    const stale = setup({ copy: machineCopy({ info: older }), hello: newer });
-    await refused(stale.api.request('chat.send', { sessionId: 'old', text: 'hi' }), UPDATE);
+    // The last hello is the newer word: updated, reconnected and off again before
+    // the copy caught up, the machine takes it.
+    const updated = setup({ copy: machineCopy({ info: older }), hello: newer });
+    await updated.api.request('chat.send', { sessionId: 'old', text: 'hi' });
+    expect(queuedOf(updated.local)).toHaveLength(1);
+    // And the other way round: the hello says it can't, whatever the copy says.
+    const downgraded = setup({ copy: machineCopy(), hello: older });
+    await refused(downgraded.api.request('chat.send', { sessionId: 'old', text: 'hi' }), UPDATE);
+    // No hello this run: the copy's info decides.
+    const copiedOnly = setup({ copy: machineCopy() });
+    await copiedOnly.api.request('chat.send', { sessionId: 'old', text: 'hi' });
+    expect(queuedOf(copiedOnly.local)).toHaveLength(1);
     // No copy: the machine's last hello decides; knowing nothing, nothing is queued.
     const unknown = setup({ copy: null });
     await refused(unknown.api.request('chat.send', { sessionId: 'old', text: 'hi' }), UPDATE);

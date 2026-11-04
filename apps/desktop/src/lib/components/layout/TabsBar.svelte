@@ -3,6 +3,7 @@
   import PlusIcon from '@lucide/svelte/icons/plus';
   import XIcon from '@lucide/svelte/icons/x';
   import { useApp } from '#lib/state/context.js';
+  import { machineAway } from '#lib/state/machines.svelte.js';
   import { parseChatKey } from '#lib/state/refs.js';
   import { cn } from '#lib/utils.js';
   import { shortcut } from '#lib/shortcuts.js';
@@ -19,12 +20,6 @@
    * Tabs are keyed by chat key (`machineId/sessionId`); each is described by its machine's scope.
    */
   const { tabs, places, interaction, usage, scopes, machines } = useApp();
-
-  /** Not connected to the machine (the chat view's read-only signal): nothing runs there (R10). */
-  const awayFrom = (machineId: string): boolean => {
-    const m = machines.get(machineId);
-    return !!m && !m.local && m.status !== 'on';
-  };
 
   /** In the selected project, on its machine (This PC's when it names none). */
   const newChat = (): void => {
@@ -56,7 +51,8 @@
     // A background tab that was never shown has only a summary (see chats.sync).
     const peek = chat ? undefined : scope?.chats.summaryOf(sessionId);
     const summary = listedSummary ?? chat?.summary ?? peek ?? null;
-    const away = ref ? awayFrom(ref.machineId) : false;
+    // Not connected to the machine (the chat view's read-only signal): nothing runs there (R10).
+    const away = ref ? machineAway(machines, ref.machineId) : false;
     return {
       sessionId,
       title: summary?.title ?? 'Loading…',

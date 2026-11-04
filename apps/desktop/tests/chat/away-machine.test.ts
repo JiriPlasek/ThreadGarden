@@ -6,6 +6,7 @@ import {
   type ChatCopy,
   type ChatItem,
   type ChatStatus,
+  type ChatTask,
   type CopyItem,
   type MachineCopy,
   type PowerConfig,
@@ -74,6 +75,8 @@ const start = async (
     power?: boolean;
     /** What the copied info says the machine can do (default: power and away). */
     capabilities?: string[];
+    /** What its hello says, when that differs from its copy (default: `capabilities`). */
+    helloCapabilities?: string[];
     /** A copy exists (default). */
     copy?: boolean;
     /** The copied tail of chat r1. */
@@ -83,7 +86,7 @@ const start = async (
     /** M1 is connected at first (default: its relay refuses from the start). */
     connected?: boolean;
     /** What M1 answers for chat r1 while connected (default: idle, three messages). */
-    live?: { status: ChatStatus; items: ChatItem[] };
+    live?: { status: ChatStatus; items: ChatItem[]; tasks?: ChatTask[] };
   } = {},
 ) => {
   const capabilities = o.capabilities ?? ['remote', POWER_CAPABILITY, AWAY_CAPABILITY];
@@ -108,7 +111,7 @@ const start = async (
   const hasCopy = o.copy !== false;
   const env = await setupTwoMachines({
     waitForOn: false,
-    m1Capabilities: capabilities,
+    m1Capabilities: o.helloCapabilities ?? capabilities,
     powerPasswords: { [M1]: 'pw' },
     configure: (s) => {
       const changed = () => s.push('away.changed', { items, states });
@@ -156,7 +159,7 @@ const start = async (
           ],
           hasMore: false,
           seq: 3,
-          tasks: [],
+          tasks: o.live?.tasks ?? [],
         }),
         'chat.commands': () => [],
         'chat.models': () => [],
@@ -395,6 +398,63 @@ describe('a machine that is away', () => {
     env.remote.refuse = false;
     await waitFor(() => expect(env.app.machines.get(M1)?.status).toBe('on'), { timeout: 10_000 });
     expect(await within(tab()).findByRole('img', { name: 'Working' })).toBeTruthy();
+  });
+
+  it('a machine updated and off again before its copy caught up can still be written to', async () => {
+    // Its copy is from before the update; its last hello (this run) says `away`.
+    const env = await start({
+      power: false,
+      connected: true,
+      capabilities: ['remote'],
+      helloCapabilities: ['remote', AWAY_CAPABILITY],
+    });
+    await waitFor(() => expect(env.app.machines.get(M1)?.status).toBe('on'));
+    const composer = await openChat(env);
+    env.remote.refuse = true;
+    env.remote.drop();
+    await waitFor(() => expect(env.app.machines.get(M1)?.status).toBe('unreachable'));
+    await waitFor(() => expect(env.app.scopes.get(M1)?.copy?.has).toBe(true));
+    expect(screen.queryByText("Update Ubuntu PC to send while it's off")).toBeNull();
+    expect(composer().disabled).toBe(false);
+    await userEvent.type(composer(), 'Postgres it is{Enter}');
+    await waitFor(() => expect(queued(env)).toHaveLength(1));
+  });
+
+  it('running tasks of a chat whose machine is away are not shown, and are again once it is back', async () => {
+    const env = await start({
+      power: false,
+      connected: true,
+      live: {
+        status: 'idle',
+        items: [user('u1', 'Start the dev server')],
+        tasks: [
+          {
+            taskId: 't1',
+            kind: 'shell',
+            description: 'npm run dev',
+            status: 'running',
+            startedAt: Date.now(),
+          },
+        ],
+      },
+    });
+    await waitFor(() => expect(env.app.machines.get(M1)?.status).toBe('on'));
+    await openChat(env);
+    render(TabsBar, { context: env.context });
+    // While away, the list's row for r1 comes from the copy (M1 lists nothing while on).
+    render(ChatList, { context: env.context });
+    // The tab's badge and the Activity panel's count.
+    await waitFor(() => expect(screen.getAllByText('1 running')).toHaveLength(2));
+
+    env.remote.refuse = true;
+    env.remote.drop();
+    await waitFor(() => expect(env.app.machines.get(M1)?.status).toBe('unreachable'));
+    await waitFor(() => expect(document.getElementById(`chat-row-${M1}/r1`)).not.toBeNull());
+    await waitFor(() => expect(screen.queryAllByText('1 running')).toHaveLength(0));
+
+    env.remote.refuse = false;
+    await waitFor(() => expect(env.app.machines.get(M1)?.status).toBe('on'), { timeout: 10_000 });
+    await waitFor(() => expect(screen.getAllByText('1 running')).toHaveLength(2));
   });
 
   it('a message going out says Sending…, and can no longer be cancelled', async () => {
