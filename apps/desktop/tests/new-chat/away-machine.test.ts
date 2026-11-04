@@ -175,6 +175,7 @@ const start = async (
             tasks: [],
           };
         },
+        'chat.send': () => ({ queued: false }),
         'chat.commands': () => [],
         'chat.models': () => [],
         'files.suggest': () => [],
@@ -367,6 +368,21 @@ describe('a new chat on a machine that is away', () => {
     expect(env.remote.calls('chat.send')).toHaveLength(0);
     expect(env.remote.calls('chat.resumeCheck')).toHaveLength(0);
     expect(screen.queryByRole('alert')).toBeNull();
+
+    // Once the machine made the chat, the next message goes to it live, once.
+    env.delivered(id);
+    await waitFor(() => expect(screen.queryByText('Starting Ubuntu PC…')).toBeNull());
+    await waitFor(() => expect(env.app.scopes.get(M1)?.chats.get(id)?.live).toBe(true));
+    await userEvent.type(
+      screen.getByRole('textbox', { name: /message/i }),
+      'And a changelog{Enter}',
+    );
+    await waitFor(() => expect(env.remote.calls('chat.send')).toHaveLength(1));
+    expect(env.remote.calls('chat.send')[0]!.params).toMatchObject({
+      sessionId: id,
+      text: 'And a changelog',
+    });
+    expect(queued(env)).toHaveLength(2);
   });
 
   it('a refused first message shows why with Retry, not Starting', async () => {
@@ -389,6 +405,28 @@ describe('a new chat on a machine that is away', () => {
     await userEvent.type(message(dialog), '{Enter}');
     await waitFor(() => expect(env.app.tabs.open).toHaveLength(1));
     const [first, second] = env.server.calls('away.queue').map((c) => c.params as QueueParams);
+    expect(second!.sessionId).toBe(first!.sessionId);
+    expect(env.app.tabs.active).toBe(`${M1}/${first!.sessionId}`);
+  });
+
+  it('a second Send keeps the same chat id whenever the message waits, even while the machine still shows as on', async () => {
+    const env = await start({ queueFailsOnce: new RpcFail('TIMEOUT', 'No answer') });
+    await waitFor(() => expect(env.app.scopes.get(M1)?.copy?.has).toBe(true));
+    // Its link closed without the machine's state following (a closed link leaves it as it was):
+    // the message waits on this device all the same.
+    const entry = env.app.machines.get(M1)!;
+    entry.client.close();
+    entry.status = 'on';
+    expect(env.app.scopes.get(M1)!.api.status).not.toBe('open');
+    const { dialog } = await openDialog(env);
+    const folder = within(dialog).getByRole('combobox', { name: /folder/i }) as HTMLSelectElement;
+    await userEvent.selectOptions(folder, '/work/infra');
+    await userEvent.type(message(dialog), 'Set up CI{Enter}');
+    expect(await within(dialog).findByText('No answer')).toBeTruthy();
+    await userEvent.type(message(dialog), '{Enter}');
+    await waitFor(() => expect(env.app.tabs.open).toHaveLength(1));
+    const [first, second] = queued(env);
+    expect(first).toMatchObject({ kind: 'create', cwd: '/work/infra' });
     expect(second!.sessionId).toBe(first!.sessionId);
     expect(env.app.tabs.active).toBe(`${M1}/${first!.sessionId}`);
   });

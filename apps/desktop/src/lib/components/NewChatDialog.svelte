@@ -300,10 +300,10 @@
 
   /** Starts the chat in `at` and opens it; throws what `chats.create` throws. */
   const startChat = async ({ target, chat }: Send, at: string): Promise<void> => {
-    // A connected machine names the chat itself, as it always has.
-    const sessionId = machineAway(machines, target.machineId)
-      ? pendingIdFor(target.machineId, at)
-      : undefined;
+    // A connected machine names the chat itself, as it always has. The test is
+    // `chats.create`'s own (its link isn't open), so an id is kept exactly when
+    // the message waits on this device.
+    const sessionId = target.api.status !== 'open' ? pendingIdFor(target.machineId, at) : undefined;
     const id = await target.chats
       .create({ cwd: at, ...chat, ...(sessionId ? { sessionId } : {}) })
       .catch((err: unknown) => {
