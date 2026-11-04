@@ -21,7 +21,8 @@
   import * as Dialog from '#lib/components/ui/dialog/index.js';
   import { nameProblem, projectsApi, supportsProjects } from '#lib/projects.js';
   import { useApp } from '#lib/state/context.js';
-  import { machineLabel, machineNameOf } from '#lib/state/machines.svelte.js';
+  import { takesAway } from '#lib/state/copy-api.js';
+  import { machineAway, machineLabel, machineNameOf } from '#lib/state/machines.svelte.js';
   import { newChatDraftKey, type ModelChoice } from '#lib/state/interaction.svelte.js';
 
   /**
@@ -42,6 +43,11 @@
    * Permission mode and the composer are shared by all three; this dialog
    * keeps the tab and sends by it. A machine whose service predates projects offers
    * only Existing folder, without Browse….
+   *
+   * A machine that's away (away machine spec) is offered too, from its copy:
+   * its projects and its home folder, as Existing folder only. The first
+   * message waits on this device until the machine is up, and the chat's tab
+   * opens at once ("Starting ‹machine›…").
    */
   const { interaction, places, tabs, settings, scopes, machines, power } = useApp();
 
@@ -70,21 +76,54 @@
   let machineId = $state(local.machineId);
   const scope = $derived(scopes.get(machineId) ?? local);
   const onThisPc = $derived(scope === local);
+
+  /**
+   * A machine this device isn't connected to, offered from its copy (away
+   * machine spec): `queue` when its first message can wait here for it,
+   * `update` when it is too old to take one exactly once, null when it isn't
+   * away or was never seen (no copy, so no folders to offer).
+   */
+  const awayOffer = (id: string): 'queue' | 'update' | null => {
+    const s = scopes.get(id);
+    if (!s?.copy?.has || !machineAway(machines, id)) return null;
+    return takesAway(machines.get(id)?.info, s.copy.info) ? 'queue' : 'update';
+  };
   /**
    * The machines a chat can start on: those that are on, not checking or
-   * shutting down (`power.takesWork`), and have their stores.
+   * shutting down (`power.takesWork`), and have their stores; and those that
+   * are away, whose first message waits on this device. One too old for that
+   * is shown, but can't be chosen.
    */
   const choices = $derived(
-    machines.list
-      .filter((m) => m.status === 'on' && power.takesWork(m.id) && scopes.get(m.id))
-      .map((m) => ({ id: m.id, label: machineLabel(m) })),
+    machines.list.flatMap((m) => {
+      if (m.status === 'on' && power.takesWork(m.id) && scopes.get(m.id)) {
+        return [{ id: m.id, label: machineLabel(m), disabled: false }];
+      }
+      const offer = awayOffer(m.id);
+      if (!offer) return [];
+      const label = `${machineLabel(m)} (off)`;
+      return offer === 'queue'
+        ? [{ id: m.id, label, disabled: false }]
+        : [
+            {
+              id: m.id,
+              label: `${label} — Update ${machineLabel(m)} to send while it's off`,
+              disabled: true,
+            },
+          ];
+    }),
   );
-  /** A machine a chat can start on now: it has its stores and takes work. */
+  /** A machine a chat can start on now: it has its stores and takes work, or its message can wait for it. */
   const usable = (id: string | null | undefined): id is string =>
-    !!id && !!scopes.get(id) && machines.get(id)?.status === 'on' && power.takesWork(id);
+    !!id &&
+    ((!!scopes.get(id) && machines.get(id)?.status === 'on' && power.takesWork(id)) ||
+      awayOffer(id) === 'queue');
+  /** The chosen machine is away: only its existing folders can be offered. */
+  const away = $derived(!onThisPc && machineAway(machines, scope.machineId));
   /**
    * The machine the dialog opens on: the one asked for, else the selected
-   * project place's, when it is on; else This PC.
+   * project place's, when it is on (or away, with its message able to wait);
+   * else This PC.
    */
   const startMachine = (): string => {
     const sel = places.selected;
@@ -96,14 +135,29 @@
   const projects = $derived(
     scope.places.projects.filter((p) => !p.hidden).sort(byPinnedThenRecent),
   );
-  /** Another machine's home folder (its service reports it). */
-  const home = $derived(onThisPc ? null : (machines.get(scope.machineId)?.info?.home ?? null));
+  /**
+   * Another machine's home folder (its service reports it in its hello; for
+   * one away and not seen this run, its copy says what it last reported).
+   */
+  const home = $derived(
+    onThisPc ? null : (machines.get(scope.machineId)?.info?.home ?? scope.copy?.info?.home ?? null),
+  );
 
   let tab = $state<Tab>('existing');
   /** This PC always can (its service is the app's own version). */
   const supported = $derived(onThisPc || supportsProjects(machines.get(scope.machineId)));
   const machineName = $derived(machineNameOf(machines, scope.machineId));
-  const updateHint = $derived(supported ? null : `Update ${machineName} to use this`);
+  /**
+   * Why New project, Clone and Browse… can't be used: they need the machine
+   * itself, so not while it's away, nor on a service that predates projects.
+   */
+  const updateHint = $derived(
+    away
+      ? `Available when ${machineName} is on`
+      : supported
+        ? null
+        : `Update ${machineName} to use this`,
+  );
   const projectsOf = $derived(projectsApi(scope.api));
   /** This PC's, for the Clone tab's "on This PC" marks. */
   const localProjects = projectsApi(local.api);
@@ -182,9 +236,9 @@
     model = '';
   };
 
-  // A machine that can't make projects offers only Existing folder.
+  // A machine that can't make projects (or is away) offers only Existing folder.
   $effect(() => {
-    if (!supported && tab !== 'existing') tab = 'existing';
+    if (updateHint && tab !== 'existing') tab = 'existing';
   });
 
   // The chosen machine was removed while the dialog is open: back to This PC, with its folder.
@@ -363,7 +417,7 @@
             <option value={scope.machineId}>{machineNameOf(machines, scope.machineId)}</option>
           {/if}
           {#each choices as m (m.id)}
-            <option value={m.id}>{m.label}</option>
+            <option value={m.id} disabled={m.disabled}>{m.label}</option>
           {/each}
         </select>
       </div>
@@ -377,7 +431,7 @@
           id="new-chat-tab-{t.id}"
           aria-selected={tab === t.id}
           aria-controls="new-chat-panel"
-          disabled={(t.id !== 'existing' && !supported) || (cloning && t.id !== tab)}
+          disabled={(t.id !== 'existing' && !!updateHint) || (cloning && t.id !== tab)}
           title={t.id === 'existing' ? undefined : (updateHint ?? undefined)}
           class="-mb-px border-b-2 px-2.5 py-1.5 disabled:opacity-50 {tab === t.id
             ? 'border-primary text-foreground'

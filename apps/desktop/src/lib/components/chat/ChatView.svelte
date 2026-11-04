@@ -54,6 +54,11 @@
    * failure, Retry. A request Claude was waiting on is answered by typing: the
    * answer goes out as the next message. A machine too old to take a message
    * exactly once can't be written to until it is updated.
+   *
+   * A new chat started while its machine is away is known only from the queue
+   * until the machine makes it: "Starting ‹machine›…" with its first message
+   * waiting. Once that message has gone out and the machine is connected, the
+   * same tab reads the machine's own chat (its id was chosen on this device).
    */
   let { ref }: { ref: ChatRef } = $props();
 
@@ -113,6 +118,24 @@
     return shown === 'off' || shown === 'starting' || away.starting(scope.machineId);
   });
   const waiting = $derived(away.items(ref));
+  /** The first message of a new chat its machine hasn't made yet. */
+  const firstWaiting = $derived(waiting.find((w) => w.kind === 'create'));
+  /** A new chat known only from the queue: "Starting ‹machine›…" until it's made. */
+  const fromQueue = $derived(chat?.fromQueue === true);
+
+  // A tab restored for a chat only in the queue: neither the machine nor the
+  // copy has it, so it is shown from its waiting first message.
+  $effect(() => {
+    const first = firstWaiting;
+    if (!first || chat?.loaded) return;
+    untrack(() => chats.waitingNew(sessionId, { cwd: first.cwd ?? '', text: first.text }));
+  });
+
+  // Its first message went out and the machine is connected: the same tab
+  // becomes the machine's own chat.
+  $effect(() => {
+    if (fromQueue && !machineAway && !firstWaiting) untrack(() => chats.made(sessionId));
+  });
 
   let copyNow = $state(Date.now());
   $effect(() => {
@@ -134,11 +157,21 @@
       : `⏳ Waiting for ${machineName} — sends when it's reachable.`;
   };
 
-  const cancelWaiting = (id: string): void => {
+  /**
+   * Takes back a waiting message. Without its first message a new chat will
+   * never be made: the messages written after it go too, and so does its tab.
+   */
+  const cancelWaiting = (w: AwayItem): void => {
     sendError = null;
-    away.cancel(id).catch((err: unknown) => {
-      sendError = err instanceof Error ? err.message : String(err);
-    });
+    const whole = w.kind === 'create' && fromQueue;
+    const ids = whole ? waiting.map((x) => x.id) : [w.id];
+    Promise.all(ids.map((id) => away.cancel(id)))
+      .then(() => {
+        if (whole) tabs.close(ref);
+      })
+      .catch((err: unknown) => {
+        sendError = err instanceof Error ? err.message : String(err);
+      });
   };
 
   const retryWaiting = (): void => {
@@ -555,7 +588,13 @@
             {chat.error}
           </div>
         {/if}
-        {#if copiedAt !== null}
+        {#if fromQueue}
+          <div class="mx-auto w-full max-w-4xl shrink-0 px-4 pt-2 text-xs">
+            <p class="bg-muted/60 rounded-md border px-3 py-1.5" role="status">
+              Starting {machineName}…
+            </p>
+          </div>
+        {:else if copiedAt !== null}
           <div class="mx-auto w-full max-w-4xl shrink-0 space-y-1 px-4 pt-2 text-xs">
             <p class="bg-muted/60 rounded-md border px-3 py-1.5" role="status">
               {machineName} is off: showing its last few messages, from {agoText(
@@ -572,7 +611,10 @@
             </p>
           </div>
         {/if}
-        {#if chat.items.length === 0}
+        {#if fromQueue}
+          <!-- Its first message waits below, with what happens next. -->
+          <div class="min-h-0 flex-1"></div>
+        {:else if chat.items.length === 0}
           <div
             class="text-muted-foreground flex min-h-0 flex-1 items-center justify-center text-sm"
           >
@@ -783,7 +825,7 @@
                     <button
                       type="button"
                       class="bg-background hover:bg-muted inline-flex h-6 shrink-0 items-center rounded border px-2"
-                      onclick={() => cancelWaiting(w.id)}>Cancel</button
+                      onclick={() => cancelWaiting(w)}>Cancel</button
                     >
                   {/if}
                 </div>
