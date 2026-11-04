@@ -616,7 +616,7 @@ export const methods = {
     empty,
   ),
   // ── update (protocol 10) ── frozen: only optional additions ───────────────
-  // Errors: `UPDATE_ERRORS`.
+  // Errors: `UPDATE_ERRORS`. All that is frozen with these: the comment in `update.ts`.
   /** Local only: the latest release version, asked of GitHub by this machine's service. */
   'update.latest': def(empty, z.object({ version: z.string() })),
   /** Updates this machine to `version`; `force` goes on although chats run (`busy` says how many). */

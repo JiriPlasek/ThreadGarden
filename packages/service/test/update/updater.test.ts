@@ -875,6 +875,33 @@ describe.skipIf(process.platform === 'win32')('with the real tar', () => {
   });
 });
 
+describe('the release an updater expects (frozen)', () => {
+  it('is the one scripts/build-headless.mjs builds', async () => {
+    const build = await readFile(
+      new URL('../../../../scripts/build-headless.mjs', import.meta.url),
+      'utf8',
+    );
+    const expand = (t: string): string =>
+      t.replaceAll('${version}', NEXT).replaceAll('${arch}', 'x64');
+    const folder = expand(/const name = `(.+)`;/.exec(build)![1]!);
+    const tarball = `${folder}${expand(/join\(OUT, `\$\{name\}(.+)`\)/.exec(build)![1]!)}`;
+    expect(build).toContain("arg('arch') ?? 'x64'");
+    for (const file of ['install.sh', 'threadgarden.service', 'VERSION']) {
+      expect(build).toContain(`join(dir, '${file}')`);
+    }
+
+    const f = releaseFetch(NEXT);
+    const r = fakeRun();
+    const { updater } = make({ fetch: f.fetch, run: r.run });
+    await updater.start(NEXT, false);
+    await expect(settled(updater)).resolves.toMatchObject({ stage: 'restarting' });
+    expect(f.urls).toContain(`${BASE}/v${NEXT}/${tarball}`);
+    expect(f.urls).toContain(`${BASE}/v${NEXT}/${tarball}.sha256`);
+    const launch = r.calls.find((c) => c.cmd === 'systemd-run')!;
+    expect(launch.args).toContain(join(updateDir, NEXT, folder, 'install.sh'));
+  });
+});
+
 describe('the service', () => {
   const opened: { svc: ServiceHandle[]; clients: TestClient[] } = { svc: [], clients: [] };
 

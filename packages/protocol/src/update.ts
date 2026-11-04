@@ -1,5 +1,20 @@
 import { z } from 'zod';
 
+/**
+ * Frozen: only optional additions, here and in `update.start` and `update.status`.
+ * A machine left behind must still update from any later desktop to any later
+ * release, and its old updater and old `apply.sh` run against every future release.
+ * So these, outside this file, must stay too:
+ * - the release: `latest.json`'s `version`; `releases/download/v<version>/`
+ *   `threadgarden-headless-<version>-linux-x64.tar.gz` and its `.sha256`; it unpacks
+ *   to the folder `threadgarden-headless-<version>/` with `VERSION` and `install.sh`
+ *   at its root, and `threadgarden.service` in it;
+ * - `install.sh` honours the environment's `SUDO` and `THREADGARDEN_SKIPPED_FILE`;
+ * - `last.json`'s keys, those of `UpdateStatus`: `apply.sh` reads `state` and
+ *   `version` from what the new version writes, and an old service reads what `apply.sh` writes;
+ * - `hello`'s `serviceVersion`, `protocolVersion`, `machine.id` and `machine.capabilities`.
+ */
+
 /** Advertised in `hello` by a headless service that can update itself (protocol 10). */
 export const UPDATE_CAPABILITY = 'update';
 

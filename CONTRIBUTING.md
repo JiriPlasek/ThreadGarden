@@ -25,6 +25,8 @@ A headless service answers paired devices over the network ([Machines](docs/arch
 - **The relay never parses frames.** `server/relay.ts` pipes the UI's socket to the machine verbatim, both ways: it never parses, logs, rewrites or filters a frame, so it needs no change when the protocol grows and leaks no chat content into logs. Behaviour belongs in the services at either end.
 - **The network side stays narrow.** The remote listener binds private addresses only (`privateListenAddresses`), never a wildcard or a public address; device tokens travel only in the WebSocket subprotocol, never in a URL or a log; nothing sends a pairing code before the machine has proved it knows it. Only tests and the mock service may listen on `127.0.0.1`, through test-only options (`remote.addresses` in `startService`, `src/testing/mock-main.ts --remote` for the Playwright specs); never through `bin.ts` or a `main.ts` default.
 
+**Updating a machine is a frozen contract.** A machine's old updater and old `apply.sh` run against every future release, and any later desktop must be able to start them, so a machine left behind can always catch up. Besides `update.start` and `update.status` (only optional additions), these must stay: the tarball's name and folder layout, `install.sh` at its root and `threadgarden.service` in the release, `install.sh` honouring `SUDO` and `THREADGARDEN_SKIPPED_FILE`, the keys of `last.json`, and `serviceVersion`, `protocolVersion`, `machine.id` and `machine.capabilities` in `hello`. The list is in `packages/protocol/src/update.ts`.
+
 ## Workflow
 
 - One branch per change, opened as a pull request against `main`.
