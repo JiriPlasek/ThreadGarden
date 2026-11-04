@@ -290,6 +290,59 @@ describe('a machine that is away', () => {
     expect(await screen.findByText('Postgres it is')).toBeTruthy();
   });
 
+  it('a live send waits behind a waiting row of its chat', async () => {
+    const env = await start({ power: false, waiting: [awayItem()] });
+    await openChat(env);
+    expect(await screen.findByText(WAITING_REACHABLE)).toBeTruthy();
+    // The machine is back, but the deliverer hasn't sent the waiting row yet.
+    env.remote.refuse = false;
+    await waitFor(() => expect(env.app.machines.get(M1)?.status).toBe('on'), { timeout: 10_000 });
+    await waitFor(() => expect(screen.queryByText(NOTE)).toBeNull());
+    // No Schedule send while one waits: it could go out first.
+    expect(screen.queryByRole('button', { name: 'More send options' })).toBeNull();
+    await userEvent.type(
+      screen.getByRole('textbox', { name: /message/i }),
+      'And the docs{Enter}',
+    );
+    await waitFor(() => expect(queued(env)).toHaveLength(1));
+    expect(queued(env)[0]).toMatchObject({ sessionId: 'r1', kind: 'send', text: 'And the docs' });
+    expect(env.remote.calls('chat.send')).toHaveLength(0);
+    expect(env.remote.calls('chat.resumeCheck')).toHaveLength(0);
+
+    // Once nothing of the chat waits, a message goes to the machine live.
+    env.delivered();
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'More send options' })).toBeTruthy(),
+    );
+    await userEvent.type(screen.getByRole('textbox', { name: /message/i }), 'Thanks{Enter}');
+    await waitFor(() => expect(env.remote.calls('chat.send')).toHaveLength(1));
+    expect(queued(env)).toHaveLength(1);
+  });
+
+  it("a send waits behind its chat's row that didn't come up, and goes live past a refused one", async () => {
+    const env = await start({
+      power: false,
+      connected: true,
+      waiting: [awayItem({ state: 'failed', reason: 'start' })],
+    });
+    await openChat(env);
+    await waitFor(() => expect(env.app.machines.get(M1)?.status).toBe('on'), { timeout: 10_000 });
+    const composer = () => screen.getByRole('textbox', { name: /message/i });
+    await userEvent.type(composer(), 'Follow-up{Enter}');
+    await waitFor(() => expect(queued(env)).toHaveLength(1));
+    expect(env.remote.calls('chat.send')).toHaveLength(0);
+
+    // A refused row needs Retry: it holds nothing back.
+    env.server.push('away.changed', {
+      items: [awayItem({ state: 'failed', reason: 'refused', error: 'No such chat' })],
+      states: [],
+    });
+    await screen.findByText('No such chat');
+    await userEvent.type(composer(), 'Live{Enter}');
+    await waitFor(() => expect(env.remote.calls('chat.send')).toHaveLength(1));
+    expect(queued(env)).toHaveLength(1);
+  });
+
   it("a machine without the away capability can't queue", async () => {
     const env = await start({ capabilities: ['remote', POWER_CAPABILITY] });
     const composer = await openChat(env);

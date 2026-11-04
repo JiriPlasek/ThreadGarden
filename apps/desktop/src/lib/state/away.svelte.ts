@@ -14,6 +14,17 @@ import type { ChatRef } from './refs';
 
 type AwayList = { items: AwayItem[]; states: AwayMachine[] };
 
+/**
+ * Whether a chat's later messages wait behind these rows of it (ruling R17),
+ * even once its machine is connected, so none overtakes one still to go:
+ * a row waiting, going out, or whose start gave up (it goes again once the
+ * machine is up), and a new chat's first message whatever its state (the
+ * machine doesn't have the chat). Only a refused message, which waits for
+ * Retry, lets them pass.
+ */
+export const holdsBack = (items: AwayItem[]): boolean =>
+  items.some((i) => i.kind === 'create' || !(i.state === 'failed' && i.reason === 'refused'));
+
 export class AwayState {
   private list = $state.raw<AwayItem[]>([]);
   private machines = $state.raw<AwayMachine[]>([]);

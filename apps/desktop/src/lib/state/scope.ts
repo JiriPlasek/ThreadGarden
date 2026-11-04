@@ -7,7 +7,7 @@ import { SvelteMap } from 'svelte/reactivity';
 import { ServiceClient } from '../service/client';
 import type { AgentsState } from './agents.svelte';
 import { quietly, type Api } from './api';
-import { CopyState, type AwayState } from './away.svelte';
+import { CopyState, holdsBack, type AwayState } from './away.svelte';
 import { buckets, BucketsState } from './buckets.svelte';
 import { chats, ChatsState, type ChatsOptions } from './chats.svelte';
 import { copyApi, type CopyApiOptions } from './copy-api';
@@ -58,39 +58,39 @@ export type ScopeDeps = {
    */
   copies?: Pick<CopyApiOptions, 'name' | 'hello'> & {
     local: Pick<Api, 'request'>;
-    /** The messages waiting on this device: a chat's later ones wait behind its first. */
+    /** The messages waiting on this device: a chat's later ones wait behind them (`holdsBack`). */
     away?: Pick<AwayState, 'items'>;
   };
 };
 
-/** A send (or its resume check) for a chat whose first message is still waiting here. */
-const behindCreate = (
+/** A send (or its resume check) for a chat with a message still waiting here. */
+const behindWaiting = (
   method: string,
   params: unknown,
-  waitsForCreate: (sessionId: string) => boolean,
+  waitsHere: (sessionId: string) => boolean,
 ): boolean =>
   (method === 'chat.send' || method === 'chat.resumeCheck') &&
-  waitsForCreate((params as { sessionId: string }).sessionId);
+  waitsHere((params as { sessionId: string }).sessionId);
 
 /**
  * The machine's own client while it is connected, its copy on this device
  * while it is away: the lists and the chat view read through it either way,
  * and none of them asks a machine that isn't there.
  *
- * A message for a chat whose first message still waits on this device
- * (`waitsForCreate`) waits behind it, even once the machine is connected:
- * the machine doesn't have that chat until the waiting one has gone out.
+ * A message for a chat with a message still waiting on this device
+ * (`waitsHere`) waits behind it, even once the machine is connected: it must
+ * not overtake that one (and the machine may not have the chat yet).
  */
 export const awayAware = (
   link: Api,
   copy: Pick<Api, 'request'>,
-  waitsForCreate: (sessionId: string) => boolean = () => false,
+  waitsHere: (sessionId: string) => boolean = () => false,
 ): Api => ({
   get status() {
     return link.status;
   },
   request: (method, params) =>
-    link.status === 'open' && !behindCreate(method, params, waitsForCreate)
+    link.status === 'open' && !behindWaiting(method, params, waitsHere)
       ? link.request(method, params)
       : copy.request(method, params),
   on: link.on,
@@ -195,10 +195,7 @@ export const createScope = (
             hello: deps.copies.hello,
             seen: copy.seen,
           }),
-          // Whatever its state: a message behind a failed one fails behind it (R8).
-          (sessionId) =>
-            deps.copies?.away?.items({ machineId, sessionId }).some((i) => i.kind === 'create') ??
-            false,
+          (sessionId) => holdsBack(deps.copies?.away?.items({ machineId, sessionId }) ?? []),
         )
       : link;
   const scope = makeScope(() => machineId, api, deps.tabs, {

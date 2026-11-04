@@ -16,6 +16,7 @@
   import { RequestError } from '#lib/service/client.js';
   import type { ResumeCheck } from '#lib/state/chats.svelte.js';
   import { useApp, useScope } from '#lib/state/context.js';
+  import { holdsBack } from '#lib/state/away.svelte.js';
   import { takesAway } from '#lib/state/copy-api.js';
   import { machineAway as isAway, machineNameOf } from '#lib/state/machines.svelte.js';
   import { chatKey, type ChatRef } from '#lib/state/refs.js';
@@ -118,6 +119,8 @@
     return shown === 'off' || shown === 'starting' || away.starting(scope.machineId);
   });
   const waiting = $derived(away.items(ref));
+  /** A message of this chat still to go: later ones wait behind it, and none is scheduled. */
+  const heldBack = $derived(holdsBack(waiting));
   /** The first message of a new chat its machine hasn't made yet. */
   const firstWaiting = $derived(waiting.find((w) => w.kind === 'create'));
   /** A new chat known only from the queue: "Starting ‹machine›…" until it's made. */
@@ -856,7 +859,7 @@
               onSubmit={submit}
               onInterrupt={interrupt}
               {onControl}
-              onSchedule={machineAway || firstWaiting ? undefined : schedule}
+              onSchedule={machineAway || heldBack ? undefined : schedule}
               {resetAt}
               limited={refusal !== undefined}
               {editing}
