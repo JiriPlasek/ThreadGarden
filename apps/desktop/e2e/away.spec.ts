@@ -40,6 +40,8 @@ const WAITING = new RegExp(`^⏳ Waiting for ${MACHINE} — `);
 const OFF_NOTE = new RegExp(`^${MACHINE} is off: showing`);
 /** The same note while it's away without showing as Off (no power control). */
 const AWAY_NOTE = new RegExp(`^${MACHINE} isn't connected: showing`);
+/** The copy follows a change within 30 s (its re-read gap) and the time a copy takes. */
+const COPY_MS = 60_000;
 /** A message that waits for its machine, or goes out. */
 const AWAY_ITEM = '[data-away-item]';
 /** Turning Ubuntu on and delivering takes a start (about 2 s), the next look (5 s) and a reconnect. */
@@ -113,8 +115,9 @@ const pairUbuntu = async (page: Page, o: { power?: boolean } = {}): Promise<stri
 /**
  * Waits until This PC's copy of Ubuntu's chat `sessionId` has a message
  * starting with `text` (the desktop saves it while Ubuntu is connected, a
- * moment after a change). The
- * UI shows no sign of a copy while the machine is on: the local service is asked.
+ * moment after a change, but re-reads the whole list at most every 30 s, so up
+ * to `COPY_MS`). The UI shows no sign of a copy while the machine is on: the
+ * local service is asked.
  */
 const copied = async (machineId: string, sessionId: string, text: string): Promise<void> => {
   await expect
@@ -126,7 +129,7 @@ const copied = async (machineId: string, sessionId: string, text: string): Promi
         });
         return copy?.items.some((i) => (i.text ?? i.markdown)?.startsWith(text)) ?? false;
       },
-      { message: `the copy of ${sessionId} has "${text}"`, timeout: 30_000 },
+      { message: `the copy of ${sessionId} has "${text}"`, timeout: COPY_MS },
     )
     .toBe(true);
 };
@@ -189,6 +192,7 @@ const recordShown = async (page: Page, texts: string[]): Promise<() => Promise<s
 };
 
 test('an away machine shows its copied chats and the last messages', async ({ page }) => {
+  test.setTimeout(150_000);
   const chat = 'session-18';
   const said = 'Did the moon cactus bloom while I was away?';
   await openApp(page);
