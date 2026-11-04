@@ -221,6 +221,7 @@ const wire = (
         local: client,
         name: () => machineNameOf(machines, m.id),
         hello: () => machines.get(m.id)?.info ?? null,
+        away: app.away,
       },
     }),
   );

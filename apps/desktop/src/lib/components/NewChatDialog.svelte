@@ -4,6 +4,7 @@
   import { buildFlags } from '#lib/build-flags.js';
   import Composer from '#lib/components/composer/Composer.svelte';
   import InScope from '#lib/components/InScope.svelte';
+  import { machineState } from '#lib/components/layout/MachineHeading.svelte';
   import CloneTab from '#lib/components/new-chat/CloneTab.svelte';
   import ExistingFolderTab from '#lib/components/new-chat/ExistingFolderTab.svelte';
   import NewProjectTab from '#lib/components/new-chat/NewProjectTab.svelte';
@@ -101,7 +102,9 @@
       }
       const offer = awayOffer(m.id);
       if (!offer) return [];
-      const label = `${machineLabel(m)} (off)`;
+      // Under the state it shows (Off, Unreachable, …), as in the places column.
+      const shown = machineState({ ...m, status: machines.shown(m) }).label.toLowerCase();
+      const label = `${machineLabel(m)} (${shown})`;
       return offer === 'queue'
         ? [{ id: m.id, label, disabled: false }]
         : [
@@ -218,6 +221,7 @@
       error = null;
       made = null;
       created = false;
+      pendingNew = null;
     }
     wasOpen = open;
   });
@@ -281,12 +285,32 @@
   );
   const composerCwd = $derived(tab === 'existing' ? cwd : createIn);
 
+  /**
+   * The id of a new chat for a machine that's away, kept until its first
+   * message is queued (or the machine or folder changes): sending again after
+   * a lost reply asks for the same chat, which the machine makes only once.
+   */
+  let pendingNew: { machineId: string; cwd: string; sessionId: string } | null = null;
+  const pendingIdFor = (on: string, at: string): string => {
+    if (pendingNew?.machineId !== on || pendingNew.cwd !== at) {
+      pendingNew = { machineId: on, cwd: at, sessionId: crypto.randomUUID() };
+    }
+    return pendingNew.sessionId;
+  };
+
   /** Starts the chat in `at` and opens it; throws what `chats.create` throws. */
   const startChat = async ({ target, chat }: Send, at: string): Promise<void> => {
-    const id = await target.chats.create({ cwd: at, ...chat }).catch((err: unknown) => {
-      noteMissingClaude(target, err);
-      throw err;
-    });
+    // A connected machine names the chat itself, as it always has.
+    const sessionId = machineAway(machines, target.machineId)
+      ? pendingIdFor(target.machineId, at)
+      : undefined;
+    const id = await target.chats
+      .create({ cwd: at, ...chat, ...(sessionId ? { sessionId } : {}) })
+      .catch((err: unknown) => {
+        noteMissingClaude(target, err);
+        throw err;
+      });
+    pendingNew = null;
     created = true;
     target.interaction.focusComposer(id);
     tabs.openTab({ machineId: target.machineId, sessionId: id });

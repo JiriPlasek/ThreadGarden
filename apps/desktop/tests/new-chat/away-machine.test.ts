@@ -74,8 +74,16 @@ const start = async (
     capabilities?: string[];
     /** `away.queue` fails with this. */
     queueFails?: RpcFail;
+    /** `away.queue` fails with this the first time only (its reply lost, say). */
+    queueFailsOnce?: RpcFail;
+    /** The machine's `chat.open` fails with this, even once it made the chat. */
+    openFails?: RpcFail;
     /** Messages already waiting. */
     waiting?: AwayItem[];
+    /** `away.cancel` of this row fails (it went out meanwhile). */
+    cancelFails?: string;
+    /** It has power control, so its plug reads off (default). */
+    power?: boolean;
   } = {},
 ) => {
   const capabilities = o.capabilities ?? [
@@ -92,6 +100,7 @@ const start = async (
     copiedAt: Date.now() - 3_600_000,
   };
   let items: AwayItem[] = o.waiting ?? [];
+  let failOnce = o.queueFailsOnce;
   /** The chats the machine has made from delivered `create`s. */
   const made = new Set<string>();
   const env = await setupTwoMachines({
@@ -101,7 +110,7 @@ const start = async (
     configure: (s) => {
       const changed = () => s.push('away.changed', { items, states: [] });
       Object.assign(s.handlers, {
-        'power.list': () => [{ machineId: M1, config: CONFIG }],
+        'power.list': () => (o.power === false ? [] : [{ machineId: M1, config: CONFIG }]),
         'power.reading': () => ({ on: false, watts: 0, at: Date.now() }),
         'power.turnOn': () => ({ cycled: false, waitMs: 0 }),
         'power.unlock': () => ({}),
@@ -116,6 +125,11 @@ const start = async (
         'away.list': () => ({ items, states: [] }),
         'away.queue': (p: unknown) => {
           if (o.queueFails) throw o.queueFails;
+          if (failOnce) {
+            const fail = failOnce;
+            failOnce = undefined;
+            throw fail;
+          }
           const q = p as QueueParams;
           const row = awayItem({
             id: `row-${items.length + 1}`,
@@ -129,6 +143,9 @@ const start = async (
           return row;
         },
         'away.cancel': (p: unknown) => {
+          if ((p as { id: string }).id === o.cancelFails) {
+            throw new RpcFail('ALREADY_SENT', 'It went out already');
+          }
           items = items.filter((i) => i.id !== (p as { id: string }).id);
           changed();
           return {};
@@ -142,6 +159,7 @@ const start = async (
         'chat.open': (p: unknown) => {
           const { sessionId } = p as { sessionId: string };
           if (!made.has(sessionId)) throw new RpcFail('NOT_FOUND', 'No such chat');
+          if (o.openFails) throw o.openFails;
           return {
             summary: summary(sessionId, {
               title: 'Set up CI',
@@ -323,5 +341,97 @@ describe('a new chat on a machine that is away', () => {
     await waitFor(() => expect(env.app.tabs.open).toEqual([]));
     expect(env.server.calls('away.cancel')[0]!.params).toEqual({ id: 'row-1' });
     expect(env.app.scopes.get(M1)?.chats.get(id)).toBeUndefined();
+  });
+
+  it('a message written before the machine made the chat waits behind its first one, even once it is connected', async () => {
+    const env = await start();
+    render(ChatPane, { context: env.context });
+    const id = await sendFirst(env);
+    expect(await screen.findByText('Starting Ubuntu PC…')).toBeTruthy();
+    // No Schedule send for a chat its machine hasn't made.
+    expect(screen.queryByRole('button', { name: 'More send options' })).toBeNull();
+
+    // The machine is up, but the deliverer hasn't made the chat there yet.
+    env.remote.refuse = false;
+    await waitFor(() => expect(env.app.machines.get(M1)?.status).toBe('on'), { timeout: 10_000 });
+    expect(screen.queryByRole('button', { name: 'More send options' })).toBeNull();
+    const composer = screen.getByRole('textbox', { name: /message/i });
+    await userEvent.type(composer, 'Add the docs too{Enter}');
+    await waitFor(() => expect(queued(env)).toHaveLength(2));
+    expect(queued(env)[1]).toMatchObject({
+      machineId: M1,
+      sessionId: id,
+      kind: 'send',
+      text: 'Add the docs too',
+    });
+    expect(env.remote.calls('chat.send')).toHaveLength(0);
+    expect(env.remote.calls('chat.resumeCheck')).toHaveLength(0);
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('a refused first message shows why with Retry, not Starting', async () => {
+    const env = await start({
+      waiting: [awayItem({ state: 'failed', reason: 'refused', error: 'No such folder' })],
+    });
+    env.app.tabs.openTab({ machineId: M1, sessionId: 'new-1' });
+    render(ChatPane, { context: env.context });
+    const line = await screen.findByText('No such folder');
+    const row = line.closest('[data-away-item]') as HTMLElement;
+    expect(within(row).getByRole('button', { name: 'Retry' })).toBeTruthy();
+    expect(screen.queryByText('Starting Ubuntu PC…')).toBeNull();
+  });
+
+  it('a second Send after a lost reply keeps the same chat id', async () => {
+    const env = await start({ queueFailsOnce: new RpcFail('TIMEOUT', 'No answer') });
+    const { dialog } = await openDialog(env);
+    await userEvent.type(message(dialog), 'Set up CI{Enter}');
+    expect(await within(dialog).findByText('No answer')).toBeTruthy();
+    await userEvent.type(message(dialog), '{Enter}');
+    await waitFor(() => expect(env.app.tabs.open).toHaveLength(1));
+    const [first, second] = env.server.calls('away.queue').map((c) => c.params as QueueParams);
+    expect(second!.sessionId).toBe(first!.sessionId);
+    expect(env.app.tabs.active).toBe(`${M1}/${first!.sessionId}`);
+  });
+
+  it("a first message that can't be cancelled leaves the later ones waiting", async () => {
+    const env = await start({
+      cancelFails: 'row-1',
+      waiting: [
+        awayItem(),
+        awayItem({ id: 'row-2', kind: 'send', text: 'Add the docs too', cwd: null }),
+      ],
+    });
+    env.app.tabs.openTab({ machineId: M1, sessionId: 'new-1' });
+    render(ChatPane, { context: env.context });
+    await screen.findByText('Add the docs too');
+    const first = document.querySelector('[data-away-item]') as HTMLElement;
+    expect(within(first).getByText('Set up CI')).toBeTruthy();
+    await userEvent.click(within(first).getByRole('button', { name: 'Cancel' }));
+    expect(await screen.findByText('It went out already')).toBeTruthy();
+    expect(env.server.calls('away.cancel').map((c) => c.params)).toEqual([{ id: 'row-1' }]);
+    expect(screen.getByText('Add the docs too')).toBeTruthy();
+    expect(env.app.tabs.open).toEqual([`${M1}/new-1`]);
+  });
+
+  it("a chat its machine can't open once made says so, not Starting", async () => {
+    const env = await start({ openFails: new RpcFail('INTERNAL', 'The chat log is unreadable') });
+    render(ChatPane, { context: env.context });
+    const id = await sendFirst(env);
+    expect(await screen.findByText('Starting Ubuntu PC…')).toBeTruthy();
+    env.remote.refuse = false;
+    await waitFor(() => expect(env.app.machines.get(M1)?.status).toBe('on'), { timeout: 10_000 });
+    env.delivered(id);
+    expect(
+      await screen.findByText('Could not open this chat: The chat log is unreadable'),
+    ).toBeTruthy();
+    expect(screen.queryByText('Starting Ubuntu PC…')).toBeNull();
+  });
+
+  it('an away machine is offered under the state it shows', async () => {
+    // Without power control nothing says it's off: it shows as still connecting.
+    const env = await start({ power: false });
+    const { machine } = await openDialog(env, false);
+    expect(env.app.machines.shown(env.app.machines.get(M1)!)).toBe('connecting');
+    expect(within(machine).getByRole('option', { name: 'Ubuntu PC (connecting…)' })).toBeTruthy();
   });
 });

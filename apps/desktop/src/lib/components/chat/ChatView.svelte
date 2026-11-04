@@ -160,18 +160,21 @@
   /**
    * Takes back a waiting message. Without its first message a new chat will
    * never be made: the messages written after it go too, and so does its tab.
+   * They go only once it is taken back: one that went out meanwhile made the
+   * chat, and they still belong to it.
    */
-  const cancelWaiting = (w: AwayItem): void => {
+  const cancelWaiting = async (w: AwayItem): Promise<void> => {
     sendError = null;
     const whole = w.kind === 'create' && fromQueue;
-    const ids = whole ? waiting.map((x) => x.id) : [w.id];
-    Promise.all(ids.map((id) => away.cancel(id)))
-      .then(() => {
-        if (whole) tabs.close(ref);
-      })
-      .catch((err: unknown) => {
-        sendError = err instanceof Error ? err.message : String(err);
-      });
+    const later = whole ? waiting.filter((x) => x.id !== w.id).map((x) => x.id) : [];
+    try {
+      await away.cancel(w.id);
+      if (!whole) return;
+      await Promise.all(later.map((id) => away.cancel(id)));
+      tabs.close(ref);
+    } catch (err) {
+      sendError = err instanceof Error ? err.message : String(err);
+    }
   };
 
   const retryWaiting = (): void => {
@@ -589,11 +592,14 @@
           </div>
         {/if}
         {#if fromQueue}
-          <div class="mx-auto w-full max-w-4xl shrink-0 px-4 pt-2 text-xs">
-            <p class="bg-muted/60 rounded-md border px-3 py-1.5" role="status">
-              Starting {machineName}…
-            </p>
-          </div>
+          <!-- A first message that failed says why in its row below, with Retry. -->
+          {#if firstWaiting?.state !== 'failed'}
+            <div class="mx-auto w-full max-w-4xl shrink-0 px-4 pt-2 text-xs">
+              <p class="bg-muted/60 rounded-md border px-3 py-1.5" role="status">
+                Starting {machineName}…
+              </p>
+            </div>
+          {/if}
         {:else if copiedAt !== null}
           <div class="mx-auto w-full max-w-4xl shrink-0 space-y-1 px-4 pt-2 text-xs">
             <p class="bg-muted/60 rounded-md border px-3 py-1.5" role="status">
@@ -825,7 +831,7 @@
                     <button
                       type="button"
                       class="bg-background hover:bg-muted inline-flex h-6 shrink-0 items-center rounded border px-2"
-                      onclick={() => cancelWaiting(w)}>Cancel</button
+                      onclick={() => void cancelWaiting(w)}>Cancel</button
                     >
                   {/if}
                 </div>
@@ -850,7 +856,7 @@
               onSubmit={submit}
               onInterrupt={interrupt}
               {onControl}
-              onSchedule={machineAway ? undefined : schedule}
+              onSchedule={machineAway || firstWaiting ? undefined : schedule}
               {resetAt}
               limited={refusal !== undefined}
               {editing}

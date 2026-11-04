@@ -333,7 +333,7 @@ export class ChatsState {
   };
 
   /** Loads the tail of a chat; events arriving meanwhile are buffered and merged by seq. */
-  open = async (sessionId: string): Promise<void> => {
+  open = async (sessionId: string, o: { made?: boolean } = {}): Promise<void> => {
     const api = this.api;
     if (!api) return;
     let chat = this.byId.get(sessionId);
@@ -371,7 +371,12 @@ export class ChatsState {
       for (const e of buffered) this.dispatch(chat, e);
     } catch (err) {
       // A chat only in the queue isn't on the machine yet: it stays as it is
-      // until its first message has gone out.
+      // until its first message has gone out. After that (`made`), a failure is
+      // one like any first open's.
+      if (this.byId.get(sessionId) === chat && chat.fromQueue && o.made) {
+        chat.fromQueue = false;
+        chat.loaded = false;
+      }
       if (this.byId.get(sessionId) === chat && !chat.fromQueue) {
         chat.error = err instanceof Error ? err.message : String(err);
         // Not connected, or away with no copy of it: opened once the machine is
@@ -533,7 +538,7 @@ export class ChatsState {
   /** A chat only in the queue went out to its machine, which is connected: read it from there. */
   made = (sessionId: string): void => {
     if (this.byId.get(sessionId)?.fromQueue && this.api?.status === 'open') {
-      quietly(this.open(sessionId));
+      quietly(this.open(sessionId, { made: true }));
     }
   };
 
