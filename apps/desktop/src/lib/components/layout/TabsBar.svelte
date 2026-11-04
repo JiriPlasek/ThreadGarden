@@ -6,7 +6,7 @@
   import { parseChatKey } from '#lib/state/refs.js';
   import { cn } from '#lib/utils.js';
   import { shortcut } from '#lib/shortcuts.js';
-  import { ANALYTICS_TAB_ID, rawStatus, tabId } from './chat-info';
+  import { ANALYTICS_TAB_ID, rawStatus, shownStatus, tabId } from './chat-info';
   import IconButton from './IconButton.svelte';
   import RunningBadge from './RunningBadge.svelte';
   import ScheduledBadge from './ScheduledBadge.svelte';
@@ -18,7 +18,13 @@
    * "+" (Ctrl/Cmd+N) starts a new chat, in the selected project if there is one.
    * Tabs are keyed by chat key (`machineId/sessionId`); each is described by its machine's scope.
    */
-  const { tabs, places, interaction, usage, scopes } = useApp();
+  const { tabs, places, interaction, usage, scopes, machines } = useApp();
+
+  /** Not connected to the machine (the chat view's read-only signal): nothing runs there (R10). */
+  const awayFrom = (machineId: string): boolean => {
+    const m = machines.get(machineId);
+    return !!m && !m.local && m.status !== 'on';
+  };
 
   /** In the selected project, on its machine (This PC's when it names none). */
   const newChat = (): void => {
@@ -50,13 +56,17 @@
     // A background tab that was never shown has only a summary (see chats.sync).
     const peek = chat ? undefined : scope?.chats.summaryOf(sessionId);
     const summary = listedSummary ?? chat?.summary ?? peek ?? null;
+    const away = ref ? awayFrom(ref.machineId) : false;
     return {
       sessionId,
       title: summary?.title ?? 'Loading…',
-      status: chat?.loaded ? chat.status : (peek?.status ?? listedSummary?.status ?? 'history'),
+      status: shownStatus(
+        chat?.loaded ? chat.status : (peek?.status ?? listedSummary?.status ?? 'history'),
+        away,
+      ),
       raw: rawStatus(summary),
       // Tasks are known for loaded chats only; closed or unseen tabs are never asked.
-      running: chat?.running ?? 0,
+      running: away ? 0 : (chat?.running ?? 0),
       scheduled: scope?.scheduled.forChat(sessionId) ?? [],
     };
   };

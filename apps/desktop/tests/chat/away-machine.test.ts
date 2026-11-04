@@ -15,6 +15,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import ChatList from '../../src/lib/components/layout/ChatList.svelte';
 import ChatPane from '../../src/lib/components/layout/ChatPane.svelte';
+import TabsBar from '../../src/lib/components/layout/TabsBar.svelte';
 import PlacesColumn from '../../src/lib/components/layout/PlacesColumn.svelte';
 import type { AppState } from '../../src/lib/state/context';
 import { M1, machineInfo, project, setupTwoMachines, summary } from '../layout/harness';
@@ -369,6 +370,31 @@ describe('a machine that is away', () => {
     expect(queued(env)[0]).toMatchObject({ sessionId: 'r1', kind: 'send', text: 'No, keep it' });
     expect(env.remote.calls('chat.respond')).toHaveLength(0);
     expect(env.server.calls('chat.respond')).toHaveLength(0);
+  });
+
+  it('a tab never shows a chat of a machine that is away as working, and does again once it is back', async () => {
+    const env = await start({
+      power: false,
+      connected: true,
+      live: { status: 'working', items: [user('u1', 'Build it')] },
+    });
+    await waitFor(() => expect(env.app.machines.get(M1)?.status).toBe('on'));
+    env.app.tabs.openTab({ machineId: M1, sessionId: 'r1' });
+    render(TabsBar, { context: env.context });
+    await waitFor(() => expect(env.app.scopes.get(M1)?.chats.get('r1')?.loaded).toBe(true));
+    const tab = (): HTMLElement =>
+      document.querySelector(`[data-chat-key="${M1}/r1"]`) as HTMLElement;
+    expect(await within(tab()).findByRole('img', { name: 'Working' })).toBeTruthy();
+
+    env.remote.refuse = true;
+    env.remote.drop();
+    await waitFor(() => expect(env.app.machines.get(M1)?.status).toBe('unreachable'));
+    await waitFor(() => expect(within(tab()).queryByRole('img', { name: 'Working' })).toBeNull());
+    expect(within(tab()).getByRole('img', { name: 'Idle' })).toBeTruthy();
+
+    env.remote.refuse = false;
+    await waitFor(() => expect(env.app.machines.get(M1)?.status).toBe('on'), { timeout: 10_000 });
+    expect(await within(tab()).findByRole('img', { name: 'Working' })).toBeTruthy();
   });
 
   it('a message going out says Sending…, and can no longer be cancelled', async () => {

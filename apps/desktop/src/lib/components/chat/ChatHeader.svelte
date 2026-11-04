@@ -14,7 +14,7 @@
   import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
   import { formatHoldUntil } from '#lib/format/hold.js';
   import { fullTime } from '#lib/format/time.js';
-  import { baseName, rawStatus } from '#lib/components/layout/chat-info.js';
+  import { baseName, rawStatus, shownStatus } from '#lib/components/layout/chat-info.js';
   import IconButton from '#lib/components/layout/IconButton.svelte';
   import ProjectIcon from '#lib/components/layout/ProjectIcon.svelte';
   import StatusIcon from '#lib/components/layout/StatusIcon.svelte';
@@ -78,9 +78,7 @@
   const live = $derived(!readOnly && chat.ownedLive);
   const external = $derived(!readOnly && chat.live ? (summary?.external ?? null) : null);
   /** Ruling R10: a machine that is away runs nothing. */
-  const status = $derived(
-    readOnly && (chat.status === 'working' || chat.status === 'unknown') ? 'idle' : chat.status,
-  );
+  const status = $derived(shownStatus(chat.status, readOnly));
   /** Run by Claude Code's background service: `claude stop <id>` can stop it. */
   const background = $derived(external?.kind === 'background' && !!external.shortId);
   const project = $derived(
