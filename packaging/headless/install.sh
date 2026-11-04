@@ -130,8 +130,8 @@ EOF
 # Whether the rule is in place: "yes", "no", or "unknown" when it can't be told.
 # Ubuntu keeps the rules directory from users (750 root:polkitd). Then polkit itself
 # is asked, by its exit code: without --allow-user-interaction it never prompts, and
-# 1, 2 and 3 are its ways of saying no. Anything else (127: no pkcheck, or it failed)
-# says nothing about the rule. Its answer also covers whatever else allows this
+# 1, 2 and 3 are its ways of saying no. Anything else (127, or no pkcheck to run at
+# all, which not every shell reports as 127) says nothing about the rule. Its answer also covers whatever else allows this
 # user to power off, so it is asked only about a file that can't be read, and only
 # unattended: polkit says yes to an active console session even with no rule.
 polkit_rule_state() {
@@ -140,6 +140,8 @@ polkit_rule_state() {
   elif [ -x "$polkit_rules_dir" ] && [ ! -e "$polkit_rule" ]; then
     echo no
   elif [ -z "${THREADGARDEN_SKIPPED_FILE-}" ]; then
+    echo unknown
+  elif ! command -v $PKCHECK >/dev/null 2>&1; then
     echo unknown
   else
     answer=0
