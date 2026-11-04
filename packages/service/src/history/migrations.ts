@@ -293,10 +293,12 @@ const steps: string[] = [
   `,
   // a machine that is away: messages written for a machine this desktop is not
   // connected to, waiting here until it accepts them (`away/queue.ts`). `payload`
-  // is what the machine is sent; the row's `id` is the message's id there.
+  // is what the machine is sent; the row's `id` is the message's id there. `seq`
+  // is the order they were written in, whatever the clock did meanwhile.
   `
   CREATE TABLE IF NOT EXISTS away_queue (
     id TEXT PRIMARY KEY,
+    seq INTEGER NOT NULL,
     machine_id TEXT NOT NULL,
     session_id TEXT NOT NULL,
     kind TEXT NOT NULL,
@@ -306,7 +308,7 @@ const steps: string[] = [
     reason TEXT,
     error TEXT
   );
-  CREATE INDEX IF NOT EXISTS away_queue_machine ON away_queue (machine_id, created_at);
+  CREATE INDEX IF NOT EXISTS away_queue_machine ON away_queue (machine_id, seq);
   `,
 ];
 

@@ -47,7 +47,8 @@ type Row = {
 
 export const ALREADY_SENT_MESSAGE = 'This message has already gone out';
 
-const ORDER = 'ORDER BY created_at, rowid';
+/** Written order (`seq`), never the clock: a clock set back must not reorder a chat. */
+const ORDER = 'ORDER BY seq';
 
 const readPayload = (json: string): AwayPayload | null => {
   try {
@@ -109,8 +110,8 @@ export class AwayQueue {
     const id = this.newId();
     this.raw
       .prepare(
-        `INSERT INTO away_queue (id, machine_id, session_id, kind, payload, created_at, state, reason, error)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO away_queue (id, seq, machine_id, session_id, kind, payload, created_at, state, reason, error)
+         VALUES (?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM away_queue), ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -149,7 +150,7 @@ export class AwayQueue {
   waitingMachines(): string[] {
     const rows = this.raw
       .prepare(
-        "SELECT machine_id FROM away_queue WHERE state = 'waiting' GROUP BY machine_id ORDER BY MIN(created_at)",
+        "SELECT machine_id FROM away_queue WHERE state = 'waiting' GROUP BY machine_id ORDER BY MIN(seq)",
       )
       .all() as { machine_id: string }[];
     return rows.map((r) => r.machine_id);
@@ -204,13 +205,14 @@ export class AwayQueue {
     return true;
   }
 
-  /** The machine's failed rows wait again; false when it had none. */
-  retry(machineId: string): boolean {
+  /** The machine's failed rows (only those failed for `reason`, if given) wait again; false when none did. */
+  retry(machineId: string, reason?: AwayReason): boolean {
     const r = this.raw
       .prepare(
-        "UPDATE away_queue SET state = 'waiting', reason = NULL, error = NULL WHERE machine_id = ? AND state = 'failed'",
+        `UPDATE away_queue SET state = 'waiting', reason = NULL, error = NULL
+         WHERE machine_id = ? AND state = 'failed' AND (? IS NULL OR reason = ?)`,
       )
-      .run(machineId);
+      .run(machineId, reason ?? null, reason ?? null);
     return Number(r.changes) > 0;
   }
 

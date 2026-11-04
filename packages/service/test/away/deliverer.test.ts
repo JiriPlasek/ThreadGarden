@@ -3,7 +3,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { EventMsg } from '@threadgarden/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { AwayDeliverer, UNREADABLE_MESSAGE, type Link } from '../../src/away/deliverer.js';
+import {
+  AWAY_LINK_TIMEOUT_MS,
+  AwayDeliverer,
+  DeviceRefused,
+  UNREADABLE_MESSAGE,
+  type Link,
+} from '../../src/away/deliverer.js';
 import { AwayQueue } from '../../src/away/queue.js';
 import { openDb } from '../../src/history/db.js';
 import { LinkError, RemoteError } from '../../src/machine/link.js';
@@ -18,6 +24,7 @@ type Call = { method: string; params: Record<string, unknown> };
 /**
  * One paired machine, `m-1`, as the deliverer sees it: its token, whether it
  * answers (`up`), what it answers each request, its plug and its switch.
+ * `m-2` is paired too, with the same token, for the tests with two machines.
  */
 const setup = (o: { token?: string | null; power?: boolean } = {}) => {
   db.raw.exec('DELETE FROM away_queue');
@@ -30,7 +37,8 @@ const setup = (o: { token?: string | null; power?: boolean } = {}) => {
   };
   const plug = { on: false as boolean | null, watts: null as number | null };
   const events: EventMsg[] = [];
-  const connect = vi.fn(async (): Promise<Link | null> => {
+  const warnings: string[] = [];
+  const connect = vi.fn<(machineId: string) => Promise<Link | null>>(async () => {
     if (!machine.up) return null;
     const n = closed.length;
     return {
@@ -51,8 +59,8 @@ const setup = (o: { token?: string | null; power?: boolean } = {}) => {
   const deliverer = new AwayDeliverer({
     queue,
     machines: {
-      get: (id) => (id === 'm-1' ? { id } : null),
-      token: (id) => (id === 'm-1' ? machine.token : null),
+      get: (id) => (id === 'm-1' || id === 'm-2' ? { id } : null),
+      token: (id) => (id === 'm-1' || id === 'm-2' ? machine.token : null),
     },
     power,
     connect,
@@ -62,8 +70,9 @@ const setup = (o: { token?: string | null; power?: boolean } = {}) => {
       setTimeout: (fn, ms) => setTimeout(fn, ms),
       clearTimeout: (h) => clearTimeout(h as NodeJS.Timeout),
     },
+    log: { warn: (m) => warnings.push(m) },
   });
-  return { calls, closed, machine, plug, events, connect, power, queue, deliverer };
+  return { calls, closed, machine, plug, events, warnings, connect, power, queue, deliverer };
 };
 
 beforeEach(() => {
@@ -132,6 +141,17 @@ describe('the away deliverer', () => {
     // Nothing waits: no more ticks.
     await settle(60_000);
     expect(t.connect).toHaveBeenCalledTimes(1);
+  });
+
+  it("a clock set back doesn't reorder a chat's messages", async () => {
+    const t = setup();
+    t.machine.up = true;
+    t.deliverer.queue({ machineId: 'm-1', sessionId: SESSION, kind: 'send', text: 'first' });
+    vi.setSystemTime(Date.now() - 10 * 60_000);
+    t.deliverer.queue({ machineId: 'm-1', sessionId: SESSION, kind: 'send', text: 'second' });
+    expect(t.deliverer.list().items.map((i) => i.text)).toEqual(['first', 'second']);
+    await settle();
+    expect(t.calls.map((c) => c.params.text)).toEqual(['first', 'second']);
   });
 
   it('a lost answer is retried with the same messageId', async () => {
@@ -301,6 +321,51 @@ describe('the away deliverer', () => {
     });
   });
 
+  it('a sleep while a connect hangs restarts the start instead of failing it', async () => {
+    const t = setup();
+    t.plug.on = false;
+    const item = t.deliverer.queue({
+      machineId: 'm-1',
+      sessionId: SESSION,
+      kind: 'send',
+      text: 'a',
+    });
+    await settle(60_000);
+    expect(t.power.turnOn).toHaveBeenCalledTimes(1);
+    // The next round's connect is under way when the lid closes for an hour.
+    let gaveUp!: (link: Link | null) => void;
+    t.connect.mockImplementationOnce(() => new Promise((resolve) => (gaveUp = resolve)));
+    await settle(5_000);
+    vi.setSystemTime(Date.now() + 60 * 60_000);
+    // On wake the connect gives up: the start was cut short, not tried.
+    gaveUp(null);
+    await settle();
+    expect(t.deliverer.list()).toEqual({
+      items: [expect.objectContaining({ id: item.id, state: 'waiting', reason: null })],
+      states: [{ machineId: 'm-1', starting: true, startedAt: Date.now() }],
+    });
+    expect(t.power.turnOn).toHaveBeenCalledTimes(2);
+  });
+
+  it('a sleep while the switch is asked gives the start its window from wake', async () => {
+    const t = setup();
+    t.plug.on = false;
+    let switched!: (v: { cycled: boolean; waitMs: number }) => void;
+    t.power.turnOn.mockImplementationOnce(() => new Promise((resolve) => (switched = resolve)));
+    t.deliverer.queue({ machineId: 'm-1', sessionId: SESSION, kind: 'send', text: 'a' });
+    await settle();
+    vi.setSystemTime(Date.now() + 60 * 60_000);
+    switched({ cycled: false, waitMs: 0 });
+    await settle(5_000);
+    // Turned on once: the machine is booting now, and is not switched again.
+    expect(t.power.turnOn).toHaveBeenCalledTimes(1);
+    expect(t.deliverer.list().states).toEqual([
+      { machineId: 'm-1', starting: true, startedAt: Date.now() - 5_000 },
+    ]);
+    await settle(4 * 60_000);
+    expect(t.deliverer.list().items).toMatchObject([{ state: 'waiting' }]);
+  });
+
   it('rows wait for the token and go out after unlock', async () => {
     // The app restarted: the local service has no token until the desktop unlocks it.
     const t = setup({ token: null });
@@ -384,31 +449,48 @@ describe('the away deliverer', () => {
     expect(t.connect.mock.calls.length).toBe(connects);
   });
 
-  it('a message written behind a failure waits for Retry with it', async () => {
+  it('a new message after a failed start starts it again', async () => {
     const t = setup();
     t.plug.on = false;
-    t.deliverer.queue({ machineId: 'm-1', sessionId: SESSION, kind: 'send', text: 'a' });
+    const first = t.deliverer.queue({
+      machineId: 'm-1',
+      sessionId: SESSION,
+      kind: 'send',
+      text: 'a',
+    });
     await settle(5 * 60_000 + 5_000);
     expect(t.deliverer.list().items).toMatchObject([{ state: 'failed', reason: 'start' }]);
-    // The machine did not come up: a new message, in any chat, does not start it again.
+    // Writing again asks for the machine again, as Retry does: the failed one goes too.
     const later = t.deliverer.queue({
       machineId: 'm-1',
       sessionId: OTHER,
       kind: 'send',
       text: 'b',
     });
-    expect(later).toMatchObject({ state: 'failed', reason: 'start', error: null });
-    await settle(60_000);
-    expect(t.power.turnOn).toHaveBeenCalledTimes(1);
+    expect(later).toMatchObject({ state: 'waiting', reason: null });
+    await settle();
+    expect(t.power.turnOn).toHaveBeenCalledTimes(2);
+    expect(t.deliverer.list()).toEqual({
+      items: [
+        expect.objectContaining({ id: first.id, state: 'waiting', reason: null }),
+        expect.objectContaining({ id: later.id, state: 'waiting' }),
+      ],
+      states: [{ machineId: 'm-1', starting: true, startedAt: Date.now() }],
+    });
+    t.machine.up = true;
+    await settle(5_000);
+    expect(t.calls.map((c) => c.params.text)).toEqual(['a', 'b']);
+  });
 
-    // A chat whose message was refused keeps its order: the next one waits behind it.
-    t.queue.forget('m-1');
+  it('a new message behind a refused one in its chat fails with it', async () => {
+    const t = setup();
     t.machine.up = true;
     t.machine.answer = async () => {
       throw new RemoteError('NOT_FOUND', 'No such chat');
     };
     t.deliverer.queue({ machineId: 'm-1', sessionId: SESSION, kind: 'send', text: 'c' });
     await settle();
+    // The chat keeps its order: the next message is not sent past the refused one.
     const behind = t.deliverer.queue({
       machineId: 'm-1',
       sessionId: SESSION,
@@ -483,14 +565,82 @@ describe('the away deliverer', () => {
   it('a slow round while awake is not taken for sleep', async () => {
     const t = setup();
     t.plug.on = false;
-    // Each connect takes 2 minutes to give up (a host that never answers).
+    // Each connect takes the whole link timeout to give up (a host that never answers).
     t.connect.mockImplementation(
-      () => new Promise<Link | null>((resolve) => setTimeout(() => resolve(null), 120_000)),
+      () =>
+        new Promise<Link | null>((resolve) =>
+          setTimeout(() => resolve(null), AWAY_LINK_TIMEOUT_MS),
+        ),
     );
     t.deliverer.queue({ machineId: 'm-1', sessionId: SESSION, kind: 'send', text: 'a' });
     await settle(10 * 60_000);
     expect(t.power.turnOn).toHaveBeenCalledTimes(1);
     expect(t.deliverer.list().items).toMatchObject([{ state: 'failed', reason: 'start' }]);
+  });
+
+  it("one machine's failure does not cut another machine's round short", async () => {
+    const t = setup();
+    t.machine.up = true;
+    let answer!: (v: unknown) => void;
+    t.machine.answer = () => new Promise((resolve) => (answer = resolve));
+    const healthy = t.connect.getMockImplementation()!;
+    t.connect.mockImplementation(async (id) => {
+      if (id === 'm-2') throw new Error('m-2 broke');
+      return healthy(id);
+    });
+    t.deliverer.queue({ machineId: 'm-1', sessionId: SESSION, kind: 'send', text: 'a' });
+    t.deliverer.queue({ machineId: 'm-2', sessionId: OTHER, kind: 'send', text: 'b' });
+    let ticked = false;
+    void t.deliverer.tick().then(() => (ticked = true));
+    await settle();
+    // m-1's round is still out: the tick is not over, and no second one overlaps it.
+    expect(t.deliverer.list('m-1').items).toMatchObject([{ state: 'sending' }]);
+    expect(ticked).toBe(false);
+    answer({ queued: false });
+    await settle();
+    expect(ticked).toBe(true);
+    expect(t.deliverer.list('m-1').items).toEqual([]);
+    expect(t.warnings.join(' ')).toContain('m-2 broke');
+  });
+
+  it('a machine that refuses this device fails its rows instead of being started', async () => {
+    const t = setup();
+    t.plug.on = false;
+    const refusal = 'Ubuntu PC refused this device; pair it again';
+    // The token was revoked: the machine is up, and says no at the door.
+    t.connect.mockImplementation(async () => {
+      throw new DeviceRefused(refusal);
+    });
+    t.deliverer.queue({ machineId: 'm-1', sessionId: SESSION, kind: 'send', text: 'a' });
+    t.deliverer.queue({ machineId: 'm-1', sessionId: OTHER, kind: 'send', text: 'b' });
+    await settle(60_000);
+    expect(t.power.turnOn).not.toHaveBeenCalled();
+    expect(t.connect).toHaveBeenCalledTimes(1);
+    expect(t.deliverer.list()).toEqual({
+      items: [
+        expect.objectContaining({ state: 'failed', reason: 'refused', error: refusal }),
+        expect.objectContaining({ state: 'failed', reason: 'refused', error: refusal }),
+      ],
+      states: [{ machineId: 'm-1', starting: false, startedAt: null }],
+    });
+
+    // Or it lets the link open and closes it on the first call: the row going out fails too.
+    t.queue.forget('m-1');
+    t.connect.mockReset();
+    t.connect.mockImplementation(async () => ({
+      request: async () => {
+        throw new DeviceRefused(refusal);
+      },
+      close: () => {},
+    }));
+    t.deliverer.queue({ machineId: 'm-1', sessionId: SESSION, kind: 'send', text: 'c' });
+    t.deliverer.queue({ machineId: 'm-1', sessionId: OTHER, kind: 'send', text: 'd' });
+    await settle(60_000);
+    expect(t.connect).toHaveBeenCalledTimes(1);
+    expect(t.deliverer.list().items).toMatchObject([
+      { state: 'failed', reason: 'refused', error: refusal },
+      { state: 'failed', reason: 'refused', error: refusal },
+    ]);
   });
 
   it('a machine without power control is never turned on, and its rows wait', async () => {
