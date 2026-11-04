@@ -65,6 +65,13 @@ export const VERSIONS_KEY = 'machines.versions';
 export const machineLabel = (m: Pick<MachineEntry, 'local' | 'name'>): string =>
   m.local ? THIS_PC : m.name;
 
+/** What a worker in WSL on a Windows PC is shown as (its platform says linux). */
+export const WSL_LABEL = 'Windows (WSL)';
+
+/** " · Windows (WSL)" after a machine's name or version when it is a worker in WSL; else nothing. */
+export const hostSuffix = (m: Pick<MachineEntry, 'info'>): string =>
+  m.info?.host === 'wsl' ? ` · ${WSL_LABEL}` : '';
+
 /** How the UI names the machine `id` (This PC for one it does not know, e.g. before its service answered). */
 export const machineNameOf = (machines: Pick<MachinesState, 'get'>, id: string): string => {
   const m = machines.get(id);
