@@ -137,6 +137,36 @@ describe('a Windows PC as a worker (WSL)', () => {
     expect(env.remote.calls('power.shutdown')).toHaveLength(1);
   });
 
+  it('a status clearing the signed-in problem closes the question without sending', async () => {
+    const env = await start({ wsl: true, signedIn: true });
+    await shutDownNow(env);
+    await screen.findByRole('alertdialog');
+    // The person signed out and the machine says so: the question no longer stands.
+    env.remote.push('power.changed', status());
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(env.app.power.signedInAsk(M1)).toBeNull();
+    expect(env.remote.calls('power.shutdown')).toHaveLength(1);
+  });
+
+  it('a question on a machine that is shutting down by other means goes too', async () => {
+    const env = await start({ wsl: true, signedIn: true });
+    await shutDownNow(env);
+    await screen.findByRole('alertdialog');
+    env.remote.push('power.changed', status({ phase: 'shuttingDown', problem: SIGNED_IN }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(env.remote.calls('power.shutdown')).toHaveLength(1);
+  });
+
+  it("a removed machine's question is gone", async () => {
+    const env = await start({ wsl: true, signedIn: true });
+    await shutDownNow(env);
+    await screen.findByRole('alertdialog');
+    await env.app.machines.remove(M1);
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(env.app.power.signedInAsk(M1)).toBeNull();
+    expect(env.remote.calls('power.shutdown')).toHaveLength(1);
+  });
+
   it("an Ubuntu machine's card and shutdown are unchanged", async () => {
     const env = await start();
     const c = await card(env);

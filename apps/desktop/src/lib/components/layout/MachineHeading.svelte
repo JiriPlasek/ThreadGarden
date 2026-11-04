@@ -294,9 +294,10 @@
     confirmLabel="Shut down"
     destructive
     onConfirm={() => {
+      // A question that went stale meanwhile sends nothing (see `signedInAsk`).
+      if (!signedInAsk) return;
       // The same force as the request it answers (despite unpushed work, or not).
-      const force = signedInAsk?.force ?? false;
-      quiet(power.shutDown(machine.id, force, true));
+      quiet(power.shutDown(machine.id, signedInAsk.force, true));
     }}
   />
   <!-- Always present, so assistive technology announces what is put in it. -->

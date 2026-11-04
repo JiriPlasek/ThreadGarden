@@ -276,8 +276,18 @@ export class PowerState {
     return s;
   };
 
-  /** A shutdown of `id` waiting on "shut it down anyway?", with the `force` it was sent with. */
-  signedInAsk = (id: string): { force: boolean } | null => this.signedInAsks[id] ?? null;
+  /**
+   * A shutdown of `id` waiting on "shut it down anyway?", with the `force` it was sent
+   * with; only while the machine is on and still says someone is signed in. A question
+   * that went stale (the person signed out, the machine went down or away) is gone,
+   * so confirming it can never send a forced shutdown to a machine in another state.
+   */
+  signedInAsk = (id: string): { force: boolean } | null => {
+    const ask = this.signedInAsks[id];
+    const st = this.statuses[id];
+    if (!ask || st?.problem !== SIGNED_IN || st.phase === 'shuttingDown') return null;
+    return this.machines?.get(id)?.status === 'on' ? ask : null;
+  };
 
   /** The owner answered (or dismissed) the question. */
   clearSignedInAsk = (id: string): void => {
@@ -388,6 +398,7 @@ export class PowerState {
     this.dropPlug(id);
     delete this.statuses[id];
     delete this.errors[id];
+    delete this.signedInAsks[id];
     this.wasBlocked.delete(id);
     this.adopted.delete(id);
     // Unpaired: there is no machine left to tell.
@@ -413,6 +424,7 @@ export class PowerState {
     delete this.waits[id];
     delete this.statuses[id];
     delete this.shutSeenAt[id];
+    delete this.signedInAsks[id];
     this.awaitingStandby.delete(id);
     this.schedule();
     const m = this.machines?.get(id);
@@ -429,6 +441,8 @@ export class PowerState {
 
   private setMachine = (id: string, s: MachinePowerStatus): void => {
     this.statuses[id] = s;
+    // Nobody signed in any more (or it says something else now): the question is over.
+    if (s.problem !== SIGNED_IN || s.phase === 'shuttingDown') delete this.signedInAsks[id];
     if (s.phase !== 'blocked') this.wasBlocked.delete(id);
     else if (!this.wasBlocked.has(id)) {
       this.wasBlocked.add(id);
