@@ -8,8 +8,14 @@ import type { Api } from './api';
 import type { MachinesState } from './machines.svelte';
 import type { MachineScope, Scopes } from './scope';
 
-/** A burst of changes is saved once, this long after the last. */
+/** A burst of changes is saved once, this long after the first. */
 const DEBOUNCE_MS = 2_000;
+/**
+ * While connected, the whole list is read at most this often per machine (a
+ * busy machine changes every second); the last change is copied all the same.
+ * A link that opens is copied at once.
+ */
+const MIN_GAP_MS = 30_000;
 /** The chats a copy keeps (the store caps them too). */
 const MAX_CHATS = 500;
 const PAGE = 100;
@@ -35,6 +41,7 @@ export type CopySyncDeps = {
   scopes: Pick<Scopes, 'observe'>;
   machines: Pick<MachinesState, 'get'>;
   debounceMs?: number;
+  minGapMs?: number;
 };
 
 export class CopySync {
@@ -48,7 +55,10 @@ export class CopySync {
   private follow = (scope: MachineScope): (() => void) => {
     const { api } = scope;
     const wait = this.deps?.debounceMs ?? DEBOUNCE_MS;
+    const gap = this.deps?.minGapMs ?? MIN_GAP_MS;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    /** When the last copy started. */
+    let lastRun = -Infinity;
     let running = false;
     let again = false;
     let stopped = false;
@@ -61,6 +71,7 @@ export class CopySync {
         return;
       }
       running = true;
+      lastRun = Date.now();
       try {
         await this.copy(scope, away);
       } catch {
@@ -73,12 +84,14 @@ export class CopySync {
         schedule();
       }
     };
+    /** A copy soon: one already due takes the change too, so a busy machine is still copied. */
     const schedule = (): void => {
-      if (timer) clearTimeout(timer);
+      if (timer) return;
+      const due = Math.max(wait, lastRun + gap - Date.now());
       timer = setTimeout(() => {
         timer = null;
         void run();
-      }, wait);
+      }, due);
     };
     const cancel = (): void => {
       if (timer) clearTimeout(timer);
@@ -87,7 +100,12 @@ export class CopySync {
     };
 
     const offs = [
-      api.onOpen(() => run()),
+      api.onOpen(() => {
+        // Back after a gap: copied now, not when the last copy allows.
+        cancel();
+        lastRun = -Infinity;
+        void run();
+      }),
       api.onStatus((s) => {
         if (s !== 'open') cancel();
       }),

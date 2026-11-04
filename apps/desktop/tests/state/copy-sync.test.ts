@@ -145,13 +145,49 @@ describe('CopySync', () => {
   it('a change saves again after the debounce, not before', async () => {
     const { remote, local } = setup();
     remote.open();
-    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(60_000);
+    const saves = local.count('copies.saveLists');
     remote.emit('sessions.changed');
     remote.emit('projects.changed');
     await vi.advanceTimersByTimeAsync(1900);
-    expect(local.count('copies.saveLists')).toBe(1);
+    expect(local.count('copies.saveLists')).toBe(saves);
     await vi.advanceTimersByTimeAsync(200);
-    expect(local.count('copies.saveLists')).toBe(2);
+    expect(local.count('copies.saveLists')).toBe(saves + 1);
+  });
+
+  it('while connected the whole list is read at most every 30 s, the last change kept', async () => {
+    const { remote, local } = setup();
+    remote.open();
+    await vi.advanceTimersByTimeAsync(60_000);
+    const lists = () => remote.count('projects.list');
+    const before = lists();
+    // A busy machine: a change every second.
+    for (let i = 0; i < 90; i++) {
+      remote.emit('sessions.changed');
+      await vi.advanceTimersByTimeAsync(1_000);
+    }
+    expect(lists() - before).toBeGreaterThanOrEqual(2);
+    expect(lists() - before).toBeLessThanOrEqual(3);
+    // The trailing one: the last change is copied too.
+    const settled = lists();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(lists()).toBe(settled + 1);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(lists()).toBe(settled + 1);
+    expect(local.count('copies.saveLists')).toBe(remote.count('projects.list'));
+  });
+
+  it('a link that opens again is copied at once', async () => {
+    const { remote, local } = setup();
+    remote.open();
+    await vi.advanceTimersByTimeAsync(0);
+    remote.emit('sessions.changed');
+    await vi.advanceTimersByTimeAsync(3_000);
+    const saves = local.count('copies.saveLists');
+    remote.away();
+    remote.open();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(local.count('copies.saveLists')).toBe(saves + 1);
   });
 
   it('nothing is fetched while the machine is away', async () => {
