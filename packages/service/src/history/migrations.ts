@@ -274,6 +274,23 @@ const steps: string[] = [
   );
   CREATE INDEX IF NOT EXISTS received_messages_at ON received_messages (at);
   `,
+  // a machine that is away: what the desktop keeps of each paired machine's lists
+  // and last messages, so they can be read while it is off.
+  `
+  CREATE TABLE IF NOT EXISTS machine_copies (
+    machine_id TEXT PRIMARY KEY,
+    json TEXT NOT NULL,
+    copied_at INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS chat_copies (
+    machine_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    json TEXT NOT NULL,
+    last_activity INTEGER,
+    copied_at INTEGER NOT NULL,
+    PRIMARY KEY (machine_id, session_id)
+  );
+  `,
 ];
 
 /** Runs the steps not run yet; `upTo` stops early (tests build older schemas with it). */

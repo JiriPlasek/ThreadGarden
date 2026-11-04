@@ -41,6 +41,8 @@ import { ChatStore } from './move/store.js';
 import type { AgentAdapter } from './sdk/adapter.js';
 import type { ClaudeFound, ClaudeProblem } from './sdk/claude-path.js';
 import { buildSessionEnv } from './sdk/real-adapter.js';
+import { CopyStore } from './away/copies.js';
+import { registerCopyHandlers } from './server/handlers/copies.js';
 import { registerChatHandlers } from './server/handlers/chat.js';
 import { busyOf, MoveLocks, registerMoveHandlers, type MoveGit } from './server/handlers/move.js';
 import { makeResumeChecker, registerExternalHandlers } from './server/handlers/external.js';
@@ -566,8 +568,12 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       });
       relay = machineRelay;
       // machine.*, pairing, devices and machines.* (v1.4); none of them without a database.
+      // What the desktop keeps of each paired machine, for when it is off (protocol 11).
+      const copies = new CopyStore(opened.raw);
+      registerCopyHandlers(router, { store: copies });
       registerMachineHandlers(router, {
         db: opened,
+        copies,
         devices,
         identity: () => machineOf(opened),
         ...(tls ? { tls } : {}),
