@@ -16,6 +16,38 @@ import {
 export const COPY_CHATS = 500;
 /** Items kept per chat copy: the last few things said. */
 export const COPY_ITEMS = 10;
+/** A string in a copied permission request is cut to this many characters (then "…"). */
+export const COPY_STRING_CHARS = 4_000;
+/** How deep a copied permission request's input is walked; deeper values are dropped. */
+const COPY_INPUT_DEPTH = 8;
+
+/** `value` with its long strings cut, at most `COPY_INPUT_DEPTH` levels deep. */
+const capped = (value: unknown, depth = 0): unknown => {
+  if (typeof value === 'string') {
+    return value.length > COPY_STRING_CHARS ? `${value.slice(0, COPY_STRING_CHARS)}…` : value;
+  }
+  if (value === null || typeof value !== 'object') return value;
+  if (depth >= COPY_INPUT_DEPTH) return null;
+  if (Array.isArray(value)) return value.map((v) => capped(v, depth + 1));
+  return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, capped(v, depth + 1)]));
+};
+
+/**
+ * What a copy keeps of an item: a user message's images only as their count
+ * (a pasted screenshot is megabytes of base64), and a permission request's
+ * input with its long strings cut (a Write's whole file).
+ */
+const textOnly = (item: unknown): unknown => {
+  if (item === null || typeof item !== 'object') return item;
+  const raw = item as { kind?: unknown; images?: unknown; imageCount?: unknown; input?: unknown };
+  if (raw.kind === 'user') {
+    const { images, ...rest } = raw;
+    const count = Array.isArray(images) ? images.length : 0;
+    return count > 0 ? { ...rest, imageCount: count } : rest;
+  }
+  if (raw.kind === 'permissionRequest') return { ...raw, input: capped(raw.input) };
+  return item;
+};
 
 /**
  * What the desktop keeps of each paired machine (its lists and the last
@@ -64,7 +96,10 @@ export class CopyStore {
     });
   }
 
-  /** Replaces one chat's copy, keeping the last few user, assistant and permission items. */
+  /**
+   * Replaces one chat's copy, keeping the last few user, assistant and
+   * permission items, text only (`textOnly`), whatever the client sends.
+   */
   saveChat(chat: {
     machineId: string;
     sessionId: string;
@@ -73,7 +108,7 @@ export class CopyStore {
   }): void {
     const items: CopyItem[] = [];
     for (const item of chat.items) {
-      const parsed = CopyItemSchema.safeParse(item);
+      const parsed = CopyItemSchema.safeParse(textOnly(item));
       if (parsed.success) items.push(parsed.data);
     }
     const copy: ChatCopy = {

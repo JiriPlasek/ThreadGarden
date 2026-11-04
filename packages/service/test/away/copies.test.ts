@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ChatSummary, CopyItem } from '@threadgarden/protocol';
 import { describe, expect, it } from 'vitest';
-import { CopyStore } from '../../src/away/copies.js';
+import { COPY_STRING_CHARS, CopyStore } from '../../src/away/copies.js';
 import { openDb } from '../../src/history/db.js';
 import { DeviceRegistry } from '../../src/machine/devices.js';
 import { PairedMachines } from '../../src/machine/paired-machines.js';
@@ -66,6 +66,67 @@ describe('the copy store', () => {
     expect(copy.items.map((i) => i.id)).toEqual(Array.from({ length: 10 }, (_, i) => `u${i + 2}`));
     expect(copy.summary.sessionId).toBe('s-1');
     expect(copy.copiedAt).toBe(5_000);
+  });
+
+  it('saveChat drops image data', () => {
+    const store = fresh();
+    const png = { mediaType: 'image/png', data: 'A'.repeat(64) };
+    const items = [
+      { kind: 'user', id: 'u1', text: 'look', ts: 1, images: [png, png] },
+      { kind: 'user', id: 'u2', text: '', ts: 2, images: [png] },
+      { kind: 'user', id: 'u3', text: 'counted', ts: 3, imageCount: 4 },
+      { kind: 'user', id: 'u4', text: 'none', ts: 4 },
+    ];
+    store.saveChat({ machineId: 'm-1', sessionId: 's-1', summary: summary(1), items });
+    expect(store.chat('m-1', 's-1')!.items).toEqual([
+      { kind: 'user', id: 'u1', text: 'look', ts: 1, imageCount: 2 },
+      { kind: 'user', id: 'u2', text: '', ts: 2, imageCount: 1 },
+      { kind: 'user', id: 'u3', text: 'counted', ts: 3, imageCount: 4 },
+      { kind: 'user', id: 'u4', text: 'none', ts: 4 },
+    ]);
+    const stored = db.raw
+      .prepare("SELECT json FROM chat_copies WHERE session_id = 's-1'")
+      .get() as { json: string };
+    expect(stored.json).not.toContain('AAAA');
+  });
+
+  it("saveChat cuts a permission request's long strings to a few KB", () => {
+    const store = fresh();
+    const long = 'x'.repeat(100_000);
+    const items = [
+      {
+        kind: 'permissionRequest',
+        id: 'p1',
+        requestId: 'r1',
+        toolName: 'Write',
+        input: { file_path: '/a', content: long, edits: [{ old: long, n: 3 }], ok: true },
+        suggestions: [],
+        state: 'pending',
+        variant: 'tool',
+      },
+      {
+        kind: 'permissionRequest',
+        id: 'p2',
+        requestId: 'r2',
+        toolName: 'Bash',
+        input: long,
+        suggestions: [],
+        state: 'pending',
+        variant: 'tool',
+      },
+    ];
+    store.saveChat({ machineId: 'm-1', sessionId: 's-1', summary: summary(1), items });
+    const [first, second] = store.chat('m-1', 's-1')!.items as {
+      input: unknown;
+    }[];
+    const cut = `${'x'.repeat(COPY_STRING_CHARS)}…`;
+    expect(first!.input).toEqual({
+      file_path: '/a',
+      content: cut,
+      edits: [{ old: cut, n: 3 }],
+      ok: true,
+    });
+    expect(second!.input).toBe(cut);
   });
 
   it("tails reports each chat copy's lastActivity", () => {

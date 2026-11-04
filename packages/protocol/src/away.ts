@@ -14,9 +14,19 @@ export const AWAY_ERROR = 'AWAY';
  * The options come out of `ChatItemSchema` by position (user, assistantText,
  * permissionRequest), so a change to an item shape is followed here; the
  * `away` test pins which kinds they are.
+ *
+ * Text only: a user message keeps how many images it had (`imageCount`), never
+ * their data, which parsing drops.
  */
 const [userItem, assistantItem, , , , permissionItem] = ChatItemSchema.options;
-export const CopyItemSchema = z.discriminatedUnion('kind', [userItem, assistantItem, permissionItem]);
+const copiedUserItem = userItem
+  .omit({ images: true })
+  .extend({ imageCount: z.number().int().nonnegative().optional() });
+export const CopyItemSchema = z.discriminatedUnion('kind', [
+  copiedUserItem,
+  assistantItem,
+  permissionItem,
+]);
 export type CopyItem = z.infer<typeof CopyItemSchema>;
 
 /** What the desktop kept of a machine's lists, for when the machine is off. */

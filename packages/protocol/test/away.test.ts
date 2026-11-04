@@ -57,6 +57,23 @@ describe('protocol 11', () => {
     expect(Object.keys(events)).toContain('away.changed');
   });
 
+  it("a copied user message says how many images it had, and never keeps their data", () => {
+    const png = { mediaType: 'image/png', data: 'AAAA' };
+    expect(
+      CopyItemSchema.parse({ kind: 'user', id: 'u', text: 'a', ts: 1, images: [png], imageCount: 1 }),
+    ).toEqual({ kind: 'user', id: 'u', text: 'a', ts: 1, imageCount: 1 });
+    // Earlier copies, written without a count, still read back.
+    expect(CopyItemSchema.parse({ kind: 'user', id: 'u', text: 'a', ts: 1 })).toEqual({
+      kind: 'user',
+      id: 'u',
+      text: 'a',
+      ts: 1,
+    });
+    expect(
+      CopyItemSchema.safeParse({ kind: 'user', id: 'u', text: 'a', ts: 1, imageCount: -1 }).success,
+    ).toBe(false);
+  });
+
   it('CopyItemSchema refuses a toolCall', () => {
     expect(CopyItemSchema.safeParse({ kind: 'user', id: 'u', text: 'a', ts: 1 }).success).toBe(true);
     expect(

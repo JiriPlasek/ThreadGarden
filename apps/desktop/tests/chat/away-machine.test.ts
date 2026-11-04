@@ -219,6 +219,20 @@ describe('a machine that is away', () => {
     expect(env.server.calls('power.turnOn')).toHaveLength(0);
   });
 
+  it('a copied message with images says how many it had', async () => {
+    const env = await start({
+      items: [
+        { ...user('u1', 'See the screenshot'), imageCount: 2 },
+        { ...user('u2', ''), imageCount: 1 },
+      ],
+    });
+    await openChat(env);
+    expect(await screen.findByText('See the screenshot')).toBeTruthy();
+    expect(screen.getByText('2 images')).toBeTruthy();
+    expect(screen.getByText('1 image')).toBeTruthy();
+    expect(document.querySelector('img[alt^="Attached image"]')).toBeNull();
+  });
+
   it('sending queues the message and shows the waiting line with Cancel', async () => {
     const env = await start();
     const composer = await openChat(env);

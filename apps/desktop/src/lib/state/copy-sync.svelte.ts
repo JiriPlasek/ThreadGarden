@@ -3,7 +3,7 @@
  * its chats can still be read when it is off or away (away machine spec). The
  * copy lives in the local service (`copies.*`); this only feeds it.
  */
-import type { ChatSummary, CopyItem, Project } from '@threadgarden/protocol';
+import type { ChatItem, ChatSummary, CopyItem, Project } from '@threadgarden/protocol';
 import type { Api } from './api';
 import type { MachinesState } from './machines.svelte';
 import type { MachineScope, Scopes } from './scope';
@@ -21,6 +21,13 @@ const OPEN_TAIL = 30;
 const PARALLEL = 2;
 
 const COPY_KINDS = new Set(['user', 'assistantText', 'permissionRequest']);
+
+/** A copy is text only: a user message's images go as their count (the store enforces it too). */
+const toCopy = (item: ChatItem): CopyItem => {
+  if (item.kind !== 'user') return item as CopyItem;
+  const { images, ...rest } = item;
+  return images?.length ? { ...rest, imageCount: images.length } : rest;
+};
 
 export type CopySyncDeps = {
   /** The local service, which keeps the copies. */
@@ -154,7 +161,8 @@ export class CopySync {
       });
       const items = opened.items
         .filter((i) => COPY_KINDS.has(i.kind))
-        .slice(-TAIL_ITEMS) as CopyItem[];
+        .slice(-TAIL_ITEMS)
+        .map(toCopy);
       await local.request('copies.saveChat', {
         machineId: scope.machineId,
         sessionId: chat.sessionId,

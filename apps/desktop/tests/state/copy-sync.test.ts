@@ -58,13 +58,15 @@ const chat = (id: string, lastActivity: number): ChatSummary =>
   ({ sessionId: id, lastActivity, projectId: 'p1' }) as unknown as ChatSummary;
 const project = { projectId: 'p1' } as unknown as Project;
 
-const setup = (opts: { tails?: Record<string, number>; chats?: ChatSummary[] } = {}) => {
+const setup = (
+  opts: { tails?: Record<string, number>; chats?: ChatSummary[]; items?: unknown[] } = {},
+) => {
   const remote = fakeApi({
     'projects.list': () => [project],
     'sessions.list': () => ({ items: opts.chats ?? [chat('a', 10), chat('b', 20)] }),
     'chat.open': ((p: { sessionId: string }) => ({
       summary: chat(p.sessionId, 99),
-      items: [
+      items: opts.items ?? [
         { kind: 'user', text: 'hi' },
         { kind: 'toolCall' },
         { kind: 'assistantText', text: 'yo' },
@@ -110,6 +112,24 @@ describe('CopySync', () => {
     expect(saved[0]!.params.items.map((i: { kind: string }) => i.kind)).toEqual([
       'user',
       'assistantText',
+    ]);
+  });
+
+  it("a user message's images are copied as their count, never their data", async () => {
+    const png = { mediaType: 'image/png', data: 'AAAA' };
+    const { remote, local } = setup({
+      chats: [chat('a', 10)],
+      items: [
+        { kind: 'user', id: 'u1', text: 'look', ts: 1, images: [png, png] },
+        { kind: 'user', id: 'u2', text: 'plain', ts: 2 },
+      ],
+    });
+    remote.open();
+    await vi.advanceTimersByTimeAsync(0);
+    const saved = local.calls.find((c) => c.method === 'copies.saveChat')!;
+    expect(saved.params.items).toEqual([
+      { kind: 'user', id: 'u1', text: 'look', ts: 1, imageCount: 2 },
+      { kind: 'user', id: 'u2', text: 'plain', ts: 2 },
     ]);
   });
 
