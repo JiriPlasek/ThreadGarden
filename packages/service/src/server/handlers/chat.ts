@@ -448,19 +448,21 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
     images?: ImageRef[] | undefined;
     messageId?: string | undefined;
   }) => {
+    // A client's retry carries the id of the message it already sent. Only a message that
+    // is really handed over counts as received, so the id is recorded in the same
+    // synchronous step as the hand-over (no await between), after the resume: a retry
+    // that comes while an earlier try still waits on the resume must not be answered as
+    // delivered. This look is only so a duplicate doesn't start a process, and it comes
+    // before the move checks: a message taken before the chat began to move was taken,
+    // and its retry must not read as refused.
+    const id = p.messageId;
+    if (id !== undefined && db.hasMessage(id)) return { queued: false };
     if (deps.isMoving?.(p.sessionId)) {
       throw new ServiceError(MOVE_ERRORS.moving, 'This chat is being moved to another machine');
     }
     const away = deps.awayTo?.(p.sessionId);
     if (away) throw new ServiceError(MOVE_ERRORS.moved, `This chat moved to ${away.name}`);
     const input = toInput(p);
-    // A client's retry carries the id of the message it already sent. Only a message that
-    // is really handed over counts as received, so the id is recorded in the same
-    // synchronous step as the hand-over (no await between), after the resume: a retry
-    // that comes while an earlier try still waits on the resume must not be answered as
-    // delivered. This look is only so a duplicate doesn't start a process.
-    const id = p.messageId;
-    if (id !== undefined && db.hasMessage(id)) return { queued: false };
     const s = await resumedOrLive(p.sessionId);
     // Nothing gets lost in the archive or on hold: a chat being sent a message
     // (and perhaps running now) is active, even if the send itself then fails.
