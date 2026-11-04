@@ -696,6 +696,63 @@ describe('the away deliverer', () => {
     ]);
   });
 
+  describe('backing off', () => {
+    /** Connects (one per look) made over `ms`. */
+    const looksOver = async (t: ReturnType<typeof setup>, ms: number): Promise<number> => {
+      const before = t.connect.mock.calls.length;
+      await settle(ms);
+      return t.connect.mock.calls.length - before;
+    };
+
+    it('a machine away for minutes with no start running is looked at once a minute', async () => {
+      // Its plug reads on (it may be booting, or its service is down): it is never started.
+      const t = setup();
+      t.plug.on = true;
+      t.deliverer.queue({ machineId: 'm-1', sessionId: SESSION, kind: 'send', text: 'a' });
+      await settle();
+      // The first minutes, every 5 s.
+      expect(await looksOver(t, 60_000)).toBe(12);
+      await settle(2 * 60_000);
+      // Then once a minute: a week away is not a TLS connect and a plug read every 5 s.
+      expect(await looksOver(t, 5 * 60_000)).toBe(5);
+      expect(t.power.reading.mock.calls.length).toBeLessThan(50);
+    });
+
+    it('a new row, Retry, unlock or an opened link looks fast again', async () => {
+      const t = setup({ power: false });
+      t.deliverer.queue({ machineId: 'm-1', sessionId: SESSION, kind: 'send', text: 'a' });
+      await settle(4 * 60_000);
+      expect(await looksOver(t, 60_000)).toBe(1);
+
+      t.deliverer.queue({ machineId: 'm-1', sessionId: SESSION, kind: 'send', text: 'b' });
+      expect(await looksOver(t, 30_000)).toBe(7);
+
+      await settle(4 * 60_000);
+      t.queue.fail(t.queue.list()[0]!.id, 'refused', 'No');
+      t.deliverer.retry('m-1');
+      expect(await looksOver(t, 30_000)).toBe(7);
+
+      await settle(4 * 60_000);
+      t.deliverer.onUnlock('m-1');
+      expect(await looksOver(t, 30_000)).toBe(7);
+
+      await settle(4 * 60_000);
+      t.deliverer.onReachable('m-1');
+      expect(await looksOver(t, 30_000)).toBe(7);
+    });
+
+    it('a start running keeps looking every 5 s', async () => {
+      const t = setup();
+      t.plug.on = false;
+      t.deliverer.queue({ machineId: 'm-1', sessionId: SESSION, kind: 'send', text: 'a' });
+      await settle();
+      expect(t.power.turnOn).toHaveBeenCalledTimes(1);
+      await settle(3 * 60_000);
+      // Booting: it is caught within a tick of coming up.
+      expect(await looksOver(t, 60_000)).toBe(12);
+    });
+  });
+
   it('a machine without power control is never turned on, and its rows wait', async () => {
     const t = setup({ power: false });
     t.deliverer.queue({ machineId: 'm-1', sessionId: SESSION, kind: 'send', text: 'a' });

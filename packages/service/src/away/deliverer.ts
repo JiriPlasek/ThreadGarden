@@ -7,6 +7,13 @@ import type { AwayPayload, AwayQueue, AwayReason, AwayRow, NewAwayRow } from './
 
 /** How often the queue is looked at while rows wait. */
 export const AWAY_TICK_MS = 5_000;
+/**
+ * A machine unreachable this long with no start running (its plug reads on,
+ * or it has no power control) is looked at only every `AWAY_SLOW_TICK_MS`:
+ * a week away is not a TLS connect and a plug read every 5 s.
+ */
+export const AWAY_SLOW_AFTER_MS = 3 * 60_000;
+export const AWAY_SLOW_TICK_MS = 60_000;
 /** How long a start may take before it failed (power control's own give-up). */
 export const AWAY_START_WINDOW_MS = 5 * 60_000;
 /**
@@ -141,7 +148,8 @@ const errorText = (err: unknown): string => (err instanceof Error ? err.message 
 
 /**
  * Delivers the queue: while rows wait, every `AWAY_TICK_MS` each machine with
- * waiting rows is tried. Connected, its rows go out in order over a link of
+ * waiting rows is tried (every `AWAY_SLOW_TICK_MS` once they have all been
+ * away for minutes with no start running). Connected, its rows go out in order over a link of
  * the round's own, closed when the round ends. Not connected, a machine whose
  * plug reads Off is turned on, once per attempt; one that draws power is never
  * turned on (it may be booting, and would be cut).
@@ -156,6 +164,8 @@ export class AwayDeliverer {
   private readonly attempts = new Map<string, { startedAt: number; lastSeen: number }>();
   /** The links of the rounds running now. */
   private readonly links = new Set<Link>();
+  /** Machines not reachable, with no start running: since when (for the slow ticks). */
+  private readonly quiet = new Map<string, number>();
 
   constructor(private readonly d: AwayDelivererDeps) {
     this.now = d.now ?? Date.now;
@@ -179,6 +189,7 @@ export class AwayDeliverer {
    */
   queue(p: NewAwayRow): AwayItem {
     if (this.d.queue.retry(p.machineId, 'start')) this.attempts.delete(p.machineId);
+    this.quiet.delete(p.machineId);
     const ahead = this.d.queue
       .rows(p.machineId)
       .find((r) => r.state === 'failed' && r.sessionId === p.sessionId);
@@ -195,6 +206,7 @@ export class AwayDeliverer {
   retry(machineId: string): void {
     if (!this.d.queue.retry(machineId)) return;
     this.attempts.delete(machineId);
+    this.quiet.delete(machineId);
     this.changed();
     this.kick();
   }
@@ -208,6 +220,7 @@ export class AwayDeliverer {
 
   /** The machine's token arrived (`machines.unlock`): its waiting rows can go now. */
   onUnlock(machineId: string): void {
+    this.quiet.delete(machineId);
     if (this.d.queue.waitingMachines().includes(machineId)) this.kick();
   }
 
@@ -217,9 +230,11 @@ export class AwayDeliverer {
    * (ruling R17). A row the machine refused still waits for Retry (R9).
    */
   onReachable(machineId: string): void {
-    if (!this.d.queue.retry(machineId, 'start')) return;
-    this.attempts.delete(machineId);
-    this.changed();
+    this.quiet.delete(machineId);
+    if (this.d.queue.retry(machineId, 'start')) {
+      this.attempts.delete(machineId);
+      this.changed();
+    } else if (!this.d.queue.waitingMachines().includes(machineId)) return;
     this.kick();
   }
 
@@ -232,6 +247,7 @@ export class AwayDeliverer {
   forget(machineId: string): void {
     this.d.queue.forget(machineId);
     this.attempts.delete(machineId);
+    this.quiet.delete(machineId);
     this.changed();
   }
 
@@ -271,7 +287,7 @@ export class AwayDeliverer {
       this.running = null;
       // Closed: the database may be closing too.
       if (this.closed) return;
-      if (this.d.queue.hasWaiting()) this.schedule(AWAY_TICK_MS);
+      if (this.d.queue.hasWaiting()) this.schedule(this.nextTickMs());
     });
     return this.running;
   }
@@ -299,8 +315,28 @@ export class AwayDeliverer {
     });
   }
 
+  /** 5 s, or a minute when every machine waited on has been quiet for minutes. */
+  private nextTickMs(): number {
+    const now = this.now();
+    const slow = this.d.queue.waitingMachines().every((id) => {
+      const since = this.quiet.get(id);
+      return !this.attempts.has(id) && since !== undefined && now - since >= AWAY_SLOW_AFTER_MS;
+    });
+    return slow ? AWAY_SLOW_TICK_MS : AWAY_TICK_MS;
+  }
+
+  /** Not reachable now: quiet since the first such look, unless a start is running. */
+  private unreachable(machineId: string): void {
+    if (this.attempts.has(machineId)) this.quiet.delete(machineId);
+    else if (!this.quiet.has(machineId)) this.quiet.set(machineId, this.now());
+  }
+
   private async round(machineId: string): Promise<void> {
-    if (!this.d.machines.get(machineId) || this.d.machines.token(machineId) === null) return;
+    if (!this.d.machines.get(machineId) || this.d.machines.token(machineId) === null) {
+      // Locked: nothing goes out until unlock, which looks again at once.
+      this.unreachable(machineId);
+      return;
+    }
     let link: Link | null;
     try {
       link = await this.d.connect(machineId);
@@ -326,8 +362,10 @@ export class AwayDeliverer {
         this.d.queue.failWaiting(machineId, 'start', null);
         this.changed();
       } else attempt.lastSeen = now;
+      this.unreachable(machineId);
       return;
     }
+    this.quiet.delete(machineId);
     if (this.attempts.delete(machineId)) this.changed();
     this.links.add(link);
     try {
