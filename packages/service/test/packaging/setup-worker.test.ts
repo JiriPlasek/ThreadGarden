@@ -51,7 +51,11 @@ function Invoke-TgWsl {
   param([string[]]$Arguments)
   Write-StubCall ('wsl ' + ($Arguments -join ' '))
   $p = Get-StubPath 'distros'
-  if ($Arguments[0] -eq '--install' -and $Arguments.Count -eq 5) { Add-Content -LiteralPath $p -Value $Arguments[4] }
+  if ($Arguments[0] -eq '--install' -and $Arguments.Count -eq 5) {
+    # An older WSL without --name.
+    if (Test-Path -LiteralPath (Get-StubPath 'old-wsl')) { return 1 }
+    Add-Content -LiteralPath $p -Value $Arguments[4]
+  }
   if ($Arguments[0] -eq '--unregister') {
     $keep = @(Get-TgDistros | Where-Object { $_ -ne $Arguments[1] })
     Set-Content -LiteralPath $p -Value $keep
@@ -496,6 +500,15 @@ $global:TgTask | ConvertTo-Json -Compress
     const remote = await run(['-DryRun']);
     expect(remote.code).toBe(0);
     expect(remote.stdout).toContain('This runs as PC\\owner.');
+  });
+
+  it('a distro install that fails says to update an older WSL', async () => {
+    await writeFile(join(state, 'old-wsl'), '');
+    const r = await run();
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain('failed (exit code 1)');
+    expect(r.stderr).toContain('If WSL is older than 2.4, run wsl --update and run this again.');
+    expect(await calls()).toEqual(['wsl --install -d Ubuntu-24.04 --name threadgarden']);
   });
 
   it('needs administrator, Windows 11 22H2 and WSL, and installs WSL first when missing', async () => {
