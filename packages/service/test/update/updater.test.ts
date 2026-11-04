@@ -5,7 +5,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PROTOCOL_VERSION, type EventMsg, type UpdateStatus } from '@threadgarden/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { WebSocket } from 'ws';
 import pkg from '../../package.json' with { type: 'json' };
+import { ExternalPoller } from '../../src/external/poller.js';
 import { startService, type ServiceHandle, type StartOptions } from '../../src/main.js';
 import { FakeAdapter } from '../../src/testing/fake-adapter.js';
 import { generateCorpus } from '../../src/testing/corpus.js';
@@ -869,7 +871,7 @@ describe('the service', () => {
       headless: true,
       remote: { addresses: ['127.0.0.1'], port: 0 },
       logger,
-      update: { installBase, platform: 'linux', run: fakeRun().run },
+      update: { installBase, platform: 'linux', arch: 'x64', run: fakeRun().run },
       ...over,
     });
     opened.svc.push(svc);
@@ -1074,6 +1076,89 @@ describe('the service', () => {
     await eventually(() => svc.remote);
     await eventually(() => existsSync(join(updateDir, 'last.json')));
     expect(await lastJson()).toMatchObject({ state: 'done', version: pkg.version });
+  });
+
+  it("done isn't written until startup has finished", async () => {
+    await writeUpdateFiles({
+      'pending.json': JSON.stringify({ version: pkg.version, from: CURRENT }),
+    });
+    // A folder where service.json goes: writing it fails after the listener has bound,
+    // and bin.ts then exits 1. The apply script has to be left to roll this one back.
+    await mkdir(join(dataDir, 'service.json'));
+    await expect(start()).rejects.toThrow();
+    expect(existsSync(join(updateDir, 'last.json'))).toBe(false);
+    expect(existsSync(join(updateDir, 'pending.json'))).toBe(true);
+  });
+
+  it('the first reconcile comes after the last startup step', async () => {
+    const order: string[] = [];
+    const pollerStart = vi.spyOn(ExternalPoller.prototype, 'start').mockImplementation(() => {
+      order.push('poller');
+    });
+    try {
+      const fake: Updater = {
+        supported: () => true,
+        status: () => ({ state: 'idle' }),
+        start: async () => ({ started: true }),
+        reconcile: async () => {
+          order.push('reconcile');
+        },
+      };
+      await start({ update: { updater: fake } });
+      expect(order).toEqual(['poller', 'reconcile']);
+    } finally {
+      pollerStart.mockRestore();
+    }
+  });
+
+  it('the startup update.progress reaches a device, and systemd being slow delays nothing', async () => {
+    // An update for another version that nothing is left to end, so reconcile asks systemd.
+    await writeUpdateFiles({
+      'pending.json': JSON.stringify({ version: '9.9.9', from: CURRENT }),
+    });
+    let answer!: () => void;
+    const systemdAnswers = new Promise<void>((resolve) => (answer = resolve));
+    const fake = fakeRun();
+    const run: Run = async (cmd, args) => {
+      if (cmd === 'systemctl') await systemdAnswers;
+      return fake.run(cmd, args);
+    };
+
+    // It starts although systemd hasn't answered, and a device can connect meanwhile.
+    const svc = await start({ update: { installBase, platform: 'linux', arch: 'x64', run } });
+    const created = (await svc.router.dispatch(
+      { id: 1, method: 'pairing.create', params: {} },
+      { clientId: 't', origin: 'local' },
+    )) as { result: { code: string } };
+    const claimed = (await svc.router.dispatch(
+      { id: 2, method: 'pair.claim', params: { code: created.result.code, deviceName: 'Laptop' } },
+      { clientId: 'p', origin: 'remote' },
+    )) as { result: { token: string } };
+    const device = new WebSocket(`wss://127.0.0.1:${svc.remote!.port}`, [
+      `threadgarden-device.${claimed.result.token}`,
+    ], { rejectUnauthorized: false });
+    try {
+      await new Promise((resolve, reject) => {
+        device.once('open', resolve);
+        device.once('error', reject);
+      });
+      const progress = new Promise<unknown>((resolve) => {
+        device.on('message', (d: unknown) => {
+          const frame = JSON.parse(String(d)) as { event?: string; data?: unknown };
+          if (frame.event === 'update.progress') resolve(frame.data);
+        });
+      });
+      answer();
+      await expect(progress).resolves.toMatchObject({
+        state: 'failed',
+        version: '9.9.9',
+        from: CURRENT,
+        reason: 'install',
+      });
+    } finally {
+      answer();
+      device.close();
+    }
   });
 
   it('reconciles only once, however often the listener moves', async () => {

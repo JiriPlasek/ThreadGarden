@@ -82,6 +82,8 @@ export type UpdaterDeps = {
   installBase?: string;
   /** Default `process.platform`. */
   platform?: NodeJS.Platform;
+  /** Default `process.arch`. */
+  arch?: NodeJS.Architecture;
   fetch: Fetch;
   /** Default `runCommand`: `tar`, `systemd-run` and `systemctl`. */
   run?: Run;
@@ -159,9 +161,10 @@ export class MachineUpdater {
   }
 
   /**
-   * Runs once this service can be reached (ruling R6): an update waiting for that
-   * ends here. `done` is what the apply script waits for, so a version that dies
-   * before this point never writes it, and is rolled back. Never rejects.
+   * Runs once this service has finished starting and can be reached (ruling R6): an
+   * update waiting for that ends here. `done` is what the apply script waits for, so
+   * a version that dies before this point never writes it, and is rolled back. Never
+   * rejects.
    */
   reconcile(): Promise<void> {
     this.reconciling = this.settle().catch((err: unknown) =>

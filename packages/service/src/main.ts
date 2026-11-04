@@ -197,7 +197,7 @@ export type StartOptions = {
    * Updating (protocol 10). `fetch` is how GitHub is asked for the newest
    * release and for its files (default the global one); `latest` replaces that
    * lookup outright. `updater` replaces the machine's updater outright (the mock
-   * service); otherwise `installBase`, `platform` and `run` go to the real one.
+   * service); otherwise `installBase`, `platform`, `arch` and `run` go to the real one.
    */
   update?: {
     fetch?: Fetch;
@@ -205,6 +205,7 @@ export type StartOptions = {
     updater?: Updater;
     installBase?: string;
     platform?: NodeJS.Platform;
+    arch?: NodeJS.Architecture;
     run?: Run;
   };
 };
@@ -283,6 +284,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       currentVersion: pkg.version,
       ...(opts.update?.installBase === undefined ? {} : { installBase: opts.update.installBase }),
       ...(opts.update?.platform === undefined ? {} : { platform: opts.update.platform }),
+      ...(opts.update?.arch === undefined ? {} : { arch: opts.update.arch }),
       ...(opts.update?.run === undefined ? {} : { run: opts.update.run }),
       fetch: updateFetch,
       busyCount: async () => {
@@ -439,7 +441,22 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   };
   /** Counts of a replaced listener's sockets closing late must not count. */
   let remoteGeneration = 0;
+  let startupFinished = false;
   let reconciled = false;
+  /**
+   * An update counts as done only now: `done` is the apply script's cue to exit for
+   * good, so a version that dies before this point has to be rolled back by it
+   * (ruling R6). Runs once, when startup has finished and devices can reach this
+   * version, whichever comes last. Not waited for: it can ask systemd, which has
+   * no business holding up startup or a move of the listener.
+   */
+  const reconcileOnce = (): void => {
+    if (reconciled || !startupFinished || !remote || closing) return;
+    reconciled = true;
+    void updater
+      .reconcile()
+      .catch((err: unknown) => log.error(`update reconcile: ${errorText(err)}`));
+  };
   /**
    * Puts the remote listener on `addresses` (sorted; none stops it): the
    * current one is closed and a new one started with the same port, identity,
@@ -488,14 +505,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       log.error(`listening for devices on ${addresses.join(', ')} failed: ${errorText(err)}`);
       return;
     }
-    // An update counts as done only now that devices can reach this version: one
-    // that dies before this point is rolled back by the apply script (ruling R6).
-    if (!reconciled) {
-      reconciled = true;
-      await updater
-        .reconcile()
-        .catch((err: unknown) => log.error(`update reconcile: ${errorText(err)}`));
-    }
+    reconcileOnce();
   };
   /** The move in progress, if any (one at a time; `close()` waits for it). */
   let following: Promise<void> | undefined;
@@ -1155,6 +1165,9 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     for (const sig of ['SIGINT', 'SIGTERM'] as const) process.once(sig, () => void close());
   }
 
+  // Last: nothing may be left that could fail once an update has been called done.
+  startupFinished = true;
+  reconcileOnce();
   log.info(`service started on 127.0.0.1:${wsServer.port}`);
   return {
     port: wsServer.port,
