@@ -403,6 +403,12 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
     return { events: events.map((e) => e.data), seq: host.seqOf(p.sessionId) };
   });
 
+  const knows = (sessionId: string): boolean =>
+    host.get(sessionId) !== undefined ||
+    catalog.summary(sessionId) !== undefined ||
+    db.getSession(sessionId) !== undefined ||
+    db.getMovedChat(sessionId) !== undefined;
+
   router.register('chat.create', async (p) => {
     const choices = {
       ...(p.model === undefined ? {} : { model: model(p.model) }),
@@ -412,7 +418,10 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
       ...(p.effort === undefined ? {} : { effort: effort(p.effort) }),
     };
     await requireRunnable();
-    const s = host.create(p.cwd, toInput(p), choices);
+    // A client that picked the id and retries (its answer was lost) must not start a second
+    // chat: a chat this machine knows by any route (live, indexed, moved here) is just returned.
+    if (p.sessionId !== undefined && knows(p.sessionId)) return { sessionId: p.sessionId };
+    const s = host.create(p.cwd, toInput(p), choices, p.sessionId);
     nameChat(s.sessionId, p.cwd, p.text, false); // shown with the change below
     markSeen(s.sessionId); // a new chat has nothing unseen; kept for symmetry with chat.send
     changed([s.sessionId]);
@@ -423,13 +432,45 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
    * `chat.send`, also the path scheduled sends (v1.3 B) go out by: resumes
    * the chat when Threadgarden is not running it (behind the resume-safety check).
    */
-  const send = async (p: { sessionId: string; text: string; images?: ImageRef[] | undefined }) => {
+  const send = async (p: {
+    sessionId: string;
+    text: string;
+    images?: ImageRef[] | undefined;
+    messageId?: string | undefined;
+  }) => {
     if (deps.isMoving?.(p.sessionId)) {
       throw new ServiceError(MOVE_ERRORS.moving, 'This chat is being moved to another machine');
     }
     const away = deps.awayTo?.(p.sessionId);
     if (away) throw new ServiceError(MOVE_ERRORS.moved, `This chat moved to ${away.name}`);
     const input = toInput(p);
+    // A client's retry carries the id of the message it already sent. The id is recorded
+    // before anything else happens (one statement, so two retries can't both pass), and
+    // forgotten again if the send fails before the message reaches Claude: the retry is
+    // then a first try. A crash in between loses the message rather than sending it twice.
+    if (p.messageId !== undefined && !db.claimMessage(p.messageId, p.sessionId, Date.now())) {
+      return { queued: false };
+    }
+    let sent: { queued: boolean };
+    let s: LiveSession;
+    try {
+      s = await resumedOrLive(p.sessionId);
+      // Nothing gets lost in the archive or on hold: a chat being sent a message
+      // (and perhaps running now) is active, even if the send itself then fails.
+      activate(p.sessionId);
+      sent = s.send(input);
+    } catch (err) {
+      if (p.messageId !== undefined) db.releaseMessage(p.messageId);
+      throw err;
+    }
+    markSeen(p.sessionId); // replying means the last turn was seen
+    if (nameChat(p.sessionId, s.cwd, p.text, true)) changed([p.sessionId]);
+    return sent;
+  };
+
+  /** The chat's live session, resuming it first when Threadgarden is not running it. */
+  const resumedOrLive = async (sessionId: string): Promise<LiveSession> => {
+    const p = { sessionId };
     let s = host.get(p.sessionId);
     if (!s?.live) {
       await requireRunnable();
@@ -453,13 +494,7 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
       );
       changed([p.sessionId]);
     }
-    // Nothing gets lost in the archive or on hold: a chat being sent a message
-    // (and perhaps running now) is active, even if the send itself then fails.
-    activate(p.sessionId);
-    const sent = s.send(input);
-    markSeen(p.sessionId); // replying means the last turn was seen
-    if (nameChat(p.sessionId, s.cwd, p.text, true)) changed([p.sessionId]);
-    return sent;
+    return s;
   };
   router.register('chat.send', send);
 

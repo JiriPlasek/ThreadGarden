@@ -264,6 +264,16 @@ const steps: string[] = [
     came_at INTEGER NOT NULL
   );
   `,
+  // a machine that is away: the ids of messages this machine accepted (`chat.send`
+  // with a `messageId`), so a client that retries after a lost answer sends once.
+  `
+  CREATE TABLE IF NOT EXISTS received_messages (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS received_messages_at ON received_messages (at);
+  `,
 ];
 
 /** Runs the steps not run yet; `upTo` stops early (tests build older schemas with it). */

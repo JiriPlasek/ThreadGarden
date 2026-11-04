@@ -1184,6 +1184,29 @@ export class Db implements LiveRegistry {
       .run(at, sessionId);
   }
 
+  // --- received messages (a client that retries) ------------------------------------
+
+  /**
+   * Records a message id this machine accepts; false when it was received before.
+   * One statement, so two sends with the same id can't both win.
+   */
+  claimMessage(id: string, sessionId: string, at: number): boolean {
+    const r = this.raw
+      .prepare('INSERT OR IGNORE INTO received_messages (id, session_id, at) VALUES (?, ?, ?)')
+      .run(id, sessionId, at);
+    return Number(r.changes) > 0;
+  }
+
+  /** Forgets a claimed id, for a send that failed before it reached Claude. */
+  releaseMessage(id: string): void {
+    this.raw.prepare('DELETE FROM received_messages WHERE id = ?').run(id);
+  }
+
+  /** Drops received ids from before `before`. */
+  pruneReceivedMessages(before: number): void {
+    this.raw.prepare('DELETE FROM received_messages WHERE at < ?').run(before);
+  }
+
   // --- LiveRegistry ---------------------------------------------------------------
 
   markLive(sessionId: string, cwd: string): void {

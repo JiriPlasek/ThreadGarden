@@ -3,6 +3,7 @@ import { mkdir } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  AWAY_CAPABILITY,
   CAPABILITIES,
   POWER_CAPABILITY,
   PROTOCOL_VERSION,
@@ -75,6 +76,8 @@ export const IDLE_EXIT_MS = 30 * 60_000;
  * the precise one).
  */
 const IDLE_CHECK_MS = 60_000;
+/** How long a received message id is remembered; a retry comes within hours, not weeks. */
+const RECEIVED_MESSAGE_KEEP_MS = 30 * 24 * 60 * 60 * 1000;
 /** UI-state key of this machine's keep awake setting (it outlives a restart). */
 const KEEP_AWAKE_KEY = 'power.keepAwake';
 /** A chat in a turn (working, waiting on the user): its next scheduled send waits (v1.3 B). */
@@ -311,10 +314,17 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       platform: process.platform as MachineInfo['platform'],
       headless,
       home: os.homedir(),
+      // `away` is every service's (This PC too): it takes message and chat ids. It is added
+      // here, not to `CAPABILITIES`, since a service of this build answers for it, like `power`.
       // `power` is for headless machines only (a desktop is never switched off this way).
       capabilities: headless
-        ? [...CAPABILITIES, POWER_CAPABILITY, ...(canUpdate() ? [UPDATE_CAPABILITY] : [])]
-        : [...CAPABILITIES],
+        ? [
+            ...CAPABILITIES,
+            AWAY_CAPABILITY,
+            POWER_CAPABILITY,
+            ...(canUpdate() ? [UPDATE_CAPABILITY] : []),
+          ]
+        : [...CAPABILITIES, AWAY_CAPABILITY],
     };
   };
   // None of these needs a database, so they are there whatever else is.
@@ -528,6 +538,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     if (opts.adapter) {
       const opened = openDb(path.join(dataDir, DB_FILE));
       db = opened;
+      opened.pruneReceivedMessages(clock() - RECEIVED_MESSAGE_KEEP_MS);
       // One registry for the handlers and the remote listener: the live pairing
       // code and the revoke listeners belong to it.
       const devices = new DeviceRegistry(

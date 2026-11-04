@@ -90,7 +90,7 @@ describe('startService', () => {
     expect(hello.result.machine).toMatchObject({
       platform: process.platform,
       headless: false,
-      capabilities: ['remote', 'projects', 'move'],
+      capabilities: ['remote', 'projects', 'move', 'away'],
     });
     const renamed = (await rpc(svc.port, svc.token, 'machine.rename', { name: ' Den ' })) as {
       result: { id: string; name: string };
