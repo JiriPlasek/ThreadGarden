@@ -7,8 +7,10 @@ import { SvelteMap } from 'svelte/reactivity';
 import { ServiceClient } from '../service/client';
 import type { AgentsState } from './agents.svelte';
 import { quietly, type Api } from './api';
+import { CopyState } from './away.svelte';
 import { buckets, BucketsState } from './buckets.svelte';
 import { chats, ChatsState, type ChatsOptions } from './chats.svelte';
+import { copyApi } from './copy-api';
 import { interaction, InteractionState } from './interaction.svelte';
 import type { MachineEntry, MachinesState } from './machines.svelte';
 import { listedAcross } from './merged-list.svelte';
@@ -34,9 +36,11 @@ export type MachineScope = {
   usage: UsageStore;
   /** The tabs as this machine sees them (session ids of its own tabs). */
   tabs: MachineTabs;
+  /** A paired machine's copy, read while it is away (This PC has none). */
+  copy?: CopyState;
 };
 
-type ScopeStores = Omit<MachineScope, 'machineId' | 'api' | 'tabs'>;
+type ScopeStores = Omit<MachineScope, 'machineId' | 'api' | 'tabs' | 'copy'>;
 
 export type ScopeDeps = {
   tabs: TabsState;
@@ -48,7 +52,29 @@ export type ScopeDeps = {
    * places are listed across machines, not by This PC's `sessions`.
    */
   scopes?: Pick<Scopes, 'all' | 'observe'>;
+  /**
+   * A paired machine's: the local service that keeps its copy and queue, and
+   * its name. While it is away, its scope reads the copy (`copyApi`).
+   */
+  copies?: { local: Pick<Api, 'request'>; name: () => string };
 };
+
+/**
+ * The machine's own client while it is connected, its copy on this device
+ * while it is away: the lists and the chat view read through it either way,
+ * and none of them asks a machine that isn't there.
+ */
+export const awayAware = (link: Api, copy: Pick<Api, 'request'>): Api => ({
+  get status() {
+    return link.status;
+  },
+  request: (method, params) =>
+    link.status === 'open' ? link.request(method, params) : copy.request(method, params),
+  on: link.on,
+  onReconnect: link.onReconnect,
+  onOpen: link.onOpen,
+  onStatus: link.onStatus,
+});
 
 /** A scope around existing store instances; `machineId` is read on every use. */
 export const makeScope = (
@@ -127,12 +153,23 @@ export const wireScope = (
   };
 };
 
-/** A paired machine's scope: new store instances on `api` (its relay client). */
+/**
+ * A paired machine's scope: new store instances on `link` (its relay client),
+ * or, while it is away and `deps.copies` is given, on its copy.
+ */
 export const createScope = (
   machineId: string,
-  api: Api,
+  link: Api,
   deps: ScopeDeps,
 ): MachineScope & { stop: () => void } => {
+  const copy = deps.copies ? new CopyState() : undefined;
+  const api =
+    deps.copies && copy
+      ? awayAware(
+          link,
+          copyApi(machineId, deps.copies.local, { name: deps.copies.name, seen: copy.seen }),
+        )
+      : link;
   const scope = makeScope(() => machineId, api, deps.tabs, {
     places: new PlacesState(),
     sessions: new SessionsState(),
@@ -144,12 +181,29 @@ export const createScope = (
     // Its last usage is kept, so the machine's account still shows while it is off.
     usage: new UsageStore({ remember: machineId }),
   });
+  scope.copy = copy;
   // Its `sessions` lists its projects; the other places are listed across machines.
   const unwire = wireScope(scope, deps, { projectsOnly: true });
   // This PC's usage is initialised by `app.ts`, as it always was.
   scope.usage.init(api);
+  // Away: its projects, counts and lists come from the copy, read now and each
+  // time the link drops (an open reads the machine itself, as always).
+  let open = link.status === 'open';
+  const readCopy = (): void => {
+    quietly(scope.places.refresh());
+    quietly(scope.sessions.reload(true));
+  };
+  const offStatus = copy
+    ? link.onStatus((s) => {
+        const was = open;
+        open = s === 'open';
+        if (was && !open) readCopy();
+      })
+    : undefined;
+  if (copy && !open) readCopy();
   const stop = (): void => {
     unwire();
+    offStatus?.();
     scope.usage.stop();
   };
   return Object.assign(scope, { stop });

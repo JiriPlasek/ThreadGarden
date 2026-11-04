@@ -6,11 +6,12 @@ import { appVersion, serviceConnection, updater, type ServiceConnection } from '
 import { startAttention } from '../notifications';
 import { agents } from './agents.svelte';
 import { analytics } from './analytics.svelte';
+import { away } from './away.svelte';
 import { connection } from './connection.svelte';
 import { copySync } from './copy-sync.svelte';
 import { lifecycle } from './lifecycle.svelte';
 import { machineUpdates } from './machine-updates.svelte';
-import { machines, relayUrl } from './machines.svelte';
+import { machineNameOf, machines, relayUrl } from './machines.svelte';
 import { places } from './places.svelte';
 import { power } from './power.svelte';
 import { client, createScope, scopes, wireScope } from './scope';
@@ -60,9 +61,18 @@ const wire = (): void => {
   // Needs you, Running, the bucket counts and the agents strip add up every machine's.
   places.follow(scopes);
   agents.follow(scopes);
-  scopes.follow(machines, tabs, (m) => createScope(m.id, m.client, { tabs, agents }));
+  // While a machine is away, its scope reads the copy on the local service.
+  scopes.follow(machines, tabs, (m) =>
+    createScope(m.id, m.client, {
+      tabs,
+      agents,
+      copies: { local: client, name: () => machineNameOf(machines, m.id) },
+    }),
+  );
   // The local copy of each paired machine's chats, kept while it is connected.
   copySync.init({ local: client, scopes, machines });
+  // The messages written for machines that are away, waiting on this device.
+  away.init(client);
   // Power control: before the machines connect, so it sees each one added.
   power.init(client, machines);
   // Updating machines: likewise, so it hears each one open.

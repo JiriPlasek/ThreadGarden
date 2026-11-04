@@ -142,9 +142,10 @@ export class PlacesState {
   };
 
   /**
-   * Adds every connected paired machine's counts to `counts` (This PC's
-   * places do this): a machine's counts join when it sends them and leave
-   * when it disconnects or goes.
+   * Adds every paired machine's counts to `counts` (This PC's places do
+   * this): a machine's counts join when it sends them and leave when it
+   * disconnects or goes. A machine that is away counts as its copy says,
+   * once that is read, as its chats are listed from the copy too.
    */
   follow = (scopes: Pick<Scopes, 'observe'>): (() => void) =>
     scopes.observe(
@@ -155,7 +156,7 @@ export class PlacesState {
         };
         const offs = [
           scope.places.subscribeCounts((c) => {
-            if (scope.api.status !== 'open') return;
+            if (scope.api.status !== 'open' && !scope.copy?.has) return;
             this.others.set(id, c);
             this.sum();
           }),
@@ -214,14 +215,20 @@ export class PlacesState {
       try {
         do {
           this.again = false;
-          const [counts, projects] = await Promise.all([
-            api.request('places.counts', {}),
-            api.request('projects.list', {}),
-          ]);
-          this.ownCounts = counts;
-          this.own = counts;
-          this.projects = projects;
-          this.sum();
+          try {
+            const [counts, projects] = await Promise.all([
+              api.request('places.counts', {}),
+              api.request('projects.list', {}),
+            ]);
+            this.ownCounts = counts;
+            this.own = counts;
+            this.projects = projects;
+            this.sum();
+          } catch (err) {
+            // A fetch asked for meanwhile still runs (e.g. the machine came on
+            // while its copy was read): it is the newer one.
+            if (!this.again) throw err;
+          }
         } while (this.again);
         this.icons.revalidate();
       } finally {

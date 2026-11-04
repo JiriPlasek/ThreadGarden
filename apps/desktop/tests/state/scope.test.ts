@@ -65,7 +65,10 @@ describe('machine scopes', () => {
     });
     const m1 = app.scopes.get(M1)!;
     expect(m1.machineId).toBe(M1);
-    expect(m1.api).toBe(app.machines.get(M1)!.client);
+    // Its API is its relay client while it is connected (its copy here while it is away).
+    expect(m1.api.status).toBe(app.machines.get(M1)!.client.status);
+    expect(m1.copy).toBeDefined();
+    expect(app.scopes.local().copy).toBeUndefined();
     expect(app.scopes.all().map((s) => s.machineId)).toEqual([LOCAL, M1]);
     await vi.waitFor(() =>
       expect(m1.places.projects.map((p) => p.displayName)).toEqual(['tg-cli']),

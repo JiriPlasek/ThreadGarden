@@ -84,6 +84,7 @@
     onSchedule,
     resetAt,
     limited = false,
+    disabled = false,
     editing,
     textarea = $bindable(null),
   }: {
@@ -110,6 +111,8 @@
     resetAt?: number | undefined;
     /** A usage limit refused this chat's last turn: offer "Send when the limit resets". */
     limited?: boolean;
+    /** Nothing can be sent now (the chat view says why). */
+    disabled?: boolean;
     /** Editing a scheduled message: what it is, how to save it and how to stop. */
     editing?: {
       label: string;
@@ -331,7 +334,7 @@
     rethrow = false,
   ): Promise<void> => {
     const value = text.trim();
-    if ((!value && images.length === 0) || sending) return;
+    if ((!value && images.length === 0) || sending || disabled) return;
     sending = true;
     try {
       if (value.startsWith('/')) {
@@ -608,12 +611,13 @@
       bind:this={textarea}
       bind:value={text}
       rows="1"
-      class="placeholder:text-muted-foreground block w-full resize-none overflow-hidden bg-transparent px-3 pt-2.5 pb-1 text-sm leading-5 outline-none"
+      class="placeholder:text-muted-foreground block w-full resize-none overflow-hidden bg-transparent px-3 pt-2.5 pb-1 text-sm leading-5 outline-none disabled:cursor-not-allowed disabled:opacity-50"
       aria-label={label}
       aria-autocomplete="list"
       aria-controls={picker ? listId : undefined}
       aria-activedescendant={activeId}
       {placeholder}
+      {disabled}
       {oninput}
       {onkeydown}
       {onpaste}
@@ -698,7 +702,7 @@
         aria-label={sendLabel}
         title="{sendLabel} · {formatCombos(sendKeys).join(' or ')}"
         aria-keyshortcuts={ariaKeyShortcuts(sendKeys)}
-        disabled={sending || empty}
+        disabled={sending || empty || disabled}
         onclick={() => void submit()}
       >
         <ArrowUpIcon class="size-4" aria-hidden="true" />

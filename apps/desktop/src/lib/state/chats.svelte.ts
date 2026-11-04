@@ -1,20 +1,22 @@
-import type {
-  ChatHeaderInfo,
-  ImageRef,
-  Params,
-  ChatItem,
-  ChatItemsEvent,
-  ChatStatus,
-  ChatStatusEvent,
-  ChatSummary,
-  ChatTask,
-  ChatTasksEvent,
-  MovePeer,
-  Result,
+import {
+  AWAY_ERROR,
+  type ChatHeaderInfo,
+  type ImageRef,
+  type Params,
+  type ChatItem,
+  type ChatItemsEvent,
+  type ChatStatus,
+  type ChatStatusEvent,
+  type ChatSummary,
+  type ChatTask,
+  type ChatTasksEvent,
+  type MovePeer,
+  type Result,
 } from '@threadgarden/protocol';
 import { SvelteMap } from 'svelte/reactivity';
 import { RequestError } from '../service/client';
 import { quietly, type Api } from './api';
+import { copiedAtOf } from './copy-api';
 
 export const OPEN_TAIL = 200;
 export const OLDER_PAGE = 200;
@@ -106,6 +108,11 @@ export class ChatState {
    * read-only. Null for a chat that is here.
    */
   movedTo = $state.raw<MovePeer | null>(null);
+  /**
+   * When the copy this chat was read from was made, while its machine is away
+   * (away machine spec); null for a chat read from the machine itself.
+   */
+  copiedAt = $state<number | null>(null);
   /** Running tasks, for the "N running" badges. */
   running = $derived(runningTasks(this.tasks));
   /** Message list geometry, kept while the chat is resident. */
@@ -113,9 +120,12 @@ export class ChatState {
   /** Bumped by `stickToBottom`: a shown message list jumps to the bottom (v1.1 §5). */
   stickRequests = $state(0);
 
-  /** True while a Claude process runs this chat (header pickers apply live). */
+  /**
+   * True while a Claude process runs this chat (header pickers apply live).
+   * A copy shows the status it last had, but nothing runs it here and now.
+   */
   get live(): boolean {
-    return LIVE_STATUSES.includes(this.status);
+    return this.copiedAt === null && LIVE_STATUSES.includes(this.status);
   }
 
   /**
@@ -181,6 +191,8 @@ export class ChatsState {
    * client's first open is no reconnect, so `resync` would not catch them.
    */
   private readonly offline = new Set<string>();
+  /** The open tabs' chats, as the last `sync` named them. */
+  private wanted = new Set<string>();
 
   private api: Api | null = null;
   private schedule: Schedule = defaultSchedule;
@@ -247,13 +259,15 @@ export class ChatsState {
    */
   sync = (sessionIds: readonly string[], active: string | null): void => {
     const wanted = new Set(sessionIds);
+    this.wanted = wanted;
     for (const id of [...this.byId.keys()]) if (!wanted.has(id)) this.drop(id);
     for (const id of [...this.peeks.keys()]) if (!wanted.has(id)) this.peeks.delete(id);
     for (const id of [...this.offline]) if (!wanted.has(id)) this.offline.delete(id);
     if (
       active !== null &&
       wanted.has(active) &&
-      (!this.byId.has(active) || (this.offline.has(active) && !this.opening.has(active)))
+      (!this.byId.has(active) ||
+        ((this.offline.has(active) || this.copiedLinkOpen(active)) && !this.opening.has(active)))
     ) {
       quietly(this.open(active));
     }
@@ -262,6 +276,10 @@ export class ChatsState {
     );
     if (unseen.length > 0) quietly(this.peek(unseen));
   };
+
+  /** Read from the copy, and its machine is connected now: read it from the machine. */
+  private copiedLinkOpen = (sessionId: string): boolean =>
+    this.api?.status === 'open' && (this.byId.get(sessionId)?.copiedAt ?? null) !== null;
 
   /** The tab-bar summary of an open chat that is not loaded (yet). */
   summaryOf = (sessionId: string): ChatSummary | undefined => this.peeks.get(sessionId);
@@ -276,6 +294,7 @@ export class ChatsState {
   private peek = async (sessionIds: string[]): Promise<void> => {
     const api = this.api;
     if (!api) return;
+    const live = api.status === 'open';
     for (const id of sessionIds) this.peeking.add(id);
     try {
       const { items } = await api.request('sessions.summaries', { sessionIds });
@@ -287,6 +306,11 @@ export class ChatsState {
       }
     } finally {
       for (const id of sessionIds) this.peeking.delete(id);
+      // Asked of the copy, and the machine connected meanwhile: ask the machine.
+      if (!live && api.status === 'open') {
+        const again = sessionIds.filter((id) => this.wanted.has(id) && !this.byId.has(id));
+        if (again.length > 0) quietly(this.peek(again));
+      }
     }
   };
 
@@ -302,9 +326,13 @@ export class ChatsState {
     chat.error = null;
     this.offline.delete(sessionId);
     this.opening.add(sessionId);
+    let again = false;
     try {
       const r = await api.request('chat.open', { sessionId, tail: OPEN_TAIL });
       if (this.byId.get(sessionId) !== chat) return; // dropped meanwhile
+      chat.copiedAt = copiedAtOf(r);
+      // The machine connected while the copy was read: the machine's own chat wins.
+      again = chat.copiedAt !== null && api.status === 'open';
       chat.items = r.items;
       chat.summary = r.summary;
       chat.header = r.header;
@@ -325,11 +353,21 @@ export class ChatsState {
     } catch (err) {
       if (this.byId.get(sessionId) === chat) {
         chat.error = err instanceof Error ? err.message : String(err);
-        if (err instanceof RequestError && err.code === 'DISCONNECTED') this.offline.add(sessionId);
+        // Not connected, or away with no copy of it: opened once the machine is
+        // (at once, when it connected while the copy was being read).
+        if (err instanceof RequestError && err.code === AWAY_ERROR && api.status === 'open') {
+          again = true;
+        } else if (
+          err instanceof RequestError &&
+          (err.code === 'DISCONNECTED' || err.code === AWAY_ERROR)
+        ) {
+          this.offline.add(sessionId);
+        }
       }
     } finally {
       if (this.byId.get(sessionId) === chat) this.opening.delete(sessionId);
     }
+    if (again) await this.open(sessionId);
   };
 
   loadOlder = async (sessionId: string): Promise<void> => {
@@ -487,8 +525,9 @@ export class ChatsState {
     if (!api) return;
     await Promise.all(
       [...this.byId.values()].map(async (chat) => {
-        // An open already under way (e.g. started by a sync on this open) brings it in.
-        if (!chat.loaded) {
+        // An open already under way (e.g. started by a sync on this open) brings it
+        // in; a chat read from the copy has no log here to catch up from.
+        if (!chat.loaded || chat.copiedAt !== null) {
           return this.opening.has(chat.sessionId) ? undefined : this.open(chat.sessionId);
         }
         chat.resyncing = true;

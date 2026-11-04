@@ -1,8 +1,9 @@
 /**
  * Lists across machines: Needs you, Running and the Active / On hold /
- * Archived buckets show the chats of every connected machine. Each machine is
- * asked for the place's pages on its own (one cursor each), and the pages are
- * merged in the order the service lists a place in.
+ * Archived buckets show the chats of every machine: a connected one's own, an
+ * away one's from its copy on this device. Each machine is asked for the
+ * place's pages on its own (one cursor each), and the pages are merged in the
+ * order the service lists a place in.
  */
 import { compareChats, type ChatSummary, type Result } from '@threadgarden/protocol';
 import { quietly } from './api';
@@ -90,6 +91,8 @@ type Feed = {
   cursor: string | undefined;
   /** Chats it sent since the last reload (shown or buffered). */
   loaded: number;
+  /** Listed by the machine itself (else by its copy): where `cursor` is good. */
+  live: boolean;
 };
 
 export type MergedListOptions = {
@@ -102,8 +105,9 @@ const message = (err: unknown): string => (err instanceof Error ? err.message : 
 
 /**
  * A cross-machine place (Needs you, Running or a bucket) over the scopes of
- * every machine. Machines that are not on, or whose list fails, are left out
- * and named in `skipped`.
+ * every machine. A machine that is not on is listed from its copy (its scope
+ * reads that while it is away); one without a copy, or whose list fails, is
+ * left out and named in `skipped`.
  */
 export class MergedList {
   items = $state.raw<MachineChat[]>([]);
@@ -133,9 +137,9 @@ export class MergedList {
   }
 
   /**
-   * Names of the machines whose chats are missing: unreachable (or otherwise
-   * not on), their list failed, or they appeared since. A machine still
-   * connecting is not named, and one that goes leaves the list at once.
+   * Names of the machines whose chats are missing: not on with no copy here,
+   * their list failed, or they appeared since. A machine still connecting is
+   * not named, and one that goes leaves the list at once.
    */
   get skipped(): string[] {
     const listed = this.listed;
@@ -177,41 +181,47 @@ export class MergedList {
   };
 
   /**
-   * The first page of every machine that is on. `keepLoaded` asks each
-   * machine for as many chats as it sent so far (used for change events), so
-   * the list does not jump back to page one. A newer reload wins over an older
-   * one still in flight.
+   * The first page of every machine (an away one's from its copy).
+   * `keepLoaded` asks each machine for as many chats as it sent so far (used
+   * for change events), so the list does not jump back to page one. A newer
+   * reload wins over an older one still in flight.
    */
   reload = async (keepLoaded = false): Promise<void> => {
     const gen = ++this.generation;
-    const asked = this.scopes().filter(this.isOn);
+    const asked = this.scopes();
     this.loading = true;
     try {
       const answers = await Promise.all(
         asked.map(async (scope) => {
           const id = scope.machineId;
+          const live = this.isOn(scope);
           const limit = keepLoaded
             ? Math.max(this.pageSize, this.feeds.get(id)?.loaded ?? 0)
             : this.pageSize;
           try {
-            return { id, page: await scope.api.request('sessions.list', this.params(limit)) };
+            return {
+              id,
+              live,
+              page: await scope.api.request('sessions.list', this.params(limit)),
+            };
           } catch (err) {
             return { id, err };
           }
         }),
       );
       if (gen !== this.generation) return;
-      // Machines that went away (or off) meanwhile are left out.
-      const now = new Set(
-        this.scopes()
-          .filter(this.isOn)
-          .map((s) => s.machineId),
-      );
+      // Machines that went away meanwhile are left out of what they said
+      // live (the drop refetches them from the copy), as are machines that went.
+      const scopes = new Map(this.scopes().map((s) => [s.machineId, s]));
+      const current = (id: string, live: boolean): boolean => {
+        const scope = scopes.get(id);
+        return !!scope && (!live || this.isOn(scope));
+      };
       const feeds = new Map<string, Feed>();
       let failure: string | null = null;
       for (const a of answers) {
         if ('err' in a) failure ??= message(a.err);
-        else if (now.has(a.id)) feeds.set(a.id, this.feed(a.id, a.page));
+        else if (current(a.id, a.live)) feeds.set(a.id, this.feed(a.id, a.page, a.live));
       }
       this.feeds = feeds;
       this.items = [];
@@ -234,13 +244,14 @@ export class MergedList {
       const answers = await Promise.all(
         due.map(async (f) => {
           const scope = this.scopes().find((s) => s.machineId === f.machineId);
-          if (!scope || !this.isOn(scope)) return { f, page: null };
+          // A cursor is the machine's or its copy's: good only where it came from.
+          if (!scope || this.isOn(scope) !== f.live) return { f, page: null };
           try {
             const page = await scope.api.request(
               'sessions.list',
               this.params(this.pageSize, f.cursor),
             );
-            return { f, page: this.isOn(scope) ? page : null };
+            return { f, page: this.isOn(scope) === f.live ? page : null };
           } catch {
             return { f, page: null };
           }
@@ -336,11 +347,12 @@ export class MergedList {
   private stamp = (machineId: string, items: ChatSummary[]): MachineChat[] =>
     items.map((c) => ({ ...c, machineId }));
 
-  private feed = (machineId: string, page: Page): Feed => ({
+  private feed = (machineId: string, page: Page, live: boolean): Feed => ({
     machineId,
     buffer: this.stamp(machineId, page.items),
     cursor: page.nextCursor,
     loaded: page.items.length,
+    live,
   });
 
   private patch = (chat: MachineChat, change: Partial<ChatSummary>): void => {

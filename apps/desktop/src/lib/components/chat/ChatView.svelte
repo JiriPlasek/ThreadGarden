@@ -1,5 +1,10 @@
 <script lang="ts">
-  import type { ImageRef, ScheduledSend } from '@threadgarden/protocol';
+  import {
+    AWAY_CAPABILITY,
+    type AwayItem,
+    type ImageRef,
+    type ScheduledSend,
+  } from '@threadgarden/protocol';
   import ArrowRightLeftIcon from '@lucide/svelte/icons/arrow-right-left';
   import CheckIcon from '@lucide/svelte/icons/check';
   import GaugeIcon from '@lucide/svelte/icons/gauge';
@@ -9,7 +14,7 @@
   import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
   import Composer from '#lib/components/composer/Composer.svelte';
   import SetupScreen from '#lib/components/SetupScreen.svelte';
-  import { clockTime, sendTimeText } from '#lib/format/usage.js';
+  import { agoText, clockTime, sendTimeText } from '#lib/format/usage.js';
   import { rowPx } from '#lib/interface-scale.js';
   import { retryOldCopy } from '#lib/move/move-chat.svelte.js';
   import { copyText } from '#lib/native.js';
@@ -45,11 +50,19 @@
    *
    * A chat moved away (move-chat §6) is this machine's read-only old copy:
    * instead of the composer it says where it went, with a link to it there.
+   *
+   * A machine that is away (away machine spec): its chat is read from this
+   * device's copy, marked as one, with its last few messages. A message
+   * written now waits on this device (`away.queue`, through the scope's copy
+   * API) and shows below the chat with what happens next, Cancel and, after a
+   * failure, Retry. A request Claude was waiting on is answered by typing: the
+   * answer goes out as the next message. A machine too old to take a message
+   * exactly once can't be written to until it is updated.
    */
   let { ref }: { ref: ChatRef } = $props();
 
   const app = useApp();
-  const { tabs, settings, usageAccounts, machines, interaction: appInteraction } = app;
+  const { tabs, settings, usageAccounts, machines, interaction: appInteraction, away } = app;
   /** The chat's machine (`ChatPane` shows it inside that machine's scope). */
   const scope = useScope();
   const { chats, interaction, scheduled } = scope;
@@ -81,6 +94,57 @@
     } finally {
       noteSending = false;
     }
+  };
+
+  // ── a machine that is away ──────────────────────────────────────────────
+
+  const entry = $derived(machines.get(scope.machineId));
+  /** Not connected to the chat's machine: messages wait on this device. */
+  const machineAway = $derived(!!entry && !entry.local && entry.status !== 'on');
+  /** When the copy this chat shows was made (null: the chat is the machine's own). */
+  const copiedAt = $derived(chat?.copiedAt ?? null);
+  /** The machine takes a message exactly once (as its copy says, else its last hello). */
+  const canQueue = $derived(
+    (scope.copy?.info ?? entry?.info)?.capabilities.includes(AWAY_CAPABILITY) === true,
+  );
+  /** Its plug reads off, or this device is turning it on. */
+  const turningOn = $derived.by((): boolean => {
+    const shown = entry ? machines.shown(entry) : 'on';
+    return shown === 'off' || shown === 'starting' || away.starting(scope.machineId);
+  });
+  const waiting = $derived(away.items(ref));
+
+  let copyNow = $state(Date.now());
+  $effect(() => {
+    if (copiedAt === null) return;
+    copyNow = Date.now();
+    const timer = setInterval(() => (copyNow = Date.now()), 30_000);
+    return () => clearInterval(timer);
+  });
+
+  const waitingLine = (w: AwayItem): string => {
+    if (w.state === 'failed') {
+      return w.reason === 'start'
+        ? `${machineName} didn't come up`
+        : (w.error ?? 'Something went wrong.');
+    }
+    return turningOn
+      ? `⏳ Waiting for ${machineName} — turning it on, sends when it's up. Keep this device awake.`
+      : `⏳ Waiting for ${machineName} — sends when it's reachable.`;
+  };
+
+  const cancelWaiting = (id: string): void => {
+    sendError = null;
+    away.cancel(id).catch((err: unknown) => {
+      sendError = err instanceof Error ? err.message : String(err);
+    });
+  };
+
+  const retryWaiting = (): void => {
+    sendError = null;
+    away.retry(scope.machineId).catch((err: unknown) => {
+      sendError = err instanceof Error ? err.message : String(err);
+    });
   };
 
   /** The source still lists its old copy of this moved chat (`move.markMoved` failed, R2): Retry. */
@@ -490,6 +554,17 @@
             {chat.error}
           </div>
         {/if}
+        {#if copiedAt !== null}
+          <div class="mx-auto w-full max-w-4xl shrink-0 space-y-1 px-4 pt-2 text-xs">
+            <p class="bg-muted/60 rounded-md border px-3 py-1.5" role="status">
+              {machineName} is off: showing its last few messages, from {agoText(
+                copiedAt,
+                copyNow,
+              )}.
+            </p>
+            <p class="text-muted-foreground px-1">… earlier messages are on {machineName}</p>
+          </div>
+        {/if}
         {#if chat.items.length === 0}
           <div
             class="text-muted-foreground flex min-h-0 flex-1 items-center justify-center text-sm"
@@ -503,8 +578,8 @@
             hasMore={chat.hasMore}
             loadingOlder={chat.loadingOlder}
             onLoadOlder={() => void chats.loadOlder(sessionId)}
-            onFork={fork}
-            {requests}
+            onFork={copiedAt === null ? fork : undefined}
+            requests={copiedAt === null ? requests : undefined}
             memory={chat.view}
             stickRequests={chat.stickRequests}
           />
@@ -589,7 +664,19 @@
                 onDismiss={() => (dismissedSetup = setupItem.id)}
               />
             {/if}
-            {#if pending.length > 0}
+            {#if pending.length > 0 && copiedAt !== null}
+              <!-- Its process ended with the machine: the answer goes out as a message. -->
+              <div
+                class="flex items-center gap-2 rounded-md bg-amber-500/10 px-3 py-1 text-xs text-amber-900 dark:text-amber-200"
+                role="status"
+              >
+                <HandIcon class="size-4 shrink-0" aria-hidden="true" />
+                <span class="flex-1"
+                  >Claude asked this before {machineName} went off. Type your answer below; it's sent
+                  as your next message.</span
+                >
+              </div>
+            {:else if pending.length > 0}
               <div
                 class="flex items-center gap-2 rounded-md bg-amber-500/10 px-3 py-1 text-xs text-amber-900 dark:text-amber-200"
               >
@@ -662,8 +749,46 @@
               editingId={editingSend?.id}
               onEdit={(s) => void startEdit(s)}
             />
+            {#each waiting as w (w.id)}
+              <div
+                class="space-y-1 rounded-md border px-3 py-1.5 text-xs"
+                role="group"
+                aria-label="Waiting for {machineName}"
+                data-away-item
+              >
+                <p class="text-sm break-words whitespace-pre-wrap">{w.text}</p>
+                <div class="flex items-center gap-2">
+                  <p
+                    class={w.state === 'failed'
+                      ? 'text-destructive min-w-0 flex-1'
+                      : 'text-muted-foreground min-w-0 flex-1'}
+                  >
+                    {waitingLine(w)}
+                  </p>
+                  {#if w.state === 'failed'}
+                    <button
+                      type="button"
+                      class="bg-background hover:bg-muted inline-flex h-6 shrink-0 items-center rounded border px-2"
+                      onclick={retryWaiting}>Retry</button
+                    >
+                  {/if}
+                  {#if w.state !== 'sending'}
+                    <button
+                      type="button"
+                      class="bg-background hover:bg-muted inline-flex h-6 shrink-0 items-center rounded border px-2"
+                      onclick={() => cancelWaiting(w.id)}>Cancel</button
+                    >
+                  {/if}
+                </div>
+              </div>
+            {/each}
             {#if sendError}
               <p class="text-destructive text-xs" role="alert">{sendError}</p>
+            {/if}
+            {#if machineAway && !canQueue}
+              <p class="text-xs text-amber-900 dark:text-amber-200" role="status">
+                Update {machineName} to send while it's off
+              </p>
             {/if}
             <Composer
               bind:this={composer}
@@ -676,11 +801,12 @@
               onSubmit={submit}
               onInterrupt={interrupt}
               {onControl}
-              onSchedule={schedule}
+              onSchedule={machineAway ? undefined : schedule}
               {resetAt}
               limited={refusal !== undefined}
               {editing}
               autofocus={focusComposer}
+              disabled={machineAway && !canQueue}
             />
           </div>
         {/if}

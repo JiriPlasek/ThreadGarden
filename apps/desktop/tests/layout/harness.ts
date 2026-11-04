@@ -11,6 +11,7 @@ import { expect, vi } from 'vitest';
 import { ServiceClient } from '../../src/lib/service/client';
 import { AgentsState } from '../../src/lib/state/agents.svelte';
 import { AnalyticsState } from '../../src/lib/state/analytics.svelte';
+import { AwayState } from '../../src/lib/state/away.svelte';
 import { BucketsState } from '../../src/lib/state/buckets.svelte';
 import { ChatsState } from '../../src/lib/state/chats.svelte';
 import { ConnectionState } from '../../src/lib/state/connection.svelte';
@@ -130,6 +131,10 @@ const serve = (server: FakeServer, machine: MachineInfo): void => {
     'machines.unlock': () => ({}),
     'machines.remove': () => ({ revoked: true }),
     'power.list': () => [],
+    // This device keeps no copy of a machine, and nothing waits for one.
+    'copies.get': () => null,
+    'copies.chat': () => null,
+    'away.list': () => ({ items: [], states: [] }),
   });
 };
 
@@ -188,6 +193,7 @@ const wire = (
     machines,
     machineUpdates: new MachineUpdatesState(),
     power: new PowerState(),
+    away: new AwayState(),
     scopes,
   };
   const chatOptions = { schedule: (cb: () => void) => cb() };
@@ -207,8 +213,14 @@ const wire = (
   app.places.follow(scopes);
   app.agents.follow(scopes);
   scopes.follow(app.machines, tabs, (m) =>
-    createScope(m.id, m.client, { tabs, agents: app.agents, chats: chatOptions }),
+    createScope(m.id, m.client, {
+      tabs,
+      agents: app.agents,
+      chats: chatOptions,
+      copies: { local: client, name: () => machineNameOf(machines, m.id) },
+    }),
   );
+  app.away.init(client);
   app.power.init(client, app.machines, { passwords });
   app.machines.init(client, client, {
     relayUrl: (id) => `ws://fake:1/relay?machine=${id}`,

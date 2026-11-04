@@ -46,7 +46,7 @@
   import { Button } from '#lib/components/ui/button/index.js';
   import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
   import * as Tooltip from '#lib/components/ui/tooltip/index.js';
-  import { clockTime, spanText } from '#lib/format/usage.js';
+  import { agoText, clockTime, spanText } from '#lib/format/usage.js';
   import { useApp } from '#lib/state/context.js';
   import { machineLabel } from '#lib/state/machines.svelte.js';
   import { cn } from '#lib/utils.js';
@@ -63,6 +63,9 @@
    * Keep awake), its idle-shutdown countdown or keep-awake time in the state
    * label's title, and, when turning it on failed, the reason in a line under
    * the heading. Shutting down a machine at work asks first.
+   *
+   * A machine that is away, whose chats show from this device's copy, says
+   * when that copy was made: "last seen 2 h ago".
    */
   let {
     machine,
@@ -70,7 +73,7 @@
     onToggle,
   }: { machine: MachineEntry; collapsed: boolean; onToggle: () => void } = $props();
 
-  const { interaction, machines, power } = useApp();
+  const { interaction, machines, power, scopes } = useApp();
 
   const name = $derived(machineLabel(machine));
   const status = $derived(machines.shown(machine));
@@ -123,6 +126,20 @@
     if (st.shutsDownAt !== null)
       return `Shuts down in ${spanText(Math.max(0, st.shutsDownAt - now))}`;
     return undefined;
+  });
+
+  /** When its copy was made, while it is away and has one. */
+  const seenAt = $derived(
+    machine.local || machine.status === 'on'
+      ? null
+      : (scopes.get(machine.id)?.copy?.copiedAt ?? null),
+  );
+  let seenNow = $state(Date.now());
+  $effect(() => {
+    if (seenAt === null) return;
+    seenNow = Date.now();
+    const timer = setInterval(() => (seenNow = Date.now()), 30_000);
+    return () => clearInterval(timer);
   });
 
   const HOUR = 3_600_000;
@@ -269,6 +286,11 @@
     destructive
     onConfirm={() => quiet(power.shutDown(machine.id, false))}
   />
+  {#if seenAt !== null}
+    <p class="text-muted-foreground px-2 text-[0.6875rem]">
+      last seen {agoText(seenAt, seenNow)}
+    </p>
+  {/if}
   <!-- Always present, so assistive technology announces what is put in it. -->
   <p class="px-2 text-xs text-red-700 empty:hidden dark:text-red-400" role="status">
     {failure ?? ''}
