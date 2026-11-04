@@ -157,7 +157,8 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm build:headless
-      - name: Upload the headless package, also under a fixed name for the latest-release link
+      # The Windows setup script readies a PC to run this package in WSL; it ships alongside.
+      - name: Upload the headless package, also under a fixed name for the latest-release link, and the Windows setup script
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.version.outputs.tag }}
@@ -167,11 +168,15 @@ jobs:
           sha256sum -c "threadgarden-headless-$VERSION-linux-x64.tar.gz.sha256"
           cp "threadgarden-headless-$VERSION-linux-x64.tar.gz" threadgarden-headless-linux-x64.tar.gz
           sha256sum threadgarden-headless-linux-x64.tar.gz > threadgarden-headless-linux-x64.tar.gz.sha256
+          cp ../packaging/windows-wsl/setup-worker.ps1 threadgarden-setup-worker.ps1
+          sha256sum threadgarden-setup-worker.ps1 > threadgarden-setup-worker.ps1.sha256
           gh release upload "$TAG" --clobber \
             "threadgarden-headless-$VERSION-linux-x64.tar.gz" \
             "threadgarden-headless-$VERSION-linux-x64.tar.gz.sha256" \
             threadgarden-headless-linux-x64.tar.gz \
-            threadgarden-headless-linux-x64.tar.gz.sha256
+            threadgarden-headless-linux-x64.tar.gz.sha256 \
+            threadgarden-setup-worker.ps1 \
+            threadgarden-setup-worker.ps1.sha256
 
   publish:
     needs: [version, bundle, headless]

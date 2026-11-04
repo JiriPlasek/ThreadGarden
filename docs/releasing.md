@@ -43,8 +43,10 @@ The tag must match the version (`v` + what `pnpm release:version` wrote), or
 the workflow stops before building anything. Then watch **Actions → Release**:
 
 1. CI's checks (lint, types, tests, Rust, end-to-end) on all three systems;
-2. a **draft** release, then signed builds for Windows, macOS and Linux and the
-   headless package, uploaded to it;
+2. a **draft** release, then signed builds for Windows, macOS and Linux, the
+   headless package (`threadgarden-headless-<version>-linux-x64.tar.gz`, and the
+   same as `threadgarden-headless-linux-x64.tar.gz`) and the Windows setup script
+   (`threadgarden-setup-worker.ps1`), each with a `.sha256`, uploaded to it;
 3. the update manifest (`latest.json`) and `SHA256SUMS`, checked;
 4. **publish**, only if everything above succeeded.
 
