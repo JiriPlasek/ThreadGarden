@@ -250,22 +250,31 @@ describe.skipIf(process.platform === 'win32' || isRoot)('headless install.sh', (
 
       // As on Ubuntu, where the directory is 750 root:polkitd. Opened again for the
       // cleanup. The suite above never runs as root, for whom this would do nothing.
-      const installClosed = async (extra: Record<string, string>) => {
+      const installByHandClosed = async (extra: Record<string, string>) => {
         rules = join(root, 'rules.d');
         await mkdir(rules);
         await writeFile(join(rules, '49-threadgarden-power.rules'), '// the rule\n');
         await chmod(rules, 0o000);
         try {
-          return await install({
-            POLKIT_RULES_DIR: rules,
-            LINGER: 'yes',
-            THREADGARDEN_SKIPPED_FILE: skipped(),
-            ...extra,
-          });
+          return await install({ POLKIT_RULES_DIR: rules, LINGER: 'yes', ...extra });
         } finally {
           await chmod(rules, 0o755);
         }
       };
+
+      /** Unattended, as an update runs it: the variable is what says so. */
+      const installClosed = (extra: Record<string, string>) =>
+        installByHandClosed({ THREADGARDEN_SKIPPED_FILE: skipped(), ...extra });
+
+      it('by hand, an unreadable rule is offered through sudo and pkcheck is not asked', async () => {
+        const { code, stdout } = await installByHandClosed({ PKCHECK: await pkcheck(0) });
+        expect(code).toBe(0);
+        expect(stdout).not.toContain('already in place');
+        const c = await calls();
+        expect(c.some((l) => l.startsWith('pkcheck'))).toBe(false);
+        expect(c.some((l) => l.startsWith('sudo tee '))).toBe(true);
+        expect(await readdir(root)).not.toContain('skipped');
+      });
 
       it('an unreadable rule that polkit allows asks for nothing and writes no marker', async () => {
         const { code, stdout } = await installClosed({ PKCHECK: await pkcheck(0) });

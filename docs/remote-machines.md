@@ -219,8 +219,8 @@ install. The installer:
   that there is "no polkit rules directory", the system is too old for the
   rule: idle shutdown cannot power the machine off there, and everything else
   works. Where the directory is closed to users (Ubuntu keeps it to root and
-  polkit), the installer can't read the rule, so it asks polkit whether your
-  user may power off; if so it says the rule is in place and asks for nothing;
+  polkit), the installer can't read the rule, so it offers to write it every
+  time you run it, even if it is there;
 - enables and starts the service, and prints what to do next.
 
 The service runs with `PATH=~/.local/bin:/usr/local/bin:/usr/bin:/bin`. If
@@ -759,7 +759,8 @@ button is disabled, and the card says "Turn it on to update".
 Two steps of the install need `sudo`: lingering (so the service starts at
 boot) and the rule that lets idle shutdown power the machine off. An update
 cannot ask for a password, so it skips such a step when it is not already in
-place. The update still counts as done, and the card says which step was
+place (where it can't read the rule, it asks polkit whether your user may
+power off). The update still counts as done, and the card says which step was
 skipped and what to run: `~/.local/share/threadgarden-headless/current/install.sh`
 once over SSH. The card says so only when the step is known to be missing: on
 a system with no polkit rules directory, or where neither the rule nor polkit

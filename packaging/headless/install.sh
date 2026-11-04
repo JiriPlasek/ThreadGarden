@@ -132,12 +132,15 @@ EOF
 # is asked, by its exit code: without --allow-user-interaction it never prompts, and
 # 1, 2 and 3 are its ways of saying no. Anything else (127: no pkcheck, or it failed)
 # says nothing about the rule. Its answer also covers whatever else allows this
-# user to power off, so it is asked only about a file that can't be read.
+# user to power off, so it is asked only about a file that can't be read, and only
+# unattended: polkit says yes to an active console session even with no rule.
 polkit_rule_state() {
   if [ -r "$polkit_rule" ]; then
     if [ "$(cat "$polkit_rule")" = "$(polkit_rule_text)" ]; then echo yes; else echo no; fi
   elif [ -x "$polkit_rules_dir" ] && [ ! -e "$polkit_rule" ]; then
     echo no
+  elif [ -z "${THREADGARDEN_SKIPPED_FILE-}" ]; then
+    echo unknown
   else
     answer=0
     $PKCHECK --action-id org.freedesktop.login1.power-off --process $$ >/dev/null 2>&1 || answer=$?
