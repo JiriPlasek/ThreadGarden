@@ -154,8 +154,22 @@ polkit_rule_state() {
   fi
 }
 
+# In WSL, Windows does the powering off (the service runs its shutdown.exe), so the
+# rule would allow nothing that matters. Any one sign is enough, as in the service:
+# systemd can register interop again as WSLInterop-late, and a session may lack
+# WSL_DISTRO_NAME. PROC_ROOT is for tests.
+PROC_ROOT=${PROC_ROOT-}
+in_wsl() {
+  [ -e "$PROC_ROOT/proc/sys/fs/binfmt_misc/WSLInterop" ] ||
+    [ -e "$PROC_ROOT/proc/sys/fs/binfmt_misc/WSLInterop-late" ] ||
+    grep -qi microsoft "$PROC_ROOT/proc/sys/kernel/osrelease" 2>/dev/null ||
+    [ -n "${WSL_DISTRO_NAME-}" ]
+}
+
 echo
-if [ ! -d "$polkit_rules_dir" ]; then
+if in_wsl; then
+  echo "Running in WSL: Windows does the powering off, so no polkit rule is needed."
+elif [ ! -d "$polkit_rules_dir" ]; then
   echo "This system has no polkit rules directory ($polkit_rules_dir), so it is" >&2
   echo "probably too old for JavaScript rules. Threadgarden won't be able to power" >&2
   echo "this machine off for idle shutdown; everything else works." >&2

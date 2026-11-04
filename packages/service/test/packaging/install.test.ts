@@ -97,6 +97,8 @@ describe.skipIf(process.platform === 'win32' || isRoot)('headless install.sh', (
       SUDO: sudo,
       // Never the real /etc: a missing directory is the "old polkit" case.
       POLKIT_RULES_DIR: join(root, 'no-polkit'),
+      // Never the real /proc either: a run inside WSL must test the plain Linux case.
+      PROC_ROOT: join(root, 'no-proc'),
       ...extra,
     });
   };
@@ -355,6 +357,104 @@ describe.skipIf(process.platform === 'win32' || isRoot)('headless install.sh', (
       expect(stdout).toContain("Could not enable lingering; run 'sudo loginctl enable-linger");
       expect(stderr).toContain("won't be able to power");
       expect(await readdir(root)).not.toContain('skipped');
+    });
+  });
+
+  describe('in WSL', () => {
+    const WSL_NOTE = 'Running in WSL: Windows does the powering off, so no polkit rule is needed.';
+    const skippedLines = async (file: string) =>
+      (await readFile(file, 'utf8').catch(() => '')).split('\n').filter(Boolean);
+
+    /** A stand-in for `/proc` holding just these files (paths below it, e.g. `sys/kernel/osrelease`). */
+    const procRoot = async (files: Record<string, string>) => {
+      const dir = join(root, 'proc-root');
+      for (const [path, text] of Object.entries(files)) {
+        const file = join(dir, 'proc', path);
+        await mkdir(join(file, '..'), { recursive: true });
+        await writeFile(file, text);
+      }
+      return dir;
+    };
+
+    it('in WSL the polkit rule is neither asked for nor marked skipped', async () => {
+      // A rules directory it can't read, as on Ubuntu: outside WSL, that asks polkit.
+      const rules = join(root, 'rules.d');
+      await mkdir(rules);
+      await chmod(rules, 0o000);
+      const skipped = join(root, 'skipped');
+      let result: Awaited<ReturnType<typeof install>>;
+      try {
+        result = await install({
+          WSL_DISTRO_NAME: 'threadgarden',
+          POLKIT_RULES_DIR: rules,
+          PKCHECK: await pkcheck(1),
+          LINGER: 'yes',
+          SUDO: 'false',
+          THREADGARDEN_SKIPPED_FILE: skipped,
+        });
+      } finally {
+        await chmod(rules, 0o755);
+      }
+      expect(result.code).toBe(0);
+      expect(result.stdout).toContain(WSL_NOTE);
+      expect(result.stdout).not.toContain('sudo tee');
+      expect(result.stdout).not.toContain('Could not write');
+      expect(result.stderr).not.toContain("won't be able to power");
+      expect(await skippedLines(skipped)).toEqual([]);
+      const c = await calls();
+      expect(c.some((l) => l.startsWith('sudo') || l.startsWith('pkcheck'))).toBe(false);
+      expect(c).toContain('systemctl --user restart threadgarden');
+    });
+
+    it('in WSL lingering is still asked for', async () => {
+      const { code, stdout } = await install({ WSL_DISTRO_NAME: 'threadgarden' });
+      expect(code).toBe(0);
+      expect(stdout).toContain('sudo loginctl enable-linger tester');
+      expect(stdout).toContain(WSL_NOTE);
+      expect(await calls()).toContain('sudo loginctl enable-linger tester');
+
+      // And a sudo that fails for it is still marked, unattended.
+      const skipped = join(root, 'skipped');
+      const again = await install({
+        WSL_DISTRO_NAME: 'threadgarden',
+        SUDO: 'false',
+        THREADGARDEN_SKIPPED_FILE: skipped,
+      });
+      expect(again.code).toBe(0);
+      expect(await skippedLines(skipped)).toEqual(['linger']);
+    });
+
+    it.each([
+      ['the interop entry', { 'sys/fs/binfmt_misc/WSLInterop': '' }],
+      ['the interop entry systemd registers late', { 'sys/fs/binfmt_misc/WSLInterop-late': '' }],
+      ['a WSL 2 kernel', { 'sys/kernel/osrelease': '6.6.87.2-microsoft-standard-WSL2\n' }],
+      ['a WSL 1 kernel', { 'sys/kernel/osrelease': '4.4.0-19041-Microsoft\n' }],
+    ])('%s alone says WSL, with no distro name', async (_, files) => {
+      const { code, stdout } = await install({
+        PROC_ROOT: await procRoot(files),
+        LINGER: 'yes',
+      });
+      expect(code).toBe(0);
+      expect(stdout).toContain(WSL_NOTE);
+      expect((await calls()).some((l) => l.startsWith('sudo'))).toBe(false);
+    });
+
+    it('outside WSL nothing changes', async () => {
+      const rules = join(root, 'rules.d');
+      await mkdir(rules);
+      const { code, stdout } = await install({
+        PROC_ROOT: await procRoot({ 'sys/kernel/osrelease': '6.8.0-45-generic\n' }),
+        // Set but empty is not a distro name.
+        WSL_DISTRO_NAME: '',
+        POLKIT_RULES_DIR: rules,
+        LINGER: 'yes',
+      });
+      expect(code).toBe(0);
+      expect(stdout).not.toContain('Running in WSL');
+      expect(stdout).toContain('needs a polkit rule');
+      expect((await calls()).some((l) => l.startsWith('sudo tee ') && l.endsWith('.rules'))).toBe(
+        true,
+      );
     });
   });
 
