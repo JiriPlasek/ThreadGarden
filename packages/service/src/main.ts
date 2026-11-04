@@ -579,6 +579,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
           log.debug(`relay to machine ${machineId}: ${errorText(err)}`),
         // The machine is up: messages whose start gave up on it go now (R17).
         onLinkOpened: (machineId) => away?.onReachable(machineId),
+        log,
       });
       relay = machineRelay;
       // machine.*, pairing, devices and machines.* (v1.4); none of them without a database.

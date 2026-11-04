@@ -636,6 +636,59 @@ describe('relay', () => {
     await expect.poll(() => deaf.closed(), { timeout: 2_000 }).toBe(1);
   });
 
+  it('an onLinkOpened that throws leaves the link open and the pinger running', async () => {
+    const debug: string[] = [];
+    const relayTo = async (machine: FakeMachine) => {
+      const r = createRelay({
+        machines: {
+          get: (id) =>
+            id === 'm-1'
+              ? {
+                  id,
+                  name: 'Fake',
+                  address: '127.0.0.1',
+                  port: machine.port,
+                  fingerprint: machine.tls.fingerprint256,
+                  certPem: machine.tls.certPem,
+                  deviceId: 'd',
+                  addedAt: 0,
+                  unlocked: true,
+                }
+              : null,
+          token: () => TOKEN,
+        },
+        pingMs: 50,
+        onLinkOpened: () => {
+          throw new Error('database is closed');
+        },
+        log: { debug: (m) => debug.push(m) },
+      });
+      const srv = await startWsServer({
+        token: 't',
+        router: new Router(),
+        relay: r,
+        onClientCountChange: () => {},
+      });
+      cleanup.push(async () => {
+        r.close();
+        await srv.close();
+      });
+      return srv;
+    };
+    // The link still relays.
+    const live = await openRelayAt((await relayTo(fake)).port, 't', 'm-1');
+    live.send('still here');
+    expect(await nextFrame(live)).toEqual({ data: 'still here', binary: false });
+    expect(debug.join(' ')).toContain('database is closed');
+    live.close();
+
+    // And its pinger runs: a machine that stops answering is still let go.
+    const deaf = await startFakeMachine(dir, () => {}, { autoPong: false });
+    cleanup.push(() => deaf.close());
+    const ui = await openRelayAt((await relayTo(deaf)).port, 't', 'm-1');
+    expect(await closeCode(ui)).toBe(4502);
+  });
+
   it('closes 4502, not 4409, when the pinned certificate fails only its dates', async () => {
     // The paired machine itself, with the pinned certificate, as seen by a
     // clock that is off: an expired certificate.
