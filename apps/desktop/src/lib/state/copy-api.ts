@@ -6,9 +6,11 @@
  * The machine itself is never asked, and reading never turns it on.
  */
 import {
+  AWAY_CAPABILITY,
   AWAY_ERROR,
   type ChatSummary,
   type MachineCopy,
+  type MachineInfo,
   type MethodName,
   type Params,
   type Place,
@@ -30,6 +32,19 @@ export type CopyApiOptions = {
   name: () => string;
   /** Told of each copy read (null: there is none), e.g. for "last seen". */
   seen?: (copy: MachineCopy | null) => void;
+  /** What the machine's last hello said, for when its copy doesn't say. */
+  hello?: () => MachineInfo | null;
+};
+
+/**
+ * Ruling R10: a machine that is away runs nothing, whatever its chats were
+ * doing when it was last seen. What waits on the user (Needs you, unread,
+ * back from hold) still does.
+ */
+const resting = (c: ChatSummary): ChatSummary => {
+  const stopped = c.status === 'working' || c.status === 'unknown';
+  if (!stopped && (c.runningTasks ?? 0) === 0) return c;
+  return { ...c, status: stopped ? 'idle' : c.status, runningTasks: 0 };
 };
 
 /** The bucket a bucket place lists (`all` is Active, v1.2). */
@@ -106,7 +121,8 @@ export const copyApi = (
   const read = (): Promise<MachineCopy | null> =>
     (reading ??= local
       .request('copies.get', { machineId })
-      .then((copy) => {
+      .then((stored) => {
+        const copy = stored && { ...stored, chats: stored.chats.map(resting) };
         o.seen?.(copy);
         return copy;
       })
@@ -129,7 +145,7 @@ export const copyApi = (
     const copiedAt = chat?.copiedAt ?? lists?.copiedAt;
     if (!summary || copiedAt === undefined) throw off();
     return {
-      summary,
+      summary: resting(summary),
       header: {},
       items: chat?.items ?? [],
       hasMore: false,
@@ -140,7 +156,20 @@ export const copyApi = (
     };
   };
 
+  /**
+   * Every message for the machine passes here (the composer, Send again, a
+   * Move's note, a new chat): one that can't take a message exactly once
+   * (no `away`, as its copy says, else its last hello) is never queued, as a
+   * retry could reach it twice.
+   */
+  const mayQueue = async (): Promise<void> => {
+    const info = (await read())?.info ?? o.hello?.() ?? null;
+    if (info?.capabilities.includes(AWAY_CAPABILITY)) return;
+    throw new RequestError(AWAY_ERROR, `Update ${o.name()} to send while it's off`);
+  };
+
   const send = async (p: Params<'chat.send'>): Promise<Result<'chat.send'>> => {
+    await mayQueue();
     await local.request(
       'away.queue',
       defined({
@@ -158,6 +187,7 @@ export const copyApi = (
   const create = async (p: Params<'chat.create'>): Promise<Result<'chat.create'>> => {
     // The chat's id is chosen here, so the machine makes it under the same one.
     const sessionId = p.sessionId ?? crypto.randomUUID();
+    await mayQueue();
     await local.request(
       'away.queue',
       defined({

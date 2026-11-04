@@ -3,6 +3,7 @@ import {
   type ChatCopy,
   type ChatSummary,
   type MachineCopy,
+  type MachineInfo,
   type Project,
 } from '@threadgarden/protocol';
 import { describe, expect, it, vi } from 'vitest';
@@ -62,11 +63,20 @@ const chatCopy: ChatCopy = {
   copiedAt: COPIED_AT,
 };
 
-const setup = (o: { copy?: MachineCopy | null } = {}) => {
+const setup = (
+  o: {
+    copy?: MachineCopy | null;
+    /** The chat copy `copies.chat` answers (default: `old`'s). */
+    chat?: ChatCopy;
+    /** What the machine's last hello said. */
+    hello?: MachineInfo | null;
+  } = {},
+) => {
+  const tail = o.chat ?? chatCopy;
   const local = fakeLocal({
     'copies.get': () => (o.copy === undefined ? machineCopy() : o.copy),
     'copies.chat': ((p: { sessionId: string }) =>
-      p.sessionId === chatCopy.sessionId ? chatCopy : null) as Handler,
+      p.sessionId === tail.sessionId ? tail : null) as Handler,
     'away.queue': ((p: { sessionId: string; kind: 'send' | 'create'; text: string }) => ({
       id: 'row-1',
       machineId: M1,
@@ -82,18 +92,36 @@ const setup = (o: { copy?: MachineCopy | null } = {}) => {
     })) as Handler,
   });
   const seen = vi.fn();
-  const api = copyApi(M1, local.api, { name: () => 'Ubuntu PC', seen });
+  const api = copyApi(M1, local.api, {
+    name: () => 'Ubuntu PC',
+    seen,
+    hello: () => o.hello ?? null,
+  });
   return { api, local, seen };
 };
 
 const ids = (items: ChatSummary[]): string[] => items.map((c) => c.sessionId);
+
+/** `p` fails with AWAY and `message`. */
+const refused = async (p: Promise<unknown>, message = 'Ubuntu PC is off') => {
+  const err = await p.then(
+    () => null,
+    (e: unknown) => e,
+  );
+  expect(err).toBeInstanceOf(RequestError);
+  expect(err).toMatchObject({ code: AWAY_ERROR, message });
+};
+
+const queuedOf = (local: { calls: { method: string }[] }) =>
+  local.calls.filter((c) => c.method === 'away.queue');
 
 describe('the copy API of a machine that is away', () => {
   it('answers the counts, the projects and the lists from the copy', async () => {
     const { api, local, seen } = setup();
     expect(await api.request('places.counts', {})).toEqual({
       needsYou: 2,
-      running: 1,
+      // Nothing runs on a machine that is away (R10).
+      running: 0,
       all: 6,
       active: 6,
       onHold: 1,
@@ -108,7 +136,7 @@ describe('the copy API of a machine that is away', () => {
     const needsYou = await api.request('sessions.list', { place: { kind: 'needsYou' }, limit: 50 });
     expect(ids(needsYou.items)).toEqual(['waiting', 'unread']);
     const running = await api.request('sessions.list', { place: { kind: 'running' }, limit: 50 });
-    expect(ids(running.items)).toEqual(['working']);
+    expect(ids(running.items)).toEqual([]);
     // A bucket in the service's order, paged; a hidden project's chats are left out.
     const first = await api.request('sessions.list', { place: { kind: 'active' }, limit: 3 });
     expect(ids(first.items)).toEqual(['waiting', 'working', 'other']);
@@ -197,14 +225,6 @@ describe('the copy API of a machine that is away', () => {
   });
 
   it('refuses anything else, and every list when there is no copy: ‹machine› is off', async () => {
-    const refused = async (p: Promise<unknown>) => {
-      const err = await p.then(
-        () => null,
-        (e: unknown) => e,
-      );
-      expect(err).toBeInstanceOf(RequestError);
-      expect(err).toMatchObject({ code: AWAY_ERROR, message: 'Ubuntu PC is off' });
-    };
     const { api, local } = setup();
     await refused(api.request('chat.interrupt', { sessionId: 'old' }));
     await refused(
@@ -218,5 +238,57 @@ describe('the copy API of a machine that is away', () => {
     await refused(none.api.request('places.counts', {}));
     await refused(none.api.request('sessions.list', { place: { kind: 'active' }, limit: 5 }));
     expect(none.seen).toHaveBeenLastCalledWith(null);
+  });
+
+  it("won't queue for a machine that can't take a message exactly once", async () => {
+    const UPDATE = "Update Ubuntu PC to send while it's off";
+    const older = machineInfo(M1, 'ubuntu-pc', ['remote']);
+    const newer = machineInfo(M1, 'ubuntu-pc', ['remote', 'away']);
+    const old = setup({ copy: machineCopy({ info: older }) });
+    await refused(old.api.request('chat.send', { sessionId: 'old', text: 'hi' }), UPDATE);
+    await refused(old.api.request('chat.create', { cwd: '/work/alpha', text: 'Start' }), UPDATE);
+    expect(queuedOf(old.local)).toHaveLength(0);
+    // The copy's info wins over the last hello.
+    const stale = setup({ copy: machineCopy({ info: older }), hello: newer });
+    await refused(stale.api.request('chat.send', { sessionId: 'old', text: 'hi' }), UPDATE);
+    // No copy: the machine's last hello decides; knowing nothing, nothing is queued.
+    const unknown = setup({ copy: null });
+    await refused(unknown.api.request('chat.send', { sessionId: 'old', text: 'hi' }), UPDATE);
+    expect(queuedOf(unknown.local)).toHaveLength(0);
+    const hello = setup({ copy: null, hello: newer });
+    await hello.api.request('chat.send', { sessionId: 'old', text: 'hi' });
+    expect(queuedOf(hello.local)).toHaveLength(1);
+  });
+
+  it('a machine that is away runs nothing: working shows idle, Needs you stays (R10)', async () => {
+    const busy = summary('busy', { status: 'working', lastActivity: 60, runningTasks: 2 });
+    const odd = summary('odd', { status: 'unknown', lastActivity: 62 });
+    const asked = summary('asked', { status: 'needsYou', lastActivity: 61 });
+    const back = summary('back', { lastActivity: 63, backFromHold: true });
+    const { api } = setup({
+      copy: machineCopy({ chats: [busy, odd, asked, back] }),
+      chat: {
+        machineId: M1,
+        sessionId: 'tail-only',
+        summary: summary('tail-only', { status: 'working', runningTasks: 1 }),
+        items: [],
+        copiedAt: COPIED_AT,
+      },
+    });
+    expect(await api.request('places.counts', {})).toMatchObject({ running: 0, needsYou: 2 });
+    const running = await api.request('sessions.list', { place: { kind: 'running' }, limit: 50 });
+    expect(running.items).toEqual([]);
+    const active = await api.request('sessions.list', { place: { kind: 'active' }, limit: 50 });
+    const by = new Map(active.items.map((c) => [c.sessionId, c]));
+    expect(by.get('busy')).toMatchObject({ status: 'idle', runningTasks: 0 });
+    expect(by.get('odd')).toMatchObject({ status: 'idle' });
+    expect(by.get('asked')).toMatchObject({ status: 'needsYou' });
+    expect(by.get('back')).toMatchObject({ backFromHold: true });
+    const summaries = await api.request('sessions.summaries', { sessionIds: ['busy'] });
+    expect(summaries.items[0]).toMatchObject({ status: 'idle', runningTasks: 0 });
+    const opened = await api.request('chat.open', { sessionId: 'busy', tail: 200 });
+    expect(opened.summary).toMatchObject({ status: 'idle', runningTasks: 0 });
+    const tailOnly = await api.request('chat.open', { sessionId: 'tail-only', tail: 200 });
+    expect(tailOnly.summary).toMatchObject({ status: 'idle', runningTasks: 0 });
   });
 });

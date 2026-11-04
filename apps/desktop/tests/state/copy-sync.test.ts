@@ -117,7 +117,9 @@ describe('CopySync', () => {
     const { remote } = setup({ tails: { a: 10, b: 5 } });
     remote.open();
     await vi.advanceTimersByTimeAsync(0);
-    expect(remote.calls.filter((c) => c.method === 'chat.open').map((c) => c.params.sessionId)).toEqual(['b']);
+    expect(
+      remote.calls.filter((c) => c.method === 'chat.open').map((c) => c.params.sessionId),
+    ).toEqual(['b']);
   });
 
   it('a change saves again after the debounce, not before', async () => {

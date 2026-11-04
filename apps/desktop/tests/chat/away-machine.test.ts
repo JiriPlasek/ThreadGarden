@@ -4,6 +4,8 @@ import {
   type AwayItem,
   type AwayState,
   type ChatCopy,
+  type ChatItem,
+  type ChatStatus,
   type CopyItem,
   type MachineCopy,
   type PowerConfig,
@@ -77,6 +79,10 @@ const start = async (
     items?: CopyItem[];
     /** Messages already waiting. */
     waiting?: AwayItem[];
+    /** M1 is connected at first (default: its relay refuses from the start). */
+    connected?: boolean;
+    /** What M1 answers for chat r1 while connected (default: idle, three messages). */
+    live?: { status: ChatStatus; items: ChatItem[] };
   } = {},
 ) => {
   const capabilities = o.capabilities ?? ['remote', POWER_CAPABILITY, AWAY_CAPABILITY];
@@ -136,13 +142,13 @@ const start = async (
       });
     },
     configureRemote: (s) => {
-      s.refuse = true;
+      s.refuse = o.connected !== true;
       Object.assign(s.handlers, {
         'projects.list': () => [project('p2', 'infra')],
         'chat.open': () => ({
-          summary: { ...r1, status: 'idle', live: true },
+          summary: { ...r1, status: o.live?.status ?? 'idle', live: true },
           header: {},
-          items: [
+          items: o.live?.items ?? [
             user('u1', 'Why is CI red?'),
             text('a1', 'The lockfile is stale.'),
             user('u2', 'Postgres it is'),
@@ -312,5 +318,66 @@ describe('a machine that is away', () => {
     await waitFor(() => expect(queued(env)).toHaveLength(1));
     expect(queued(env)[0]).toMatchObject({ sessionId: 'r1', kind: 'send', text: 'No, keep it' });
     expect(env.server.calls('chat.respond')).toHaveLength(0);
+  });
+
+  it('a chat open live whose machine goes away stops looking live, and an answer is queued', async () => {
+    const env = await start({
+      power: false,
+      connected: true,
+      live: {
+        status: 'working',
+        items: [
+          user('u1', 'Clean up the build folder'),
+          {
+            kind: 'permissionRequest',
+            id: 'p1',
+            requestId: 'req-1',
+            toolName: 'Bash',
+            input: { command: 'rm -rf build' },
+            suggestions: [],
+            state: 'pending',
+            variant: 'tool',
+          },
+        ],
+      },
+    });
+    await waitFor(() => expect(env.app.machines.get(M1)?.status).toBe('on'));
+    const composer = await openChat(env);
+    const header = screen.getByRole('banner');
+    // Live: working, with Stop.
+    expect(await within(header).findByRole('img', { name: 'Working' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Stop' })).toBeTruthy();
+
+    env.remote.refuse = true;
+    env.remote.drop();
+    await waitFor(() => expect(env.app.machines.get(M1)?.status).toBe('unreachable'));
+    expect(await screen.findByText('Ubuntu PC is off: showing the chat as it was')).toBeTruthy();
+    expect(within(header).queryByRole('img', { name: 'Working' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull();
+    expect(
+      screen.getByText(
+        "Claude asked this before Ubuntu PC went off. Type your answer below; it's sent as your next message.",
+      ),
+    ).toBeTruthy();
+    // The card can't be answered: nothing goes to the machine or the queue.
+    const card = screen.getByRole('group', { name: 'Permission request: Bash' });
+    await userEvent.click(within(card).getByRole('button', { name: 'Allow' }));
+    expect(queued(env)).toHaveLength(0);
+    // A typed answer waits as the next message.
+    await userEvent.type(composer(), 'No, keep it{Enter}');
+    await waitFor(() => expect(queued(env)).toHaveLength(1));
+    expect(queued(env)[0]).toMatchObject({ sessionId: 'r1', kind: 'send', text: 'No, keep it' });
+    expect(env.remote.calls('chat.respond')).toHaveLength(0);
+    expect(env.server.calls('chat.respond')).toHaveLength(0);
+  });
+
+  it('a message going out says Sending…, and can no longer be cancelled', async () => {
+    const env = await start({ waiting: [awayItem({ state: 'sending' })] });
+    await openChat(env);
+    const line = await screen.findByText('Sending…');
+    const row = line.closest('[data-away-item]') as HTMLElement;
+    expect(within(row).getByText('Postgres it is')).toBeTruthy();
+    expect(within(row).queryByRole('button', { name: 'Cancel' })).toBeNull();
+    expect(screen.queryByText(WAITING_OFF)).toBeNull();
   });
 });

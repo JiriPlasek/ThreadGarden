@@ -217,7 +217,11 @@ const wire = (
       tabs,
       agents: app.agents,
       chats: chatOptions,
-      copies: { local: client, name: () => machineNameOf(machines, m.id) },
+      copies: {
+        local: client,
+        name: () => machineNameOf(machines, m.id),
+        hello: () => machines.get(m.id)?.info ?? null,
+      },
     }),
   );
   app.away.init(client);

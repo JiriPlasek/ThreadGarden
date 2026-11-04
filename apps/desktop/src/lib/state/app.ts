@@ -66,7 +66,11 @@ const wire = (): void => {
     createScope(m.id, m.client, {
       tabs,
       agents,
-      copies: { local: client, name: () => machineNameOf(machines, m.id) },
+      copies: {
+        local: client,
+        name: () => machineNameOf(machines, m.id),
+        hello: () => machines.get(m.id)?.info ?? null,
+      },
     }),
   );
   // The local copy of each paired machine's chats, kept while it is connected.

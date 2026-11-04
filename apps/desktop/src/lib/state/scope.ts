@@ -10,7 +10,7 @@ import { quietly, type Api } from './api';
 import { CopyState } from './away.svelte';
 import { buckets, BucketsState } from './buckets.svelte';
 import { chats, ChatsState, type ChatsOptions } from './chats.svelte';
-import { copyApi } from './copy-api';
+import { copyApi, type CopyApiOptions } from './copy-api';
 import { interaction, InteractionState } from './interaction.svelte';
 import type { MachineEntry, MachinesState } from './machines.svelte';
 import { listedAcross } from './merged-list.svelte';
@@ -53,10 +53,10 @@ export type ScopeDeps = {
    */
   scopes?: Pick<Scopes, 'all' | 'observe'>;
   /**
-   * A paired machine's: the local service that keeps its copy and queue, and
-   * its name. While it is away, its scope reads the copy (`copyApi`).
+   * A paired machine's: the local service that keeps its copy and queue, its
+   * name and its last hello. While it is away, its scope reads the copy (`copyApi`).
    */
-  copies?: { local: Pick<Api, 'request'>; name: () => string };
+  copies?: Pick<CopyApiOptions, 'name' | 'hello'> & { local: Pick<Api, 'request'> };
 };
 
 /**
@@ -167,7 +167,11 @@ export const createScope = (
     deps.copies && copy
       ? awayAware(
           link,
-          copyApi(machineId, deps.copies.local, { name: deps.copies.name, seen: copy.seen }),
+          copyApi(machineId, deps.copies.local, {
+            name: deps.copies.name,
+            hello: deps.copies.hello,
+            seen: copy.seen,
+          }),
         )
       : link;
   const scope = makeScope(() => machineId, api, deps.tabs, {

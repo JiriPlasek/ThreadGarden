@@ -103,6 +103,12 @@
   const machineAway = $derived(!!entry && !entry.local && entry.status !== 'on');
   /** When the copy this chat shows was made (null: the chat is the machine's own). */
   const copiedAt = $derived(chat?.copiedAt ?? null);
+  /**
+   * Nothing runs it here and now: a copy, or a chat read live whose machine
+   * then went away. Its requests can't be answered (a typed answer waits as
+   * the next message), and it has no Stop, no fork and no live pickers.
+   */
+  const readOnly = $derived(copiedAt !== null || machineAway);
   /** The machine takes a message exactly once (as its copy says, else its last hello). */
   const canQueue = $derived(
     (scope.copy?.info ?? entry?.info)?.capabilities.includes(AWAY_CAPABILITY) === true,
@@ -128,6 +134,7 @@
         ? `${machineName} didn't come up`
         : (w.error ?? 'Something went wrong.');
     }
+    if (w.state === 'sending') return 'Sending…';
     return turningOn
       ? `⏳ Waiting for ${machineName} — turning it on, sends when it's up. Keep this device awake.`
       : `⏳ Waiting for ${machineName} — sends when it's reachable.`;
@@ -360,7 +367,7 @@
 
   // ── interrupt ───────────────────────────────────────────────────────────
 
-  const working = $derived(chat?.ownedLive === true && chat.status === 'working');
+  const working = $derived(!readOnly && chat?.ownedLive === true && chat.status === 'working');
 
   const interrupt = (): void => {
     chats.interrupt(sessionId).catch((err: unknown) => {
@@ -529,7 +536,7 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="flex min-h-0 flex-1 flex-col" bind:this={root} {onkeydown}>
   {#if chat}
-    <ChatHeader {chat} activityOpen={activityShown} onToggleActivity={toggleActivity} />
+    <ChatHeader {chat} {readOnly} activityOpen={activityShown} onToggleActivity={toggleActivity} />
   {/if}
   {#if forkError}
     <div class="bg-destructive/10 text-destructive shrink-0 px-4 py-1 text-xs" role="alert">
@@ -564,6 +571,12 @@
             </p>
             <p class="text-muted-foreground px-1">… earlier messages are on {machineName}</p>
           </div>
+        {:else if machineAway}
+          <div class="mx-auto w-full max-w-4xl shrink-0 px-4 pt-2 text-xs">
+            <p class="bg-muted/60 rounded-md border px-3 py-1.5" role="status">
+              {machineName} is off: showing the chat as it was
+            </p>
+          </div>
         {/if}
         {#if chat.items.length === 0}
           <div
@@ -578,8 +591,8 @@
             hasMore={chat.hasMore}
             loadingOlder={chat.loadingOlder}
             onLoadOlder={() => void chats.loadOlder(sessionId)}
-            onFork={copiedAt === null ? fork : undefined}
-            requests={copiedAt === null ? requests : undefined}
+            onFork={readOnly ? undefined : fork}
+            requests={readOnly ? undefined : requests}
             memory={chat.view}
             stickRequests={chat.stickRequests}
           />
@@ -664,7 +677,7 @@
                 onDismiss={() => (dismissedSetup = setupItem.id)}
               />
             {/if}
-            {#if pending.length > 0 && copiedAt !== null}
+            {#if pending.length > 0 && readOnly}
               <!-- Its process ended with the machine: the answer goes out as a message. -->
               <div
                 class="flex items-center gap-2 rounded-md bg-amber-500/10 px-3 py-1 text-xs text-amber-900 dark:text-amber-200"
