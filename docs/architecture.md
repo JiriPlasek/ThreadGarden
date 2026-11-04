@@ -850,7 +850,9 @@ the machine, and are reached only by local callers.
 `.chat`, `.tails`). While connected, the desktop saves a machine's projects,
 info and chat list, and the last 10 items of each chat (user text, assistant
 text and permission requests), at most 500 chats. The whole list is read again
-at most every 30 s while connected, and at once when the link opens. The copy is
+at most every 30 s while connected, and at once when the link opens; the chats a
+`sessions.changed` names are copied 2 s after it, and a link that drops then
+doesn't stop a copy under way. The copy is
 text only, whatever the client sends: a user message keeps how many images it
 had (`imageCount`), never their data, and a permission request's long strings
 are cut to 4,000 characters. A stored row that no longer parses reads as no

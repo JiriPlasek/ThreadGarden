@@ -11,7 +11,7 @@ const fakeApi = (handlers: Record<string, Handler>) => {
   // Params are read loosely by the assertions below.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const calls: { method: string; params: Record<string, any> }[] = [];
-  const events = new Map<string, Set<() => void>>();
+  const events = new Map<string, Set<(data: unknown) => void>>();
   const opens = new Set<() => void>();
   const statuses = new Set<(s: string) => void>();
   const api = {
@@ -22,7 +22,7 @@ const fakeApi = (handlers: Record<string, Handler>) => {
       if (!h) throw new Error(`no handler for ${method}`);
       return h(params as never);
     }),
-    on: (event: string, cb: () => void) => {
+    on: (event: string, cb: (data: unknown) => void) => {
       if (!events.has(event)) events.set(event, new Set());
       events.get(event)!.add(cb);
       return () => events.get(event)!.delete(cb);
@@ -40,7 +40,8 @@ const fakeApi = (handlers: Record<string, Handler>) => {
   return {
     api: api as unknown as Api & { status: string },
     calls,
-    emit: (event: string) => events.get(event)?.forEach((cb) => cb()),
+    emit: (event: string, data: unknown = { sessionIds: [] }) =>
+      events.get(event)?.forEach((cb) => cb(data)),
     open: () => {
       api.status = 'open';
       statuses.forEach((cb) => cb('open'));
@@ -175,6 +176,46 @@ describe('CopySync', () => {
     await vi.advanceTimersByTimeAsync(60_000);
     expect(lists()).toBe(settled + 1);
     expect(local.count('copies.saveLists')).toBe(remote.count('projects.list'));
+  });
+
+  it('a change to one chat right before the link drops is in the copy without waiting 30 s', async () => {
+    const { remote, local } = setup();
+    remote.open();
+    await vi.advanceTimersByTimeAsync(5_000);
+    const saved = () =>
+      local.calls.filter((c) => c.method === 'copies.saveChat').map((c) => c.params.sessionId);
+    const before = saved().length;
+    // Claude's last reply in chat a; the owner reads it and shuts the machine down.
+    remote.emit('sessions.changed', { sessionIds: ['a'] });
+    await vi.advanceTimersByTimeAsync(2_100);
+    expect(saved().slice(before)).toEqual(['a']);
+    remote.away();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(saved().slice(before)).toEqual(['a']);
+  });
+
+  it('a chat copy under way when the link drops is still saved', async () => {
+    let answer: (v: unknown) => void = () => {};
+    const { remote, local } = setup();
+    remote.open();
+    await vi.advanceTimersByTimeAsync(5_000);
+    const before = local.count('copies.saveChat');
+    // This chat's tail is slow to come.
+    const handlers = remote.api.request as unknown as {
+      mockImplementationOnce: (f: unknown) => void;
+    };
+    handlers.mockImplementationOnce(async (method: string, params: { sessionId: string }) => {
+      remote.calls.push({ method, params });
+      await new Promise((r) => (answer = r));
+      return { summary: chat(params.sessionId, 99), items: [{ kind: 'user', text: 'late' }] };
+    });
+    remote.emit('sessions.changed', { sessionIds: ['b'] });
+    await vi.advanceTimersByTimeAsync(2_100);
+    expect(remote.calls.at(-1)).toMatchObject({ method: 'chat.open', params: { sessionId: 'b' } });
+    remote.away();
+    answer(undefined);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(local.count('copies.saveChat')).toBe(before + 1);
   });
 
   it('a link that opens again is copied at once', async () => {

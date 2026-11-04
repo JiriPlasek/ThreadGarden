@@ -13,9 +13,12 @@ const DEBOUNCE_MS = 2_000;
 /**
  * While connected, the whole list is read at most this often per machine (a
  * busy machine changes every second); the last change is copied all the same.
- * A link that opens is copied at once.
+ * A link that opens is copied at once. The chats a change names are copied
+ * after the debounce alone, so a reply read just before ⏻ Shut down is kept.
  */
 const MIN_GAP_MS = 30_000;
+/** More chats than this in one change are left to the whole list's next read. */
+const MAX_CHANGED_CHATS = 20;
 /** The chats a copy keeps (the store caps them too). */
 const MAX_CHATS = 500;
 const PAGE = 100;
@@ -99,6 +102,33 @@ export class CopySync {
       again = false;
     };
 
+    /**
+     * The chats `sessions.changed` named, copied after the debounce. A link that
+     * drops meanwhile doesn't stop them: one under way is still saved, and one
+     * whose machine is gone fails quietly (the next open compares every tail).
+     */
+    const changed = new Set<string>();
+    let chatTimer: ReturnType<typeof setTimeout> | null = null;
+    const copyChanged = async (): Promise<void> => {
+      const ids = [...changed];
+      changed.clear();
+      if (ids.length > MAX_CHANGED_CHATS) return;
+      for (const id of ids) {
+        if (stopped) return;
+        await this.copyChat(scope, id);
+      }
+    };
+    const onSessions = (d: { sessionIds: string[] }): void => {
+      for (const id of d.sessionIds) changed.add(id);
+      if (!chatTimer && changed.size > 0) {
+        chatTimer = setTimeout(() => {
+          chatTimer = null;
+          void copyChanged();
+        }, wait);
+      }
+      schedule();
+    };
+
     const offs = [
       api.onOpen(() => {
         // Back after a gap: copied now, not when the last copy allows.
@@ -109,13 +139,14 @@ export class CopySync {
       api.onStatus((s) => {
         if (s !== 'open') cancel();
       }),
-      api.on('sessions.changed', schedule),
+      api.on('sessions.changed', onSessions),
       api.on('projects.changed', schedule),
     ];
     void run();
     return () => {
       stopped = true;
       cancel();
+      if (chatTimer) clearTimeout(chatTimer);
       for (const off of offs) off();
     };
   };
@@ -140,7 +171,7 @@ export class CopySync {
     const worker = async (): Promise<void> => {
       while (next < stale.length && !away()) {
         const chat = stale[next++]!;
-        await this.copyChat(scope, chat);
+        await this.copyChat(scope, chat.sessionId);
       }
     };
     await Promise.all(Array.from({ length: PARALLEL }, worker));
@@ -169,12 +200,12 @@ export class CopySync {
     return all.sort((a, b) => b.lastActivity - a.lastActivity).slice(0, MAX_CHATS);
   };
 
-  private copyChat = async (scope: MachineScope, chat: ChatSummary): Promise<void> => {
+  private copyChat = async (scope: MachineScope, sessionId: string): Promise<void> => {
     const local = this.deps?.local;
     if (!local) return;
     try {
       const opened = await scope.api.request('chat.open', {
-        sessionId: chat.sessionId,
+        sessionId,
         tail: OPEN_TAIL,
       });
       const items = opened.items
@@ -183,7 +214,7 @@ export class CopySync {
         .map(toCopy);
       await local.request('copies.saveChat', {
         machineId: scope.machineId,
-        sessionId: chat.sessionId,
+        sessionId,
         summary: opened.summary,
         items,
       });
