@@ -18,7 +18,7 @@
   import type { ResumeCheck } from '#lib/state/chats.svelte.js';
   import { useApp, useScope } from '#lib/state/context.js';
   import { holdsBack } from '#lib/state/away.svelte.js';
-  import { takesAway } from '#lib/state/copy-api.js';
+  import { awayRefusal } from '#lib/state/copy-api.js';
   import { machineAway as isAway, machineNameOf } from '#lib/state/machines.svelte.js';
   import { chatKey, type ChatRef } from '#lib/state/refs.js';
   import type { SendWhen } from '#lib/state/scheduled.svelte.js';
@@ -55,7 +55,9 @@
    * API) and shows below the chat with what happens next, Cancel and, after a
    * failure, Retry. A request Claude was waiting on is answered by typing: the
    * answer goes out as the next message. A machine too old to take a message
-   * exactly once can't be written to until it is updated.
+   * exactly once can't be written to until it is updated; nor can one never
+   * seen, or one whose link can't open (`awayRefusal`). The note says "is off"
+   * only when the machine shows as Off, else "isn't connected".
    *
    * A new chat started while its machine is away is known only from the queue
    * until the machine makes it: "Starting ‹machine›…" with its first message
@@ -112,13 +114,27 @@
    * the next message), and it has no Stop, no fork and no live pickers.
    */
   const readOnly = $derived(copiedAt !== null || machineAway);
-  /** The machine takes a message exactly once (its last hello, else its copy, says so). */
-  const canQueue = $derived(takesAway(entry?.info, scope.copy?.info));
+  /**
+   * Why a message can't wait here for the machine (too old to take one
+   * exactly once, never seen, or a link that can't open), or null.
+   */
+  const queueRefusal = $derived(
+    awayRefusal(machineName, {
+      hello: entry?.info,
+      copied: scope.copy?.info,
+      status: entry?.status,
+    }),
+  );
+  /** The state the machine shows (Off, Unreachable, …), as in the places column. */
+  const shown = $derived(entry ? machines.shown(entry) : 'on');
   /** Its plug reads off, or this device is turning it on. */
-  const turningOn = $derived.by((): boolean => {
-    const shown = entry ? machines.shown(entry) : 'on';
-    return shown === 'off' || shown === 'starting' || away.starting(scope.machineId);
-  });
+  const turningOn = $derived(
+    shown === 'off' || shown === 'starting' || away.starting(scope.machineId),
+  );
+  /** What the note above a chat read from here says: Off only when it shows as Off. */
+  const awayAs = $derived(
+    shown === 'off' ? `${machineName} is off` : `${machineName} isn't connected`,
+  );
   const waiting = $derived(away.items(ref));
   /** A message of this chat still to go: later ones wait behind it, and none is scheduled. */
   const heldBack = $derived(holdsBack(waiting));
@@ -607,7 +623,7 @@
         {:else if copiedAt !== null}
           <div class="mx-auto w-full max-w-4xl shrink-0 space-y-1 px-4 pt-2 text-xs">
             <p class="bg-muted/60 rounded-md border px-3 py-1.5" role="status">
-              {machineName} is off: showing its last few messages, from {agoText(
+              {awayAs}: showing its last few messages, from {agoText(
                 copiedAt,
                 copyNow,
               )}.
@@ -617,7 +633,7 @@
         {:else if machineAway}
           <div class="mx-auto w-full max-w-4xl shrink-0 px-4 pt-2 text-xs">
             <p class="bg-muted/60 rounded-md border px-3 py-1.5" role="status">
-              {machineName} is off: showing the chat as it was
+              {awayAs}: showing the chat as it was
             </p>
           </div>
         {/if}
@@ -849,9 +865,9 @@
             {#if sendError}
               <p class="text-destructive text-xs" role="alert">{sendError}</p>
             {/if}
-            {#if machineAway && !canQueue}
+            {#if machineAway && queueRefusal}
               <p class="text-xs text-amber-900 dark:text-amber-200" role="status">
-                Update {machineName} to send while it's off
+                {queueRefusal}
               </p>
             {/if}
             <Composer
@@ -870,7 +886,7 @@
               limited={refusal !== undefined}
               {editing}
               autofocus={focusComposer}
-              disabled={machineAway && !canQueue}
+              disabled={machineAway && queueRefusal !== null}
             />
           </div>
         {/if}

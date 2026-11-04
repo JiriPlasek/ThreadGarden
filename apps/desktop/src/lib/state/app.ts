@@ -70,6 +70,7 @@ const wire = (): void => {
         local: client,
         name: () => machineNameOf(machines, m.id),
         hello: () => machines.get(m.id)?.info ?? null,
+        status: () => machines.get(m.id)?.status,
         away,
       },
     }),

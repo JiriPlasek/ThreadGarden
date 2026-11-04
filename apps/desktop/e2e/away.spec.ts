@@ -36,8 +36,10 @@ const WAITING_REACHABLE = `⏳ Waiting for ${MACHINE} — sends when it's reacha
 const WAITING_OFF = `⏳ Waiting for ${MACHINE} — turning it on, sends when it's up. Keep this device awake.`;
 /** Any line under a message that waits for Ubuntu. */
 const WAITING = new RegExp(`^⏳ Waiting for ${MACHINE} — `);
-/** The note over a chat of Ubuntu's while it's away (from its copy, or as it was). */
+/** The note over a chat of Ubuntu's while its plug reads Off (from its copy, or as it was). */
 const OFF_NOTE = new RegExp(`^${MACHINE} is off: showing`);
+/** The same note while it's away without showing as Off (no power control). */
+const AWAY_NOTE = new RegExp(`^${MACHINE} isn't connected: showing`);
 /** A message that waits for its machine, or goes out. */
 const AWAY_ITEM = '[data-away-item]';
 /** Turning Ubuntu on and delivering takes a start (about 2 s), the next look (5 s) and a reconnect. */
@@ -202,7 +204,9 @@ test('an away machine shows its copied chats and the last messages', async ({ pa
   await expect(page.getByRole('tab', { selected: true })).toHaveAttribute('data-tab', chat);
   const messages = page.getByRole('region', { name: 'Messages' });
   await expect(
-    page.getByText(new RegExp(`^${MACHINE} is off: showing its last few messages, from `)),
+    page.getByText(
+      new RegExp(`^${MACHINE} isn't connected: showing its last few messages, from `),
+    ),
   ).toBeVisible();
   await expect(page.getByText(`… earlier messages are on ${MACHINE}`)).toBeVisible();
   await expect(messages.getByText(said)).toBeVisible();
@@ -258,6 +262,7 @@ test('Cancel removes a waiting reply', async ({ page }) => {
   await goAway(page);
   await showProject(page);
   await (await chatRow(page, chat)).click();
+  await expect(page.getByText(AWAY_NOTE)).toBeVisible();
 
   const composer = page.getByRole('textbox', { name: 'Message' });
   await composer.fill(reply);
@@ -271,7 +276,7 @@ test('Cancel removes a waiting reply', async ({ page }) => {
 
   // Back on, the chat is live again, and the cancelled reply never went out.
   await remoteCall('mock.comeBack', {});
-  await expect(page.getByText(OFF_NOTE)).toHaveCount(0, { timeout: 30_000 });
+  await expect(page.getByText(AWAY_NOTE)).toHaveCount(0, { timeout: 30_000 });
   await expect(ubuntuGroup(page).getByText('On', { exact: true })).toBeVisible();
   expect(await onUbuntu(chat, reply)).toBe(0);
   await expect(page.getByRole('region', { name: 'Messages' }).getByText(reply)).toHaveCount(0);

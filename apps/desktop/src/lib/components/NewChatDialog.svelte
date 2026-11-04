@@ -22,7 +22,7 @@
   import * as Dialog from '#lib/components/ui/dialog/index.js';
   import { nameProblem, projectsApi, supportsProjects } from '#lib/projects.js';
   import { useApp } from '#lib/state/context.js';
-  import { takesAway } from '#lib/state/copy-api.js';
+  import { awayRefusal } from '#lib/state/copy-api.js';
   import { machineAway, machineLabel, machineNameOf } from '#lib/state/machines.svelte.js';
   import { newChatDraftKey, type ModelChoice } from '#lib/state/interaction.svelte.js';
 
@@ -80,20 +80,28 @@
 
   /**
    * A machine this device isn't connected to, offered from its copy (away
-   * machine spec): `queue` when its first message can wait here for it,
-   * `update` when it is too old to take one exactly once, null when it isn't
-   * away or was never seen (no copy, so no folders to offer).
+   * machine spec): null when it isn't away or was never seen (no copy, so no
+   * folders to offer); else why its first message can't wait here for it
+   * (`awayRefusal`: too old to take one exactly once, or a link that can't
+   * open), `refusal` null when it can.
    */
-  const awayOffer = (id: string): 'queue' | 'update' | null => {
+  const awayOffer = (id: string): { refusal: string | null } | null => {
     const s = scopes.get(id);
-    if (!s?.copy?.has || !machineAway(machines, id)) return null;
-    return takesAway(machines.get(id)?.info, s.copy.info) ? 'queue' : 'update';
+    const m = machines.get(id);
+    if (!m || !s?.copy?.has || !machineAway(machines, id)) return null;
+    return {
+      refusal: awayRefusal(machineLabel(m), {
+        hello: m.info,
+        copied: s.copy.info,
+        status: m.status,
+      }),
+    };
   };
   /**
    * The machines a chat can start on: those that are on, not checking or
    * shutting down (`power.takesWork`), and have their stores; and those that
-   * are away, whose first message waits on this device. One too old for that
-   * is shown, but can't be chosen.
+   * are away, whose first message waits on this device. One whose message
+   * can't wait (too old, say) is shown with why, but can't be chosen.
    */
   const choices = $derived(
     machines.list.flatMap((m) => {
@@ -105,22 +113,16 @@
       // Under the state it shows (Off, Unreachable, …), as in the places column.
       const shown = machineState({ ...m, status: machines.shown(m) }).label.toLowerCase();
       const label = `${machineLabel(m)} (${shown})`;
-      return offer === 'queue'
+      return offer.refusal === null
         ? [{ id: m.id, label, disabled: false }]
-        : [
-            {
-              id: m.id,
-              label: `${label} — Update ${machineLabel(m)} to send while it's off`,
-              disabled: true,
-            },
-          ];
+        : [{ id: m.id, label: `${label} — ${offer.refusal}`, disabled: true }];
     }),
   );
   /** A machine a chat can start on now: it has its stores and takes work, or its message can wait for it. */
   const usable = (id: string | null | undefined): id is string =>
     !!id &&
     ((!!scopes.get(id) && machines.get(id)?.status === 'on' && power.takesWork(id)) ||
-      awayOffer(id) === 'queue');
+      awayOffer(id)?.refusal === null);
   /** The chosen machine is away: only its existing folders can be offered. */
   const away = $derived(!onThisPc && machineAway(machines, scope.machineId));
   /**

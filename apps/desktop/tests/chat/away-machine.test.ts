@@ -1,6 +1,7 @@
 import {
   AWAY_CAPABILITY,
   POWER_CAPABILITY,
+  RELAY_CLOSE,
   type AwayItem,
   type AwayState,
   type ChatCopy,
@@ -39,6 +40,8 @@ const WAITING_OFF =
   "⏳ Waiting for Ubuntu PC — turning it on, sends when it's up. Keep this device awake.";
 const WAITING_REACHABLE = "⏳ Waiting for Ubuntu PC — sends when it's reachable.";
 const NOTE = 'Ubuntu PC is off: showing its last few messages, from 2 h ago.';
+/** The note of a machine that isn't Off, only not connected (no plug that reads off). */
+const NOTE_AWAY = "Ubuntu PC isn't connected: showing its last few messages, from 2 h ago.";
 
 let apps: AppState[] = [];
 afterEach(() => {
@@ -81,6 +84,8 @@ const start = async (
     copy?: boolean;
     /** The copied tail of chat r1. */
     items?: CopyItem[];
+    /** The copy has no info of the machine (default: it has). */
+    copiedInfo?: false;
     /** Messages already waiting. */
     waiting?: AwayItem[];
     /** M1 is connected at first (default: its relay refuses from the start). */
@@ -93,7 +98,7 @@ const start = async (
   const copiedAt = Date.now() - 2 * HOUR - 60_000;
   const machineCopy: MachineCopy = {
     machineId: M1,
-    info: machineInfo(M1, 'ubuntu-pc', capabilities),
+    info: o.copiedInfo === false ? null : machineInfo(M1, 'ubuntu-pc', capabilities),
     projects: [{ ...project('p2', 'infra'), exists: true }],
     chats: [r1],
     copiedAt,
@@ -272,9 +277,11 @@ describe('a machine that is away', () => {
     for (const p of rows[1]!.querySelectorAll('p')) expect(p.textContent?.trim()).not.toBe('');
   });
 
-  it("without a plug that reads off, the line says it sends when it's reachable", async () => {
+  it("without a plug that reads off, the note and the line say it isn't connected", async () => {
     const env = await start({ power: false });
     const composer = await openChat(env);
+    expect(await screen.findByText(NOTE_AWAY)).toBeTruthy();
+    expect(screen.queryByText(NOTE)).toBeNull();
     await userEvent.type(composer(), 'Postgres it is{Enter}');
     expect(await screen.findByText(WAITING_REACHABLE)).toBeTruthy();
     expect(screen.queryByText(WAITING_OFF)).toBeNull();
@@ -295,13 +302,13 @@ describe('a machine that is away', () => {
   it('when the machine connects the chat is live again and the waiting line goes', async () => {
     const env = await start({ power: false, waiting: [awayItem()] });
     await openChat(env);
-    expect(await screen.findByText(NOTE)).toBeTruthy();
+    expect(await screen.findByText(NOTE_AWAY)).toBeTruthy();
     expect(screen.getByText(WAITING_REACHABLE)).toBeTruthy();
 
     env.remote.refuse = false;
     await waitFor(() => expect(env.app.machines.get(M1)?.status).toBe('on'), { timeout: 10_000 });
     env.delivered();
-    await waitFor(() => expect(screen.queryByText(NOTE)).toBeNull());
+    await waitFor(() => expect(screen.queryByText(NOTE_AWAY)).toBeNull());
     expect(env.remote.calls('chat.open').length).toBeGreaterThan(0);
     await waitFor(() => expect(screen.queryByText(WAITING_REACHABLE)).toBeNull());
     expect(screen.queryByText('… earlier messages are on Ubuntu PC')).toBeNull();
@@ -316,7 +323,7 @@ describe('a machine that is away', () => {
     // The machine is back, but the deliverer hasn't sent the waiting row yet.
     env.remote.refuse = false;
     await waitFor(() => expect(env.app.machines.get(M1)?.status).toBe('on'), { timeout: 10_000 });
-    await waitFor(() => expect(screen.queryByText(NOTE)).toBeNull());
+    await waitFor(() => expect(screen.queryByText(NOTE_AWAY)).toBeNull());
     // No Schedule send while one waits: it could go out first.
     expect(screen.queryByRole('button', { name: 'More send options' })).toBeNull();
     await userEvent.type(
@@ -368,6 +375,31 @@ describe('a machine that is away', () => {
     expect(await screen.findByText("Update Ubuntu PC to send while it's off")).toBeTruthy();
     expect(composer().disabled).toBe(true);
     expect(screen.getByRole('button', { name: /^send/i })).toHaveProperty('disabled', true);
+    expect(queued(env)).toHaveLength(0);
+  });
+
+  it("a machine known neither from a hello nor from its copy hasn't been seen yet", async () => {
+    const env = await start({ copiedInfo: false });
+    const composer = await openChat(env);
+    expect(await screen.findByText("Ubuntu PC hasn't been seen yet")).toBeTruthy();
+    expect(screen.queryByText("Update Ubuntu PC to send while it's off")).toBeNull();
+    expect(composer().disabled).toBe(true);
+    expect(queued(env)).toHaveLength(0);
+  });
+
+  it('a machine whose address answers as another one takes no message', async () => {
+    const env = await start({ power: false, connected: true });
+    await waitFor(() => expect(env.app.machines.get(M1)?.status).toBe('on'));
+    const composer = await openChat(env);
+    env.remote.refuse = true;
+    env.remote.drop(RELAY_CLOSE.mismatch);
+    await waitFor(() => expect(env.app.machines.get(M1)?.status).toBe('mismatch'));
+    expect(
+      await screen.findByText(
+        "Can't send to Ubuntu PC: its address answers as a different machine",
+      ),
+    ).toBeTruthy();
+    expect(composer().disabled).toBe(true);
     expect(queued(env)).toHaveLength(0);
   });
 
@@ -441,7 +473,11 @@ describe('a machine that is away', () => {
     env.remote.refuse = true;
     env.remote.drop();
     await waitFor(() => expect(env.app.machines.get(M1)?.status).toBe('unreachable'));
-    expect(await screen.findByText('Ubuntu PC is off: showing the chat as it was')).toBeTruthy();
+    // No plug reads it off: it isn't connected, not Off.
+    expect(
+      await screen.findByText("Ubuntu PC isn't connected: showing the chat as it was"),
+    ).toBeTruthy();
+    expect(screen.queryByText(/is off/)).toBeNull();
     expect(within(header).queryByRole('img', { name: 'Working' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull();
     expect(

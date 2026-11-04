@@ -10,6 +10,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { RequestError } from '../../src/lib/service/client';
 import type { Api } from '../../src/lib/state/api';
 import { copiedAtOf, copyApi } from '../../src/lib/state/copy-api';
+import type { MachineStatus } from '../../src/lib/state/machines.svelte';
 import { M1, machineInfo, project, summary } from '../layout/harness';
 import { text, user } from '../chat/fixtures';
 
@@ -70,6 +71,8 @@ const setup = (
     chat?: ChatCopy;
     /** What the machine's last hello said. */
     hello?: MachineInfo | null;
+    /** Its link's state (default: unreachable). */
+    status?: MachineStatus;
   } = {},
 ) => {
   const tail = o.chat ?? chatCopy;
@@ -96,6 +99,7 @@ const setup = (
     name: () => 'Ubuntu PC',
     seen,
     hello: () => o.hello ?? null,
+    status: () => o.status ?? 'unreachable',
   });
   return { api, local, seen };
 };
@@ -262,11 +266,31 @@ describe('the copy API of a machine that is away', () => {
     expect(queuedOf(copiedOnly.local)).toHaveLength(1);
     // No copy: the machine's last hello decides; knowing nothing, nothing is queued.
     const unknown = setup({ copy: null });
-    await refused(unknown.api.request('chat.send', { sessionId: 'old', text: 'hi' }), UPDATE);
+    await refused(
+      unknown.api.request('chat.send', { sessionId: 'old', text: 'hi' }),
+      "Ubuntu PC hasn't been seen yet",
+    );
     expect(queuedOf(unknown.local)).toHaveLength(0);
+    const noInfo = setup({ copy: machineCopy({ info: null }) });
+    await refused(
+      noInfo.api.request('chat.send', { sessionId: 'old', text: 'hi' }),
+      "Ubuntu PC hasn't been seen yet",
+    );
     const hello = setup({ copy: null, hello: newer });
     await hello.api.request('chat.send', { sessionId: 'old', text: 'hi' });
     expect(queuedOf(hello.local)).toHaveLength(1);
+  });
+
+  it("won't queue for a machine whose link can't open: another certificate, or another version", async () => {
+    for (const [status, why] of [
+      ['mismatch', "Can't send to Ubuntu PC: its address answers as a different machine"],
+      ['incompatible', "Can't send to Ubuntu PC: it runs a different Threadgarden version"],
+    ] as const) {
+      const t = setup({ status });
+      await refused(t.api.request('chat.send', { sessionId: 'old', text: 'hi' }), why);
+      await refused(t.api.request('chat.create', { cwd: '/work/alpha', text: 'Start' }), why);
+      expect(queuedOf(t.local), status).toHaveLength(0);
+    }
   });
 
   it('a machine that is away runs nothing: working shows idle, Needs you stays (R10)', async () => {

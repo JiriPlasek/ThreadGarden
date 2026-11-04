@@ -18,6 +18,7 @@ import {
 } from '@threadgarden/protocol';
 import { RequestError } from '../service/client';
 import type { Api } from './api';
+import type { MachineStatus } from './machines.svelte';
 import { mergeOrder } from './merged-list.svelte';
 
 /** A `chat.open` answered from the copy carries when the copy was made. */
@@ -34,17 +35,37 @@ export type CopyApiOptions = {
   seen?: (copy: MachineCopy | null) => void;
   /** What the machine's last hello said, for when its copy doesn't say. */
   hello?: () => MachineInfo | null;
+  /** Its link's state: one that can't open (`mismatch`, `incompatible`) takes nothing. */
+  status?: () => MachineStatus | undefined;
 };
 
 /**
- * Whether a machine takes a message exactly once (`away`), so one may wait
- * for it here. Its hello from this run is the newer word (it may have been
- * updated since its copy was made), else its copy's info; knowing nothing, no.
+ * Why a message can't wait on this device for machine `name`, or null when it
+ * can. A link that can't open (another certificate answers at its address, or
+ * another version) would keep it waiting forever. Otherwise the machine must
+ * take a message exactly once (`away`): its hello from this run is the newer
+ * word (it may have been updated since its copy was made), else its copy's
+ * info; knowing neither, nothing waits.
  */
-export const takesAway = (
-  hello: MachineInfo | null | undefined,
-  copied: MachineInfo | null | undefined,
-): boolean => (hello ?? copied)?.capabilities.includes(AWAY_CAPABILITY) === true;
+export const awayRefusal = (
+  name: string,
+  m: {
+    hello: MachineInfo | null | undefined;
+    copied: MachineInfo | null | undefined;
+    status?: MachineStatus | undefined;
+  },
+): string | null => {
+  if (m.status === 'mismatch') {
+    return `Can't send to ${name}: its address answers as a different machine`;
+  }
+  if (m.status === 'incompatible') {
+    return `Can't send to ${name}: it runs a different Threadgarden version`;
+  }
+  const info = m.hello ?? m.copied;
+  if (!info) return `${name} hasn't been seen yet`;
+  if (!info.capabilities.includes(AWAY_CAPABILITY)) return `Update ${name} to send while it's off`;
+  return null;
+};
 
 /**
  * Ruling R10: a machine that is away runs nothing, whatever its chats were
@@ -169,11 +190,15 @@ export const copyApi = (
   /**
    * Every message for the machine passes here (the composer, Send again, a
    * Move's note, a new chat): one that can't take a message exactly once
-   * (no `away`: `takesAway`) is never queued, as a retry could reach it twice.
+   * (no `away`), or never could be reached, is never queued (`awayRefusal`).
    */
   const mayQueue = async (): Promise<void> => {
-    if (takesAway(o.hello?.(), (await read())?.info)) return;
-    throw new RequestError(AWAY_ERROR, `Update ${o.name()} to send while it's off`);
+    const refusal = awayRefusal(o.name(), {
+      hello: o.hello?.(),
+      copied: (await read())?.info,
+      status: o.status?.(),
+    });
+    if (refusal) throw new RequestError(AWAY_ERROR, refusal);
   };
 
   const send = async (p: Params<'chat.send'>): Promise<Result<'chat.send'>> => {

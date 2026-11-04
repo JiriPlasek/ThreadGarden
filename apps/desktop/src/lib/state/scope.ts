@@ -56,7 +56,7 @@ export type ScopeDeps = {
    * A paired machine's: the local service that keeps its copy and queue, its
    * name and its last hello. While it is away, its scope reads the copy (`copyApi`).
    */
-  copies?: Pick<CopyApiOptions, 'name' | 'hello'> & {
+  copies?: Pick<CopyApiOptions, 'name' | 'hello' | 'status'> & {
     local: Pick<Api, 'request'>;
     /** The messages waiting on this device: a chat's later ones wait behind them (`holdsBack`). */
     away?: Pick<AwayState, 'items'>;
@@ -193,6 +193,7 @@ export const createScope = (
           copyApi(machineId, deps.copies.local, {
             name: deps.copies.name,
             hello: deps.copies.hello,
+            ...(deps.copies.status ? { status: deps.copies.status } : {}),
             seen: copy.seen,
           }),
           (sessionId) => holdsBack(deps.copies?.away?.items({ machineId, sessionId }) ?? []),
