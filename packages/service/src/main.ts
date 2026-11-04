@@ -187,9 +187,15 @@ export type StartOptions = {
    * loopback; never re-read); otherwise `addressSource` (default this
    * machine's private IPv4 addresses) is read at start and on every idle tick,
    * and the listener follows it (Ruling R12). Without any address there is no
-   * remote listener.
+   * remote listener. `reachable` is the mock service's own (`mock.goAway`):
+   * while it says no, no device gets in; `bin.ts` never sets it.
    */
-  remote?: { port?: number; addresses?: string[]; addressSource?: () => string[] };
+  remote?: {
+    port?: number;
+    addresses?: string[];
+    addressSource?: () => string[];
+    reachable?: () => boolean;
+  };
   /**
    * Random bytes for pairing codes (default `crypto.randomBytes`). Tests and
    * the mock service (`mock --remote --pairing-code`) fix the code with it;
@@ -504,6 +510,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         router,
         // Pairing sockets only while the owner has a code out (`threadgarden pair`).
         pairingOpen: () => devices.hasLiveCode(),
+        ...(opts.remote?.reachable ? { reachable: opts.remote.reachable } : {}),
         onClientCountChange: (n) => {
           if (generation !== remoteGeneration) return;
           remoteClients = n;

@@ -23,7 +23,8 @@ import {
  * A second mock (`mock --remote`) is the other machine `machines.spec.ts`
  * pairs with: headless, its device listener on 127.0.0.1 (test-only) and a
  * fixed pairing code. The UI reaches it through the first mock's relay. With
- * `--fake-tasmota` it also holds a fake Tasmota Zigbee bridge (`power.spec.ts`).
+ * `--fake-tasmota` it also holds a fake Tasmota Zigbee bridge (`power.spec.ts`),
+ * whose plug brings it back when `away.spec.ts` has switched it off.
  */
 const UI_URL = `http://127.0.0.1:${UI_PORT}`;
 

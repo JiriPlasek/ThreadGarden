@@ -1,10 +1,17 @@
 import { existsSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { dirname, join } from 'node:path';
-import { PROTOCOL_VERSION, type ChatItem, type EventMsg } from '@threadgarden/protocol';
+import {
+  PROTOCOL_VERSION,
+  type ChatItem,
+  type EventMsg,
+  type PowerConfig,
+} from '@threadgarden/protocol';
 import { afterEach, describe, expect, it } from 'vitest';
 import { WebSocket } from 'ws';
+import { connectToMachine } from '../../src/away/deliverer.js';
 import { pairWithMachine } from '../../src/machine/pairing-client.js';
+import { createSwitch } from '../../src/power/switch.js';
 import {
   MOCK_FORGET_MOVES,
   REMOTE_MACHINE_NAME,
@@ -502,6 +509,101 @@ describe('mock service --fake-tasmota', () => {
       process.stderr.write = write;
     }
   });
+});
+
+describe('mock service: a machine that is away', () => {
+  const PLUG: PowerConfig = {
+    kind: 'tasmota-zigbee',
+    address: '',
+    device: 'MockPlug',
+    offWatts: 5,
+    minOffSeconds: 90,
+    measured: { running: null, standby: null },
+  };
+  /** The remote mock with its plug, paired with a device; a link as the deliverer opens one. */
+  const start = async () => {
+    mock = await startMockService({
+      remote: { port: 0, pairingCode: 'TEST-TEST-TEST' },
+      fakeTasmota: { port: 0 },
+      sessions: 3,
+      installSignalHandlers: false,
+    });
+    const c = (client = await TestClient.connect(mock.svc.port, mock.svc.token));
+    const paired = await pairWithMachine({
+      address: '127.0.0.1',
+      port: mock.svc.remote!.port,
+      code: 'TEST-TEST-TEST',
+      deviceName: 'Desk',
+    });
+    const machine = {
+      id: paired.machine.id,
+      name: paired.machine.name,
+      address: '127.0.0.1',
+      port: mock.svc.remote!.port,
+      certPem: paired.certPem,
+      fingerprint: paired.fingerprint,
+      deviceId: paired.deviceId,
+      addedAt: 0,
+      unlocked: true,
+    };
+    const connect = connectToMachine(
+      { get: () => machine, token: () => paired.token },
+      { linkTimeoutMs: 2_000 },
+    );
+    const plug = createSwitch({ ...PLUG, address: mock.fakeTasmota!.address }, 'mock-switch', {
+      readWaitMs: 0,
+    });
+    return { c, connect: () => connect(machine.id), plug };
+  };
+
+  it('goAway drops the devices and answers none, its plug reads Off; switched on, it is back about 2 s later', async () => {
+    const { c, connect, plug } = await start();
+    const link = await connect();
+    expect(await link!.request('hello', HELLO)).toMatchObject({ machine: { name: 'Ubuntu' } });
+    expect(await plug.reading()).toMatchObject({ on: true, watts: 47 });
+
+    await c.call('mock.goAway', {});
+    // Its link is cut.
+    await expect(link!.request('hello', HELLO)).rejects.toThrow();
+    // Not reachable, as a PC without power: never a refusal, which would mean "pair again".
+    expect(await connect()).toBeNull();
+    expect(await plug.reading()).toMatchObject({ on: false, watts: 0 });
+
+    await plug.setPower(true);
+    const on = Date.now();
+    expect(await connect()).toBeNull();
+    const back = (await eventually(connect, 10_000))!;
+    expect(Date.now() - on).toBeGreaterThanOrEqual(1_500);
+    expect(await back.request('hello', HELLO)).toMatchObject({ machine: { name: 'Ubuntu' } });
+    back.close();
+  }, 30_000);
+
+  it('comeBack lets the devices in again at once, with the plug on', async () => {
+    const { c, connect, plug } = await start();
+    await c.call('mock.goAway', {});
+    expect(await connect()).toBeNull();
+    await c.call('mock.comeBack', {});
+    const link = await connect();
+    expect(link).not.toBeNull();
+    link!.close();
+    expect(await plug.reading()).toMatchObject({ on: true, watts: 47 });
+  }, 30_000);
+
+  it('only the remote mock has them, for its own callers only', async () => {
+    const { c } = await start();
+    const asDevice = await mock!.svc.router.dispatch(
+      { id: 1, method: 'mock.goAway', params: {} },
+      { clientId: 't', origin: 'remote', deviceId: 'd' },
+    );
+    expect(asDevice).toMatchObject({ error: { code: 'METHOD_NOT_FOUND' } });
+    await c.close();
+    client = undefined;
+    await mock!.svc.close();
+    await mock!.removed;
+    mock = await startMockService({ sessions: 3, installSignalHandlers: false });
+    const main = (client = await TestClient.connect(mock.svc.port, mock.svc.token));
+    await expect(main.call('mock.goAway', {})).rejects.toMatchObject({ code: 'METHOD_NOT_FOUND' });
+  }, 30_000);
 });
 
 describe('mock service: moving a chat (protocol 9)', () => {
