@@ -5,8 +5,9 @@ screen) so that Threadgarden on your Windows desktop can run chats on it. You
 do the steps once, over SSH; after that everything happens in Threadgarden.
 
 A Windows 11 PC can be the worker too: it runs the same Ubuntu setup inside
-WSL. See [A Windows PC as the worker (WSL)](#a-windows-pc-as-the-worker-wsl)
-for what is different there; everything else in this guide applies to it.
+WSL. [A Windows PC as the worker (WSL)](#a-windows-pc-as-the-worker-wsl) says
+what is different there, including what its chats can reach on Windows; the
+rest of this guide applies to it as written for the Ubuntu PC.
 
 ## What it does
 
@@ -28,7 +29,9 @@ for what is different there; everything else in this guide applies to it.
   does not set up or manage that, and nothing in it is exposed to the
   internet.
 - Every paired device has **full control** of the Ubuntu PC's chats (send,
-  answer permissions, stop). Pairing can be revoked from either side.
+  answer permissions, stop), and through them of what Claude Code can do on
+  that machine. Pairing can be revoked from either side. (A Windows PC's
+  chats reach further: see [Things to know](#things-to-know).)
 - Optionally, Threadgarden turns the PC on and shuts it down through a
   Tasmota smart plug on your network: see [Power control](#4-power-control).
   Without it the PC simply stays on.
@@ -736,14 +739,16 @@ every change it would make without making any.
 4. It adds a Hyper-V firewall rule, `ThreadgardenWorker`, which lets devices
    reach the worker on TCP port 47380.
 5. It adds a scheduled task, `Threadgarden worker`, which starts the distro
-   at boot with nobody signed in. It runs `wsl.exe -d threadgarden --exec sleep
-   infinity` as you, without storing your password. The distro's systemd then
-   starts the worker, as on Ubuntu.
+   at boot with nobody signed in, and again every 5 minutes if it has stopped
+   (a run still going is left alone). It runs `wsl.exe -d threadgarden --exec
+   sleep infinity` as you, without storing your password. The distro's systemd
+   then starts the worker, as on Ubuntu.
 6. It tells you if Windows would put the PC to sleep (see below).
 7. It offers `wsl --shutdown`, so that WSL restarts with mirrored networking
    now. That stops every running distro, and Docker Desktop, so the default is
    no; the change then applies at the next restart of Windows.
-8. It prints the commands to run next, inside the distro.
+8. It starts the task, so the worker is held from now on, not only from the
+   next boot, and prints the commands to run next, inside the distro.
 
 The script never installs Claude Code or Threadgarden inside the distro: that
 part is the same as on Ubuntu. Open the distro and go to your home folder
@@ -768,6 +773,12 @@ the Windows PC's address (`threadgarden status` lists it).
 
 ### Things to know
 
+- **A chat there reaches your Windows account.** Through WSL's interop and
+  `/mnt/c`, Claude Code in the distro can read and change your Windows user's
+  files and run Windows programs as that user (not elevated), and so can every
+  paired device through its chats. Use a spare PC, or give the worker a
+  Windows account of its own. That account must be an administrator, since the
+  script must run elevated as the signed-in user.
 - **Mirrored networking is global.** It applies to every WSL distro on the PC
   and to Docker Desktop, not only to the worker. With it, the worker listens on
   the PC's own addresses, so other devices reach it like any other machine.
@@ -784,7 +795,16 @@ the Windows PC's address (`threadgarden status` lists it).
   setting up after an update" (Settings → Accounts → Sign-in options) signs you
   in and locks the screen after an update restart. The worker runs either way,
   but a locked session counts as someone signed in (below), so idle shutdown
-  waits until you sign out. Turn it off if you rely on idle shutdown.
+  waits until you sign out. Turn it off if you rely on idle shutdown. The same
+  goes for Remote Desktop: a session you only disconnected counts as signed in
+  and holds idle shutdown back, so sign out instead of closing the window.
+- **After `wsl --shutdown`** (or a WSL update, or Docker Desktop resetting
+  WSL) the worker stops while Windows keeps running. The scheduled task starts
+  it again within 5 minutes; to have it back at once, in PowerShell:
+
+  ```powershell
+  Start-ScheduledTask 'Threadgarden worker'
+  ```
 - **Sleep.** A sleeping PC can't be reached, by Threadgarden or by power
   control. The script tells you when Windows would sleep on mains power; to
   turn that off:
@@ -825,8 +845,9 @@ differences:
   without saving. When there is also unpushed work, it asks both, in turn:
   first **Unpushed work on ‹machine›** (**Shut down anyway**), then whether
   someone is signed in. Windows Home has no `quser.exe`, the tool the worker
-  asks, so there nobody is ever seen as signed in, and idle shutdown does not
-  hold back for a person.
+  asks first, so there it asks Windows who is signed in at the screen
+  instead. That still holds idle shutdown back for a person at the PC. If
+  that question fails too, nobody counts as signed in.
 
 ### Removing it
 
