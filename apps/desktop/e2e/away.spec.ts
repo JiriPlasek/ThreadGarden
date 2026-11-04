@@ -18,7 +18,14 @@ import { chatRow, markAllSeen, openApp, remoteCall, resetTabs, serviceCall } fro
  * switched on) and delivers the message once.
  *
  * The messages stay clear of the mock's script words ("perm", "ask", "plan",
- * "agent", "server", "limit"), so each gets the plain reply.
+ * "agent", "server", "limit"), so each gets the plain reply. They stay on the
+ * remote mock for the specs after this one: replies in session-16 to
+ * session-18, and one new chat in tg-cli.
+ *
+ * A waiting message lives only from its Send until the next delivery round
+ * (about 5 s), so what it showed is recorded in the page as it happens
+ * (`recordWaiting`) and checked afterwards, and the turn-on is checked on the
+ * plug itself: off before the message, on after it went out.
  */
 const MACHINE = 'Ubuntu';
 const PROJECT = 'tg-cli';
@@ -151,6 +158,34 @@ const onUbuntu = async (sessionId: string, text: string): Promise<number> => {
   return opened.items.filter((i) => i.kind === 'user' && i.text === text).length;
 };
 
+/** Whether This PC's service reads Ubuntu's plug as on (it may answer from a reading 3 s old). */
+const plugOn = async (machineId: string): Promise<boolean | null> =>
+  (await serviceCall<{ on: boolean | null }>('power.reading', { machineId })).on;
+
+/**
+ * Records in the page, from now on, which of `texts` the page has shown, so a
+ * line that came and went between two of the test's looks still counts.
+ * Returns a function that reads what was recorded so far.
+ */
+const recordShown = async (page: Page, texts: string[]): Promise<() => Promise<string[]>> => {
+  await page.evaluate((texts) => {
+    const seen = new Set<string>();
+    (window as unknown as { __shown: Set<string> }).__shown = seen;
+    const look = (): void => {
+      const now = document.body.textContent ?? '';
+      for (const t of texts) if (now.includes(t)) seen.add(t);
+    };
+    new MutationObserver(look).observe(document.body, {
+      subtree: true,
+      childList: true,
+      characterData: true,
+    });
+    look();
+  }, texts);
+  return () =>
+    page.evaluate(() => [...(window as unknown as { __shown: Set<string> }).__shown].sort());
+};
+
 test('an away machine shows its copied chats and the last messages', async ({ page }) => {
   const chat = 'session-18';
   const said = 'Did the moon cactus bloom while I was away?';
@@ -167,7 +202,7 @@ test('an away machine shows its copied chats and the last messages', async ({ pa
   await expect(page.getByRole('tab', { selected: true })).toHaveAttribute('data-tab', chat);
   const messages = page.getByRole('region', { name: 'Messages' });
   await expect(
-    page.getByText(`${MACHINE} is off: showing its last few messages, from just now`),
+    page.getByText(new RegExp(`^${MACHINE} is off: showing its last few messages, from `)),
   ).toBeVisible();
   await expect(page.getByText(`… earlier messages are on ${MACHINE}`)).toBeVisible();
   await expect(messages.getByText(said)).toBeVisible();
@@ -185,19 +220,24 @@ test('a reply while away turns it on and is delivered once', async ({ page }) =>
   await showProject(page);
   await (await chatRow(page, chat)).click();
   await expect(page.getByText(OFF_NOTE)).toBeVisible();
+  // Off, and nothing turns it on until a message waits.
+  await expect.poll(() => plugOn(ubuntuId)).toBe(false);
 
+  const shown = await recordShown(page, [WAITING_OFF]);
   const composer = page.getByRole('textbox', { name: 'Message' });
   await composer.fill(reply);
   await composer.press('Enter');
-  const waiting = page.locator(AWAY_ITEM).filter({ hasText: reply });
-  await expect(waiting).toBeVisible();
   await expect(composer).toHaveValue('');
-  // This PC switches the plug on at once; Ubuntu boots (2 s) and is looked at again 5 s later.
-  await expect(waiting.getByText(WAITING_OFF)).toBeVisible();
 
-  // Only the plug brings Ubuntu back here (nothing calls `mock.comeBack`): the reply goes
-  // out once it's up, and the chat is live again, with the reply and its answer.
+  // This PC switches the plug on at once (only the plug brings Ubuntu back here: nothing
+  // calls `mock.comeBack`), and the reply goes out once it's up, about 5 s later.
+  await expect.poll(() => plugOn(ubuntuId), { timeout: DELIVERY_MS }).toBe(true);
+  const waiting = page.locator(AWAY_ITEM).filter({ hasText: reply });
   await expect(waiting).toHaveCount(0, { timeout: DELIVERY_MS });
+  // Meanwhile it waited, saying Ubuntu was being turned on.
+  expect(await shown()).toEqual([WAITING_OFF]);
+
+  // The chat is live again, with the reply and its answer.
   await expect(page.getByText(OFF_NOTE)).toHaveCount(0, { timeout: DELIVERY_MS });
   await expect(ubuntuGroup(page).getByText('On', { exact: true })).toBeVisible();
   const messages = page.getByRole('region', { name: 'Messages' });
@@ -245,6 +285,7 @@ test("a new chat while away opens at once and starts when it's up", async ({ pag
   await copiedChat(ubuntuId, 'session-19');
   await goAway(page);
   await showProject(page);
+  await expect.poll(() => plugOn(ubuntuId)).toBe(false);
 
   // New chat in Ubuntu's tg-cli, from the copy's folders.
   await page.getByRole('button', { name: 'New chat', exact: true }).click();
@@ -256,21 +297,25 @@ test("a new chat while away opens at once and starts when it's up", async ({ pag
   await folder.selectOption({ label: PROJECT });
   const message = dialog.getByRole('textbox', { name: /message/i });
   await message.fill(first);
+  const starting = `Starting ${MACHINE}…`;
+  const shown = await recordShown(page, [WAITING_OFF, starting]);
   await message.press('Enter');
   await expect(dialog).toBeHidden();
 
-  // At once: its tab, keyed by the id This PC chose, says it's starting, with the first message waiting.
+  // At once: its tab, keyed by the id This PC chose (the tab stays, whatever happens next).
   const tab = page.getByRole('tab', { selected: true });
   await expect(tab).toHaveAttribute('data-chat-key', new RegExp(`^${ubuntuId}/[0-9a-f-]{36}$`));
   const key = (await tab.getAttribute('data-chat-key'))!;
   const sessionId = key.slice(ubuntuId.length + 1);
-  const waiting = page.locator(AWAY_ITEM).filter({ hasText: first });
-  await expect(waiting.getByText(WAITING_OFF)).toBeVisible();
-  await expect(page.getByText(`Starting ${MACHINE}…`)).toBeVisible();
 
   // Ubuntu is turned on, makes the chat under that id, and the same tab is its live chat.
-  await expect(page.getByText(`Starting ${MACHINE}…`)).toHaveCount(0, { timeout: DELIVERY_MS });
-  await expect(waiting).toHaveCount(0, { timeout: DELIVERY_MS });
+  await expect.poll(() => plugOn(ubuntuId), { timeout: DELIVERY_MS }).toBe(true);
+  await expect(page.getByText(starting)).toHaveCount(0, { timeout: DELIVERY_MS });
+  await expect(page.locator(AWAY_ITEM).filter({ hasText: first })).toHaveCount(0, {
+    timeout: DELIVERY_MS,
+  });
+  // Meanwhile the tab said it was starting, with its first message waiting for the turn-on.
+  expect(await shown()).toEqual([starting, WAITING_OFF].sort());
   const messages = page.getByRole('region', { name: 'Messages' });
   await expect(messages.getByText(first)).toBeVisible({ timeout: DELIVERY_MS });
   await expect(messages.getByText(REPLY)).toBeVisible({ timeout: DELIVERY_MS });
