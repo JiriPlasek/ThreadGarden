@@ -1197,6 +1197,11 @@ export class Db implements LiveRegistry {
     return Number(r.changes) > 0;
   }
 
+  /** True when `id` was received (a look only; `claimMessage` is the record). */
+  hasMessage(id: string): boolean {
+    return this.raw.prepare('SELECT 1 FROM received_messages WHERE id = ?').get(id) !== undefined;
+  }
+
   /** Forgets a claimed id, for a send that failed before it reached Claude. */
   releaseMessage(id: string): void {
     this.raw.prepare('DELETE FROM received_messages WHERE id = ?').run(id);

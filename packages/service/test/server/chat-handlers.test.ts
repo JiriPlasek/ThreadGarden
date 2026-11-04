@@ -709,6 +709,44 @@ describe('ids from a client that retries (a machine that is away)', () => {
     expect(adapter.lastSession().sent).toHaveLength(1);
   });
 
+  it('a retry while the first try waits on the resume is not answered as delivered', async () => {
+    const adapter = new FakeAdapter();
+    addHistory(adapter, 'held', 1);
+    const busy = JSON.stringify([
+      { pid: 7, cwd: dir, kind: 'interactive', startedAt: 1, sessionId: 'held', status: 'busy' },
+    ]);
+    let agents: () => Promise<string> = async () => '[]';
+    await start(adapter, { externalRun: () => agents() });
+    let open!: () => void;
+    const gate = new Promise<string>((resolve) => {
+      open = () => resolve(busy);
+    });
+    agents = () => gate;
+
+    const first = call('chat.send', { sessionId: 'held', text: 'hi', messageId: M1 });
+    const retry = call('chat.send', { sessionId: 'held', text: 'hi', messageId: M1 });
+    await settle();
+    open();
+    // The first try fails; the retry must fail too, not be told the message went out.
+    expect((await first).error?.code).toBe('RESUME_BLOCKED');
+    expect((await retry).error?.code).toBe('RESUME_BLOCKED');
+    expect(adapter.started).toHaveLength(0);
+    // Once the chat is free, the same id goes through.
+    agents = async () => '[]';
+    await ok('chat.send', { sessionId: 'held', text: 'hi', messageId: M1 });
+    expect(adapter.lastSession().sent).toHaveLength(1);
+  });
+
+  it('chat.create with the id of a chat in another folder is refused', async () => {
+    const adapter = new FakeAdapter();
+    addHistory(adapter, S1, 1);
+    await start(adapter);
+    expect(
+      await code('chat.create', { cwd: join(dir, 'elsewhere'), text: 'hi', sessionId: S1 }),
+    ).toBe('INVALID_PARAMS');
+    expect(adapter.started).toHaveLength(0);
+  });
+
   it('messageIds older than 30 days are dropped at start', async () => {
     const adapter = new FakeAdapter();
     addHistory(adapter, 'h1', 1);

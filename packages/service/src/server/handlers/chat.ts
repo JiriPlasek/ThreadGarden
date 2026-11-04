@@ -403,11 +403,14 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
     return { events: events.map((e) => e.data), seq: host.seqOf(p.sessionId) };
   });
 
-  const knows = (sessionId: string): boolean =>
-    host.get(sessionId) !== undefined ||
-    catalog.summary(sessionId) !== undefined ||
-    db.getSession(sessionId) !== undefined ||
-    db.getMovedChat(sessionId) !== undefined;
+  /** The folder of a chat this machine knows by any route (null: known, folder unknown); undefined: unknown. */
+  const knownCwd = (sessionId: string): string | null | undefined => {
+    const live = host.get(sessionId);
+    const row = db.getSession(sessionId);
+    const moved = db.getMovedChat(sessionId);
+    if (!live && !row && !moved && !catalog.summary(sessionId)) return undefined;
+    return live?.cwd ?? row?.cwd ?? moved?.cwd ?? null;
+  };
 
   router.register('chat.create', async (p) => {
     const choices = {
@@ -420,7 +423,14 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
     await requireRunnable();
     // A client that picked the id and retries (its answer was lost) must not start a second
     // chat: a chat this machine knows by any route (live, indexed, moved here) is just returned.
-    if (p.sessionId !== undefined && knows(p.sessionId)) return { sessionId: p.sessionId };
+    const known = p.sessionId === undefined ? undefined : knownCwd(p.sessionId);
+    if (p.sessionId !== undefined && known !== undefined) {
+      // The same id for another folder is not a retry: say so, rather than pretend it worked.
+      if (known !== null && known !== p.cwd) {
+        throw new ServiceError('INVALID_PARAMS', `Chat ${p.sessionId} exists in another folder`);
+      }
+      return { sessionId: p.sessionId };
+    }
     const s = host.create(p.cwd, toInput(p), choices, p.sessionId);
     nameChat(s.sessionId, p.cwd, p.text, false); // shown with the change below
     markSeen(s.sessionId); // a new chat has nothing unseen; kept for symmetry with chat.send
@@ -444,23 +454,30 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
     const away = deps.awayTo?.(p.sessionId);
     if (away) throw new ServiceError(MOVE_ERRORS.moved, `This chat moved to ${away.name}`);
     const input = toInput(p);
-    // A client's retry carries the id of the message it already sent. The id is recorded
-    // before anything else happens (one statement, so two retries can't both pass), and
-    // forgotten again if the send fails before the message reaches Claude: the retry is
-    // then a first try. A crash in between loses the message rather than sending it twice.
-    if (p.messageId !== undefined && !db.claimMessage(p.messageId, p.sessionId, Date.now())) {
+    // A client's retry carries the id of the message it already sent. Only a message that
+    // is really handed over counts as received, so the id is recorded in the same
+    // synchronous step as the hand-over (no await between), after the resume: a retry
+    // that comes while an earlier try still waits on the resume must not be answered as
+    // delivered. This look is only so a duplicate doesn't start a process.
+    const id = p.messageId;
+    if (id !== undefined && db.hasMessage(id)) return { queued: false };
+    const s = await resumedOrLive(p.sessionId);
+    // Nothing gets lost in the archive or on hold: a chat being sent a message
+    // (and perhaps running now) is active, even if the send itself then fails.
+    activate(p.sessionId);
+    if (id !== undefined && !db.claimMessage(id, p.sessionId, (deps.now ?? Date.now)())) {
       return { queued: false };
     }
+    let submitted = false;
     let sent: { queued: boolean };
-    let s: LiveSession;
     try {
-      s = await resumedOrLive(p.sessionId);
-      // Nothing gets lost in the archive or on hold: a chat being sent a message
-      // (and perhaps running now) is active, even if the send itself then fails.
-      activate(p.sessionId);
-      sent = s.send(input);
+      sent = s.send(input, () => {
+        submitted = true;
+      });
     } catch (err) {
-      if (p.messageId !== undefined) db.releaseMessage(p.messageId);
+      // Not with Claude: forget the id, so the retry is a first try. (A crash between the
+      // record and the hand-over loses the message rather than sending it twice.)
+      if (id !== undefined && !submitted) db.releaseMessage(id);
       throw err;
     }
     markSeen(p.sessionId); // replying means the last turn was seen
