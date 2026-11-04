@@ -227,7 +227,10 @@ describe('create', () => {
       await refuses(
         { replies: [ghNotReady, repoFree, gitInit] },
         { github: true },
-        { code: 'GH_NOT_READY', message: 'Run gh auth login on this machine (over SSH).' },
+        {
+          code: 'GH_NOT_READY',
+          message: `Run gh auth login on this machine (over ${process.platform === 'win32' ? 'Remote Desktop' : 'SSH'}).`,
+        },
         ['gh auth status --hostname github.com'],
       );
       expect(existsSync(path.join(code, 'plant'))).toBe(false);

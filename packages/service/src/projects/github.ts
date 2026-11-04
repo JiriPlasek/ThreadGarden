@@ -141,7 +141,11 @@ export const firstLine = (s: string): string =>
     .find((l) => l.trim())
     ?.trim() ?? '';
 
-export const githubStatus = async (t: Tools): Promise<GithubStatus> => {
+/** `platform` picks how the owner reaches the machine: SSH, or Remote Desktop on Windows. */
+export const githubStatus = async (
+  t: Tools,
+  platform: NodeJS.Platform = process.platform,
+): Promise<GithubStatus> => {
   const r = await t.run('gh', ['auth', 'status', '--hostname', 'github.com'], {
     timeoutMs: 10000,
   });
@@ -152,9 +156,11 @@ export const githubStatus = async (t: Tools): Promise<GithubStatus> => {
   const problem =
     r.code === 127
       ? 'GitHub CLI (gh) is not installed on this machine.'
-      : /keyring/i.test(r.stderr)
-        ? 'gh cannot read its keyring. Run gh auth login --insecure-storage on this machine (over SSH).'
-        : 'Run gh auth login on this machine (over SSH).';
+      : platform === 'win32'
+        ? 'Run gh auth login on this machine (over Remote Desktop).'
+        : /keyring/i.test(r.stderr)
+          ? 'gh cannot read its keyring. Run gh auth login --insecure-storage on this machine (over SSH).'
+          : 'Run gh auth login on this machine (over SSH).';
   return { ready: false, login: null, problem };
 };
 

@@ -322,8 +322,9 @@ describe('power on a service', () => {
   afterEach(async () => {
     await rm(dir, { recursive: true, force: true });
   });
-  const start = (headless: boolean) =>
+  const start = (headless: boolean, platform: NodeJS.Platform = 'linux') =>
     startService({
+      platform,
       dataDir: join(dir, 'data'),
       claudeConfigDir: join(dir, 'claude-missing'),
       adapter: generateCorpus({ sessions: 1, projects: 1, bigSessionMessages: 0 }),
@@ -383,5 +384,19 @@ describe('power on a service', () => {
       'away',
     ]);
     await d.close();
+  });
+
+  it('a headless win32 service advertises no power', async () => {
+    const svc = await start(true, 'win32');
+    try {
+      const hello = (await svc.router.dispatch(
+        { id: 1, method: 'hello', params: { protocolVersion: PROTOCOL_VERSION, client: 't' } },
+        { clientId: 't', origin: 'local' },
+      )) as { result: { machine: { platform: string; capabilities: string[] } } };
+      expect(hello.result.machine.platform).toBe('win32');
+      expect(hello.result.machine.capabilities).toEqual(['remote', 'projects', 'move']);
+    } finally {
+      await svc.close();
+    }
   });
 });

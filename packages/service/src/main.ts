@@ -189,6 +189,9 @@ export type StartOptions = {
    * `shutdown.exe` in WSL; tests replace it). One passed in is always used: no test
    * or mock ever reaches Windows.
    */
+  /** The platform `hello` reports and capabilities follow. Default `process.platform` (tests replace it). */
+  platform?: NodeJS.Platform;
+  /** Headless only: powers the machine off (default `systemctl poweroff`; tests replace it). */
   poweroff?: () => Promise<void>;
   /**
    * What the machine runs on: `wsl` a worker in WSL on a Windows PC, which Windows
@@ -278,6 +281,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   const clearTimer = opts.clearInterval ?? ((t) => clearInterval(t));
   const log = opts.logger ?? createLogger(dataDir);
   const headless = opts.headless === true;
+  const platform = (opts.platform ?? process.platform) as MachineInfo['platform'];
   if (headless && !opts.adapter) throw new Error('A headless service needs history (an adapter)');
   /** A worker in WSL: only a headless machine is ever one. */
   const wsl = headless && (opts.host === undefined ? detectWsl() : opts.host === 'wsl');
@@ -339,7 +343,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     return {
       id,
       name,
-      platform: process.platform as MachineInfo['platform'],
+      platform,
       headless,
       home: os.homedir(),
       // `away` is every service's (This PC too): it takes message and chat ids. It is added
@@ -349,7 +353,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         ? [
             ...CAPABILITIES,
             AWAY_CAPABILITY,
-            POWER_CAPABILITY,
+            ...(platform === 'linux' ? [POWER_CAPABILITY] : []),
             ...(canUpdate() ? [UPDATE_CAPABILITY] : []),
           ]
         : [...CAPABILITIES, AWAY_CAPABILITY],
