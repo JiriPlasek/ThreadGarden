@@ -462,8 +462,9 @@ connected" when it doesn't show as Off). Looking never turns the machine on.
 
 **The copy** is Threadgarden's own data on this PC, refreshed while the two are
 connected. It holds the lists and the last 10 or so messages of each chat, as
-text: a pasted image shows as "1 image". It is read-only, and nothing on it shows as running, since the machine runs nothing
-while it is off. Every PC you pair keeps its own copy.
+text: a pasted image shows as "1 image". It is read-only, and nothing on it
+shows as running, since the machine runs nothing while it is off. Every PC you
+pair keeps its own copy.
 
 **Replying.** Send as usual. The message is saved on this PC at once and shows
 under the chat as "Waiting for ‹machine›", with **Cancel**. If the plug reads
