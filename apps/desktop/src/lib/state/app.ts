@@ -7,6 +7,7 @@ import { startAttention } from '../notifications';
 import { agents } from './agents.svelte';
 import { analytics } from './analytics.svelte';
 import { connection } from './connection.svelte';
+import { copySync } from './copy-sync.svelte';
 import { lifecycle } from './lifecycle.svelte';
 import { machineUpdates } from './machine-updates.svelte';
 import { machines, relayUrl } from './machines.svelte';
@@ -60,6 +61,8 @@ const wire = (): void => {
   places.follow(scopes);
   agents.follow(scopes);
   scopes.follow(machines, tabs, (m) => createScope(m.id, m.client, { tabs, agents }));
+  // The local copy of each paired machine's chats, kept while it is connected.
+  copySync.init({ local: client, scopes, machines });
   // Power control: before the machines connect, so it sees each one added.
   power.init(client, machines);
   // Updating machines: likewise, so it hears each one open.
