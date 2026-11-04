@@ -63,6 +63,9 @@ export default defineConfig({
       env: {
         THREADGARDEN_MOCK_PORT: String(REMOTE_LOCAL_PORT),
         THREADGARDEN_MOCK_TOKEN: REMOTE_LOCAL_TOKEN,
+        // Long enough that a slow CI runner still sees each stage of a pretend update
+        // (three steps fit well within `expect.timeout`).
+        THREADGARDEN_MOCK_UPDATE_STEP_MS: '1500',
       },
       // The device listener speaks TLS; the port opening is the signal.
       port: REMOTE_MOCK_PORT,

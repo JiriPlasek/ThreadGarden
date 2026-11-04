@@ -66,8 +66,9 @@
  *
  * Updating (protocol 10): both mocks pretend to update, never touching systemd
  * or GitHub. `update.latest` answers `THREADGARDEN_MOCK_LATEST` (default
- * 0.99.0). `update.start` goes through the stages about 300 ms apart, then
- * pretends to restart: the devices' sockets drop, later `hello`s report the new
+ * 0.99.0). `update.start` goes through the stages about 300 ms apart
+ * (`THREADGARDEN_MOCK_UPDATE_STEP_MS` changes it), then pretends to restart:
+ * the devices' sockets drop, later `hello`s report the new
  * version and `update.status` is `done`. The mock-only methods (local callers
  * only) `mock.failNextUpdate {reason}` (the next update fails with it) and
  * `mock.setBusy {count}` (the chats an update would stop) steer it, and
@@ -932,8 +933,8 @@ export const MOCK_RESET_UPDATE = 'mock.resetUpdate';
 /** The release the main mock's `update.latest` answers; the env variable changes it. */
 const mockLatest = (): string => process.env.THREADGARDEN_MOCK_LATEST || '0.99.0';
 
-/** The step between two stages of a pretend update. */
-const UPDATE_STEP_MS = 300;
+/** The step between two stages of a pretend update; the env variable changes it. */
+const UPDATE_STEP_MS = Number(process.env.THREADGARDEN_MOCK_UPDATE_STEP_MS) || 300;
 
 const FailNextParams = z.object({ reason: UpdateFailureSchema });
 const SetBusyParams = z.object({ count: z.number().int().min(0) });

@@ -6,8 +6,9 @@ import { markAllSeen, openApp, remoteCall, resetTabs, serviceCall } from './help
  * Updating a machine from Settings (protocol 10) end to end: This PC (the mock
  * service) pairs with the headless mock "Ubuntu", which is behind the release
  * the main mock offers (0.99.0), and updates it. The remote mock only pretends
- * (stages 300 ms apart, then a pretend restart that changes its version), and
- * keeps that version for the rest of the run, so each test resets it.
+ * (stages 1.5 s apart, see `playwright.config.ts`, then a pretend restart that
+ * changes its version), and keeps that version for the rest of the run, so each
+ * test resets it.
  */
 const MACHINE = 'Ubuntu';
 const LATEST = '0.99.0';
