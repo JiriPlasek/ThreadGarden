@@ -922,6 +922,7 @@ describe('the service', () => {
       externalRun: async () => '[]',
       installSignalHandlers: false,
       headless: true,
+      host: null,
       remote: { addresses: ['127.0.0.1'], port: 0 },
       logger,
       update: { installBase, platform: 'linux', arch: 'x64', run: fakeRun().run },

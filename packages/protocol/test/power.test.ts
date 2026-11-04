@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
   CAPABILITIES,
+  MachineInfoSchema,
   PROTOCOL_VERSION,
   POWER_CAPABILITY,
   PlugReadingSchema,
   PowerConfigSchema,
+  SIGNED_IN,
   SettingsSchema,
   acceptsRemoteProtocol,
   events,
@@ -51,6 +53,25 @@ describe('power protocol', () => {
   it('allows never for idle shutdown, default 60', () => {
     expect(SettingsSchema.shape.idleShutdownMinutes.parse(null)).toBeNull();
     expect(SettingsSchema.parse({}).idleShutdownMinutes).toBe(60);
+  });
+
+  it('MachineInfoSchema parses with and without host', () => {
+    const machine = {
+      id: 'm1',
+      name: 'Den',
+      platform: 'linux',
+      headless: true,
+      home: '/home/u',
+      capabilities: ['remote'],
+    };
+    expect(MachineInfoSchema.parse({ ...machine, host: 'wsl' }).host).toBe('wsl');
+    // A machine from before the field (or not in WSL) says nothing, and still parses.
+    expect(MachineInfoSchema.parse(machine)).not.toHaveProperty('host');
+    expect(MachineInfoSchema.safeParse({ ...machine, host: 'windows' }).success).toBe(false);
+  });
+
+  it('names a signed-in person as the problem', () => {
+    expect(SIGNED_IN).toBe('Someone is signed in on this PC');
   });
 
   it('is protocol 10 and accepts machines at 9 to 11', () => {

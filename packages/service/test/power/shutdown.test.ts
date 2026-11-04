@@ -2,18 +2,28 @@ import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type {
-  ChatStatus,
-  EventMsg,
-  MachinePowerStatus,
-  PowerConfig,
-  Unpushed,
+import {
+  PROTOCOL_VERSION,
+  SIGNED_IN,
+  type ChatStatus,
+  type EventMsg,
+  type MachineInfo,
+  type MachinePowerStatus,
+  type PowerConfig,
+  type Unpushed,
 } from '@threadgarden/protocol';
 import { IdleMonitor } from '../../src/power/idle.js';
 import { ruleText } from '../../src/power/rules.js';
 import { DID_NOT_POWER_OFF, ShutdownSequence } from '../../src/power/shutdown.js';
 import { PowerStore } from '../../src/power/store.js';
 import { createSwitch } from '../../src/power/switch.js';
+import {
+  QUSER,
+  REG,
+  SHUTDOWN_EXE,
+  windowsHost,
+  type RunResult,
+} from '../../src/power/windows-host.js';
 import { registerPowerMachineHandlers } from '../../src/server/handlers/power.js';
 import { Router } from '../../src/server/router.js';
 import { startService } from '../../src/main.js';
@@ -63,7 +73,16 @@ type RigOptions = {
   offline?: () => boolean;
   /** Runs when the sequence stops the sessions (the cut is armed then, poweroff not yet sent). */
   onStopAll?: () => void | Promise<void>;
+  /**
+   * A worker in WSL: Windows answers `quser`, `reg` and `shutdown.exe` like this
+   * (a fake `run`; nothing real is ever started). Replaces `poweroff`.
+   */
+  windows?: { signedIn?: boolean; pending?: boolean; shutdown?: RunResult };
 };
+
+/** quser's answer with one person signed in at the console. */
+const QUSER_SIGNED_IN =
+  ' USERNAME   SESSIONNAME   ID  STATE   IDLE TIME  LOGON TIME\r\n>owner   console   1  Active   none   04/11/2026 09:12\r\n';
 
 /** Timers that fire only when told to (the start disarm's retries). */
 function manualTimers() {
@@ -104,7 +123,10 @@ async function rig(o: RigOptions = {}) {
   if (o.password !== null) store.save(config, o.password ?? 'pw');
 
   const clock = { now: 10_000_000 };
-  /** Event tga, Timer16 writes, stopAll and poweroff, in the order they happened. */
+  /**
+   * Event tga, RuleTimer8 0, Timer16 writes, stopAll and poweroff (or, in WSL, quser,
+   * reg and shutdown.exe), in the order they happened.
+   */
   const order: string[] = [];
   const idle = new IdleMonitor({
     sessions: () => o.sessions?.(order) ?? [],
@@ -125,11 +147,35 @@ async function rig(o: RigOptions = {}) {
       order.push('stopAll');
       await o.onStopAll?.();
     },
-    poweroff:
-      o.poweroff ??
-      (async () => {
-        order.push('poweroff');
-      }),
+    ...(o.windows
+      ? {
+          windows: windowsHost({
+            run: async (file, args) => {
+              const w = o.windows!;
+              if (file === QUSER) {
+                order.push('quser');
+                return w.signedIn
+                  ? { code: 0, stdout: QUSER_SIGNED_IN, stderr: '' }
+                  : { code: 1, stdout: '', stderr: 'No User exists for *\r\n' };
+              }
+              if (file === REG) {
+                order.push('reg');
+                // Only Windows Update's own key says a restart is pending here.
+                const hit = w.pending === true && args[1]!.endsWith('\\RebootRequired');
+                return { code: hit ? 0 : 1, stdout: '', stderr: '' };
+              }
+              order.push(`${file === SHUTDOWN_EXE ? 'shutdown.exe' : file} ${args.join(' ')}`);
+              return w.shutdown ?? { code: 0, stdout: '', stderr: '' };
+            },
+          }),
+        }
+      : {
+          poweroff:
+            o.poweroff ??
+            (async () => {
+              order.push('poweroff');
+            }),
+        }),
     check:
       o.check ??
       (async (d) => {
@@ -146,7 +192,9 @@ async function rig(o: RigOptions = {}) {
             throw Object.assign(new TypeError('fetch failed'), { cause: { code: 'EHOSTUNREACH' } });
           }
           const cmnd = new URL(String(input)).searchParams.get('cmnd') ?? '';
-          if (cmnd === 'Event tga' || cmnd.startsWith('Timer16 ')) order.push(cmnd);
+          if (cmnd === 'Event tga' || cmnd === 'RuleTimer8 0' || cmnd.startsWith('Timer16 ')) {
+            order.push(cmnd);
+          }
           return fetch(input, init);
         },
       });
@@ -884,6 +932,95 @@ describe('ShutdownSequence.idleTick (the minute tick)', () => {
   });
 });
 
+describe('ShutdownSequence.run on a worker in WSL', () => {
+  it('outside WSL the sequence is unchanged', async () => {
+    const r = await rig();
+    await r.seq.run({ force: false, reason: 'idle' });
+    // systemctl poweroff, the full 15-minute cut, and no question to Windows.
+    expect(r.order).toEqual(CLEAN);
+    expect(r.f.commands).not.toContain('RuleTimer8 0');
+  });
+
+  it('nobody signed in and no restart pending: shutdown.exe /s /t 0 after the full cut', async () => {
+    const r = await rig({ windows: {} });
+    const s = await r.seq.run({ force: false, reason: 'idle' });
+    expect(s).toMatchObject({ phase: 'shuttingDown', problem: null });
+    expect(r.order).toEqual([
+      'quser',
+      'reg',
+      'reg',
+      'reg',
+      'Event tga',
+      'Timer16 {"Enable":0}',
+      'stopAll',
+      'shutdown.exe /s /t 0',
+    ]);
+  });
+
+  it('idle shutdown with someone signed in settles SIGNED_IN and arms nothing', async () => {
+    const r = await rig({ windows: { signedIn: true } });
+    const s = await r.seq.run({ force: false, reason: 'idle' });
+    expect(s).toMatchObject({ phase: 'running', unpushed: [], problem: SIGNED_IN });
+    // Asked first: nothing else ran, not even the push check.
+    expect(r.order).toEqual(['quser']);
+    expect(r.checked).toEqual([]);
+    expect(r.f.commands).toEqual([]);
+    expect(r.emitted.at(-1)).toEqual(s);
+  });
+
+  it('forced Shut down now with someone signed in runs shutdown.exe /s /f /t 0', async () => {
+    const r = await rig({ windows: { signedIn: true } });
+    const s = await r.seq.run({ force: true, reason: 'manual' });
+    expect(s).toMatchObject({ phase: 'shuttingDown', problem: null });
+    expect(r.order).toEqual([
+      'reg',
+      'reg',
+      'reg',
+      'Event tga',
+      'Timer16 {"Enable":0}',
+      'stopAll',
+      'shutdown.exe /s /f /t 0',
+    ]);
+  });
+
+  it('a pending restart arms the cut and then sends RuleTimer8 0', async () => {
+    const r = await rig({ windows: { pending: true } });
+    const s = await r.seq.run({ force: false, reason: 'idle' });
+    expect(s).toMatchObject({ phase: 'shuttingDown', problem: null });
+    expect(r.order).toEqual([
+      'quser',
+      'reg',
+      'reg',
+      'reg',
+      'Event tga',
+      'RuleTimer8 0',
+      'Timer16 {"Enable":0}',
+      'stopAll',
+      'shutdown.exe /s /t 0',
+    ]);
+    // Straight after the arming (once tga started it): the 15-minute cut is off, the
+    // low-reading one stays armed.
+    const tga = r.f.commands.indexOf('Event tga');
+    expect(r.f.commands.slice(tga, tga + 3)).toEqual(['Event tga', 'RuleTimer8', 'RuleTimer8 0']);
+    expect(r.f.ruleTimers).toMatchObject({ 7: 5, 8: 0 });
+  });
+
+  it('a shutdown.exe that fails is reported as a refusal and disarms', async () => {
+    const r = await rig({
+      windows: { shutdown: { code: 1, stdout: '', stderr: 'Access is denied.(5)\r\n' } },
+    });
+    const s = await r.seq.run({ force: false, reason: 'idle' });
+    expect(s).toMatchObject({
+      phase: 'running',
+      problem: 'The machine refused to power off (Access is denied.(5))',
+    });
+    const tga = r.f.commands.indexOf('Event tga');
+    expect(r.f.commands.lastIndexOf('Event tgo')).toBeGreaterThan(tga);
+    expect(r.f.commands.lastIndexOf('Timer16 {"Enable":0}')).toBeGreaterThan(tga);
+    expect(r.emitted.at(-1)).toEqual(s);
+  });
+});
+
 describe('power.shutdown and power.status', () => {
   it('power.shutdown runs the sequence for a paired device; power.status shows its phase', async () => {
     const r = await rig({ found: [unpushed] });
@@ -917,7 +1054,10 @@ describe('power.shutdown and power.status', () => {
 });
 
 describe('the headless service', () => {
-  const start = (dir: string, o: { headless: boolean; poweroff: () => Promise<void> }) =>
+  const start = (
+    dir: string,
+    o: { headless: boolean; poweroff: () => Promise<void>; host?: 'wsl' | null },
+  ) =>
     startService({
       dataDir: join(dir, 'data'),
       claudeConfigDir: join(dir, 'claude-missing'),
@@ -925,6 +1065,8 @@ describe('the headless service', () => {
       installSignalHandlers: false,
       headless: o.headless,
       poweroff: o.poweroff,
+      // Never detected here: a test run inside WSL must not think it is a Windows worker.
+      host: o.host ?? null,
       ...(o.headless ? { remote: { addresses: ['127.0.0.1'], port: 0 } } : {}),
       logger: { debug() {}, info() {}, warn() {}, error() {}, flush: async () => {} },
     });
@@ -950,6 +1092,65 @@ describe('the headless service', () => {
       expect(res.result.phase).toBe('shuttingDown');
       expect(f.commands).toContain('Event tga');
       expect(powered).toBe(1);
+    } finally {
+      await svc.close();
+    }
+  });
+
+  /** `hello`'s machine from a service started with `o`. */
+  const helloMachine = async (o: {
+    headless: boolean;
+    host: 'wsl' | null;
+  }): Promise<MachineInfo> => {
+    const dir = await mkdtemp(join(tmpdir(), 'threadgarden-shutdown-host-'));
+    dirs.push(dir);
+    const svc = await start(dir, { ...o, poweroff: async () => {} });
+    try {
+      const res = (await svc.router.dispatch(
+        { id: 1, method: 'hello', params: { protocolVersion: PROTOCOL_VERSION, client: 't' } },
+        { clientId: 'l', origin: 'local' } as never,
+      )) as { result: { machine: MachineInfo } };
+      return res.result.machine;
+    } finally {
+      await svc.close();
+    }
+  };
+
+  it('hello reports host wsl on a WSL headless machine and omits it elsewhere', async () => {
+    expect(await helloMachine({ headless: true, host: 'wsl' })).toMatchObject({
+      host: 'wsl',
+      platform: process.platform,
+    });
+    expect(await helloMachine({ headless: true, host: null })).not.toHaveProperty('host');
+    // A desktop is never a worker, whatever it runs on.
+    expect(await helloMachine({ headless: false, host: 'wsl' })).not.toHaveProperty('host');
+  });
+
+  it('a poweroff passed in wins over Windows: no test or mock ever runs shutdown.exe', async () => {
+    const f = await startFakeTasmota({ password: 'pw' });
+    fakes.push(f);
+    const dir = await mkdtemp(join(tmpdir(), 'threadgarden-shutdown-wsl-'));
+    dirs.push(dir);
+    const config: PowerConfig = { ...cfg, address: f.address };
+    installRule(f, config);
+    await mkdir(join(dir, 'data'), { recursive: true });
+    new PowerStore(join(dir, 'data')).save(config, 'pw');
+    let powered = 0;
+    const svc = await start(dir, {
+      headless: true,
+      host: 'wsl',
+      poweroff: async () => void powered++,
+    });
+    try {
+      await expect.poll(() => f.commands.includes('Timer16 {"Enable":0}')).toBe(true);
+      const res = (await svc.router.dispatch(
+        { id: 1, method: 'power.shutdown', params: { force: true } } as never,
+        { clientId: 'p', origin: 'remote', deviceId: 'd' } as never,
+      )) as { result: MachinePowerStatus };
+      expect(res.result.phase).toBe('shuttingDown');
+      expect(powered).toBe(1);
+      // Without the Windows host, the cut is the full one.
+      expect(f.commands).not.toContain('RuleTimer8 0');
     } finally {
       await svc.close();
     }

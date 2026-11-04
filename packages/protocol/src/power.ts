@@ -78,6 +78,9 @@ export const MachinePowerStatusSchema = z.object({
 });
 export type MachinePowerStatus = z.infer<typeof MachinePowerStatusSchema>;
 
+/** The problem of an idle shutdown that a person signed in at a Windows worker kept on. */
+export const SIGNED_IN = 'Someone is signed in on this PC';
+
 export const POWER_ERRORS = {
   unreachable: 'POWER_UNREACHABLE',
   auth: 'POWER_AUTH',

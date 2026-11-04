@@ -18,7 +18,13 @@ export interface PowerSwitch {
   ensureInstalled(): Promise<void>;
   /** Clears our slot, Mem11-14 and Timer16, and nothing else. */
   uninstall(): Promise<void>;
-  armCut(): Promise<void>;
+  /**
+   * Installs, then arms the cut (`Event tga`). `maxTimer: false` then stops the
+   * 15-minute cut (`RuleTimer8 0`) as soon as tga has started it, so only the
+   * low-reading one stays armed: for a Windows shutdown that may install updates
+   * for longer than that. POWER_CONFLICT when the switch never shows it stopped.
+   */
+  armCut(opts?: { maxTimer?: boolean }): Promise<void>;
   disarm(): Promise<void>;
   /** Timer16 for local(at - 5 min) on that weekday, Repeat 0, Action 3; null disables it. */
   armWake(atMs: number | null): Promise<void>;
@@ -27,6 +33,10 @@ export interface PowerSwitch {
 }
 
 const WAKE_LEAD_MS = 5 * 60_000;
+/** How long `armCut({ maxTimer: false })` waits for tga to start the 15-minute cut… */
+const MAX_TIMER_WAIT_MS = 5_000;
+/** …and how often it looks. */
+const MAX_TIMER_POLL_MS = 100;
 const SLOTS = [1, 2, 3] as const;
 type Slot = (typeof SLOTS)[number];
 
@@ -95,6 +105,19 @@ export function createSwitch(
     if (typeof v !== 'string' && typeof v !== 'number') throw notTasmota(config.address);
     return String(v).toUpperCase() === 'ON' || String(v) === '1';
   };
+
+  /** Seconds left on RuleTimer8 (0: not running); the reply lists every rule timer. */
+  const ruleTimer8 = async (): Promise<number> => {
+    const v = field(await client.command('RuleTimer8'), 'T8');
+    if (typeof v !== 'number' && typeof v !== 'string') throw notTasmota(config.address);
+    return Number(v) || 0;
+  };
+
+  const maxTimerNotStopped = () =>
+    new PowerError(
+      POWER_ERRORS.conflict,
+      "The switch didn't stop its 15-minute cut, which a Windows update could run into.",
+    );
 
   const notInstalled = () =>
     new PowerError(
@@ -207,9 +230,20 @@ export function createSwitch(
       await client.command(`Timer${RESOURCES.timer} {"Enable":0}`);
     },
 
-    async armCut() {
+    async armCut(opts = {}) {
       await sw.ensureInstalled();
       await client.command('Event tga');
+      if (opts.maxTimer !== false) return;
+      // tga's Backlog starts RuleTimer8 900, the 15-minute cut (rules.ts), a moment later:
+      // Tasmota spaces Backlog commands about 200 ms apart. Stopped before then, it would
+      // start again, so it is stopped once it is seen running.
+      const deadline = now() + MAX_TIMER_WAIT_MS;
+      while ((await ruleTimer8()) === 0) {
+        if (now() >= deadline) throw maxTimerNotStopped();
+        await sleep(MAX_TIMER_POLL_MS);
+      }
+      const after = field(await client.command('RuleTimer8 0'), 'T8');
+      if (Number(after) !== 0) throw maxTimerNotStopped();
     },
 
     async disarm() {

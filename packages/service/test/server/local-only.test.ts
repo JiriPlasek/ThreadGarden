@@ -38,6 +38,7 @@ describe('methods a paired device may not call', () => {
       adapter: generateCorpus({ sessions: 1, projects: 1, bigSessionMessages: 0 }),
       installSignalHandlers: false,
       headless: true,
+      host: null,
       projectTools: fakeTools(),
       remote: { addresses: ['127.0.0.1'], port: 0 },
       logger: { debug() {}, info() {}, warn() {}, error() {}, flush: async () => {} },

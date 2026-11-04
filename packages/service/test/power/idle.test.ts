@@ -329,6 +329,7 @@ describe('power on a service', () => {
       adapter: generateCorpus({ sessions: 1, projects: 1, bigSessionMessages: 0 }),
       installSignalHandlers: false,
       headless,
+      host: null,
       ...(headless ? { remote: { addresses: ['127.0.0.1'], port: 0 } } : {}),
       logger: { debug() {}, info() {}, warn() {}, error() {}, flush: async () => {} },
     });
