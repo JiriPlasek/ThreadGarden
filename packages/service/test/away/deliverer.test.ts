@@ -482,6 +482,59 @@ describe('the away deliverer', () => {
     expect(t.calls.map((c) => c.params.text)).toEqual(['a', 'b']);
   });
 
+  it('a start-failed row goes once the link opens', async () => {
+    const t = setup();
+    t.plug.on = false;
+    const late = t.deliverer.queue({
+      machineId: 'm-1',
+      sessionId: SESSION,
+      kind: 'send',
+      text: 'late',
+    });
+    await settle(5 * 60_000 + 5_000);
+    expect(t.deliverer.list().items).toMatchObject([{ state: 'failed', reason: 'start' }]);
+    // A refused row of another chat waits for an explicit Retry (R9).
+    t.queue.fail(
+      t.queue.add({ machineId: 'm-1', sessionId: OTHER, kind: 'send', text: 'no' }).id,
+      'refused',
+      'No such chat',
+    );
+    // It came up after the window: this desktop's link to it opened.
+    t.machine.up = true;
+    t.deliverer.onReachable('m-1');
+    await settle();
+    expect(t.calls.map((c) => c.params.text)).toEqual(['late']);
+    expect(t.calls[0]?.params.messageId).toBe(late.id);
+    expect(t.deliverer.list().items).toMatchObject([
+      { sessionId: OTHER, state: 'failed', reason: 'refused' },
+    ]);
+  });
+
+  it('a link opening with nothing failed to start changes nothing', async () => {
+    const t = setup();
+    t.deliverer.onReachable('m-1');
+    t.deliverer.onReachable('m-9');
+    await settle();
+    expect(t.connect).not.toHaveBeenCalled();
+    expect(t.events).toEqual([]);
+  });
+
+  it('the follow-up after a start failure reaches the machine after the original', async () => {
+    const t = setup();
+    t.plug.on = false;
+    t.deliverer.queue({ machineId: 'm-1', sessionId: SESSION, kind: 'send', text: 'original' });
+    await settle(5 * 60_000 + 5_000);
+    expect(t.deliverer.list().items).toMatchObject([{ state: 'failed', reason: 'start' }]);
+    // The machine is up and the desktop's link open; the follow-up goes through the
+    // queue (the chat has a row that isn't refused), so it can't overtake the original.
+    t.machine.up = true;
+    t.deliverer.queue({ machineId: 'm-1', sessionId: SESSION, kind: 'send', text: 'follow-up' });
+    t.deliverer.onReachable('m-1');
+    await settle();
+    expect(t.calls.map((c) => c.params.text)).toEqual(['original', 'follow-up']);
+    expect(t.deliverer.list().items).toEqual([]);
+  });
+
   it('a new message behind a refused one in its chat fails with it', async () => {
     const t = setup();
     t.machine.up = true;

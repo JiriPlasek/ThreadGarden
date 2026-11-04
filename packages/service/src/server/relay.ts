@@ -75,6 +75,8 @@ export const createRelay = (deps: {
    * machine and why, never a frame or token).
    */
   onLinkFailed?: (machineId: string, err: unknown) => void;
+  /** A link opened: the machine is reachable now (its away messages may go). */
+  onLinkOpened?: (machineId: string) => void;
 }): Relay => {
   const relays = new Map<WebSocket, { machineId: string; end(code: number): void }>();
   /** Set by `close()`: the service is stopping, no new links. */
@@ -143,6 +145,7 @@ export const createRelay = (deps: {
       linked = true;
       for (const f of waiting.splice(0)) remote.send(f.data, { binary: f.binary });
       waitingBytes = 0;
+      deps.onLinkOpened?.(machine.id);
       let answered = true;
       remote.on('pong', () => {
         answered = true;

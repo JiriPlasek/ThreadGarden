@@ -485,6 +485,34 @@ describe('relay', () => {
     ws.close();
   });
 
+  it('tells which machine its link opened to, and not for one that never opened', async () => {
+    const opened: string[] = [];
+    const r = createRelay({
+      machines: { get: machineAt, token: (id) => (id === 'm-1' ? TOKEN : null) },
+      linkTimeoutMs: 300,
+      onLinkOpened: (id) => opened.push(id),
+    });
+    const s = await startWsServer({
+      token: 't',
+      router: new Router(),
+      relay: r,
+      onClientCountChange: () => {},
+    });
+    try {
+      const ws = await openRelayAt(s.port, 't', 'm-1');
+      ws.send('ping');
+      expect(await nextFrame(ws)).toEqual({ data: 'ping', binary: false });
+      expect(opened).toEqual(['m-1']);
+      ws.close();
+      const unknown = await openRelayAt(s.port, 't', 'm-2');
+      expect(await closeCode(unknown)).toBe(4404);
+      expect(opened).toEqual(['m-1']);
+    } finally {
+      r.close();
+      await s.close();
+    }
+  });
+
   it('counts relays as clients and sends them no local events', async () => {
     const ws = await open();
     expect(counts).toEqual([1]);

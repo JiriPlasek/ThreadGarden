@@ -211,6 +211,18 @@ export class AwayDeliverer {
     if (this.d.queue.waitingMachines().includes(machineId)) this.kick();
   }
 
+  /**
+   * A link to the machine opened (the relay's, for this desktop's own window):
+   * it is up after all, so the rows its start gave up on wait again and go now
+   * (ruling R17). A row the machine refused still waits for Retry (R9).
+   */
+  onReachable(machineId: string): void {
+    if (!this.d.queue.retry(machineId, 'start')) return;
+    this.attempts.delete(machineId);
+    this.changed();
+    this.kick();
+  }
+
   /** Rows wait to go out (the local service stays up for them). */
   waiting(): boolean {
     return this.d.queue.hasWaiting();
