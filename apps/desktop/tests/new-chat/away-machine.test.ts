@@ -219,6 +219,13 @@ const sendFirst = async (env: Env): Promise<string> => {
   await userEvent.selectOptions(folder, '/work/infra');
   await userEvent.type(message(dialog), 'Set up CI{Enter}');
   await waitFor(() => expect(queued(env)).toHaveLength(1));
+  // Sending ends when the dialog is gone: it unmounts a frame or more after it
+  // closes, and gives the page its pointer back after that. Until then a click
+  // in the chat is blocked, and its composer is not the only "message" box.
+  await waitFor(() => {
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.body.style.pointerEvents).not.toBe('none');
+  });
   return queued(env)[0]!.sessionId;
 };
 
