@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { ImageRef, ScheduledSend } from '@threadgarden/protocol';
+  import type { AwayItem, ImageRef, ScheduledSend } from '@threadgarden/protocol';
   import ArrowRightLeftIcon from '@lucide/svelte/icons/arrow-right-left';
   import CheckIcon from '@lucide/svelte/icons/check';
   import GaugeIcon from '@lucide/svelte/icons/gauge';
@@ -9,14 +9,17 @@
   import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
   import Composer from '#lib/components/composer/Composer.svelte';
   import SetupScreen from '#lib/components/SetupScreen.svelte';
-  import { clockTime, sendTimeText } from '#lib/format/usage.js';
+  import { imageCountText } from '#lib/format/images.js';
+  import { agoText, clockTime, sendTimeText } from '#lib/format/usage.js';
   import { rowPx } from '#lib/interface-scale.js';
   import { retryOldCopy } from '#lib/move/move-chat.svelte.js';
   import { copyText } from '#lib/native.js';
   import { RequestError } from '#lib/service/client.js';
   import type { ResumeCheck } from '#lib/state/chats.svelte.js';
   import { useApp, useScope } from '#lib/state/context.js';
-  import { machineNameOf } from '#lib/state/machines.svelte.js';
+  import { holdsBack } from '#lib/state/away.svelte.js';
+  import { awayRefusal } from '#lib/state/copy-api.js';
+  import { machineAway as isAway, machineNameOf } from '#lib/state/machines.svelte.js';
   import { chatKey, type ChatRef } from '#lib/state/refs.js';
   import type { SendWhen } from '#lib/state/scheduled.svelte.js';
   import ActivityPanel from './ActivityPanel.svelte';
@@ -45,11 +48,26 @@
    *
    * A chat moved away (move-chat §6) is this machine's read-only old copy:
    * instead of the composer it says where it went, with a link to it there.
+   *
+   * A machine that is away (away machine spec): its chat is read from this
+   * device's copy, marked as one, with its last few messages. A message
+   * written now waits on this device (`away.queue`, through the scope's copy
+   * API) and shows below the chat with what happens next, Cancel and, after a
+   * failure, Retry. A request Claude was waiting on is answered by typing: the
+   * answer goes out as the next message. A machine too old to take a message
+   * exactly once can't be written to until it is updated; nor can one never
+   * seen, or one whose link can't open (`awayRefusal`). The note says "is off"
+   * only when the machine shows as Off, else "isn't connected".
+   *
+   * A new chat started while its machine is away is known only from the queue
+   * until the machine makes it: "Starting ‹machine›…" with its first message
+   * waiting. Once that message has gone out and the machine is connected, the
+   * same tab reads the machine's own chat (its id was chosen on this device).
    */
   let { ref }: { ref: ChatRef } = $props();
 
   const app = useApp();
-  const { tabs, settings, usageAccounts, machines, interaction: appInteraction } = app;
+  const { tabs, settings, usageAccounts, machines, interaction: appInteraction, away } = app;
   /** The chat's machine (`ChatPane` shows it inside that machine's scope). */
   const scope = useScope();
   const { chats, interaction, scheduled } = scope;
@@ -81,6 +99,109 @@
     } finally {
       noteSending = false;
     }
+  };
+
+  // ── a machine that is away ──────────────────────────────────────────────
+
+  const entry = $derived(machines.get(scope.machineId));
+  /** Not connected to the chat's machine: messages wait on this device. */
+  const machineAway = $derived(isAway(machines, scope.machineId));
+  /** When the copy this chat shows was made (null: the chat is the machine's own). */
+  const copiedAt = $derived(chat?.copiedAt ?? null);
+  /**
+   * Nothing runs it here and now: a copy, or a chat read live whose machine
+   * then went away. Its requests can't be answered (a typed answer waits as
+   * the next message), and it has no Stop, no fork and no live pickers.
+   */
+  const readOnly = $derived(copiedAt !== null || machineAway);
+  /**
+   * Why a message can't wait here for the machine (too old to take one
+   * exactly once, never seen, or a link that can't open), or null.
+   */
+  const queueRefusal = $derived(
+    awayRefusal(machineName, {
+      hello: entry?.info,
+      copied: scope.copy?.info,
+      status: entry?.status,
+    }),
+  );
+  /** The state the machine shows (Off, Unreachable, …), as in the places column. */
+  const shown = $derived(entry ? machines.shown(entry) : 'on');
+  /** Its plug reads off, or this device is turning it on. */
+  const turningOn = $derived(
+    shown === 'off' || shown === 'starting' || away.starting(scope.machineId),
+  );
+  /** What the note above a chat read from here says: Off only when it shows as Off. */
+  const awayAs = $derived(
+    shown === 'off' ? `${machineName} is off` : `${machineName} isn't connected`,
+  );
+  const waiting = $derived(away.items(ref));
+  /** A message of this chat still to go: later ones wait behind it, and none is scheduled. */
+  const heldBack = $derived(holdsBack(waiting));
+  /** The first message of a new chat its machine hasn't made yet. */
+  const firstWaiting = $derived(waiting.find((w) => w.kind === 'create'));
+  /** A new chat known only from the queue: "Starting ‹machine›…" until it's made. */
+  const fromQueue = $derived(chat?.fromQueue === true);
+
+  // A tab restored for a chat only in the queue: neither the machine nor the
+  // copy has it, so it is shown from its waiting first message.
+  $effect(() => {
+    const first = firstWaiting;
+    if (!first || chat?.loaded) return;
+    untrack(() => chats.waitingNew(sessionId, { cwd: first.cwd ?? '', text: first.text }));
+  });
+
+  // Its first message went out and the machine is connected: the same tab
+  // becomes the machine's own chat.
+  $effect(() => {
+    if (fromQueue && !machineAway && !firstWaiting) untrack(() => chats.made(sessionId));
+  });
+
+  let copyNow = $state(Date.now());
+  $effect(() => {
+    if (copiedAt === null) return;
+    copyNow = Date.now();
+    const timer = setInterval(() => (copyNow = Date.now()), 30_000);
+    return () => clearInterval(timer);
+  });
+
+  const waitingLine = (w: AwayItem): string => {
+    if (w.state === 'failed') {
+      return w.reason === 'start'
+        ? `${machineName} didn't come up`
+        : (w.error ?? 'Something went wrong.');
+    }
+    if (w.state === 'sending') return 'Sending…';
+    return turningOn
+      ? `⏳ Waiting for ${machineName} — turning it on, sends when it's up. Keep this device awake.`
+      : `⏳ Waiting for ${machineName} — sends when it's reachable.`;
+  };
+
+  /**
+   * Takes back a waiting message. Without its first message a new chat will
+   * never be made: the messages written after it go too, and so does its tab.
+   * They go only once it is taken back: one that went out meanwhile made the
+   * chat, and they still belong to it.
+   */
+  const cancelWaiting = async (w: AwayItem): Promise<void> => {
+    sendError = null;
+    const whole = w.kind === 'create' && fromQueue;
+    const later = whole ? waiting.filter((x) => x.id !== w.id).map((x) => x.id) : [];
+    try {
+      await away.cancel(w.id);
+      if (!whole) return;
+      await Promise.all(later.map((id) => away.cancel(id)));
+      tabs.close(ref);
+    } catch (err) {
+      sendError = err instanceof Error ? err.message : String(err);
+    }
+  };
+
+  const retryWaiting = (): void => {
+    sendError = null;
+    away.retry(scope.machineId).catch((err: unknown) => {
+      sendError = err instanceof Error ? err.message : String(err);
+    });
   };
 
   /** The source still lists its old copy of this moved chat (`move.markMoved` failed, R2): Retry. */
@@ -296,7 +417,7 @@
 
   // ── interrupt ───────────────────────────────────────────────────────────
 
-  const working = $derived(chat?.ownedLive === true && chat.status === 'working');
+  const working = $derived(!readOnly && chat?.ownedLive === true && chat.status === 'working');
 
   const interrupt = (): void => {
     chats.interrupt(sessionId).catch((err: unknown) => {
@@ -465,7 +586,7 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="flex min-h-0 flex-1 flex-col" bind:this={root} {onkeydown}>
   {#if chat}
-    <ChatHeader {chat} activityOpen={activityShown} onToggleActivity={toggleActivity} />
+    <ChatHeader {chat} {readOnly} activityOpen={activityShown} onToggleActivity={toggleActivity} />
   {/if}
   {#if forkError}
     <div class="bg-destructive/10 text-destructive shrink-0 px-4 py-1 text-xs" role="alert">
@@ -490,7 +611,33 @@
             {chat.error}
           </div>
         {/if}
-        {#if chat.items.length === 0}
+        {#if fromQueue}
+          <!-- A first message that failed says why in its row below, with Retry. -->
+          {#if firstWaiting?.state !== 'failed'}
+            <div class="mx-auto w-full max-w-4xl shrink-0 px-4 pt-2 text-xs">
+              <p class="bg-muted/60 rounded-md border px-3 py-1.5" role="status">
+                Starting {machineName}…
+              </p>
+            </div>
+          {/if}
+        {:else if copiedAt !== null}
+          <div class="mx-auto w-full max-w-4xl shrink-0 space-y-1 px-4 pt-2 text-xs">
+            <p class="bg-muted/60 rounded-md border px-3 py-1.5" role="status">
+              {awayAs}: showing its last few messages, from {agoText(copiedAt, copyNow)}.
+            </p>
+            <p class="text-muted-foreground px-1">… earlier messages are on {machineName}</p>
+          </div>
+        {:else if machineAway}
+          <div class="mx-auto w-full max-w-4xl shrink-0 px-4 pt-2 text-xs">
+            <p class="bg-muted/60 rounded-md border px-3 py-1.5" role="status">
+              {awayAs}: showing the chat as it was
+            </p>
+          </div>
+        {/if}
+        {#if fromQueue}
+          <!-- Its first message waits below, with what happens next. -->
+          <div class="min-h-0 flex-1"></div>
+        {:else if chat.items.length === 0}
           <div
             class="text-muted-foreground flex min-h-0 flex-1 items-center justify-center text-sm"
           >
@@ -503,8 +650,8 @@
             hasMore={chat.hasMore}
             loadingOlder={chat.loadingOlder}
             onLoadOlder={() => void chats.loadOlder(sessionId)}
-            onFork={fork}
-            {requests}
+            onFork={readOnly ? undefined : fork}
+            requests={readOnly ? undefined : requests}
             memory={chat.view}
             stickRequests={chat.stickRequests}
           />
@@ -589,7 +736,19 @@
                 onDismiss={() => (dismissedSetup = setupItem.id)}
               />
             {/if}
-            {#if pending.length > 0}
+            {#if pending.length > 0 && readOnly}
+              <!-- Its process ended with the machine: the answer goes out as a message. -->
+              <div
+                class="flex items-center gap-2 rounded-md bg-amber-500/10 px-3 py-1 text-xs text-amber-900 dark:text-amber-200"
+                role="status"
+              >
+                <HandIcon class="size-4 shrink-0" aria-hidden="true" />
+                <span class="flex-1"
+                  >Claude asked this before {machineName} went off. Type your answer below; it's sent
+                  as your next message.</span
+                >
+              </div>
+            {:else if pending.length > 0}
               <div
                 class="flex items-center gap-2 rounded-md bg-amber-500/10 px-3 py-1 text-xs text-amber-900 dark:text-amber-200"
               >
@@ -662,8 +821,51 @@
               editingId={editingSend?.id}
               onEdit={(s) => void startEdit(s)}
             />
+            {#each waiting as w (w.id)}
+              <div
+                class="space-y-1 rounded-md border px-3 py-1.5 text-xs"
+                role="group"
+                aria-label="Waiting for {machineName}"
+                data-away-item
+              >
+                {#if w.text}
+                  <p class="text-sm break-words whitespace-pre-wrap">{w.text}</p>
+                {/if}
+                {#if w.imageCount > 0}
+                  <p class="text-muted-foreground">{imageCountText(w.imageCount)}</p>
+                {/if}
+                <div class="flex items-center gap-2">
+                  <p
+                    class={w.state === 'failed'
+                      ? 'text-destructive min-w-0 flex-1'
+                      : 'text-muted-foreground min-w-0 flex-1'}
+                  >
+                    {waitingLine(w)}
+                  </p>
+                  {#if w.state === 'failed'}
+                    <button
+                      type="button"
+                      class="bg-background hover:bg-muted inline-flex h-6 shrink-0 items-center rounded border px-2"
+                      onclick={retryWaiting}>Retry</button
+                    >
+                  {/if}
+                  {#if w.state !== 'sending'}
+                    <button
+                      type="button"
+                      class="bg-background hover:bg-muted inline-flex h-6 shrink-0 items-center rounded border px-2"
+                      onclick={() => void cancelWaiting(w)}>Cancel</button
+                    >
+                  {/if}
+                </div>
+              </div>
+            {/each}
             {#if sendError}
               <p class="text-destructive text-xs" role="alert">{sendError}</p>
+            {/if}
+            {#if machineAway && queueRefusal}
+              <p class="text-xs text-amber-900 dark:text-amber-200" role="status">
+                {queueRefusal}
+              </p>
             {/if}
             <Composer
               bind:this={composer}
@@ -676,11 +878,12 @@
               onSubmit={submit}
               onInterrupt={interrupt}
               {onControl}
-              onSchedule={schedule}
+              onSchedule={machineAway || heldBack ? undefined : schedule}
               {resetAt}
               limited={refusal !== undefined}
               {editing}
               autofocus={focusComposer}
+              disabled={machineAway && queueRefusal !== null}
             />
           </div>
         {/if}

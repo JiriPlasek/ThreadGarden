@@ -8,7 +8,12 @@ import {
   type ScheduledSend,
 } from '@threadgarden/protocol';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { MoveChat, RECONNECT_WAIT_MS, START_WAIT_MS } from '../../src/lib/move/move-chat.svelte';
+import {
+  markOldCopy,
+  MoveChat,
+  RECONNECT_WAIT_MS,
+  START_WAIT_MS,
+} from '../../src/lib/move/move-chat.svelte';
 import { moveNote } from '../../src/lib/move/note';
 import type { AppState } from '../../src/lib/state/context';
 import { LOCAL, M1, machineInfo, setupTwoMachines, summary } from '../layout/harness';
@@ -894,4 +899,34 @@ describe('MoveChat', () => {
     expect(remote.calls('move.commit')).toHaveLength(0);
     expect(app.tabs.open).toEqual([`${LOCAL}/s1`]);
   });
+});
+
+describe('a source that is away', () => {
+  it('a markMoved asked while the source is away is asked again once it is back', async () => {
+    const { app, remote } = await setupTwoMachines({
+      configureRemote: (s) => (s.handlers['move.markMoved'] = () => ({})),
+    });
+    apps.push(app);
+    remote.refuse = true;
+    remote.drop();
+    await vi.waitFor(() => expect(app.machines.get(M1)?.status).toBe('unreachable'));
+    // Asked now, it is answered by the copy here (AWAY), not by the machine.
+    const marked = markOldCopy(
+      app,
+      { machineId: LOCAL, sessionId: 's1' },
+      {
+        source: M1,
+        exportId: 'e1',
+        begunAt: 1,
+        to: { machineId: LOCAL, name: 'This PC' },
+        problem: null,
+      },
+      { retryMs: 0 },
+    );
+    await new Promise((r) => setTimeout(r, 50));
+    remote.refuse = false;
+    expect(await marked).toBe('done');
+    expect(remote.calls('move.markMoved')).toHaveLength(1);
+    expect(app.interaction.pendingMarks).toEqual({});
+  }, 20_000);
 });

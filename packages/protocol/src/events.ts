@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { AwayItemSchema, AwayStateSchema } from './away.js';
 import { ChatHeaderInfoSchema, ChatStatusSchema } from './chat.js';
 import { ChatItemSchema } from './items.js';
 import { PairedMachineSchema } from './machines.js';
@@ -88,6 +89,8 @@ export const events = {
   'power.changed': MachinePowerStatusSchema,
   /** Protocol 10: this machine's update changed stage or ended. */
   'update.progress': UpdateStatusSchema,
+  /** Protocol 11, local only: every waiting message and machine being started (as `away.list` without a machine). */
+  'away.changed': z.object({ items: z.array(AwayItemSchema), states: z.array(AwayStateSchema) }),
 } as const;
 
 export type EventName = keyof typeof events;

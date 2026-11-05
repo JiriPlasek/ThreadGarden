@@ -74,6 +74,14 @@
  * `mock.setBusy {count}` (the chats an update would stop) steer it, and
  * `mock.resetUpdate` puts it back to its start. The
  * `update` capability is offered on every OS.
+ *
+ * A machine that's away (away machine spec): the remote mock's mock-only
+ * methods (local callers only) `mock.goAway` (it is switched off: its devices'
+ * sockets drop, no device gets in, as a PC without power never answers, and
+ * its plug `MockPlug` is off, 0 W) and `mock.comeBack` (on again at once).
+ * Its plug switched on through the fake Tasmota while it's away, as
+ * Threadgarden does to deliver a message, brings it back about 2 s later
+ * (`MOCK_BOOT_MS`). The main mock has neither method.
  */
 import { randomUUID } from 'node:crypto';
 import { appendFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -101,7 +109,7 @@ import {
 } from '../machine/devices.js';
 import { startService, type ServiceHandle } from '../main.js';
 import { CREATE_IN_KEY } from '../projects/maker.js';
-import { startFakeTasmota, type FakeTasmota } from './fake-tasmota.js';
+import { startFakeTasmota, type FakeDevice, type FakeTasmota } from './fake-tasmota.js';
 import type { MoveGit } from '../server/handlers/move.js';
 import { ServiceError } from '../server/router.js';
 import type { Updater } from '../update/updater.js';
@@ -924,6 +932,82 @@ const fixedPairingRandom = (code: string): ((n: number) => Buffer) => {
 /** The mock's own test reset (see the file comment); not a protocol method. */
 export const MOCK_FORGET_MOVES = 'mock.forgetMoves';
 
+/** A machine that's away (see the file comment): the remote mock goes off, and comes back. */
+export const MOCK_GO_AWAY = 'mock.goAway';
+export const MOCK_COME_BACK = 'mock.comeBack';
+/** How long the remote mock takes to boot once its plug is switched on while it's away. */
+export const MOCK_BOOT_MS = 2_000;
+
+/**
+ * The remote mock as a machine that can be switched off (away machine spec).
+ * Away, every device link is cut and no new one gets in, as a PC without
+ * power never answers, and its plug is off (0 W). The plug switched on through
+ * the fake Tasmota, as Threadgarden does to deliver a message, brings it back
+ * `MOCK_BOOT_MS` later; `comeBack` brings it back at once.
+ */
+class MockPresence {
+  private away = false;
+  private booting: ReturnType<typeof setTimeout> | undefined;
+  private svc: ServiceHandle | undefined;
+  private plug: FakeDevice | undefined;
+
+  /** What the device listener asks before letting anyone in. */
+  readonly reachable = (): boolean => !this.away;
+
+  /** The service exists only after this (`reachable` is passed to `startService`). */
+  attach(svc: ServiceHandle): void {
+    this.svc = svc;
+    svc.onClosed(() => this.stopBooting());
+  }
+
+  /** The machine's plug on the fake switch, which tells this when it is switched on. */
+  makePlug(): FakeDevice {
+    let on = true;
+    const switchedOn = (): void => this.switchedOn();
+    this.plug = {
+      name: 'MockPlug',
+      watts: 47,
+      get on() {
+        return on;
+      },
+      set on(value: boolean) {
+        const was = on;
+        on = value;
+        if (value && !was) switchedOn();
+      },
+    };
+    return this.plug;
+  }
+
+  goAway(): void {
+    this.stopBooting();
+    this.away = true;
+    this.svc?.dropDevices();
+    if (this.plug) this.plug.on = false;
+  }
+
+  comeBack(): void {
+    this.stopBooting();
+    this.away = false;
+    if (this.plug) this.plug.on = true;
+  }
+
+  /** Power came back while away: the machine boots. */
+  private switchedOn(): void {
+    if (!this.away || this.booting) return;
+    this.booting = setTimeout(() => {
+      this.booting = undefined;
+      this.away = false;
+    }, MOCK_BOOT_MS);
+    this.booting.unref();
+  }
+
+  private stopBooting(): void {
+    clearTimeout(this.booting);
+    this.booting = undefined;
+  }
+}
+
 /** Updating (protocol 10): the next update fails with `reason`; the busy count `update.start` sees. */
 export const MOCK_FAIL_NEXT_UPDATE = 'mock.failNextUpdate';
 export const MOCK_SET_BUSY = 'mock.setBusy';
@@ -1050,12 +1134,27 @@ const invalid = (id: number, message: string) => ({
   error: { code: 'INVALID_PARAMS', message },
 });
 
-/** Answers the mock-only methods from local callers before the router sees them. */
-const addMockMethods = (svc: ServiceHandle, updater: MockUpdater): void => {
+/**
+ * Answers the mock-only methods from local callers before the router sees them;
+ * `mock.goAway` and `mock.comeBack` only on the remote mock (`presence`).
+ */
+const addMockMethods = (
+  svc: ServiceHandle,
+  updater: MockUpdater,
+  presence: MockPresence | undefined,
+): void => {
   const dispatch = svc.router.dispatch.bind(svc.router);
   svc.router.dispatch = async (req, ctx) => {
     if (ctx.origin !== 'local') return dispatch(req, ctx);
     switch (req.method) {
+      case MOCK_GO_AWAY:
+        if (!presence) return dispatch(req, ctx);
+        presence.goAway();
+        return { id: req.id, result: {} };
+      case MOCK_COME_BACK:
+        if (!presence) return dispatch(req, ctx);
+        presence.comeBack();
+        return { id: req.id, result: {} };
       case MOCK_FORGET_MOVES:
         await svc.forgetMoves();
         return { id: req.id, result: {} };
@@ -1132,6 +1231,7 @@ export const startMockService = async (o: MockOptions = {}): Promise<MockService
       ]
     : [];
 
+  const presence = remote ? new MockPresence() : undefined;
   let fakeTasmota: FakeTasmota | undefined;
   try {
     if (o.fakeTasmota) {
@@ -1141,7 +1241,10 @@ export const startMockService = async (o: MockOptions = {}): Promise<MockService
         port: o.fakeTasmota.port,
       });
       fakeTasmota.devices.clear();
-      fakeTasmota.devices.set('0x863B', { name: 'MockPlug', on: true, watts: 47 });
+      fakeTasmota.devices.set(
+        '0x863B',
+        presence?.makePlug() ?? { name: 'MockPlug', on: true, watts: 47 },
+      );
     }
     const updater = new MockUpdater();
     const svc = await startService({
@@ -1170,13 +1273,18 @@ export const startMockService = async (o: MockOptions = {}): Promise<MockService
         ? {
             headless: true,
             // Test-only: loopback (Ruling R4). `bin.ts` lets the service find its private addresses.
-            remote: { port: remote.port, addresses: ['127.0.0.1'] },
+            remote: {
+              port: remote.port,
+              addresses: ['127.0.0.1'],
+              reachable: presence!.reachable,
+            },
             pairingRandom: fixedPairingRandom(remote.pairingCode),
           }
         : {}),
     });
     updater.attach(svc);
-    addMockMethods(svc, updater);
+    presence?.attach(svc);
+    addMockMethods(svc, updater, presence);
     if (remote) {
       // The real service retries a listener that failed to start; a test mock must say so at once.
       if (!svc.remote) {

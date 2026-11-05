@@ -300,6 +300,8 @@ describe('a new chat on another machine', () => {
     await userEvent.type(within(dialog).getByRole('textbox', { name: /message/i }), 'hi{Enter}');
     await waitFor(() => expect(remote.calls('chat.create')).toHaveLength(1));
     expect(remote.calls('chat.create')[0]!.params).toMatchObject({ cwd: '/home/jiri' });
+    // A connected machine names the chat itself, as it always did.
+    expect(remote.calls('chat.create')[0]!.params).not.toHaveProperty('sessionId');
     expect(server.calls('chat.create')).toHaveLength(0);
     await waitFor(() => expect(app.tabs.active).toBe(`${M1}/new-id`));
   });

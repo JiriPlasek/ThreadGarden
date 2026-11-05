@@ -106,8 +106,18 @@ export class SessionHost {
     this.reclaimTimer = undefined;
   }
 
-  create(cwd: string, firstMessage: UserInput, choices: SessionChoices = {}): LiveSession {
-    const s = LiveSession.create(cwd, firstMessage, this.options(choices));
+  /** `sessionId` is the client's own id for the chat; none, and the session picks one. */
+  create(
+    cwd: string,
+    firstMessage: UserInput,
+    choices: SessionChoices = {},
+    sessionId?: string,
+  ): LiveSession {
+    const s = LiveSession.create(
+      cwd,
+      firstMessage,
+      this.options({ ...choices, ...(sessionId === undefined ? {} : { sessionId }) }),
+    );
     this.sessions.set(s.sessionId, s);
     return s;
   }

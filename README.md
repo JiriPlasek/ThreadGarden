@@ -36,6 +36,7 @@ It uses your own `claude` install and login, through the official Agent SDK. Not
 - **Usage meter** per Claude account, and "send when the limit resets".
 - **Remote machines:** run chats on another computer from the same window. Start a project, clone a repo, or move a chat there with its whole conversation, and update it from Settings.
 - **Power:** turn a remote machine on and off through a Tasmota smart plug.
+- **Away machines:** read an off machine's chats from a local copy; a reply waits and goes out once it's on.
 - Analytics, a quick switcher (Ctrl+K), keyboard shortcuts (Ctrl+/ lists them) and themes.
 
 ## Install
@@ -140,7 +141,7 @@ There's no Threadgarden account; it uses whatever Claude Code uses. Anthropic's 
 - After Claude Code compacts a chat, history starts at the compaction.
 - Clicking a notification brings the window forward, but doesn't open the chat.
 - A moved chat isn't listed by `claude --resume` on its new machine, and can't be forked yet.
-- A machine's chats aren't shown while it's off.
+- A machine that's off shows only the last few messages of each chat.
 - macOS and Linux pass CI but haven't seen much real use.
 
 ## License

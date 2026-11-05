@@ -11,11 +11,11 @@ import {
   methods,
 } from '../src/index.js';
 
-describe('protocol 10', () => {
-  it('PROTOCOL_VERSION is 10 and the remote range is 9..11', () => {
-    expect(PROTOCOL_VERSION).toBe(10);
-    expect(REMOTE_PROTOCOL_RANGE).toEqual({ min: 9, max: 11 });
-    expect([8, 9, 10, 11, 12].map(acceptsRemoteProtocol)).toEqual([false, true, true, true, false]);
+describe('protocol 10 (update)', () => {
+  it('PROTOCOL_VERSION is 11 and the remote range is 10..12', () => {
+    expect(PROTOCOL_VERSION).toBe(11);
+    expect(REMOTE_PROTOCOL_RANGE).toEqual({ min: 10, max: 12 });
+    expect([9, 10, 11, 12, 13].map(acceptsRemoteProtocol)).toEqual([false, true, true, true, false]);
   });
 
   it('has the update capability and error codes', () => {

@@ -329,7 +329,8 @@
             onToggle={() => machines.setCollapsed(id, !collapsed)}
           />
           {#if !collapsed}
-            {#if machines.shown(group.machine) === 'off'}
+            {#if machines.shown(group.machine) === 'off' && !group.scope.copy?.has}
+              <!-- Never seen by this device: there is no copy of its chats to show. -->
               <p class="text-muted-foreground px-2 text-xs">Its chats appear once it's on.</p>
             {:else}
               {@render projects(group.scope)}

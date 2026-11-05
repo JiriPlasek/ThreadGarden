@@ -459,11 +459,12 @@ export class LiveSession {
   // ── input and controls ──────────────────────────────────────────────────
 
   /** Sends user input; while a turn is in progress it is queued (`priority: 'next'`). */
-  send(input: UserInput): { queued: boolean } {
+  send(input: UserInput, onSubmitted?: () => void): { queued: boolean } {
     const session = this.requireLive();
     const queued = BUSY.has(this.statusValue);
     const uuid = randomUUID();
     session.send(toUserMessage(input, uuid, queued));
+    onSubmitted?.(); // the message is with Claude; what follows is only our bookkeeping
     if (queued) this.queuedInputs++;
     this.firstText ??= input.text;
     const images = (input.images ?? []).map((i) => ({

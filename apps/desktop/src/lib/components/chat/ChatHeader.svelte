@@ -14,7 +14,7 @@
   import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
   import { formatHoldUntil } from '#lib/format/hold.js';
   import { fullTime } from '#lib/format/time.js';
-  import { baseName, rawStatus } from '#lib/components/layout/chat-info.js';
+  import { baseName, rawStatus, shownStatus } from '#lib/components/layout/chat-info.js';
   import IconButton from '#lib/components/layout/IconButton.svelte';
   import ProjectIcon from '#lib/components/layout/ProjectIcon.svelte';
   import StatusIcon from '#lib/components/layout/StatusIcon.svelte';
@@ -42,10 +42,16 @@
    */
   let {
     chat,
+    readOnly = false,
     activityOpen = false,
     onToggleActivity,
   }: {
     chat: ChatState;
+    /**
+     * Nothing runs the chat here and now (its machine is away): no live
+     * controls, and a status it had as working shows as idle.
+     */
+    readOnly?: boolean;
     /** The Activity panel is shown. */
     activityOpen?: boolean;
     onToggleActivity?: () => void;
@@ -69,8 +75,10 @@
   const header = $derived(chat.header);
   const summary = $derived(chat.summary);
   /** Threadgarden's own process runs this chat: header controls and End session apply. */
-  const live = $derived(chat.ownedLive);
-  const external = $derived(chat.live ? (summary?.external ?? null) : null);
+  const live = $derived(!readOnly && chat.ownedLive);
+  const external = $derived(!readOnly && chat.live ? (summary?.external ?? null) : null);
+  /** Ruling R10: a machine that is away runs nothing. */
+  const status = $derived(shownStatus(chat.status, readOnly));
   /** Run by Claude Code's background service: `claude stop <id>` can stop it. */
   const background = $derived(external?.kind === 'background' && !!external.shortId);
   const project = $derived(
@@ -150,7 +158,7 @@
   let confirmEnd = $state(false);
   /** Background agents and processes that ending the session stops with the process. */
   const runningTasks = $derived(chat.tasks.filter(taskRunning));
-  const busy = $derived(chat.status === 'working' || chat.status === 'needsYou');
+  const busy = $derived(status === 'working' || status === 'needsYou');
   const endDescription = $derived(
     endSessionWarning({ busy, tasks: runningTasks.length, listed: true }) ?? undefined,
   );
@@ -196,7 +204,7 @@
 <header class="shrink-0 border-b">
   <div class="flex h-10 items-center gap-2 px-4">
     {#if chat.loaded}
-      <StatusIcon status={chat.status} raw={rawStatus(summary)} />
+      <StatusIcon {status} raw={rawStatus(summary)} />
     {/if}
     <h1 class="min-w-0 truncate text-sm font-semibold">{summary?.title ?? 'Loading…'}</h1>
     {#if machineName}
@@ -286,7 +294,7 @@
           onclick={onToggleActivity}
         >
           <ActivityIcon />
-          {#if !activityOpen && chat.running > 0}
+          {#if !activityOpen && !readOnly && chat.running > 0}
             <!-- Running tasks while the panel is hidden: the tab badge says how many. -->
             <span
               class="absolute top-0.5 right-0.5 size-1.5 rounded-full bg-emerald-600 dark:bg-emerald-400"

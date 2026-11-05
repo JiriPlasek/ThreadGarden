@@ -264,6 +264,52 @@ const steps: string[] = [
     came_at INTEGER NOT NULL
   );
   `,
+  // a machine that is away: the ids of messages this machine accepted (`chat.send`
+  // with a `messageId`), so a client that retries after a lost answer sends once.
+  `
+  CREATE TABLE IF NOT EXISTS received_messages (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS received_messages_at ON received_messages (at);
+  `,
+  // a machine that is away: what the desktop keeps of each paired machine's lists
+  // and last messages, so they can be read while it is off.
+  `
+  CREATE TABLE IF NOT EXISTS machine_copies (
+    machine_id TEXT PRIMARY KEY,
+    json TEXT NOT NULL,
+    copied_at INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS chat_copies (
+    machine_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    json TEXT NOT NULL,
+    last_activity INTEGER,
+    copied_at INTEGER NOT NULL,
+    PRIMARY KEY (machine_id, session_id)
+  );
+  `,
+  // a machine that is away: messages written for a machine this desktop is not
+  // connected to, waiting here until it accepts them (`away/queue.ts`). `payload`
+  // is what the machine is sent; the row's `id` is the message's id there. `seq`
+  // is the order they were written in, whatever the clock did meanwhile.
+  `
+  CREATE TABLE IF NOT EXISTS away_queue (
+    id TEXT PRIMARY KEY,
+    seq INTEGER NOT NULL,
+    machine_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    state TEXT NOT NULL,
+    reason TEXT,
+    error TEXT
+  );
+  CREATE INDEX IF NOT EXISTS away_queue_machine ON away_queue (machine_id, seq);
+  `,
 ];
 
 /** Runs the steps not run yet; `upTo` stops early (tests build older schemas with it). */

@@ -1,6 +1,13 @@
 import { z } from 'zod';
 import { AnalyticsRangeSchema, AnalyticsSchema } from './analytics.js';
 import {
+  AwayItemSchema,
+  AwayStateSchema,
+  ChatCopySchema,
+  CopyItemSchema,
+  MachineCopySchema,
+} from './away.js';
+import {
   BucketSchema,
   ChatHeaderInfoSchema,
   HOLD_NOTE_MAX,
@@ -241,6 +248,8 @@ export const methods = {
       model: z.string().optional(),
       permissionMode: z.string().optional(),
       effort: z.string().optional(),
+      /** Protocol 11: the chat's id (uuid), made by the desktop that wrote it while the machine was away. */
+      sessionId: z.string().uuid().optional(),
     }),
     z.object({ sessionId: z.string() }),
   ),
@@ -249,6 +258,8 @@ export const methods = {
       sessionId: z.string(),
       text: z.string(),
       images: z.array(ImageRefSchema).optional(),
+      /** Protocol 11: the message's id (uuid); sending the same one again changes nothing. */
+      messageId: z.string().uuid().optional(),
     }),
     z.object({ queued: z.boolean() }),
   ),
@@ -633,6 +644,59 @@ export const methods = {
     UpdateStartResultSchema,
   ),
   'update.status': def(empty, UpdateStatusSchema),
+  // ── away (protocol 11) ─────────────────────────────────────────────────────
+  // All local only: the desktop's own service keeps what a machine had, and the
+  // messages written while it is off.
+  /** Keeps the machine's lists (replacing the last copy). */
+  'copies.saveLists': def(
+    z.object({
+      machineId: z.string(),
+      info: MachineInfoSchema.nullable(),
+      projects: z.array(ProjectSchema),
+      chats: z.array(ChatSummarySchema),
+    }),
+    empty,
+  ),
+  /** Keeps one chat of the machine (replacing its last copy). */
+  'copies.saveChat': def(
+    z.object({
+      machineId: z.string(),
+      sessionId: z.string(),
+      summary: ChatSummarySchema,
+      items: z.array(CopyItemSchema),
+    }),
+    empty,
+  ),
+  'copies.get': def(machineIdOnly, MachineCopySchema.nullable()),
+  'copies.chat': def(
+    z.object({ machineId: z.string(), sessionId: z.string() }),
+    ChatCopySchema.nullable(),
+  ),
+  /** Each copied chat's `lastActivity`, by session id: what the copy already has. */
+  'copies.tails': def(machineIdOnly, z.record(z.string(), z.number())),
+  /** Writes down a message for a machine that is away; `create` makes a new chat once it is on. */
+  'away.queue': def(
+    z.object({
+      machineId: z.string(),
+      sessionId: z.string(),
+      kind: z.enum(['send', 'create']),
+      text: z.string(),
+      images: z.array(ImageRefSchema).optional(),
+      cwd: z.string().optional(),
+      model: z.string().optional(),
+      permissionMode: z.string().optional(),
+      effort: z.string().optional(),
+    }),
+    AwayItemSchema,
+  ),
+  /** The waiting messages and the machines being started (one machine's, or every one's). */
+  'away.list': def(
+    z.object({ machineId: z.string().optional() }),
+    z.object({ items: z.array(AwayItemSchema), states: z.array(AwayStateSchema) }),
+  ),
+  'away.cancel': def(z.object({ id: z.string() }), empty),
+  /** Tries the machine's failed messages again. */
+  'away.retry': def(machineIdOnly, empty),
 } as const;
 
 export type MethodName = keyof typeof methods;

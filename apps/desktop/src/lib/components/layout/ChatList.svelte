@@ -17,7 +17,7 @@
     MergedList,
     type MachineChat,
   } from '#lib/state/merged-list.svelte.js';
-  import { machineNameOf } from '#lib/state/machines.svelte.js';
+  import { machineAway, machineNameOf } from '#lib/state/machines.svelte.js';
   import { includesOtherBuckets } from '#lib/state/places.svelte.js';
   import { chatKey } from '#lib/state/refs.js';
   import type { MachineScope } from '#lib/state/scope.js';
@@ -647,7 +647,9 @@
           projectName={spansProjects ? projectNameOf(chat) : undefined}
           machineName={showMachine ? machineNameOf(machines, chat.machineId) : undefined}
           {now}
-          running={scope.chats.get(chat.sessionId)?.running ?? chat.runningTasks ?? 0}
+          running={machineAway(machines, chat.machineId)
+            ? 0
+            : (scope.chats.get(chat.sessionId)?.running ?? chat.runningTasks ?? 0)}
           scheduled={scope.scheduled.forChat(chat.sessionId)}
           onOpen={(_, e) => onRowClick(chat, e)}
           onRename={() => (renaming = chat)}

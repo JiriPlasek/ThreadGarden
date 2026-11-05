@@ -4,7 +4,7 @@ import { z } from 'zod';
  * The protocol versions a desktop accepts from a remote service: its own, one
  * older and one newer. A local service must match exactly.
  */
-export const REMOTE_PROTOCOL_RANGE = { min: 9, max: 11 } as const;
+export const REMOTE_PROTOCOL_RANGE = { min: 10, max: 12 } as const;
 
 export const acceptsRemoteProtocol = (v: number): boolean =>
   Number.isInteger(v) && v >= REMOTE_PROTOCOL_RANGE.min && v <= REMOTE_PROTOCOL_RANGE.max;

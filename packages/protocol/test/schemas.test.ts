@@ -51,8 +51,8 @@ const sampleItems = [
 
 describe('protocol schemas', () => {
   it('exposes the protocol version', () => {
-    expect(PROTOCOL_VERSION).toBe(10);
-    expect([8, 9, 10, 11, 12].map(acceptsRemoteProtocol)).toEqual([false, true, true, true, false]);
+    expect(PROTOCOL_VERSION).toBe(11);
+    expect([9, 10, 11, 12, 13].map(acceptsRemoteProtocol)).toEqual([false, true, true, true, false]);
   });
 
   it('accepts every ChatItem kind', () => {
@@ -187,6 +187,15 @@ describe('protocol schemas', () => {
       'update.latest',
       'update.start',
       'update.status',
+      'copies.saveLists',
+      'copies.saveChat',
+      'copies.get',
+      'copies.chat',
+      'copies.tails',
+      'away.queue',
+      'away.list',
+      'away.cancel',
+      'away.retry',
     ];
     expect(Object.keys(methods).sort()).toEqual([...expected].sort());
     for (const name of expected) {
@@ -219,6 +228,7 @@ describe('protocol schemas', () => {
         'machines.changed',
         'power.changed',
         'update.progress',
+        'away.changed',
       ].sort(),
     );
   });

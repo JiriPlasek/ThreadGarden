@@ -1,4 +1,6 @@
 import { RELAY_CLOSE, type EventMsg, type MachineInfo } from '@threadgarden/protocol';
+import type { CopyStore } from '../../away/copies.js';
+import type { AwayDeliverer } from '../../away/deliverer.js';
 import type { Db } from '../../history/db.js';
 import type { DeviceRegistry } from '../../machine/devices.js';
 import { renameMachine } from '../../machine/identity.js';
@@ -40,6 +42,10 @@ export const registerMachineHandlers = (
     paired?: PairedMachines;
     /** Their relays, closed when a machine moves or goes. */
     relay?: Pick<Relay, 'drop'>;
+    /** The local copies of paired machines, forgotten with the machine. */
+    copies?: Pick<CopyStore, 'forget'>;
+    /** The messages waiting for paired machines: tried on unlock, dropped with the machine. */
+    away?: Pick<AwayDeliverer, 'onUnlock' | 'forget'>;
     /** Sends an event to this machine's own clients only (never to paired devices). */
     emitLocal?: (e: EventMsg) => void;
     /** Pairing, injectable for tests. */
@@ -147,6 +153,7 @@ const registerPairedMachineHandlers = (
       const was = paired.token(machineId);
       paired.unlock(machineId, token);
       if (was !== token) changed();
+      deps.away?.onUnlock(machineId);
       return {};
     },
     local,
@@ -180,6 +187,8 @@ const registerPairedMachineHandlers = (
       // Forgotten first, token included, then its relays closed: a relay
       // opened while the machine is asked to revoke finds nothing (4404).
       paired.remove(machineId);
+      deps.copies?.forget(machineId);
+      deps.away?.forget(machineId);
       deps.relay?.drop(machineId, RELAY_CLOSE.locked);
       changed();
       // Best effort: the machine forgets this device if it can be reached (needs the token).

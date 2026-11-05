@@ -99,7 +99,7 @@ them to the service it starts (`THREADGARDEN_DATA_DIR`,
 `THREADGARDEN_LEGACY_DATA_DIR`), so the two never disagree. It looks for
 `service.json` in the new dir first, then in the old one: a pahub service
 still running there is reached (both subprotocols are offered), its `hello`
-reports an older protocol than the app's (10), so the UI shows the
+reports an older protocol than the app's (11), so the UI shows the
 incompatible screen, and **Restart service** stops it (the shell stops a
 service recorded in either dir). At start, before it takes its own lock, the
 service migrates once (`src/migrate-data-dir.ts`): when the new dir has no
@@ -124,7 +124,7 @@ a burst of more than 10 uncaught exceptions in a minute ends the process.
 Shutdown runs every step even if one fails, and always releases the lock.
 
 **Versions.** `hello` exchanges the protocol version and the service version.
-The local service must speak exactly the app's protocol (10); any other
+The local service must speak exactly the app's protocol (11); any other
 version is incompatible: the UI shows a blocking screen that offers to
 restart the service. A paired machine's service is accepted one version
 either way (9–11, `REMOTE_PROTOCOL_RANGE`; see Versions across machines
@@ -205,16 +205,17 @@ service and the UI; the service validates every request.
   `chat.since`); **1001** when the local service stops. The UI also checks
   that the relayed `hello` names the paired machine's id: another id counts
   as a mismatch, like 4409, and the client stops.
-- **Versions across machines.** The protocol is 10 (v1.4 was 5; 6 added power
+- **Versions across machines.** The protocol is 11 (v1.4 was 5; 6 added power
   control, 7 projects, 8 the usage state's account, 9 moving a chat, 10
-  updating a machine). The
+  updating a machine, 11 a machine that's away). The
   desktop and its local service still need the exact version; a remote
-  service is accepted one version either way (9, 10 or 11 for a desktop on 10,
+  service is accepted one version either way (10, 11 or 12 for a desktop on 11,
   `REMOTE_PROTOCOL_RANGE`; the Rust shell keeps its own copy of the version in
   `src-tauri/src/service.rs`). What a machine can do is read from the
   capabilities in its `hello`, not from its version: the desktop offers power
   control only with `power`, New project, Clone and Browse… only with
-  `projects`, and a machine as a target of Move to… only with `move`. On an
+  `projects`, a machine as a target of Move to… only with `move`, and a waiting message
+  for a machine only with `away`. On an
   older machine the New project and Clone tabs and Browse… show disabled with
   "Update ‹machine› to use this", and Move to… lists it disabled with "Update
   ‹machine› to move chats there"; power control without `power` isn't offered
@@ -625,8 +626,8 @@ Threadgarden service. The design is
 [`2026-10-31-remote-machines-design.md`](superpowers/specs/2026-10-31-remote-machines-design.md);
 this release covers pairing, the connection, chats on a paired machine,
 [power control](#power), [new projects and clones](#projects) and
-[moving a chat](#moving-a-chat) (not yet offline copies, or analytics and
-usage across machines). The owner's setup steps are in
+[moving a chat](#moving-a-chat) and [a machine that's away](#a-machine-thats-away)
+(not yet analytics and usage across machines). The owner's setup steps are in
 [Remote machines](remote-machines.md).
 
 **Identity.** Every service has a machine id (random, made once, kept in
@@ -834,6 +835,61 @@ items; only those folders may later be changed more freely. Threadgarden
 never touches a folder it did not make (it only reads `git remote get-url
 origin` there, to mark the repos This PC has and to recognise a clone already
 in place) and never deletes a GitHub repo.
+
+### A machine that's away
+
+While the desktop isn't connected to a machine (Off, Unreachable or Connecting),
+its chats are read from a copy and replies wait in a queue (protocol 11,
+capability `away`; the design is
+[`2026-11-04-away-machine-design.md`](superpowers/specs/2026-11-04-away-machine-design.md),
+the owner's view is in [Remote machines](remote-machines.md#when-its-off)).
+Both live in the **local** service's database, one set per desktop, never on
+the machine, and are reached only by local callers.
+
+**The copy** (`away/copies.ts`; `copies.saveLists`, `.saveChat`, `.get`,
+`.chat`, `.tails`). While connected, the desktop saves a machine's projects,
+info and chat list, and the last 10 items of each chat (user text, assistant
+text and permission requests), at most 500 chats. The whole list is read again
+at most every 30 s while connected, and at once when the link opens; the chats a
+`sessions.changed` names are copied 2 s after it, and a link that drops then
+doesn't stop a copy under way. The copy is
+text only, whatever the client sends: a user message keeps how many images it
+had (`imageCount`), never their data, and a permission request's long strings
+are cut to 4,000 characters. A stored row that no longer parses reads as no
+copy. The UI marks everything read from it, shows no chat on it as running, and
+never opens a link to the machine to look.
+
+**The queue** (`away/queue.ts`, `away/deliverer.ts`; `away.queue`, `.list`,
+`.cancel`, `.retry`, event `away.changed`). A message is written to disk before
+the composer clears. The deliverer runs in the local service, so the window can
+be closed. Every 5 s while rows wait (once a minute when every machine waited on
+has been unreachable for 3 minutes with no start running; a new row, Retry,
+unlock or an opened link looks fast again), for each machine with rows waiting:
+
+- If the plug reads Off (or below `offWatts`), it calls `power.turnOn`. A
+  machine that may be running is never turned on, and without power control the
+  rows just wait for a link.
+- A start has 5 minutes. A gap of more than 90 s between two looks means the
+  device slept, and the window begins again. Running the whole window without
+  an answer fails the rows with reason `start`, and they wait for `away.retry`;
+  a new message for that machine counts as a retry, and so does the relay's
+  link to it opening (the machine came up late).
+  Refused rows still wait for Retry.
+- When the link opens, rows go out in order per chat. A chat's later rows fail
+  with an earlier refused one, which keeps the order, and go again on Retry.
+- **Exactly once:** the row id is the `messageId` of `chat.send`, and a new
+  chat's id is the `sessionId` of `chat.create`, chosen by the desktop. The
+  machine remembers both, so a resend after a lost answer does nothing twice
+  (a remembered `messageId` reads as accepted before any move check). For a
+  machine without the `away` capability, the desktop's copy API refuses with
+  `AWAY` and the machine is never asked; the desktop shows "Update ‹machine› to
+  send while it's off". It also refuses for a machine known neither from a hello
+  nor from its copy ("‹machine› hasn't been seen yet"), and for one whose link
+  can't open (`mismatch`, `incompatible`), whose message would wait forever.
+- While a chat has a row still to go (any but a refused one), later messages
+  for it also go to the queue, even if the link is open, so none overtakes it;
+  Schedule is hidden meanwhile. A new chat on an away machine opens at once
+  under its final id, with "Starting ‹machine›…".
 
 ### Updating a machine
 

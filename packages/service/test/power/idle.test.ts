@@ -370,12 +370,18 @@ describe('power on a service', () => {
       'remote',
       'projects',
       'move',
+      'away',
       'power',
     ]);
     await h.close();
     await rm(join(dir, 'data'), { recursive: true, force: true });
     const d = await start(false);
-    expect((await hello(d)).result.machine.capabilities).toEqual(['remote', 'projects', 'move']);
+    expect((await hello(d)).result.machine.capabilities).toEqual([
+      'remote',
+      'projects',
+      'move',
+      'away',
+    ]);
     await d.close();
   });
 });

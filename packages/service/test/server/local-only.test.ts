@@ -63,6 +63,8 @@ describe('methods a paired device may not call', () => {
     'power.noteMeasurement',
   ];
   const machinesMethods = Object.keys(methods).filter((m) => m.startsWith('machines.'));
+  // Protocol 11: the desktop's own copies and waiting messages, never a device's.
+  const awayMethods = Object.keys(methods).filter((m) => /^(copies|away)\./.test(m));
   const forbidden = [
     'service.shutdown',
     'ui.error',
@@ -73,7 +75,12 @@ describe('methods a paired device may not call', () => {
     'update.latest',
     ...powerClient,
     ...machinesMethods,
+    ...awayMethods,
   ];
+
+  it('covers every copies.* and away.* method', () => {
+    expect(awayMethods).toHaveLength(9);
+  });
 
   it('covers every machines.* method', () => {
     expect(machinesMethods).toEqual(

@@ -1,0 +1,245 @@
+import type { ChatSummary, Project } from '@threadgarden/protocol';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { Api } from '../../src/lib/state/api';
+import { CopySync } from '../../src/lib/state/copy-sync.svelte';
+import type { MachineScope } from '../../src/lib/state/scope';
+
+type Handler = (params: never) => unknown;
+
+/** A fake client: `handlers` answer by method, `emit` fires an event, `open`/`away` move the link. */
+const fakeApi = (handlers: Record<string, Handler>) => {
+  // Params are read loosely by the assertions below.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const calls: { method: string; params: Record<string, any> }[] = [];
+  const events = new Map<string, Set<(data: unknown) => void>>();
+  const opens = new Set<() => void>();
+  const statuses = new Set<(s: string) => void>();
+  const api = {
+    status: 'open',
+    request: vi.fn(async (method: string, params: unknown) => {
+      calls.push({ method, params: params as Record<string, never> });
+      const h = handlers[method];
+      if (!h) throw new Error(`no handler for ${method}`);
+      return h(params as never);
+    }),
+    on: (event: string, cb: (data: unknown) => void) => {
+      if (!events.has(event)) events.set(event, new Set());
+      events.get(event)!.add(cb);
+      return () => events.get(event)!.delete(cb);
+    },
+    onReconnect: () => () => {},
+    onOpen: (cb: () => void) => {
+      opens.add(cb);
+      return () => opens.delete(cb);
+    },
+    onStatus: (cb: (s: string) => void) => {
+      statuses.add(cb);
+      return () => statuses.delete(cb);
+    },
+  };
+  return {
+    api: api as unknown as Api & { status: string },
+    calls,
+    emit: (event: string, data: unknown = { sessionIds: [] }) =>
+      events.get(event)?.forEach((cb) => cb(data)),
+    open: () => {
+      api.status = 'open';
+      statuses.forEach((cb) => cb('open'));
+      opens.forEach((cb) => cb());
+    },
+    away: () => {
+      api.status = 'reconnecting';
+      statuses.forEach((cb) => cb('reconnecting'));
+    },
+    count: (method: string) => calls.filter((c) => c.method === method).length,
+  };
+};
+
+const chat = (id: string, lastActivity: number): ChatSummary =>
+  ({ sessionId: id, lastActivity, projectId: 'p1' }) as unknown as ChatSummary;
+const project = { projectId: 'p1' } as unknown as Project;
+
+const setup = (
+  opts: { tails?: Record<string, number>; chats?: ChatSummary[]; items?: unknown[] } = {},
+) => {
+  const remote = fakeApi({
+    'projects.list': () => [project],
+    'sessions.list': () => ({ items: opts.chats ?? [chat('a', 10), chat('b', 20)] }),
+    'chat.open': ((p: { sessionId: string }) => ({
+      summary: chat(p.sessionId, 99),
+      items: opts.items ?? [
+        { kind: 'user', text: 'hi' },
+        { kind: 'toolCall' },
+        { kind: 'assistantText', text: 'yo' },
+      ],
+    })) as Handler,
+  });
+  const local = fakeApi({
+    'copies.saveLists': () => ({}),
+    'copies.saveChat': () => ({}),
+    'copies.tails': () => opts.tails ?? {},
+  });
+  const sync = new CopySync();
+  let attach: (scope: MachineScope) => void = () => {};
+  sync.init({
+    local: local.api,
+    scopes: { observe: (cb: typeof attach) => ((attach = cb), () => {}) } as never,
+    machines: { get: () => ({ info: { name: 'kumbal' } }) } as never,
+    debounceMs: 2000,
+  });
+  attach({ machineId: 'm1', api: remote.api } as MachineScope);
+  return { remote, local };
+};
+
+describe('CopySync', () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  it("on connect the lists are saved and changed chats' tails refreshed", async () => {
+    const { remote, local } = setup();
+    remote.open();
+    await vi.advanceTimersByTimeAsync(0);
+    const lists = local.calls.find((c) => c.method === 'copies.saveLists')!;
+    expect(lists.params).toMatchObject({ machineId: 'm1', info: { name: 'kumbal' } });
+    expect(lists.params.chats).toHaveLength(2);
+    expect(remote.calls.find((c) => c.method === 'sessions.list')!.params.place).toEqual({
+      kind: 'project',
+      projectId: 'p1',
+      include: ['onHold', 'archived'],
+    });
+    expect(remote.count('chat.open')).toBe(2);
+    const saved = local.calls.filter((c) => c.method === 'copies.saveChat');
+    expect(saved).toHaveLength(2);
+    expect(saved[0]!.params.items.map((i: { kind: string }) => i.kind)).toEqual([
+      'user',
+      'assistantText',
+    ]);
+  });
+
+  it("a user message's images are copied as their count, never their data", async () => {
+    const png = { mediaType: 'image/png', data: 'AAAA' };
+    const { remote, local } = setup({
+      chats: [chat('a', 10)],
+      items: [
+        { kind: 'user', id: 'u1', text: 'look', ts: 1, images: [png, png] },
+        { kind: 'user', id: 'u2', text: 'plain', ts: 2 },
+      ],
+    });
+    remote.open();
+    await vi.advanceTimersByTimeAsync(0);
+    const saved = local.calls.find((c) => c.method === 'copies.saveChat')!;
+    expect(saved.params.items).toEqual([
+      { kind: 'user', id: 'u1', text: 'look', ts: 1, imageCount: 2 },
+      { kind: 'user', id: 'u2', text: 'plain', ts: 2 },
+    ]);
+  });
+
+  it("an unchanged chat's tail isn't fetched again", async () => {
+    const { remote } = setup({ tails: { a: 10, b: 5 } });
+    remote.open();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(
+      remote.calls.filter((c) => c.method === 'chat.open').map((c) => c.params.sessionId),
+    ).toEqual(['b']);
+  });
+
+  it('a change saves again after the debounce, not before', async () => {
+    const { remote, local } = setup();
+    remote.open();
+    await vi.advanceTimersByTimeAsync(60_000);
+    const saves = local.count('copies.saveLists');
+    remote.emit('sessions.changed');
+    remote.emit('projects.changed');
+    await vi.advanceTimersByTimeAsync(1900);
+    expect(local.count('copies.saveLists')).toBe(saves);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(local.count('copies.saveLists')).toBe(saves + 1);
+  });
+
+  it('while connected the whole list is read at most every 30 s, the last change kept', async () => {
+    const { remote, local } = setup();
+    remote.open();
+    await vi.advanceTimersByTimeAsync(60_000);
+    const lists = () => remote.count('projects.list');
+    const before = lists();
+    // A busy machine: a change every second.
+    for (let i = 0; i < 90; i++) {
+      remote.emit('sessions.changed');
+      await vi.advanceTimersByTimeAsync(1_000);
+    }
+    expect(lists() - before).toBeGreaterThanOrEqual(2);
+    expect(lists() - before).toBeLessThanOrEqual(3);
+    // The trailing one: the last change is copied too.
+    const settled = lists();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(lists()).toBe(settled + 1);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(lists()).toBe(settled + 1);
+    expect(local.count('copies.saveLists')).toBe(remote.count('projects.list'));
+  });
+
+  it('a change to one chat right before the link drops is in the copy without waiting 30 s', async () => {
+    const { remote, local } = setup();
+    remote.open();
+    await vi.advanceTimersByTimeAsync(5_000);
+    const saved = () =>
+      local.calls.filter((c) => c.method === 'copies.saveChat').map((c) => c.params.sessionId);
+    const before = saved().length;
+    // Claude's last reply in chat a; the owner reads it and shuts the machine down.
+    remote.emit('sessions.changed', { sessionIds: ['a'] });
+    await vi.advanceTimersByTimeAsync(2_100);
+    expect(saved().slice(before)).toEqual(['a']);
+    remote.away();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(saved().slice(before)).toEqual(['a']);
+  });
+
+  it('a chat copy under way when the link drops is still saved', async () => {
+    let answer: (v: unknown) => void = () => {};
+    const { remote, local } = setup();
+    remote.open();
+    await vi.advanceTimersByTimeAsync(5_000);
+    const before = local.count('copies.saveChat');
+    // This chat's tail is slow to come.
+    const handlers = remote.api.request as unknown as {
+      mockImplementationOnce: (f: unknown) => void;
+    };
+    handlers.mockImplementationOnce(async (method: string, params: { sessionId: string }) => {
+      remote.calls.push({ method, params });
+      await new Promise((r) => (answer = r));
+      return { summary: chat(params.sessionId, 99), items: [{ kind: 'user', text: 'late' }] };
+    });
+    remote.emit('sessions.changed', { sessionIds: ['b'] });
+    await vi.advanceTimersByTimeAsync(2_100);
+    expect(remote.calls.at(-1)).toMatchObject({ method: 'chat.open', params: { sessionId: 'b' } });
+    remote.away();
+    answer(undefined);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(local.count('copies.saveChat')).toBe(before + 1);
+  });
+
+  it('a link that opens again is copied at once', async () => {
+    const { remote, local } = setup();
+    remote.open();
+    await vi.advanceTimersByTimeAsync(0);
+    remote.emit('sessions.changed');
+    await vi.advanceTimersByTimeAsync(3_000);
+    const saves = local.count('copies.saveLists');
+    remote.away();
+    remote.open();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(local.count('copies.saveLists')).toBe(saves + 1);
+  });
+
+  it('nothing is fetched while the machine is away', async () => {
+    const { remote, local } = setup();
+    remote.open();
+    await vi.advanceTimersByTimeAsync(0);
+    remote.away();
+    const before = remote.calls.length;
+    remote.emit('sessions.changed');
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(remote.calls.length).toBe(before);
+    expect(local.count('copies.saveLists')).toBe(1);
+  });
+});

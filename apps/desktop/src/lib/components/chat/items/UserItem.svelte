@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { ChatItem } from '@threadgarden/protocol';
   import GitForkIcon from '@lucide/svelte/icons/git-fork';
+  import { imageCountText } from '#lib/format/images.js';
   import { isThreadgardenNote } from '#lib/move/note.js';
   import { chatActions } from '../context';
 
@@ -8,9 +9,16 @@
    * A user message. Top-level messages offer "Fork from this message" (spec §6.4);
    * very long pastes are clamped until expanded. Threadgarden's own note in a
    * moved chat (ruling R4) is labelled, so it doesn't read as the owner's words.
+   * A message read from an away machine's copy has no images, only how many
+   * it had (`imageCount`), which is said instead.
    */
-  let { item, nested = false }: { item: Extract<ChatItem, { kind: 'user' }>; nested?: boolean } =
-    $props();
+  let {
+    item,
+    nested = false,
+  }: {
+    item: Extract<ChatItem, { kind: 'user' }> & { imageCount?: number };
+    nested?: boolean;
+  } = $props();
 
   const actions = chatActions();
   const LONG = 3000;
@@ -46,6 +54,8 @@
         />
       {/each}
     </div>
+  {:else if item.imageCount}
+    <div class="text-muted-foreground mt-1 text-xs">{imageCountText(item.imageCount)}</div>
   {/if}
   {#if !nested && actions.fork && !fromThreadgarden}
     <button

@@ -149,6 +149,22 @@ describe('away chats', () => {
     svc!.moveLocks.unlock('kept');
     await ok('chat.send', { sessionId: 'kept', text: 'hi' });
   });
+
+  it('a retry of a message already taken reads as taken, even once the chat is moving', async () => {
+    const M1 = '7b0c1f0e-5d1c-4f55-9a53-0a1b2c3d4e51';
+    const M2 = '7b0c1f0e-5d1c-4f55-9a53-0a1b2c3d4e52';
+    await start([]);
+    await ok('chat.send', { sessionId: 'kept', text: 'hi', messageId: M1 });
+    svc!.moveLocks.lock('kept', 'x1');
+    // Its answer was lost and it comes again: it was taken, so it isn't refused.
+    expect(await ok('chat.send', { sessionId: 'kept', text: 'hi', messageId: M1 })).toEqual({
+      queued: false,
+    });
+    // A new message is still refused.
+    expect(
+      (await call('chat.send', { sessionId: 'kept', text: 'more', messageId: M2 })).error?.code,
+    ).toBe('MOVING');
+  });
 });
 
 describe('move.check', () => {
