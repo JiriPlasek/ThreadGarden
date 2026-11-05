@@ -47,6 +47,7 @@ const startHeadless = (name: string) =>
   startService({
     ...base(join(dir, name)),
     headless: true,
+    host: null,
     remote: { addresses: ['127.0.0.1'], port: 0 },
   });
 

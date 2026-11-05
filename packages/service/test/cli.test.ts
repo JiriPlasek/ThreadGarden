@@ -105,6 +105,7 @@ describe('runCli', () => {
       adapter: generateCorpus({ sessions: 1, projects: 1, bigSessionMessages: 0 }),
       installSignalHandlers: false,
       headless: true,
+      host: null,
       // Two addresses: `pair` lists every one (the first may be docker0 or a VPN's).
       remote: { addresses: ['127.0.0.1', '::1'], port: 0 },
     });

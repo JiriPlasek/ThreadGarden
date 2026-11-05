@@ -1,11 +1,17 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { POWER_ERRORS, type MachinePowerStatus, type Unpushed } from '@threadgarden/protocol';
+import {
+  POWER_ERRORS,
+  SIGNED_IN,
+  type MachinePowerStatus,
+  type Unpushed,
+} from '@threadgarden/protocol';
 import type { IdleMonitor } from './idle.js';
 import { checkUnpushed } from './push-check.js';
 import type { PowerStore } from './store.js';
 import { createSwitch, type PowerSwitch } from './switch.js';
 import { PowerError } from './tasmota.js';
+import type { WindowsHost } from './windows-host.js';
 
 const MIN = 60_000;
 /** A send due this soon keeps the machine on: its wake would fire before the machine is off. */
@@ -17,7 +23,7 @@ const START_RETRY_MS = 10_000;
 /** …this many times (about 5 minutes); after that, on every minute tick. */
 const START_RETRIES = 30;
 /**
- * A service still running this long after `systemctl poweroff` was accepted is on
+ * A service still running this long after its poweroff was accepted is on
  * a machine that is not going down: a real shutdown stops it within seconds. Well
  * inside the switch's 15 min arming, after which the switch cuts (rules.ts).
  */
@@ -64,6 +70,13 @@ export type ShutdownOptions = {
   stopAll: () => Promise<void>;
   /** Defaults to `systemctl poweroff`. */
   poweroff?: () => Promise<void>;
+  /**
+   * A worker in WSL: Windows powers the PC off (`shutdown.exe`, replacing `poweroff`),
+   * a shutdown never goes ahead under a signed-in person unless the run says
+   * `despiteSignedIn` (an idle one never does), and a pending restart leaves the
+   * 15-minute cut unarmed (a shutdown that installs updates can take longer).
+   */
+  windows?: WindowsHost;
   makeSwitch?: typeof createSwitch;
   check?: (dirs: Dir[]) => Promise<Unpushed[]>;
   now?: () => number;
@@ -83,16 +96,17 @@ const switchProblem = (err: unknown): string =>
   err instanceof PowerError ? err.message : 'The power switch could not be driven.';
 
 /**
- * Whether `systemctl poweroff` was refused. One ended by an outside signal is not:
- * systemd stops this service, and its children, once the shutdown is under way.
- * One killed by our own timeout (`killed`) is: the machine is not going down.
+ * Whether the poweroff was refused. One ended by an outside signal is not: the
+ * shutdown stops this service, and its children, once it is under way. One killed
+ * by our own timeout (`killed`) is: the machine is not going down. (Windows'
+ * `shutdown.exe` throws neither: see `windowsHost`.)
  */
 const refused = (err: unknown): boolean => {
   const e = err as { signal?: unknown; killed?: unknown } | null;
   return e?.killed === true || !(typeof e?.signal === 'string' && e.signal !== '');
 };
 
-/** The first line of what went wrong (stderr first: `systemctl poweroff` explains itself there). */
+/** The first line of what went wrong (stderr first: a refused poweroff explains itself there). */
 const firstLine = (err: unknown): string => {
   const e = err as { stderr?: unknown; message?: unknown } | null;
   const text =
@@ -102,7 +116,10 @@ const firstLine = (err: unknown): string => {
   return text.split('\n')[0]!.trim();
 };
 
-/** Why `systemctl poweroff` failed, in a few words. */
+/**
+ * Why the poweroff failed, in a few words. Only `systemctl poweroff` is ever `killed`
+ * (Windows' timeout says "shutdown.exe timed out" itself).
+ */
 const poweroffReason = (err: unknown): string =>
   (err as { killed?: unknown } | null)?.killed === true ? 'systemctl timed out' : firstLine(err);
 
@@ -159,9 +176,14 @@ export class ShutdownSequence {
   /**
    * One sequence at a time: a call while one runs, or once the machine is going
    * down, returns the current status. Whatever goes wrong, the phase never stays
-   * `checking`.
+   * `checking`. `force` goes ahead despite unpushed work; `despiteSignedIn`, despite
+   * someone signed in at a Windows worker. Each is its own confirm in the app.
    */
-  run(r: { force: boolean; reason: 'idle' | 'manual' }): Promise<MachinePowerStatus> {
+  run(r: {
+    force: boolean;
+    despiteSignedIn?: boolean;
+    reason: 'idle' | 'manual';
+  }): Promise<MachinePowerStatus> {
     if (this.inFlight || this.state.phase === 'shuttingDown') return Promise.resolve(this.status());
     this.inFlight = this.sequence(r)
       .catch(async (err: unknown) => {
@@ -332,12 +354,15 @@ export class ShutdownSequence {
 
   private async sequence(r: {
     force: boolean;
+    despiteSignedIn?: boolean;
     reason: 'idle' | 'manual';
   }): Promise<MachinePowerStatus> {
     const startedAt = this.now();
     this.set({ phase: 'checking', unpushed: [], problem: null });
     // A machine at work when asked (manual only: idle never is) goes down as asked.
     const busyAtStart = this.o.idle.busy;
+    const windows = this.o.windows;
+    const despiteSignedIn = r.despiteSignedIn === true;
 
     // 1. Work that never reached GitHub, or that could not be checked, keeps the machine on.
     if (!r.force) {
@@ -352,6 +377,13 @@ export class ShutdownSequence {
         this.o.log?.info(`power: ${r.reason} shutdown blocked by ${found.length} unpushed item(s)`);
         return this.settle({ phase: 'blocked', unpushed: found, problem: null });
       }
+    }
+
+    // 1b. A person at the Windows PC keeps it on, unless the owner confirmed shutting
+    // it down under them. Asked after the push check, so the app asks both in turn.
+    if (windows && !despiteSignedIn && (await windows.signedIn())) {
+      this.o.log?.info(`power: ${r.reason} shutdown stopped, someone is signed in on Windows`);
+      return this.settle({ ...RUNNING, problem: SIGNED_IN });
     }
 
     // 2. The next scheduled send: one due soon keeps the machine on; a far one goes out late.
@@ -370,6 +402,11 @@ export class ShutdownSequence {
     // 3. Arm the cut and the wake. Without both, the machine must not power off.
     const stored = this.o.store.load();
     if (!stored) return this.settle({ ...RUNNING, problem: NOT_CONFIGURED });
+    // Windows installs waiting updates on its way down: the 15-minute cut could land in them.
+    const restartPending = windows ? await windows.restartPending() : false;
+    if (restartPending) {
+      this.o.log?.info('power: a Windows restart is pending, so the 15-minute cut is not armed');
+    }
     // The disarm at start must not land after this sequence's cut or wake, and
     // while it has not got through, nothing is armed: it is tried once more first.
     if (this.startAttempt) await this.startAttempt;
@@ -387,7 +424,7 @@ export class ShutdownSequence {
     try {
       // From here a failure anywhere must disarm (see `run`).
       this.armed = sw;
-      await sw.armCut();
+      await (windows ? sw.armCut({ maxTimer: !restartPending }) : sw.armCut());
       await sw.armWake(wakeAt);
     } catch (err) {
       this.armed = null;
@@ -429,12 +466,13 @@ export class ShutdownSequence {
     // Powering off: from here the cut must stay armed, whatever happens to this process.
     this.armed = null;
     try {
-      await this.poweroff();
+      // Only a confirmed shutdown under a signed-in person closes their apps (/f).
+      await (windows ? windows.shutdown({ force: despiteSignedIn }) : this.poweroff());
     } catch (err) {
       const reason = poweroffReason(err);
       if (!refused(err)) {
         this.o.log?.info(
-          `power: systemctl poweroff ended by a signal (${reason}); the machine is going down`,
+          `power: the poweroff ended by a signal (${reason}); the machine is going down`,
         );
         this.watchPoweroff();
         return this.status();

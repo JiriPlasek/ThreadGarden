@@ -180,6 +180,51 @@ describe('Tasmota switch', () => {
     expect(f.commands.at(-1)).toBe('Event tgw');
   });
 
+  it('armCut without the max timer stops RuleTimer8 straight after tga', async () => {
+    const { f, sw } = await setup();
+    await sw.armCut({ maxTimer: false });
+    const tga = f.commands.indexOf('Event tga');
+    expect(f.commands.slice(tga)).toEqual(['Event tga', 'RuleTimer8', 'RuleTimer8 0']);
+    // The low-reading cut stays armed; the 15-minute one is off.
+    expect(f.ruleTimers).toMatchObject({ 7: 5, 8: 0 });
+
+    const kept = f.commands.length;
+    await sw.armCut({ maxTimer: true });
+    expect(f.commands.slice(kept).at(-1)).toBe('Event tga');
+    expect(f.commands.slice(kept)).not.toContain('RuleTimer8');
+    expect(f.ruleTimers).toMatchObject({ 7: 5, 8: 900 });
+  });
+
+  it("armCut without the max timer waits for tga's Backlog: stopped sooner, it would start again", async () => {
+    const f = await startFakeTasmota({ backlogDelayMs: 300 });
+    fakes.push(f);
+    const sw = createSwitch({ ...cfg, address: f.address }, 'pw', { readWaitMs: 0 });
+    await sw.armCut({ maxTimer: false });
+    expect(f.ruleTimers[8]).toBe(0);
+    // Polled until the Backlog had started it, then stopped once.
+    expect(f.commands.filter((c) => c === 'RuleTimer8').length).toBeGreaterThan(1);
+    expect(f.commands.filter((c) => c === 'RuleTimer8 0')).toEqual(['RuleTimer8 0']);
+  });
+
+  it('armCut without the max timer fails when the switch never starts it', async () => {
+    const f = await startFakeTasmota();
+    fakes.push(f);
+    let clock = 0;
+    const sw = createSwitch({ ...cfg, address: f.address }, 'pw', {
+      readWaitMs: 0,
+      now: () => (clock += 1000),
+      // A switch that answers tga but never runs it.
+      fetch: async (input, init) =>
+        new URL(String(input)).searchParams.get('cmnd') === 'Event tga'
+          ? new Response(JSON.stringify({ Event: 'Done' }))
+          : fetch(input, init),
+    });
+    await expect(sw.armCut({ maxTimer: false })).rejects.toMatchObject({
+      code: 'POWER_CONFLICT',
+    });
+    expect(f.commands).not.toContain('RuleTimer8 0');
+  });
+
   describe('armWake', () => {
     const NOW = '2026-11-01T12:00:00Z'; // a Sunday
     // Monday 2026-11-02 02:00Z

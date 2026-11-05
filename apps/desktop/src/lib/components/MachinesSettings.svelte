@@ -9,7 +9,7 @@
   import { Button } from '#lib/components/ui/button/index.js';
   import { appVersion } from '#lib/native.js';
   import { useApp } from '#lib/state/context.js';
-  import type { MachineEntry } from '#lib/state/machines.svelte.js';
+  import { hostSuffix, type MachineEntry } from '#lib/state/machines.svelte.js';
   import { THIS_PC } from '#lib/state/refs.js';
   import { cn } from '#lib/utils.js';
 
@@ -137,7 +137,7 @@
       </div>
       {#if m.version}
         <p class="text-muted-foreground text-xs break-words">
-          <span>Threadgarden {m.version}</span>
+          <span>Threadgarden {m.version}{hostSuffix(m)}</span>
           {#if machineUpdates.behind(m) && machineUpdates.latest}
             <span>· {machineUpdates.latest} available</span>
           {/if}

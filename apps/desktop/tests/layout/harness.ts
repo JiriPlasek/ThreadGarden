@@ -266,6 +266,8 @@ export const setupTwoMachines = async (
     m1Status?: 'on' | 'mismatch' | 'refused' | 'locked';
     /** What M1's `hello` advertises (default `['remote']`; `['remote', 'power']` for power control). */
     m1Capabilities?: string[];
+    /** What M1's `hello` says it runs on (`wsl`: a worker in WSL on a Windows PC); default nothing. */
+    m1Host?: 'wsl';
     /** Power switch passwords in the fake keychain, by machine id. */
     powerPasswords?: Record<string, string>;
   } = {},
@@ -273,7 +275,10 @@ export const setupTwoMachines = async (
   const server = new FakeServer();
   const remote = new FakeServer();
   serve(server, machineInfo(LOCAL, 'my-host'));
-  serve(remote, machineInfo(M1, 'ubuntu-pc', o.m1Capabilities));
+  serve(remote, {
+    ...machineInfo(M1, 'ubuntu-pc', o.m1Capabilities),
+    ...(o.m1Host ? { host: o.m1Host } : {}),
+  });
   server.handlers['machines.list'] = () => [pairedMachine(M1, 'Ubuntu PC')];
   o.configure?.(server);
   o.configureRemote?.(remote);

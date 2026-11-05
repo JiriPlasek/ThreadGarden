@@ -62,6 +62,7 @@ import {
 import { IdleMonitor } from './power/idle.js';
 import { ShutdownSequence } from './power/shutdown.js';
 import { PowerStore } from './power/store.js';
+import { detectWsl, windowsHost } from './power/windows-host.js';
 import { registerUpdateHandlers } from './server/handlers/update.js';
 import { registerUsageHandlers } from './server/handlers/usage.js';
 import { LatestRelease, type Fetch } from './update/github.js';
@@ -179,8 +180,18 @@ export type StartOptions = {
    * (devices live in the database). Default: neither, as on a desktop.
    */
   headless?: boolean;
-  /** Headless only: powers the machine off (default `systemctl poweroff`; tests replace it). */
+  /**
+   * Headless only: powers the machine off (default `systemctl poweroff`, or Windows'
+   * `shutdown.exe` in WSL; tests replace it). One passed in is always used: no test
+   * or mock ever reaches Windows.
+   */
   poweroff?: () => Promise<void>;
+  /**
+   * What the machine runs on: `wsl` a worker in WSL on a Windows PC, which Windows
+   * powers off and which says so in its machine info; null neither. Default:
+   * detected once at start. Tests pass null, so a run inside WSL stays plain Linux.
+   */
+  host?: 'wsl' | null;
   /**
    * Headless only: the remote listener's port (default `REMOTE_PORT`; 0 = any
    * free one) and where it listens. `addresses` fixes the addresses (tests:
@@ -264,6 +275,8 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   const log = opts.logger ?? createLogger(dataDir);
   const headless = opts.headless === true;
   if (headless && !opts.adapter) throw new Error('A headless service needs history (an adapter)');
+  /** A worker in WSL: only a headless machine is ever one. */
+  const wsl = headless && (opts.host === undefined ? detectWsl() : opts.host === 'wsl');
 
   await mkdir(dataDir, { recursive: true });
   if (opts.legacyDataDir !== undefined) {
@@ -336,6 +349,8 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
             ...(canUpdate() ? [UPDATE_CAPABILITY] : []),
           ]
         : [...CAPABILITIES, AWAY_CAPABILITY],
+      // The platform stays linux, as its paths are; the app shows it as Windows (WSL).
+      ...(wsl ? { host: 'wsl' as const } : {}),
     };
   };
   // None of these needs a database, so they are there whatever else is.
@@ -630,7 +645,11 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
           stopAll: async () => {
             host?.stopAll();
           },
-          ...(opts.poweroff ? { poweroff: opts.poweroff } : {}),
+          ...(opts.poweroff
+            ? { poweroff: opts.poweroff }
+            : wsl
+              ? { windows: windowsHost({ log }) }
+              : {}),
           now: clock,
           emit: (s) => powerMachine?.publish(s),
           log,

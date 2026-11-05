@@ -32,6 +32,7 @@ beforeAll(async () => {
     adapter: generateCorpus({ sessions: 1, projects: 1, bigSessionMessages: 0 }),
     installSignalHandlers: false,
     headless: true,
+    host: null,
     remote: { addresses: ['127.0.0.1'], port: 0 },
     logger: quietLogger(),
   });
@@ -260,6 +261,7 @@ describe('pairWithMachine', () => {
       adapter: generateCorpus({ sessions: 1, projects: 1, bigSessionMessages: 0 }),
       installSignalHandlers: false,
       headless: true,
+      host: null,
       remote: { addresses: ['127.0.0.1'], port: 0 },
       logger: quietLogger(),
     });

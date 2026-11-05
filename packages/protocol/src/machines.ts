@@ -22,6 +22,11 @@ export const MachineInfoSchema = z.object({
   headless: z.boolean(),
   home: z.string(),
   capabilities: z.array(z.string()),
+  /**
+   * `wsl`: a worker running in WSL on a Windows PC (its platform stays `linux`).
+   * Absent everywhere else, and from machines that predate it.
+   */
+  host: z.enum(['wsl']).optional(),
 });
 export type MachineInfo = z.infer<typeof MachineInfoSchema>;
 

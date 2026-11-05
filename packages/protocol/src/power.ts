@@ -78,6 +78,13 @@ export const MachinePowerStatusSchema = z.object({
 });
 export type MachinePowerStatus = z.infer<typeof MachinePowerStatusSchema>;
 
+/**
+ * The problem of a shutdown that a person signed in at a Windows worker kept on: an
+ * idle one, or a manual one sent without `despiteSignedIn`. Worded for any desktop
+ * that shows it as it is (one from before it names the machine itself).
+ */
+export const SIGNED_IN = 'Someone is signed in on the machine';
+
 export const POWER_ERRORS = {
   unreachable: 'POWER_UNREACHABLE',
   auth: 'POWER_AUTH',

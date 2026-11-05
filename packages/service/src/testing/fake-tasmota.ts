@@ -28,6 +28,8 @@ export type FakeTasmota = {
   utcOffsetMinutes: number;
   /** The global `Timers` flag (default on). */
   timersOn: boolean;
+  /** Rule timers in seconds, as our rule's tga and tgo set them (the fake never counts down). */
+  ruleTimers: Record<number, number>;
   /** The next `ZbPermitJoin 1` pairs this device. */
   joinNext(dev: {
     id: string;
@@ -49,6 +51,11 @@ export type FakeTasmotaOptions = {
   maxRuleLength?: number;
   /** Mem values longer than this are cut off when written. */
   maxMemLength?: number;
+  /**
+   * How long after `Event tga`/`tgo` our rule's Backlog sets its rule timers (default
+   * at once). A real switch spaces Backlog commands about 200 ms apart.
+   */
+  backlogDelayMs?: number;
 };
 
 const DEFAULT_TIMER = {
@@ -140,6 +147,7 @@ export async function startFakeTasmota(o: FakeTasmotaOptions = {}): Promise<Fake
     devices,
     utcOffsetMinutes: 60,
     timersOn: true,
+    ruleTimers: {},
     joinNext(dev) {
       pending.push({
         id: dev.id,
@@ -160,6 +168,27 @@ export async function startFakeTasmota(o: FakeTasmotaOptions = {}): Promise<Fake
   };
 
   const unknown = (input: string) => ({ Command: 'Unknown', Input: input });
+
+  /** Backlogs of our rule not yet done, cleared on close. */
+  const backlogs = new Set<NodeJS.Timeout>();
+  /** What our rule does on an event, if it is installed and on: tga arms, tgo and tgw disarm. */
+  const ruleEvent = (event: string) => {
+    const ours = Object.values(state.rules).some((r) => r.on && r.text.includes('Event#tga'));
+    const set =
+      event === 'tga'
+        ? { 7: 5, 8: 900 }
+        : event === 'tgo' || event === 'tgw'
+          ? { 7: 0, 8: 0 }
+          : null;
+    if (!ours || !set) return;
+    const apply = () => Object.assign(state.ruleTimers, set);
+    if (!o.backlogDelayMs) return apply();
+    const t = setTimeout(() => {
+      backlogs.delete(t);
+      apply();
+    }, o.backlogDelayMs);
+    backlogs.add(t);
+  };
 
   const run = (input: string): Record<string, unknown> => {
     state.commands.push(input);
@@ -307,7 +336,16 @@ export async function startFakeTasmota(o: FakeTasmotaOptions = {}): Promise<Fake
       if (arg !== '') state.timersOn = arg === '1' || arg.toLowerCase() === 'on';
       return { Timers: state.timersOn ? 'ON' : 'OFF' };
     }
-    if (name === 'event') return { Event: 'Done' };
+    if (name === 'event') {
+      ruleEvent(arg.toLowerCase());
+      return { Event: 'Done' };
+    }
+    if ((m = name.match(/^ruletimer([1-8])$/))) {
+      if (arg !== '') state.ruleTimers[Number(m[1])] = Number(arg);
+      return Object.fromEntries(
+        Array.from({ length: 8 }, (_, i) => [`T${i + 1}`, state.ruleTimers[i + 1] ?? 0]),
+      );
+    }
     return unknown(input);
   };
 
@@ -345,6 +383,8 @@ export async function startFakeTasmota(o: FakeTasmotaOptions = {}): Promise<Fake
   state.address = `127.0.0.1:${(server.address() as AddressInfo).port}`;
   state.close = () =>
     new Promise<void>((resolve) => {
+      for (const t of backlogs) clearTimeout(t);
+      backlogs.clear();
       server.close(() => resolve());
       server.closeAllConnections();
     });

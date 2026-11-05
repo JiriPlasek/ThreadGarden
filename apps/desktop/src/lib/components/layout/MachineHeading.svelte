@@ -39,7 +39,7 @@
 </script>
 
 <script lang="ts">
-  import { POWER_CAPABILITY } from '@threadgarden/protocol';
+  import { POWER_CAPABILITY, SIGNED_IN } from '@threadgarden/protocol';
   import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
   import PowerIcon from '@lucide/svelte/icons/power';
   import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
@@ -48,7 +48,7 @@
   import * as Tooltip from '#lib/components/ui/tooltip/index.js';
   import { agoText, clockTime, spanText } from '#lib/format/usage.js';
   import { useApp } from '#lib/state/context.js';
-  import { machineLabel } from '#lib/state/machines.svelte.js';
+  import { hostSuffix, machineLabel } from '#lib/state/machines.svelte.js';
   import { cn } from '#lib/utils.js';
 
   /**
@@ -62,7 +62,9 @@
    * A machine with power control also gets a ⏻ menu (Turn on, Shut down now,
    * Keep awake), its idle-shutdown countdown or keep-awake time in the state
    * label's title, and, when turning it on failed, the reason in a line under
-   * the heading. Shutting down a machine at work asks first.
+   * the heading. Shutting down a machine at work asks first, and so does one
+   * that answers that someone is signed in at it (a Windows PC): confirmed,
+   * it is shut down regardless. A worker in WSL says so in its name's title.
    *
    * A machine that is away, whose chats show from this device's copy, says
    * when that copy was made: "last seen 2 h ago".
@@ -76,6 +78,7 @@
   const { interaction, machines, power, scopes } = useApp();
 
   const name = $derived(machineLabel(machine));
+  const hostTitle = $derived(hostSuffix(machine) ? `${name}${hostSuffix(machine)}` : undefined);
   const status = $derived(machines.shown(machine));
   const shown = $derived(machineState({ name: machine.name, status }));
   // A machine that answered says whether it has power control; one that has not yet, the stored switch.
@@ -87,7 +90,12 @@
   const awake = $derived(power.machine(machine.id)?.keepAwake);
   const starting = $derived(power.turningOn(machine.id));
   // What failed when asked (turning on, shutting down), else why the machine stopped a shutdown.
-  const failure = $derived(power.error(machine.id) ?? power.machine(machine.id)?.problem ?? null);
+  const problem = $derived(power.machine(machine.id)?.problem ?? null);
+  // The wire's wording is generic; here the machine has a name.
+  const failure = $derived(
+    power.error(machine.id) ??
+      (problem === SIGNED_IN ? `Someone is signed in on ${name}` : problem),
+  );
 
   /** What the menu offers: Turn on whenever the plug reads off, else only what the state allows. */
   const plugOff = $derived.by((): boolean => {
@@ -146,6 +154,11 @@
   const quiet = (p: Promise<unknown>): void => void p.catch(() => {});
   /** Asking whether to shut down a machine that is at work. */
   let confirmShutDown = $state(false);
+  /**
+   * Asking whether to shut down a Windows PC that someone is signed in at: open while
+   * a shutdown from here or from the unpushed notice waits on it (see `signedInAsk`).
+   */
+  const signedInAsk = $derived(power.signedInAsk(machine.id));
   const shutDown = (): void => {
     if (power.machine(machine.id)?.busy) confirmShutDown = true;
     else quiet(power.shutDown(machine.id, false));
@@ -169,6 +182,7 @@
         type="button"
         class="hover:text-foreground focus-visible:ring-ring/50 flex min-w-0 items-center gap-1 rounded-sm px-0.5 tracking-wide uppercase outline-none focus-visible:ring-2"
         aria-expanded={!collapsed}
+        title={hostTitle}
         onclick={onToggle}
       >
         <ChevronRightIcon
@@ -285,6 +299,23 @@
     confirmLabel="Shut down"
     destructive
     onConfirm={() => quiet(power.shutDown(machine.id, false))}
+  />
+  <ConfirmDialog
+    bind:open={
+      () => signedInAsk !== null,
+      (open) => {
+        if (!open) power.clearSignedInAsk(machine.id);
+      }
+    }
+    title="Someone is signed in on {name}. Shut it down anyway?"
+    confirmLabel="Shut down"
+    destructive
+    onConfirm={() => {
+      // A question that went stale meanwhile sends nothing (see `signedInAsk`).
+      if (!signedInAsk) return;
+      // The same force as the request it answers (despite unpushed work, or not).
+      quiet(power.shutDown(machine.id, signedInAsk.force, true));
+    }}
   />
   {#if seenAt !== null}
     <p class="text-muted-foreground px-2 text-[0.6875rem]">

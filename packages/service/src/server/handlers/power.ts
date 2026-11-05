@@ -126,7 +126,11 @@ export const registerPowerMachineHandlers = (
   // Machine side, open to paired devices: the sequence never powers off unless the switch is armed.
   if (shutdown) {
     router.register('power.shutdown', async (p) =>
-      shutdown.run({ force: p.force, reason: 'manual' }),
+      shutdown.run({
+        force: p.force,
+        despiteSignedIn: p.despiteSignedIn === true,
+        reason: 'manual',
+      }),
     );
   }
   return { status, notify, publish };

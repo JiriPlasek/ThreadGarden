@@ -681,6 +681,8 @@ const headless = () => ({
   adapter: generateCorpus({ sessions: 1, projects: 1, bigSessionMessages: 0 }),
   installSignalHandlers: false,
   headless: true,
+  // Never detected: a run inside WSL must not make this a Windows worker.
+  host: null,
   remote: { addresses: ['127.0.0.1'], port: 0 },
   logger: quietLogger(),
 });

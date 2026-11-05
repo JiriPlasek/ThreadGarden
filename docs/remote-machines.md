@@ -4,6 +4,11 @@ This guide sets up a second computer (here: an Ubuntu PC on Wi-Fi, without a
 screen) so that Threadgarden on your Windows desktop can run chats on it. You
 do the steps once, over SSH; after that everything happens in Threadgarden.
 
+A Windows 11 PC can be the worker too: it runs the same Ubuntu setup inside
+WSL. [A Windows PC as the worker (WSL)](#a-windows-pc-as-the-worker-wsl) says
+what is different there, including what its chats can reach on Windows; the
+rest of this guide applies to it as written for the Ubuntu PC.
+
 ## What it does
 
 - The Ubuntu PC runs the **Threadgarden service headless**: no window, started
@@ -24,7 +29,9 @@ do the steps once, over SSH; after that everything happens in Threadgarden.
   does not set up or manage that, and nothing in it is exposed to the
   internet.
 - Every paired device has **full control** of the Ubuntu PC's chats (send,
-  answer permissions, stop). Pairing can be revoked from either side.
+  answer permissions, stop), and through them of what Claude Code can do on
+  that machine. Pairing can be revoked from either side. (A Windows PC's
+  chats reach further: see [Things to know](#things-to-know).)
 - Optionally, Threadgarden turns the PC on and shuts it down through a
   Tasmota smart plug on your network: see [Power control](#4-power-control).
   Without it the PC simply stays on.
@@ -717,6 +724,193 @@ internet, and give it a web password. Threadgarden keeps the password in the
 desktop's credential store and, on the Ubuntu PC (whose own service arms the
 cut), in `~/.local/share/threadgarden/power-switch.json`, readable only by your
 user. It never appears in the interface, logs or errors after you type it.
+
+## A Windows PC as the worker (WSL)
+
+A spare Windows PC can be the worker instead of an Ubuntu PC. It runs the
+same Linux package inside its own WSL distro, and Threadgarden shows it as
+**Windows (WSL)** in Settings → Machines. A setup script prepares the Windows
+side once. Inside the distro you then follow the Ubuntu steps of this guide,
+which stay the same.
+
+**You need:**
+
+- Windows 11 22H2 (build 22621) or newer, x64, with virtualization turned on
+  in the BIOS (WSL 2 needs it; it usually is);
+- an administrator account. The worker belongs to the Windows user who runs
+  the script, because WSL distros, `.wslconfig` and the start-at-boot task are
+  per user;
+- a reserved address for the PC in your router, as for an Ubuntu PC
+  ([A stable address](#a-stable-address)).
+
+### Run the setup script
+
+Sign in to Windows as the user who will own the worker. Open PowerShell with
+**Run as administrator**, from that same session. A PowerShell elevated with
+another account's password would set up that account instead, so the script
+stops and says so. Then download the script and its checksum into a folder
+of their own, check it, and run it:
+
+```powershell
+mkdir ~\threadgarden-setup -Force | Out-Null; cd ~\threadgarden-setup
+$base = 'https://github.com/JiriPlasek/ThreadGarden/releases/latest/download'
+curl.exe -fL -O "$base/threadgarden-setup-worker.ps1" -O "$base/threadgarden-setup-worker.ps1.sha256"
+(Get-FileHash .\threadgarden-setup-worker.ps1).Hash -eq (Get-Content .\threadgarden-setup-worker.ps1.sha256).Split(' ')[0]
+Unblock-File .\threadgarden-setup-worker.ps1
+powershell -ExecutionPolicy Bypass -File .\threadgarden-setup-worker.ps1
+```
+
+The check must print `True`; if it prints `False`, download again and do not
+run it. Windows blocks scripts that were downloaded and are not signed.
+`Unblock-File` and `-ExecutionPolicy Bypass` let this one run, in this window
+only, without changing your settings. Add `-DryRun` to the last line to see
+every change it would make without making any.
+
+**What the script does.** It explains each step as it goes:
+
+1. It checks the Windows version, then whether WSL is installed. If WSL is
+   missing, it installs it (`wsl --install --no-distribution`) and asks you to
+   restart Windows and run the script again. If WSL still isn't found after
+   the restart, run `wsl --update` first.
+2. It installs Ubuntu 24.04 as a distro of its own, named `threadgarden`
+   (`-Distro <name>` picks another name). Your other distros are left alone.
+   When Ubuntu asks, create your Linux user, then type `exit` to come back to
+   the script.
+3. It turns on mirrored networking in `%USERPROFILE%\.wslconfig`: it adds
+   `networkingMode=mirrored` under `[wsl2]`, with a `# added by Threadgarden`
+   line above it. Your other settings stay as they are, and the file is first
+   backed up to `.wslconfig.bak-threadgarden`; an earlier backup is kept. If
+   your `.wslconfig` already sets a different `networkingMode`, the script
+   stops before installing anything and leaves the file as it is.
+4. It adds a Hyper-V firewall rule, `ThreadgardenWorker`, which lets devices
+   reach the worker on TCP port 47380.
+5. It adds a scheduled task, `Threadgarden worker`, which starts the distro
+   at boot with nobody signed in, and again every 5 minutes if it has stopped
+   (a run still going is left alone). It runs `wsl.exe -d threadgarden --exec
+   sleep infinity` as you, without storing your password. The distro's systemd
+   then starts the worker, as on Ubuntu.
+6. It tells you if Windows would put the PC to sleep (see below).
+7. It offers `wsl --shutdown`, so that WSL restarts with mirrored networking
+   now. That stops every running distro, and Docker Desktop, so the default is
+   no; the change then applies at the next restart of Windows.
+8. It starts the task, so the worker is held from now on, not only from the
+   next boot, and prints the commands to run next, inside the distro.
+
+The script never installs Claude Code or Threadgarden inside the distro: that
+part is the same as on Ubuntu. Open the distro and go to your home folder
+first. A distro opened from an administrator PowerShell starts in
+`C:\Windows\System32`, and a download there would land in that folder:
+
+```powershell
+wsl -d threadgarden
+```
+
+```sh
+cd ~
+```
+
+Then follow [Claude Code](#claude-code), [git and the GitHub
+CLI](#git-and-the-github-cli) and [The Threadgarden headless
+service](#the-threadgarden-headless-service) above. The installer asks for
+your password once, for lingering. It needs no polkit rule in WSL and says so:
+"Running in WSL: Windows does the powering off, so no polkit rule is needed."
+Then pair as in [section 3](#3-pair-it-with-threadgarden-on-windows), with
+the Windows PC's address (`threadgarden status` lists it).
+
+### Things to know
+
+- **A chat there reaches your Windows account.** Through WSL's interop and
+  `/mnt/c`, Claude Code in the distro can read and change your Windows user's
+  files and run Windows programs as that user (not elevated), and so can every
+  paired device through its chats. Use a spare PC, or give the worker a
+  Windows account of its own. That account must be an administrator, since the
+  script must run elevated as the signed-in user.
+- **Mirrored networking is global.** It applies to every WSL distro on the PC
+  and to Docker Desktop, not only to the worker. With it, the worker listens on
+  the PC's own addresses, so other devices reach it like any other machine.
+- **Pairing from the same PC.** Another device pairs as usual. Threadgarden on
+  the same Windows PC can reach the worker only once this is in
+  `.wslconfig`, after a `wsl --shutdown` or a restart:
+
+  ```ini
+  [experimental]
+  hostAddressLoopback=true
+  ```
+
+- **Automatic restart sign-on.** "Use my sign-in info to automatically finish
+  setting up after an update" (Settings → Accounts → Sign-in options) signs you
+  in and locks the screen after an update restart. The worker runs either way,
+  but a locked session counts as someone signed in (below), so idle shutdown
+  waits until you sign out. Turn it off if you rely on idle shutdown. The same
+  goes for Remote Desktop: a session you only disconnected counts as signed in
+  and holds idle shutdown back, so sign out instead of closing the window.
+- **After `wsl --shutdown`** (or a WSL update, or Docker Desktop resetting
+  WSL) the worker stops while Windows keeps running. The scheduled task starts
+  it again within 5 minutes; to have it back at once, in PowerShell:
+
+  ```powershell
+  Start-ScheduledTask 'Threadgarden worker'
+  ```
+- **Sleep.** A sleeping PC can't be reached, by Threadgarden or by power
+  control. The script tells you when Windows would sleep on mains power; to
+  turn that off:
+
+  ```powershell
+  powercfg /change standby-timeout-ac 0
+  ```
+
+- **Windows Update.** The script doesn't change Windows Update. Set **active
+  hours** (Settings → Windows Update → Advanced options) to when you use the
+  worker, so Windows doesn't restart it in the middle of a chat.
+
+### Power control on Windows
+
+Power control works as in [section 4](#4-power-control), with the same plug,
+and the BIOS setting [4.3](#43-the-bios) matters just the same. The
+differences:
+
+- **Windows powers the PC off.** In WSL, `systemctl poweroff` would stop only
+  the distro. The worker runs Windows' `shutdown.exe /s /t 0` instead, a full
+  shutdown (not Fast Startup's hybrid one), so the next start is a real boot
+  and the start-at-boot task runs.
+- **Pending restarts.** Before each shutdown the worker asks Windows whether a
+  restart is pending (the Windows Update, servicing and
+  `PendingFileRenameOperations` registry entries). If one is, Windows may
+  install updates on the way down, which can take longer than 15 minutes. So
+  the switch's 15-minute cut is not armed for that shutdown. The cut once the
+  plug reads low stays armed, and a shutdown that hangs then just stays on. On
+  some PCs `PendingFileRenameOperations` stays set all the time (installers
+  leave entries in it), so the 15-minute cut is skipped on every shutdown.
+  That is safe; it only means a PC that hangs at the end of a shutdown stays
+  on.
+- **Someone is signed in.** Idle shutdown never shuts the PC down while
+  someone is signed in to Windows, even with the screen locked. The machine's
+  heading says "Someone is signed in on ‹machine›", and it tries again after
+  the next idle period. **Shut down now** asks "Someone is signed in on
+  ‹machine›. Shut it down anyway?"; **Shut down** then closes their apps
+  without saving. When there is also unpushed work, it asks both, in turn:
+  first **Unpushed work on ‹machine›** (**Shut down anyway**), then whether
+  someone is signed in. Windows Home has no `quser.exe`, the tool the worker
+  asks first, so there it asks Windows who is signed in at the screen
+  instead. That still holds idle shutdown back for a person at the PC. If
+  that question fails too, nobody counts as signed in.
+
+### Removing it
+
+First **Remove** the machine in Settings → Machines. Then, in PowerShell as
+administrator (as the same user), in the folder with the script:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\threadgarden-setup-worker.ps1 -Remove
+```
+
+It removes the scheduled task, the firewall rule and the lines it added to
+`.wslconfig`, and only those. A line you have changed since stays, and so
+does the backup `.wslconfig.bak-threadgarden`. Then it asks whether to
+unregister the `threadgarden` distro, which deletes everything in it for
+good. The default is no; you can do it later with `wsl --unregister
+threadgarden`. Running `-Remove` again finds nothing more to remove (it asks
+about the distro again if you kept it). WSL itself stays installed.
 
 ## Troubleshooting
 

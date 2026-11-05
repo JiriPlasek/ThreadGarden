@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
   CAPABILITIES,
+  MachineInfoSchema,
   PROTOCOL_VERSION,
   POWER_CAPABILITY,
   PlugReadingSchema,
   PowerConfigSchema,
+  SIGNED_IN,
   SettingsSchema,
   acceptsRemoteProtocol,
   events,
@@ -53,9 +55,45 @@ describe('power protocol', () => {
     expect(SettingsSchema.parse({}).idleShutdownMinutes).toBe(60);
   });
 
+  it('MachineInfoSchema parses with and without host', () => {
+    const machine = {
+      id: 'm1',
+      name: 'Den',
+      platform: 'linux',
+      headless: true,
+      home: '/home/u',
+      capabilities: ['remote'],
+    };
+    expect(MachineInfoSchema.parse({ ...machine, host: 'wsl' }).host).toBe('wsl');
+    // A machine from before the field (or not in WSL) says nothing, and still parses.
+    expect(MachineInfoSchema.parse(machine)).not.toHaveProperty('host');
+    expect(MachineInfoSchema.safeParse({ ...machine, host: 'windows' }).success).toBe(false);
+  });
+
+  it('names a signed-in person as the problem', () => {
+    expect(SIGNED_IN).toBe('Someone is signed in on the machine');
+  });
+
+  it('power.shutdown takes despiteSignedIn as an optional second confirm', () => {
+    const params = methods['power.shutdown'].params;
+    // An older desktop sends only force.
+    expect(params.parse({ force: true })).toEqual({ force: true });
+    expect(params.parse({ force: false, despiteSignedIn: true })).toEqual({
+      force: false,
+      despiteSignedIn: true,
+    });
+    expect(params.safeParse({ force: false, despiteSignedIn: 'yes' }).success).toBe(false);
+  });
+
   it('is protocol 11 and accepts machines at 10 to 12', () => {
     expect(PROTOCOL_VERSION).toBe(11);
-    expect([9, 10, 11, 12, 13].map(acceptsRemoteProtocol)).toEqual([false, true, true, true, false]);
+    expect([9, 10, 11, 12, 13].map(acceptsRemoteProtocol)).toEqual([
+      false,
+      true,
+      true,
+      true,
+      false,
+    ]);
     expect(POWER_CAPABILITY).toBe('power');
     expect(CAPABILITIES).not.toContain('power');
   });
