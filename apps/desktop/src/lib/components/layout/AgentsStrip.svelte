@@ -5,7 +5,7 @@
   import { Button } from '#lib/components/ui/button/index.js';
   import { useApp } from '#lib/state/context.js';
   import { stopAllDescription } from '#lib/state/lifecycle.svelte.js';
-  import { machineNameOf, onMachineNames } from '#lib/state/machines.svelte.js';
+  import { machineAway, machineNameOf, onMachineNames } from '#lib/state/machines.svelte.js';
   import { chatKey } from '#lib/state/refs.js';
   import type { MachineScope } from '#lib/state/scope.js';
   import { cn } from '#lib/utils.js';
@@ -58,8 +58,11 @@
       {#each agents.items as agent (chatKey(agent))}
         {@const project = namesOn.get(agent.machineId)?.get(agent.projectId) ?? baseName(agent.cwd)}
         {@const detail = previewLine(agent)}
-        {@const running =
-          scopeOf(agent.machineId).chats.get(agent.sessionId)?.running ?? agent.runningTasks ?? 0}
+        {@const running = machineAway(machines, agent.machineId)
+          ? 0
+          : (scopeOf(agent.machineId).chats.get(agent.sessionId)?.running ??
+            agent.runningTasks ??
+            0)}
         <li class="shrink-0">
           <button
             type="button"

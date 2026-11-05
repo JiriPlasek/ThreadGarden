@@ -7,7 +7,8 @@
   import IconButton from '#lib/components/layout/IconButton.svelte';
   import { fullTime } from '#lib/format/time.js';
   import { taskEnded, type ChatState } from '#lib/state/chats.svelte.js';
-  import { useScope } from '#lib/state/context.js';
+  import { useApp, useScope } from '#lib/state/context.js';
+  import { machineAway } from '#lib/state/machines.svelte.js';
   import { cn } from '#lib/utils.js';
   import { shortModel, taskRows, type TaskRow } from './activity';
   import { elapsed, tokens } from './format';
@@ -41,7 +42,10 @@
   } = $props();
 
   /** The chat's machine's chats (stopping a task goes there). */
-  const { chats } = useScope();
+  const { chats, machineId } = useScope();
+  const { machines } = useApp();
+  /** Ruling R10: nothing runs on a machine that is away, whatever its tasks last said. */
+  const running = $derived(machineAway(machines, machineId) ? 0 : chat.running);
 
   /** A prompt longer than this (or than PROMPT_LINES lines) is clamped behind "Show all". */
   const PROMPT_CHARS = 240;
@@ -307,9 +311,9 @@
 >
   <div class="flex h-8 shrink-0 items-center gap-2 border-b pr-1.5 pl-3">
     <h2 class="shrink-0 text-xs font-semibold">Activity</h2>
-    {#if chat.running > 0}
+    {#if running > 0}
       <span class="text-muted-foreground min-w-0 truncate text-[0.6875rem] tabular-nums"
-        >{chat.running} running</span
+        >{running} running</span
       >
     {/if}
     <IconButton label="Hide activity" class="ml-auto shrink-0" side="left" onclick={onClose}>

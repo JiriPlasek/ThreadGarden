@@ -1,4 +1,12 @@
-import type { ChatSummary } from '@threadgarden/protocol';
+import type { ChatStatus, ChatSummary } from '@threadgarden/protocol';
+
+/**
+ * A chat's status as shown while its machine is away (ruling R10): nothing
+ * runs there, so working (or unknown) shows as idle; what waits on the user
+ * stays as it is. `away` false: the status as it is.
+ */
+export const shownStatus = (status: ChatStatus, away: boolean): ChatStatus =>
+  away && (status === 'working' || status === 'unknown') ? 'idle' : status;
 
 /** The source's own status text for an external session (shown when Threadgarden does not know it). */
 export const rawStatus = (

@@ -5,6 +5,7 @@
 import { getContext } from 'svelte';
 import { agents, type AgentsState } from './agents.svelte';
 import { analytics, type AnalyticsState } from './analytics.svelte';
+import { away, type AwayState } from './away.svelte';
 import { buckets, type BucketsState } from './buckets.svelte';
 import { chats, type ChatsState } from './chats.svelte';
 import { connection, type ConnectionState } from './connection.svelte';
@@ -49,6 +50,8 @@ export type AppState = {
   machineUpdates: MachineUpdatesState;
   /** Power control of paired machines: plug readings, power status, Off / Starting… / Shutting down. */
   power: PowerState;
+  /** Messages written for machines that are away, waiting on this device. */
+  away: AwayState;
   /**
    * One scope of per-machine stores per machine. The keys above (`places`,
    * `sessions`, `chats`, …) are This PC's scope.
@@ -77,6 +80,7 @@ const singletons: AppState = {
   machines,
   machineUpdates,
   power,
+  away,
   scopes,
 };
 

@@ -53,9 +53,9 @@ describe('power protocol', () => {
     expect(SettingsSchema.parse({}).idleShutdownMinutes).toBe(60);
   });
 
-  it('is protocol 10 and accepts machines at 9 to 11', () => {
-    expect(PROTOCOL_VERSION).toBe(10);
-    expect([8, 9, 10, 11, 12].map(acceptsRemoteProtocol)).toEqual([false, true, true, true, false]);
+  it('is protocol 11 and accepts machines at 10 to 12', () => {
+    expect(PROTOCOL_VERSION).toBe(11);
+    expect([9, 10, 11, 12, 13].map(acceptsRemoteProtocol)).toEqual([false, true, true, true, false]);
     expect(POWER_CAPABILITY).toBe('power');
     expect(CAPABILITIES).not.toContain('power');
   });

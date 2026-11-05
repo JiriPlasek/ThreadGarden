@@ -124,6 +124,11 @@ export const startRemoteServer = async (opts: {
    * them only while a pairing code is live; otherwise they are refused with 503.
    */
   pairingOpen?(): boolean;
+  /**
+   * The mock service only (`mock.goAway`): while false, every upgrade is cut
+   * at once, as a machine without power never answers. Default: always.
+   */
+  reachable?(): boolean;
   /** Tests: how long a pairing socket stays open (default `PAIRING_SOCKET_TTL_MS`). */
   pairingTtlMs?: number;
   /** Tests: the TLS handshake timeout (default `REMOTE_HANDSHAKE_TIMEOUT_MS`). */
@@ -228,6 +233,10 @@ export const startRemoteServer = async (opts: {
   };
 
   const onUpgrade = (req: IncomingMessage, socket: Duplex, head: Buffer): void => {
+    if (opts.reachable?.() === false) {
+      socket.destroy();
+      return;
+    }
     const protocol = offeredProtocol(req);
     if (protocol?.startsWith(DEVICE_PREFIX)) {
       const token = protocol.slice(DEVICE_PREFIX.length);

@@ -71,6 +71,15 @@ export const machineNameOf = (machines: Pick<MachinesState, 'get'>, id: string):
   return m ? machineLabel(m) : THIS_PC;
 };
 
+/**
+ * A paired machine this device isn't connected to (away machine spec): its
+ * chats are read from the copy and nothing runs there (ruling R10).
+ */
+export const machineAway = (machines: Pick<MachinesState, 'get'>, id: string): boolean => {
+  const m = machines.get(id);
+  return !!m && !m.local && m.status !== 'on';
+};
+
 /** The names of the machines that are on (This PC first), e.g. for "Stop all work". */
 export const onMachineNames = (machines: Pick<MachinesState, 'list'>): string[] =>
   machines.list.filter((m) => m.status === 'on').map(machineLabel);

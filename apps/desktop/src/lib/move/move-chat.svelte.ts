@@ -5,7 +5,13 @@
  * the rest (the old copy hidden, scheduled sends, the draft, the tab, the
  * first note) follows.
  */
-import { MOVE_ERRORS, type GitState, type MovePeer, type Result } from '@threadgarden/protocol';
+import {
+  AWAY_ERROR,
+  MOVE_ERRORS,
+  type GitState,
+  type MovePeer,
+  type Result,
+} from '@threadgarden/protocol';
 import { supportsMove } from '../projects';
 import { RequestError } from '../service/client';
 import type { Api } from '../state/api';
@@ -90,9 +96,14 @@ const repoNameOf = (origin: string | null, cwd: string): string => {
 const reason = (e: unknown): string =>
   e instanceof Error && e.message ? e.message : 'Something went wrong.';
 
-/** The answer was lost on the way (the call may have done its work). */
+/**
+ * The answer was lost on the way (the call may have done its work). A call
+ * made while the machine's link is down is answered by its copy here with
+ * AWAY: like DISCONNECTED, it is asked again once the machine is back.
+ */
 const lost = (e: unknown): boolean =>
-  e instanceof RequestError && (e.code === 'TIMEOUT' || e.code === 'DISCONNECTED');
+  e instanceof RequestError &&
+  (e.code === 'TIMEOUT' || e.code === 'DISCONNECTED' || e.code === AWAY_ERROR);
 
 const isExpired = (e: unknown): boolean =>
   e instanceof RequestError && e.code === MOVE_ERRORS.expired;

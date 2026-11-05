@@ -2,7 +2,8 @@
 import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { ChatItem } from '@threadgarden/protocol';
+import { DatabaseSync } from 'node:sqlite';
+import { PROTOCOL_VERSION, type ChatItem } from '@threadgarden/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Logger } from '../../src/logger.js';
 import { startService, type ServiceHandle, type StartOptions } from '../../src/main.js';
@@ -652,5 +653,154 @@ describe('chat handlers', () => {
     await ok('chat.open', { sessionId: 'b', tail: 1 });
     await ok('chat.open', { sessionId: 'a', tail: 1 }); // evicted by b
     expect(reads).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe('ids from a client that retries (a machine that is away)', () => {
+  const M1 = '7b0c1f0e-5d1c-4f55-9a53-0a1b2c3d4e51';
+  const M2 = '7b0c1f0e-5d1c-4f55-9a53-0a1b2c3d4e52';
+  const S1 = '9d2f6a40-1c1b-4e8e-8f0a-5b6c7d8e9f01';
+  const S2 = '9d2f6a40-1c1b-4e8e-8f0a-5b6c7d8e9f02';
+
+  it('a repeated messageId is accepted once', async () => {
+    const adapter = new FakeAdapter();
+    addHistory(adapter, 'h1', 1);
+    await start(adapter);
+
+    await ok('chat.send', { sessionId: 'h1', text: 'once', messageId: M1 });
+    const fake = adapter.lastSession();
+    expect(fake.sent).toHaveLength(1);
+    // The same id again (a retry after a lost answer): nothing more is sent.
+    expect(await ok('chat.send', { sessionId: 'h1', text: 'once', messageId: M1 })).toEqual({
+      queued: false,
+    });
+    expect(fake.sent).toHaveLength(1);
+    expect(adapter.started).toHaveLength(1);
+    // Another id, or none, goes through.
+    await ok('chat.send', { sessionId: 'h1', text: 'twice', messageId: M2 });
+    await ok('chat.send', { sessionId: 'h1', text: 'no id' });
+    expect(fake.sent).toHaveLength(3);
+  });
+
+  it('a messageId is remembered across a service restart', async () => {
+    const adapter = new FakeAdapter();
+    addHistory(adapter, 'h1', 1);
+    await start(adapter);
+    await ok('chat.send', { sessionId: 'h1', text: 'once', messageId: M1 });
+    await svc!.close();
+    svc = undefined;
+
+    const again = new FakeAdapter();
+    addHistory(again, 'h1', 1);
+    await start(again);
+    await ok('chat.send', { sessionId: 'h1', text: 'once', messageId: M1 });
+    expect(again.started).toHaveLength(0);
+  });
+
+  it('a send that fails before reaching Claude does not keep its messageId', async () => {
+    const adapter = new FakeAdapter();
+    await start(adapter);
+    // The chat is not known yet: the send fails, and a retry must not be swallowed.
+    expect(await code('chat.send', { sessionId: 'late', text: 'hi', messageId: M1 })).toBe(
+      'NOT_FOUND',
+    );
+    addHistory(adapter, 'late', 1);
+    await ok('chat.send', { sessionId: 'late', text: 'hi', messageId: M1 });
+    expect(adapter.lastSession().sent).toHaveLength(1);
+  });
+
+  it('a retry while the first try waits on the resume is not answered as delivered', async () => {
+    const adapter = new FakeAdapter();
+    addHistory(adapter, 'held', 1);
+    const busy = JSON.stringify([
+      { pid: 7, cwd: dir, kind: 'interactive', startedAt: 1, sessionId: 'held', status: 'busy' },
+    ]);
+    let agents: () => Promise<string> = async () => '[]';
+    await start(adapter, { externalRun: () => agents() });
+    let open!: () => void;
+    const gate = new Promise<string>((resolve) => {
+      open = () => resolve(busy);
+    });
+    agents = () => gate;
+
+    const first = call('chat.send', { sessionId: 'held', text: 'hi', messageId: M1 });
+    const retry = call('chat.send', { sessionId: 'held', text: 'hi', messageId: M1 });
+    await settle();
+    open();
+    // The first try fails; the retry must fail too, not be told the message went out.
+    expect((await first).error?.code).toBe('RESUME_BLOCKED');
+    expect((await retry).error?.code).toBe('RESUME_BLOCKED');
+    expect(adapter.started).toHaveLength(0);
+    // Once the chat is free, the same id goes through.
+    agents = async () => '[]';
+    await ok('chat.send', { sessionId: 'held', text: 'hi', messageId: M1 });
+    expect(adapter.lastSession().sent).toHaveLength(1);
+  });
+
+  it('chat.create with the id of a chat in another folder is refused', async () => {
+    const adapter = new FakeAdapter();
+    addHistory(adapter, S1, 1);
+    await start(adapter);
+    expect(
+      await code('chat.create', { cwd: join(dir, 'elsewhere'), text: 'hi', sessionId: S1 }),
+    ).toBe('INVALID_PARAMS');
+    expect(adapter.started).toHaveLength(0);
+  });
+
+  it('messageIds older than 30 days are dropped at start', async () => {
+    const adapter = new FakeAdapter();
+    addHistory(adapter, 'h1', 1);
+    await start(adapter);
+    await svc!.close();
+    svc = undefined;
+    const raw = new DatabaseSync(join(dir, 'data', 'threadgarden.db'));
+    const day = 24 * 60 * 60 * 1000;
+    const ins = raw.prepare('INSERT INTO received_messages (id, session_id, at) VALUES (?, ?, ?)');
+    ins.run(M1, 'h1', Date.now() - 31 * day);
+    ins.run(M2, 'h1', Date.now() - 29 * day);
+    raw.close();
+
+    const again = new FakeAdapter();
+    addHistory(again, 'h1', 1);
+    await start(again);
+    await ok('chat.send', { sessionId: 'h1', text: 'old', messageId: M1 });
+    expect(again.lastSession().sent).toHaveLength(1);
+    await ok('chat.send', { sessionId: 'h1', text: 'recent', messageId: M2 });
+    expect(again.lastSession().sent).toHaveLength(1);
+  });
+
+  it('chat.create with a client sessionId uses it', async () => {
+    const adapter = new FakeAdapter();
+    await start(adapter);
+    expect(await ok('chat.create', { cwd: dir, text: 'hi', sessionId: S1 })).toEqual({
+      sessionId: S1,
+    });
+    expect(adapter.lastSession().options.sessionId).toBe(S1);
+  });
+
+  it('chat.create with an existing sessionId returns it and creates nothing', async () => {
+    const adapter = new FakeAdapter();
+    addHistory(adapter, S1, 1);
+    await start(adapter);
+    // A chat in the history ...
+    expect(await ok('chat.create', { cwd: dir, text: 'hi', sessionId: S1 })).toEqual({
+      sessionId: S1,
+    });
+    expect(adapter.started).toHaveLength(0);
+    // ... and a live one.
+    await ok('chat.create', { cwd: dir, text: 'first', sessionId: S2 });
+    expect(await ok('chat.create', { cwd: dir, text: 'again', sessionId: S2 })).toEqual({
+      sessionId: S2,
+    });
+    expect(adapter.started).toHaveLength(1);
+  });
+
+  it('the away capability is offered', async () => {
+    await start(new FakeAdapter());
+    const hello = await ok<{ machine: { capabilities: string[] } }>('hello', {
+      protocolVersion: PROTOCOL_VERSION,
+      client: 't',
+    });
+    expect(hello.machine.capabilities).toContain('away');
   });
 });

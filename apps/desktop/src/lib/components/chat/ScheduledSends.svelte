@@ -3,6 +3,7 @@
   import OctagonAlertIcon from '@lucide/svelte/icons/octagon-alert';
   import type { ScheduledSend } from '@threadgarden/protocol';
   import ScheduleDialog from '#lib/components/composer/ScheduleDialog.svelte';
+  import { imageCountText } from '#lib/format/images.js';
   import { fullTime } from '#lib/format/time.js';
   import { sendTimeText } from '#lib/format/usage.js';
   import { useScope } from '#lib/state/context.js';
@@ -56,7 +57,7 @@
   const preview = (s: ScheduledSend): string => {
     const line = s.text.trim().split('\n')[0] ?? '';
     if (line) return line;
-    return s.imageCount === 1 ? '1 image' : `${s.imageCount} images`;
+    return imageCountText(s.imageCount);
   };
 </script>
 
@@ -80,9 +81,7 @@
             {/if}
             <span class="min-w-0 flex-1 truncate" title={s.text}>
               {preview(s)}{#if s.imageCount > 0 && s.text.trim()}
-                <span class="text-muted-foreground">
-                  · {s.imageCount === 1 ? '1 image' : `${s.imageCount} images`}</span
-                >{/if}
+                <span class="text-muted-foreground"> · {imageCountText(s.imageCount)}</span>{/if}
             </span>
             <button
               type="button"

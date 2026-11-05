@@ -13,10 +13,10 @@ const peer = { machineId: 'm', name: 'kumbal-machine' };
 const entry = { type: 'user', uuid: 'u', anything: { nested: [1, 2] } };
 
 describe('protocol 9', () => {
-  it('is protocol 10 and accepts remotes at 9 to 11', () => {
-    expect(PROTOCOL_VERSION).toBe(10);
-    expect(REMOTE_PROTOCOL_RANGE).toEqual({ min: 9, max: 11 });
-    expect([8, 9, 10, 11, 12].map(acceptsRemoteProtocol)).toEqual([false, true, true, true, false]);
+  it('is protocol 11 and accepts remotes at 10 to 12', () => {
+    expect(PROTOCOL_VERSION).toBe(11);
+    expect(REMOTE_PROTOCOL_RANGE).toEqual({ min: 10, max: 12 });
+    expect([9, 10, 11, 12, 13].map(acceptsRemoteProtocol)).toEqual([false, true, true, true, false]);
   });
 
   it('has the move capability and error codes', () => {

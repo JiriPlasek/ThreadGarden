@@ -403,6 +403,15 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
     return { events: events.map((e) => e.data), seq: host.seqOf(p.sessionId) };
   });
 
+  /** The folder of a chat this machine knows by any route (null: known, folder unknown); undefined: unknown. */
+  const knownCwd = (sessionId: string): string | null | undefined => {
+    const live = host.get(sessionId);
+    const row = db.getSession(sessionId);
+    const moved = db.getMovedChat(sessionId);
+    if (!live && !row && !moved && !catalog.summary(sessionId)) return undefined;
+    return live?.cwd ?? row?.cwd ?? moved?.cwd ?? null;
+  };
+
   router.register('chat.create', async (p) => {
     const choices = {
       ...(p.model === undefined ? {} : { model: model(p.model) }),
@@ -412,7 +421,17 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
       ...(p.effort === undefined ? {} : { effort: effort(p.effort) }),
     };
     await requireRunnable();
-    const s = host.create(p.cwd, toInput(p), choices);
+    // A client that picked the id and retries (its answer was lost) must not start a second
+    // chat: a chat this machine knows by any route (live, indexed, moved here) is just returned.
+    const known = p.sessionId === undefined ? undefined : knownCwd(p.sessionId);
+    if (p.sessionId !== undefined && known !== undefined) {
+      // The same id for another folder is not a retry: say so, rather than pretend it worked.
+      if (known !== null && known !== p.cwd) {
+        throw new ServiceError('INVALID_PARAMS', `Chat ${p.sessionId} exists in another folder`);
+      }
+      return { sessionId: p.sessionId };
+    }
+    const s = host.create(p.cwd, toInput(p), choices, p.sessionId);
     nameChat(s.sessionId, p.cwd, p.text, false); // shown with the change below
     markSeen(s.sessionId); // a new chat has nothing unseen; kept for symmetry with chat.send
     changed([s.sessionId]);
@@ -423,13 +442,54 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
    * `chat.send`, also the path scheduled sends (v1.3 B) go out by: resumes
    * the chat when Threadgarden is not running it (behind the resume-safety check).
    */
-  const send = async (p: { sessionId: string; text: string; images?: ImageRef[] | undefined }) => {
+  const send = async (p: {
+    sessionId: string;
+    text: string;
+    images?: ImageRef[] | undefined;
+    messageId?: string | undefined;
+  }) => {
+    // A client's retry carries the id of the message it already sent. Only a message that
+    // is really handed over counts as received, so the id is recorded in the same
+    // synchronous step as the hand-over (no await between), after the resume: a retry
+    // that comes while an earlier try still waits on the resume must not be answered as
+    // delivered. This look is only so a duplicate doesn't start a process, and it comes
+    // before the move checks: a message taken before the chat began to move was taken,
+    // and its retry must not read as refused.
+    const id = p.messageId;
+    if (id !== undefined && db.hasMessage(id)) return { queued: false };
     if (deps.isMoving?.(p.sessionId)) {
       throw new ServiceError(MOVE_ERRORS.moving, 'This chat is being moved to another machine');
     }
     const away = deps.awayTo?.(p.sessionId);
     if (away) throw new ServiceError(MOVE_ERRORS.moved, `This chat moved to ${away.name}`);
     const input = toInput(p);
+    const s = await resumedOrLive(p.sessionId);
+    // Nothing gets lost in the archive or on hold: a chat being sent a message
+    // (and perhaps running now) is active, even if the send itself then fails.
+    activate(p.sessionId);
+    if (id !== undefined && !db.claimMessage(id, p.sessionId, (deps.now ?? Date.now)())) {
+      return { queued: false };
+    }
+    let submitted = false;
+    let sent: { queued: boolean };
+    try {
+      sent = s.send(input, () => {
+        submitted = true;
+      });
+    } catch (err) {
+      // Not with Claude: forget the id, so the retry is a first try. (A crash between the
+      // record and the hand-over loses the message rather than sending it twice.)
+      if (id !== undefined && !submitted) db.releaseMessage(id);
+      throw err;
+    }
+    markSeen(p.sessionId); // replying means the last turn was seen
+    if (nameChat(p.sessionId, s.cwd, p.text, true)) changed([p.sessionId]);
+    return sent;
+  };
+
+  /** The chat's live session, resuming it first when Threadgarden is not running it. */
+  const resumedOrLive = async (sessionId: string): Promise<LiveSession> => {
+    const p = { sessionId };
     let s = host.get(p.sessionId);
     if (!s?.live) {
       await requireRunnable();
@@ -453,13 +513,7 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
       );
       changed([p.sessionId]);
     }
-    // Nothing gets lost in the archive or on hold: a chat being sent a message
-    // (and perhaps running now) is active, even if the send itself then fails.
-    activate(p.sessionId);
-    const sent = s.send(input);
-    markSeen(p.sessionId); // replying means the last turn was seen
-    if (nameChat(p.sessionId, s.cwd, p.text, true)) changed([p.sessionId]);
-    return sent;
+    return s;
   };
   router.register('chat.send', send);
 

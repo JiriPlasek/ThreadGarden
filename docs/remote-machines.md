@@ -34,9 +34,10 @@ do the steps once, over SSH; after that everything happens in Threadgarden.
   conversation: see [Moving a chat](#moving-a-chat).
 - The Ubuntu PC can update itself to the newest release from Settings: see
   [Upgrading](#upgrading).
-- Not yet: showing a machine's chats while it is off (an Off machine's group
-  says "Its chats appear once it's on."). The usage meter shows each
-  account's usage, the Ubuntu PC's too; Analytics shows This PC only for now.
+- While the PC is off, its chats are still shown from a local copy, and a
+  reply or a new chat waits until it is on: see [When it's off](#when-its-off).
+- The usage meter shows each account's usage, the Ubuntu PC's too; Analytics
+  shows This PC only for now.
 
 You need: the Ubuntu PC (Ubuntu 22.04 or newer, x64), its Wi-Fi password,
 access to your router's admin page, and a Claude subscription or API key
@@ -451,6 +452,51 @@ If something goes wrong:
 - Uncommitted changes never travel: only what is pushed reaches the other
   machine, through git.
 - Both machines need a Threadgarden that can move chats.
+
+### When it's off
+
+While this PC isn't connected to the machine (Off, Unreachable or Connecting),
+its group keeps its projects and chats, marked "last seen ‹time›", and a chat
+opens with a note: "‹machine› is off: showing its last few messages" ("isn't
+connected" when it doesn't show as Off). Looking never turns the machine on.
+
+**The copy** is Threadgarden's own data on this PC, refreshed while the two are
+connected. It holds the lists and the last 10 or so messages of each chat, as
+text: a pasted image shows as "1 image". It is read-only, and nothing on it
+shows as running, since the machine runs nothing while it is off. Every PC you
+pair keeps its own copy.
+
+**Replying.** Send as usual. The message is saved on this PC at once and shows
+under the chat as "Waiting for ‹machine›", with **Cancel**. If the plug reads
+Off, Threadgarden turns the machine on. When it is up, the messages go out in
+order, once each, and the chat goes live. A message sent while one of the chat's
+still waits goes behind it, even once the machine is connected. A waiting reply
+skips the "Continue this chat here?" question, but the machine still refuses a
+chat that another program is running.
+
+- **Keep this PC awake, with Threadgarden running.** The waiting messages live
+  here, and only this PC sends them. If it sleeps or Threadgarden is closed, they
+  stay saved and go out when it is back. A start cut short that way is simply
+  begun again.
+- If the machine doesn't answer within 5 minutes, the message says "‹machine›
+  didn't come up", with **Retry** and Cancel. It waits for Retry so that a PC that
+  won't boot isn't power-cycled again and again; a new message counts as a Retry,
+  and if the machine comes up later and connects, it goes by itself. A message
+  the machine refuses waits for Retry.
+- A machine already running is never switched off and on to send. Without power
+  control, or while the plug can't be read, the line says "sends when it's
+  reachable" and waits for you to turn the machine on.
+- The machine must run this version of Threadgarden. An older one shows "Update
+  ‹machine› to send while it's off" ([Upgrading](#upgrading)).
+
+**New chat.** The machine is offered with its saved folders and Home as Existing
+folder, and **Default** as the only model. New project, Clone and Browse… say
+"Available when ‹machine› is on". The chat opens at once with "Starting
+‹machine›…", its first message waiting like a reply.
+
+**From outside home,** turning the machine on needs a VPN that reaches your home
+network, not just the PC: the plug is on that network. A subnet router, such as
+Tailscale offers, does this. At home it just works.
 
 ## 4. Power control
 

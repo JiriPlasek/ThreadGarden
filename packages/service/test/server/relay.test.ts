@@ -485,6 +485,34 @@ describe('relay', () => {
     ws.close();
   });
 
+  it('tells which machine its link opened to, and not for one that never opened', async () => {
+    const opened: string[] = [];
+    const r = createRelay({
+      machines: { get: machineAt, token: (id) => (id === 'm-1' ? TOKEN : null) },
+      linkTimeoutMs: 300,
+      onLinkOpened: (id) => opened.push(id),
+    });
+    const s = await startWsServer({
+      token: 't',
+      router: new Router(),
+      relay: r,
+      onClientCountChange: () => {},
+    });
+    try {
+      const ws = await openRelayAt(s.port, 't', 'm-1');
+      ws.send('ping');
+      expect(await nextFrame(ws)).toEqual({ data: 'ping', binary: false });
+      expect(opened).toEqual(['m-1']);
+      ws.close();
+      const unknown = await openRelayAt(s.port, 't', 'm-2');
+      expect(await closeCode(unknown)).toBe(4404);
+      expect(opened).toEqual(['m-1']);
+    } finally {
+      r.close();
+      await s.close();
+    }
+  });
+
   it('counts relays as clients and sends them no local events', async () => {
     const ws = await open();
     expect(counts).toEqual([1]);
@@ -606,6 +634,59 @@ describe('relay', () => {
     expect(await closeCode(ui)).toBe(4502);
     // The dead link is let go as well.
     await expect.poll(() => deaf.closed(), { timeout: 2_000 }).toBe(1);
+  });
+
+  it('an onLinkOpened that throws leaves the link open and the pinger running', async () => {
+    const debug: string[] = [];
+    const relayTo = async (machine: FakeMachine) => {
+      const r = createRelay({
+        machines: {
+          get: (id) =>
+            id === 'm-1'
+              ? {
+                  id,
+                  name: 'Fake',
+                  address: '127.0.0.1',
+                  port: machine.port,
+                  fingerprint: machine.tls.fingerprint256,
+                  certPem: machine.tls.certPem,
+                  deviceId: 'd',
+                  addedAt: 0,
+                  unlocked: true,
+                }
+              : null,
+          token: () => TOKEN,
+        },
+        pingMs: 50,
+        onLinkOpened: () => {
+          throw new Error('database is closed');
+        },
+        log: { debug: (m) => debug.push(m) },
+      });
+      const srv = await startWsServer({
+        token: 't',
+        router: new Router(),
+        relay: r,
+        onClientCountChange: () => {},
+      });
+      cleanup.push(async () => {
+        r.close();
+        await srv.close();
+      });
+      return srv;
+    };
+    // The link still relays.
+    const live = await openRelayAt((await relayTo(fake)).port, 't', 'm-1');
+    live.send('still here');
+    expect(await nextFrame(live)).toEqual({ data: 'still here', binary: false });
+    expect(debug.join(' ')).toContain('database is closed');
+    live.close();
+
+    // And its pinger runs: a machine that stops answering is still let go.
+    const deaf = await startFakeMachine(dir, () => {}, { autoPong: false });
+    cleanup.push(() => deaf.close());
+    const ui = await openRelayAt((await relayTo(deaf)).port, 't', 'm-1');
+    expect(await closeCode(ui)).toBe(4502);
   });
 
   it('closes 4502, not 4409, when the pinned certificate fails only its dates', async () => {

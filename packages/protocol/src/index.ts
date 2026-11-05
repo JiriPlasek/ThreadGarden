@@ -11,5 +11,6 @@ export * from './power.js';
 export * from './projects.js';
 export * from './move.js';
 export * from './update.js';
+export * from './away.js';
 export * from './methods.js';
 export * from './envelope.js';
