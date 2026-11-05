@@ -215,7 +215,9 @@ service and the UI; the service validates every request.
   capabilities in its `hello`, not from its version: the desktop offers power
   control only with `power`, New project, Clone and Browse… only with
   `projects`, a machine as a target of Move to… only with `move`, and a waiting message
-  for a machine only with `away`. On an
+  for a machine only with `away`. A worker in WSL on a Windows PC also says
+  `host: 'wsl'` in its `machine` (an optional field, no new version; its
+  platform stays `linux`), and the desktop shows it as Windows (WSL). On an
   older machine the New project and Clone tabs and Browse… show disabled with
   "Update ‹machine› to use this", and Move to… lists it disabled with "Update
   ‹machine› to move chats there"; power control without `power` isn't offered
@@ -748,7 +750,12 @@ and owns **idle detection** (`power/idle.ts`, a minute tick; keep awake is
 persisted), the **push check** (`power/push-check.ts`) and the **shutdown
 sequence** (`power/shutdown.ts`): check, postpone or pause, arm the cut (and
 a wake) on the switch, stop chats, `systemctl poweroff` (the installer's polkit rule allows
-exactly that for the service's user). If the switch cannot be reached or
+exactly that for the service's user). A worker in WSL (`power/windows-host.ts`,
+detected once at start) has Windows power off instead: `shutdown.exe /s /t 0`
+through interop. It never shuts down while someone is signed in at the PC unless
+`power.shutdown` says `despiteSignedIn` (then with `/f`; idle never does), and
+when Windows has a restart pending it stops the 900 s cut (`RuleTimer8 0`) once
+the arming has started it, so an update on the way down is never cut. If the switch cannot be reached or
 refuses, the sequence stops before powering off: a machine that cannot be
 switched on again must stay on, and its power status says why. The UI derives
 the state (Off, Starting…, On, Shutting down, Unreachable) from the link status,
