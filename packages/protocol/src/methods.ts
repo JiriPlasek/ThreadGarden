@@ -313,6 +313,12 @@ export const methods = {
    * chat), `UNKNOWN_TASK`, `STOP_FAILED`.
    */
   'chat.stopTask': def(z.object({ sessionId: z.string(), taskId: z.string() }), empty),
+  /**
+   * Stops a chat running outside Threadgarden: a background session with
+   * `claude stop <id>`, one another Claude Code process holds by ending that
+   * process. Errors: `EXTERNAL_UNAVAILABLE`, `NOT_EXTERNAL`, `NOT_STOPPABLE`,
+   * `STOP_FAILED`.
+   */
   'external.stop': def(sessionIdOnly, z.object({})),
   'files.suggest': def(
     z.object({ cwd: z.string(), query: z.string(), limit: z.number() }),
