@@ -36,7 +36,7 @@ describe('resume safety (spec §4.4)', () => {
     expect(within(alert).getByText(`claude --resume ${SID}`)).toBeTruthy();
   });
 
-  it('a blocked chat offers End that process, which ends the holder and clears the banner', async () => {
+  it('a blocked chat offers End the process, which ends the holder and clears the banner', async () => {
     const { server, composer } = await renderChat({
       status: 'history',
       configure: (s) => {
@@ -49,7 +49,7 @@ describe('resume safety (spec §4.4)', () => {
     });
     await userEvent.type(composer(), 'continue please{Enter}');
     const alert = await screen.findByRole('alert');
-    await userEvent.click(within(alert).getByRole('button', { name: /end that process/i }));
+    await userEvent.click(within(alert).getByRole('button', { name: /end the process/i }));
     await waitFor(() => expect(server.calls('external.stop')).toHaveLength(1));
     expect(server.calls('external.stop')[0]!.params).toEqual({ sessionId: SID });
     await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
@@ -57,7 +57,7 @@ describe('resume safety (spec §4.4)', () => {
     expect(composer().value).toBe('continue please');
   });
 
-  it('a failed End that process is shown in the banner', async () => {
+  it('a failed End the process is shown in the banner', async () => {
     const { composer } = await renderChat({
       status: 'history',
       configure: (s) => {
@@ -69,7 +69,7 @@ describe('resume safety (spec §4.4)', () => {
     });
     await userEvent.type(composer(), 'x{Enter}');
     const alert = await screen.findByRole('alert');
-    await userEvent.click(within(alert).getByRole('button', { name: /end that process/i }));
+    await userEvent.click(within(alert).getByRole('button', { name: /end the process/i }));
     expect(await within(alert).findByText(/process 4242 is still running/i)).toBeTruthy();
   });
 

@@ -519,7 +519,7 @@ live, `chat.send` runs the command again (fresh, not the last poll):
 
 - **blocked** when the session is listed with a live pid or as working or
   blocked: the UI explains why and offers the hand-off commands
-  (`claude --resume <id>`, `claude attach <short id>`) and End that process
+  (`claude --resume <id>`, `claude attach <short id>`) and End the process
   (`external.stop`, below);
 - **ok** when it is listed only as finished without a pid, or not listed;
 - **unverified** when the command cannot be run: the UI asks the user to
@@ -1359,7 +1359,7 @@ startup failures, which credential a session picks).
 
 Decisions made during the build that change behaviour described in the design:
 
-- **Stopping background sessions.** The design kept sessions run by other processes hand-off only. Threadgarden now also stops a background session that Claude Code's background service runs, via the documented `claude stop <id>` (`external.stop`), after a confirmation; only ids shaped like `claude agents` short ids are passed. A chat another Claude Code process holds (a terminal, an editor's agent) can be ended too, from the chat header's End other process or the blocked banner's End that process: `external.stop` ends the pid `claude agents` lists for that chat (Claude Code checks it against the process's start time), with its child processes on Windows (`taskkill /T`) and SIGTERM elsewhere, and waits until the chat leaves the list. It asks first only when that process is mid-turn. The chat header's End session and pickers still apply only to chats Threadgarden itself runs.
+- **Stopping background sessions.** The design kept sessions run by other processes hand-off only. Threadgarden now also stops a background session that Claude Code's background service runs, via the documented `claude stop <id>` (`external.stop`), after a confirmation; only ids shaped like `claude agents` short ids are passed. A chat another Claude Code process holds (a terminal, an editor's agent) can be ended too, with End the process, shown beside the chat header's "Running in another Claude Code process" and in the blocked banner: `external.stop` ends the pid `claude agents` lists for that chat (Claude Code checks it against the process's start time), with its child processes on Windows (`taskkill /T`) and SIGTERM elsewhere, and waits until the chat leaves the list. It asks first only when that process is mid-turn. The chat header's End session and pickers still apply only to chats Threadgarden itself runs.
 - **No bypass mode** (§6.4 listed it). The SDK requires an explicit
   dangerous opt-in for `bypassPermissions`; Threadgarden offers default,
   acceptEdits, plan and auto only, and drops "always allow" suggestions that

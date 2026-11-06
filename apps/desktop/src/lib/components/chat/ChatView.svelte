@@ -230,7 +230,7 @@
     reason: string;
     command: string | null;
     copied: boolean;
-    /** End that process failed: why. */
+    /** End the process failed: why. */
     endError?: string;
   } | null>(null);
 
@@ -350,7 +350,7 @@
     }
   };
 
-  /** The banner's End that process: ends the other Claude Code process holding this chat. */
+  /** The banner's End the process: ends the other Claude Code process holding this chat. */
   let confirmEndHolder = $state(false);
   const endHolderNow = async (): Promise<void> => {
     await chats.stopExternal(sessionId);
@@ -822,7 +822,7 @@
                     class="bg-background hover:bg-muted inline-flex h-6 items-center gap-1 rounded border px-2"
                     onclick={endHolder}
                   >
-                    End that process
+                    End the process
                   </button>
                   {#if blocked.command}
                     <code class="bg-muted rounded px-1.5 py-0.5 font-mono">{blocked.command}</code>

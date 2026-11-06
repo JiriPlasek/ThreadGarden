@@ -1,8 +1,8 @@
 import type { ChatStatus } from '@threadgarden/protocol';
 
 /**
- * Ending another Claude Code process that holds a chat (`external.stop`): the
- * chat header's End other process and the blocked banner's End that process.
+ * Ending another Claude Code process that holds a chat (`external.stop`): End
+ * the process in the chat header, beside its note, and in the blocked banner.
  * An idle holder is ended at once, since every message is already saved; one
  * mid-turn asks first, because ending it stops that turn.
  */

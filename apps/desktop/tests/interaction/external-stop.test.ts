@@ -47,7 +47,7 @@ describe('chats running outside Threadgarden', () => {
     expect(await within(dialog).findByText(/claude stop abc12345 failed/i)).toBeTruthy();
   });
 
-  it('a chat another process holds, idle, is ended at once with End other process', async () => {
+  it('a chat another process holds says so, with End the process right beside it', async () => {
     const { server } = await renderChat({
       status: 'idle',
       summary: { external: { ...terminal, status: 'idle' } },
@@ -55,17 +55,21 @@ describe('chats running outside Threadgarden', () => {
         s.handlers['external.stop'] = () => ({});
       },
     });
-    expect(screen.getByText(/running in another claude code process/i)).toBeTruthy();
-    expect(screen.queryByRole('button', { name: /end session/i })).toBeNull();
+    const note = screen.getByText(/running in another claude code process/i);
+    const button = screen.getByRole('button', { name: /end the process/i });
+    // Next to the note, not among the header's icon buttons.
+    expect(note.parentElement).toBe(button.parentElement);
     expect(screen.queryByRole('button', { name: /stop background session/i })).toBeNull();
-    await userEvent.click(screen.getByRole('button', { name: /end other process/i }));
+    const end = screen.getByRole('button', { name: /end session/i }) as HTMLButtonElement;
+    expect(end.disabled).toBe(true);
+    await userEvent.click(button);
     await waitFor(() => expect(server.calls('external.stop')).toHaveLength(1));
     expect(server.calls('external.stop')[0]!.params).toEqual({ sessionId: SID });
     expect(screen.queryByRole('alertdialog')).toBeNull();
     expect(server.calls('chat.end')).toHaveLength(0);
   });
 
-  it('a busy one asks before End other process ends it', async () => {
+  it('a busy one asks before End the process ends it', async () => {
     const { server } = await renderChat({
       status: 'working',
       summary: { external: terminal },
@@ -73,7 +77,7 @@ describe('chats running outside Threadgarden', () => {
         s.handlers['external.stop'] = () => ({});
       },
     });
-    await userEvent.click(screen.getByRole('button', { name: /end other process/i }));
+    await userEvent.click(screen.getByRole('button', { name: /end the process/i }));
     const dialog = await screen.findByRole('alertdialog');
     expect(server.calls('external.stop')).toHaveLength(0);
     await userEvent.click(within(dialog).getByRole('button', { name: /end process/i }));

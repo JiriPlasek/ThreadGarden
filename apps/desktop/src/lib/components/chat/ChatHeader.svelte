@@ -34,8 +34,8 @@
    * mode pickers (chats Threadgarden runs only), context usage, cost, auth, Claude
    * Code version, End session and Copy resume command. A chat running outside
    * Threadgarden gets Stop when Claude Code's background service runs it, and End
-   * other process when another Claude Code process (a terminal, an editor's
-   * agent) holds it. The Activity button
+   * the process beside its note when another Claude Code process (a terminal,
+   * an editor's agent) holds it. The Activity button
    * shows or hides the Activity panel (Ctrl/Cmd+., handled by ChatView). The
    * "Chat state" menu moves the chat between Active, On hold and Archived; an
    * on-hold chat shows until when and its note (v1.2 §3). With more than one
@@ -326,10 +326,6 @@
         <IconButton label="Stop background session" onclick={() => (confirmStop = true)}>
           <CircleStopIcon />
         </IconButton>
-      {:else if holder}
-        <IconButton label="End other process" onclick={endOther}>
-          <CircleStopIcon />
-        </IconButton>
       {:else}
         <IconButton label="End session" onclick={end} disabled={!live}>
           <PowerIcon />
@@ -348,6 +344,16 @@
   >
     {#if external && !background}
       <span class="text-foreground/80 shrink-0">Running in another Claude Code process</span>
+      {#if holder}
+        <button
+          type="button"
+          class="text-foreground bg-background hover:bg-muted inline-flex h-6 shrink-0 items-center gap-1 rounded border px-2"
+          onclick={endOther}
+        >
+          <CircleStopIcon class="text-destructive size-3.5" aria-hidden="true" />
+          End the process
+        </button>
+      {/if}
     {:else if external}
       <span class="text-foreground/80 shrink-0">Running in Claude Code's background service</span>
     {/if}
