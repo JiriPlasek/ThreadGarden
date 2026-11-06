@@ -208,9 +208,6 @@ describe('chat handlers', () => {
     const adapter = new FakeAdapter();
     await start(adapter);
     const base = { cwd: dir, text: 'x' };
-    expect(await code('chat.create', { ...base, permissionMode: 'bypassPermissions' })).toBe(
-      'INVALID_PARAMS',
-    );
     expect(await code('chat.create', { ...base, permissionMode: 'dontAsk' })).toBe(
       'INVALID_PARAMS',
     );
@@ -225,10 +222,10 @@ describe('chat handlers', () => {
       model: 'opus',
     });
     const fake = adapter.lastSession();
-    for (const value of ['bypassPermissions', 'yolo', '']) {
+    for (const value of ['dontAsk', 'yolo', '']) {
       expect(await code('chat.setPermissionMode', { sessionId, value })).toBe('INVALID_PARAMS');
     }
-    for (const value of ['default', 'acceptEdits', 'plan', 'auto']) {
+    for (const value of ['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions']) {
       await ok('chat.setPermissionMode', { sessionId, value });
       expect(fake.permissionMode).toBe(value);
     }
@@ -242,6 +239,13 @@ describe('chat handlers', () => {
 
     await ok('chat.end', { sessionId });
     expect(await code('chat.setModel', { sessionId, value: 'opus' })).toBe('NOT_LIVE');
+  });
+
+  it('chat.create starts a chat in bypassPermissions', async () => {
+    const adapter = new FakeAdapter();
+    await start(adapter);
+    await ok('chat.create', { cwd: dir, text: 'x', permissionMode: 'bypassPermissions' });
+    expect(adapter.lastSession().permissionMode).toBe('bypassPermissions');
   });
 
   it('chat.respond never applies a bypassPermissions suggestion (R11)', async () => {
