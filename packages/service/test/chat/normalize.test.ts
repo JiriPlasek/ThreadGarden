@@ -475,6 +475,9 @@ describe('Normalizer', () => {
       'worker_shutting_down',
       'plugin_install',
       'elicitation_complete',
+      // Not in SDK 0.3.314; a newer CLI sends it while a tool call waits on its
+      // permission check ('checking' after ~4 s, then 'done').
+      'permission_check_status',
     ];
     const samples = [
       ...topLevel.map((type, i) => ({ type, uuid: `t${i}`, session_id: 's' })),
@@ -883,6 +886,60 @@ describe('Normalizer: user messages the CLI writes itself', () => {
   it('keeps synthetic user messages that do not follow a boundary', () => {
     const items = run(new Normalizer(), [special('x1', 'injected', { isSynthetic: true })]);
     expect(items).toMatchObject([{ kind: 'user', id: 'x1', text: 'injected' }]);
+  });
+
+  // A loaded skill's instructions, as the live stream carries them (CLI 2.1.319:
+  // `isSynthetic`; history drops these entries, which the transcript marks `isMeta`).
+  const skillText = [
+    'Base directory for this skill: C:\\Users\\me\\.claude\\plugins\\cache\\superpowers\\7.0.0\\skills\\brainstorming',
+    '',
+    '# Brainstorming',
+    '',
+    'You are very good at building.',
+  ].join('\n');
+
+  it('collapses a loaded skill to a labelled system item with the instructions as detail', () => {
+    const items = run(new Normalizer(), [
+      special('k1', [{ type: 'text', text: skillText }], { isSynthetic: true }),
+    ]);
+    expect(items).toEqual([
+      { kind: 'system', id: 'k1', level: 'info', text: 'Skill: brainstorming', detail: skillText },
+    ]);
+  });
+
+  it('collapses a skill the transcript marks isMeta, with a forward-slash path', () => {
+    const text = 'Base directory for this skill: /home/me/proj/.claude/skills/work/\n\n# Work';
+    const items = run(new Normalizer(), [special('k2', text, { isMeta: true })]);
+    expect(items).toEqual([
+      { kind: 'system', id: 'k2', level: 'info', text: 'Skill: work', detail: text },
+    ]);
+  });
+
+  it('nests a subagent’s skill under the subagent that loaded it', () => {
+    const items = run(new Normalizer(), [
+      sdk({
+        ...(user('k3', [{ type: 'text', text: skillText }], 'toolu_agent') as unknown as Record<
+          string,
+          unknown
+        >),
+        isSynthetic: true,
+      }),
+    ]);
+    expect(items).toEqual([
+      {
+        kind: 'system',
+        id: 'k3',
+        level: 'info',
+        text: 'Skill: brainstorming',
+        detail: skillText,
+        parentToolUseId: 'toolu_agent',
+      },
+    ]);
+  });
+
+  it('keeps skill-like text the user typed as their message', () => {
+    const items = run(new Normalizer(), [special('k4', skillText)]);
+    expect(items).toMatchObject([{ kind: 'user', id: 'k4', text: skillText }]);
   });
 
   it('renders slash command entries as the command the user typed', () => {

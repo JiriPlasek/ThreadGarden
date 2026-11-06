@@ -66,9 +66,11 @@ export const ChatItemSchema = z.discriminatedUnion('kind', [
     setup: z.boolean().optional(),
     /**
      * Full text behind a collapsed item whose `text` is a short label (Ruling
-     * R27: notifications and hand-backs the CLI injects as user turns).
+     * R27: notifications and hand-backs the CLI injects as user turns; a
+     * loaded skill's instructions).
      */
     detail: z.string().optional(),
+    ...parent,
   }),
   z.object({ kind: z.literal('compactBoundary'), id: z.string() }),
   z.object({

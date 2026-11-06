@@ -50,6 +50,9 @@ export const NON_VISUAL_SYSTEM_SUBTYPES: ReadonlySet<string> = new Set([
   'worker_shutting_down',
   'plugin_install',
   'elicitation_complete',
+  // Outside the SDK 0.3.314 union: a newer CLI reports a tool call that has waited
+  // ~4 s on its permission check ('checking') and when that wait ends ('done').
+  'permission_check_status',
 ]);
 
 export type SystemLine = { level: Level; text: string };

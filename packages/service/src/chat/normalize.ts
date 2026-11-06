@@ -420,6 +420,9 @@ export class Normalizer {
    * - `<bash-input>` (a `!` shell command) → `! command`;
    * - local command and `!` shell output (`<local-command-stdout>`,
    *   `<bash-stderr>`, …) → a system line, or nothing when empty;
+   * - a loaded skill's instructions (`isSynthetic` live; `isMeta` in the
+   *   transcript, whose history read drops them) → a collapsed system item
+   *   "Skill: <name>", nested under a subagent that loaded it;
    * - envelopes the CLI injects as user turns (Ruling R27: background-task
    *   notifications, subagent hand-backs, … — see `INJECTED`) → a collapsed
    *   system item with a short label; the local-command caveat → nothing.
@@ -432,6 +435,17 @@ export class Normalizer {
       return shown ? NONE : this.one({ kind: 'compactBoundary', id });
     }
     if (text === undefined) return undefined;
+    const skill = m.isSynthetic === true || m.isMeta === true ? skillLabel(text) : undefined;
+    if (skill !== undefined) {
+      return this.one({
+        kind: 'system',
+        id,
+        level: 'info',
+        text: skill,
+        detail: text,
+        ...this.parentOf(m),
+      });
+    }
     const injected = parseInjected(text);
     if (injected === null) return NONE;
     if (injected !== undefined) {
@@ -742,7 +756,21 @@ const parseInjected = (text: string): { text: string; detail: string } | null | 
   };
 };
 
-const OUTPUT_BLOCK = /<(local-command|bash)-(stdout|stderr)>([\s\S]*?)<\/\1-\2>/g;
+const SKILL_HEADER = /^Base directory for this skill: *([^\n]*)/;
+
+/**
+ * A loaded skill's instructions (`Base directory for this skill: <dir>` and
+ * the SKILL.md body) → "Skill: <folder name>"; else undefined. Only asked of
+ * messages the CLI marks synthetic or meta, never of what the user typed.
+ */
+const skillLabel = (text: string): string | undefined => {
+  const dir = SKILL_HEADER.exec(text)?.[1]?.trim();
+  if (dir === undefined) return undefined;
+  const name = dir.split(/[\\/]+/).filter(Boolean).at(-1);
+  return name ? `Skill: ${name}` : 'Skill';
+};
+
+const OUTPUT_BLOCK =/<(local-command|bash)-(stdout|stderr)>([\s\S]*?)<\/\1-\2>/g;
 // eslint-disable-next-line no-control-regex
 const ANSI = /\u001b\[[0-9;]*[A-Za-z]/g;
 
