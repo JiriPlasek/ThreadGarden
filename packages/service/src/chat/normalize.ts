@@ -766,11 +766,14 @@ const SKILL_HEADER = /^Base directory for this skill: *([^\n]*)/;
 const skillLabel = (text: string): string | undefined => {
   const dir = SKILL_HEADER.exec(text)?.[1]?.trim();
   if (dir === undefined) return undefined;
-  const name = dir.split(/[\\/]+/).filter(Boolean).at(-1);
+  const name = dir
+    .split(/[\\/]+/)
+    .filter(Boolean)
+    .at(-1);
   return name ? `Skill: ${name}` : 'Skill';
 };
 
-const OUTPUT_BLOCK =/<(local-command|bash)-(stdout|stderr)>([\s\S]*?)<\/\1-\2>/g;
+const OUTPUT_BLOCK = /<(local-command|bash)-(stdout|stderr)>([\s\S]*?)<\/\1-\2>/g;
 // eslint-disable-next-line no-control-regex
 const ANSI = /\u001b\[[0-9;]*[A-Za-z]/g;
 
