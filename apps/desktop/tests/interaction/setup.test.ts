@@ -61,7 +61,7 @@ describe('setup screen (spec §6.4)', () => {
 });
 
 describe('new chat dialog (spec §5.4)', () => {
-  it('starts a chat in a project with the chosen model and mode, never bypass', async () => {
+  it('starts a chat in a project with the chosen model and mode', async () => {
     const { server, app, context } = await setup((server) => {
       Object.assign(server.handlers, {
         'projects.list': () => [project('p1', 'alpha'), project('p2', 'beta')],
@@ -85,8 +85,8 @@ describe('new chat dialog (spec §5.4)', () => {
     const modes = within(mode)
       .getAllByRole('option')
       .map((o) => (o as HTMLOptionElement).value);
-    expect(modes).toEqual(['default', 'acceptEdits', 'plan', 'auto']);
-    await userEvent.selectOptions(mode, 'plan');
+    expect(modes).toEqual(['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions']);
+    await userEvent.selectOptions(mode, 'bypassPermissions');
     await waitFor(() =>
       expect(within(dialog).getAllByRole('option', { name: 'Opus' })).toHaveLength(1),
     );
@@ -99,7 +99,7 @@ describe('new chat dialog (spec §5.4)', () => {
       cwd: '/work/beta',
       text: 'add a health check',
       model: 'opus',
-      permissionMode: 'plan',
+      permissionMode: 'bypassPermissions',
     });
     await waitFor(() => expect(app.tabs.active).toBe(here('new-1')));
     expect(app.interaction.newChat.open).toBe(false);

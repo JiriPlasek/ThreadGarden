@@ -300,7 +300,7 @@ describe('chat view', () => {
     await waitFor(() => expect(writeText).toHaveBeenCalledWith('claude --resume abc-123'));
   });
 
-  it('header pickers change the model of a live chat', async () => {
+  it('header pickers change the model and permission mode of a live chat', async () => {
     const { server, app, context } = await streamingSetup();
     await app.chats.open('s');
     render(ChatView, { context, props: { ref: { machineId: LOCAL, sessionId: 's' } } });
@@ -317,7 +317,14 @@ describe('chat view', () => {
     const modes = within(mode)
       .getAllByRole('option')
       .map((o) => (o as HTMLOptionElement).value);
-    expect(modes).toEqual(['default', 'acceptEdits', 'plan', 'auto']);
+    expect(modes).toEqual(['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions']);
+    await userEvent.selectOptions(mode, 'bypassPermissions');
+    await waitFor(() =>
+      expect(server.calls('chat.setPermissionMode').at(-1)?.params).toEqual({
+        sessionId: 's',
+        value: 'bypassPermissions',
+      }),
+    );
   });
 
   it('pickers are disabled for a history-only chat', async () => {

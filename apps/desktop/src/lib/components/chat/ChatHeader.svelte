@@ -63,12 +63,12 @@
   /** With more than one machine, the header names the chat's machine. */
   const machineName = $derived(machines.several ? machineNameOf(machines, machineId) : null);
 
-  /** Ruling R11: Threadgarden never offers bypassPermissions. */
   const PERMISSION_MODES = [
     { value: 'default', label: 'Default' },
     { value: 'acceptEdits', label: 'Accept edits' },
     { value: 'plan', label: 'Plan' },
     { value: 'auto', label: 'Auto' },
+    { value: 'bypassPermissions', label: 'Bypass permissions' },
   ];
 
   const sessionId = $derived(chat.sessionId);

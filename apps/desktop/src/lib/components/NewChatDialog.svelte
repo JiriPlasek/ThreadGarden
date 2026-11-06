@@ -28,8 +28,7 @@
 
   /**
    * Starts a chat (spec §5.4): in any listed project or any folder from the
-   * native picker, with a model and permission mode (Ruling R11: never
-   * bypassPermissions). The first message is written here, with the full
+   * native picker, with a model and permission mode. The first message is written here, with the full
    * composer (`@` files of the chosen folder, `/` commands, images); its draft
    * is kept per folder (`new:<cwd>`).
    *
@@ -52,12 +51,12 @@
    */
   const { interaction, places, tabs, settings, scopes, machines, power } = useApp();
 
-  /** Ruling R11: Threadgarden never offers bypassPermissions. */
   const PERMISSION_MODES = [
     { value: 'default', label: 'Default (ask before acting)' },
     { value: 'acceptEdits', label: 'Accept edits' },
     { value: 'plan', label: 'Plan' },
     { value: 'auto', label: 'Auto' },
+    { value: 'bypassPermissions', label: 'Bypass permissions' },
   ];
 
   const byPinnedThenRecent = (a: Project, b: Project): number =>
