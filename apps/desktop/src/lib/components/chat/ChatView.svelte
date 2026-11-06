@@ -25,6 +25,7 @@
   import ActivityPanel from './ActivityPanel.svelte';
   import ChatHeader from './ChatHeader.svelte';
   import type { RequestActions } from './context';
+  import { END_OTHER_DESCRIPTION, END_OTHER_TITLE, endOtherNeedsConfirm } from './end-other';
   import MessageList from './MessageList.svelte';
   import ScheduledSends from './ScheduledSends.svelte';
 
@@ -225,7 +226,13 @@
 
   let forkError = $state<string | null>(null);
   let sendError = $state<string | null>(null);
-  let blocked = $state<{ reason: string; command: string | null; copied: boolean } | null>(null);
+  let blocked = $state<{
+    reason: string;
+    command: string | null;
+    copied: boolean;
+    /** End that process failed: why. */
+    endError?: string;
+  } | null>(null);
 
   const fork = (itemId: string): void => {
     forkError = null;
@@ -341,6 +348,24 @@
     } catch (err) {
       sendError = err instanceof Error ? err.message : String(err);
     }
+  };
+
+  /** The banner's End that process: ends the other Claude Code process holding this chat. */
+  let confirmEndHolder = $state(false);
+  const endHolderNow = async (): Promise<void> => {
+    await chats.stopExternal(sessionId);
+    blocked = null;
+  };
+  const endHolder = (): void => {
+    if (endOtherNeedsConfirm(chat?.status)) {
+      confirmEndHolder = true;
+      return;
+    }
+    if (blocked) blocked = { ...blocked, endError: undefined };
+    endHolderNow().catch((err: unknown) => {
+      if (blocked)
+        blocked = { ...blocked, endError: err instanceof Error ? err.message : String(err) };
+    });
   };
 
   // ── v1.3 B: usage limit and scheduled sends ─────────────────────────────
@@ -792,10 +817,20 @@
                     {#if blocked.copied}<CheckIcon class="size-3.5" aria-hidden="true" />{/if}
                     Copy resume command
                   </button>
+                  <button
+                    type="button"
+                    class="bg-background hover:bg-muted inline-flex h-6 items-center gap-1 rounded border px-2"
+                    onclick={endHolder}
+                  >
+                    End that process
+                  </button>
                   {#if blocked.command}
                     <code class="bg-muted rounded px-1.5 py-0.5 font-mono">{blocked.command}</code>
                   {/if}
                 </div>
+                {#if blocked.endError}
+                  <p class="text-destructive mt-1.5">{blocked.endError}</p>
+                {/if}
               </div>
             {/if}
             {#if refusal}
@@ -910,6 +945,14 @@
     {/if}
   </div>
 </div>
+
+<ConfirmDialog
+  bind:open={confirmEndHolder}
+  title={END_OTHER_TITLE}
+  description={END_OTHER_DESCRIPTION}
+  confirmLabel="End process"
+  onConfirm={endHolderNow}
+/>
 
 <ConfirmDialog
   bind:open={confirmOpen}

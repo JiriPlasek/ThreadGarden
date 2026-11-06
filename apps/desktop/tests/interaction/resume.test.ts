@@ -36,6 +36,43 @@ describe('resume safety (spec §4.4)', () => {
     expect(within(alert).getByText(`claude --resume ${SID}`)).toBeTruthy();
   });
 
+  it('a blocked chat offers End that process, which ends the holder and clears the banner', async () => {
+    const { server, composer } = await renderChat({
+      status: 'history',
+      configure: (s) => {
+        s.handlers['chat.resumeCheck'] = resumeAnswer(
+          'blocked',
+          'This chat is running in another Claude Code process (pid 4242).',
+        );
+        s.handlers['external.stop'] = () => ({});
+      },
+    });
+    await userEvent.type(composer(), 'continue please{Enter}');
+    const alert = await screen.findByRole('alert');
+    await userEvent.click(within(alert).getByRole('button', { name: /end that process/i }));
+    await waitFor(() => expect(server.calls('external.stop')).toHaveLength(1));
+    expect(server.calls('external.stop')[0]!.params).toEqual({ sessionId: SID });
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+    // Press Enter again to send it here.
+    expect(composer().value).toBe('continue please');
+  });
+
+  it('a failed End that process is shown in the banner', async () => {
+    const { composer } = await renderChat({
+      status: 'history',
+      configure: (s) => {
+        s.handlers['chat.resumeCheck'] = resumeAnswer('blocked', 'Running in pid 4242.');
+        s.handlers['external.stop'] = () => {
+          throw new RpcFail('STOP_FAILED', 'Process 4242 is still running.');
+        };
+      },
+    });
+    await userEvent.type(composer(), 'x{Enter}');
+    const alert = await screen.findByRole('alert');
+    await userEvent.click(within(alert).getByRole('button', { name: /end that process/i }));
+    expect(await within(alert).findByText(/process 4242 is still running/i)).toBeTruthy();
+  });
+
   it('unverified resume asks confirmation', async () => {
     const { server, composer } = await renderChat({
       status: 'history',
