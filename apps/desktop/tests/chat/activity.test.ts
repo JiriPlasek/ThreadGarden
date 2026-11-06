@@ -774,3 +774,32 @@ describe('End session with running background work', () => {
     expect(screen.queryByRole('alertdialog')).toBeNull();
   });
 });
+
+describe('subagent rows follow their task', () => {
+  const launched = tool(
+    'c1',
+    'Agent',
+    { description: 'Explore the parser', prompt: 'look', run_in_background: true },
+    { toolUseId: 'tu-agent', status: 'ok', resultText: 'Async agent launched successfully.' },
+  );
+  const row = () =>
+    within(screen.getByRole('region', { name: 'Messages' })).getByRole('button', {
+      name: /Explore the parser/,
+    });
+
+  it('a background agent shows Running until its task ends, then Done', async () => {
+    const { server } = await renderChat({ status: 'idle', items: [launched], tasks: [agent()] });
+    expect(row().textContent).toContain('Running');
+    expect(row().textContent).not.toContain('Done');
+
+    pushTasks(server, 2, [agent({ status: 'completed', endedAt: Date.now() })]);
+    await waitFor(() => expect(row().textContent).toContain('Done'));
+    expect(row().textContent).not.toContain('Running');
+  });
+
+  it('without its task (an old chat) it says it started in the background', async () => {
+    await renderChat({ status: 'idle', items: [launched], tasks: [] });
+    expect(row().textContent).toContain('Started in background');
+    expect(row().textContent).not.toContain('Done');
+  });
+});

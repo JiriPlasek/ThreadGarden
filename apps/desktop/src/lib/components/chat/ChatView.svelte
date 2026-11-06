@@ -727,6 +727,7 @@
             onFork={readOnly ? undefined : fork}
             requests={readOnly ? undefined : requests}
             requestsDocked={!readOnly}
+            tasks={machineAway ? [] : chat.tasks}
             memory={chat.view}
             stickRequests={chat.stickRequests}
           />

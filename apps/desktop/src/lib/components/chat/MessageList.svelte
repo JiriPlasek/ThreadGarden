@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { ChatItem } from '@threadgarden/protocol';
+  import type { ChatItem, ChatTask } from '@threadgarden/protocol';
   import ArrowDownIcon from '@lucide/svelte/icons/arrow-down';
   import { onDestroy, untrack } from 'svelte';
   import type { ListMemory } from '#lib/state/chats.svelte.js';
@@ -27,6 +27,7 @@
     onFork,
     requests,
     requestsDocked = false,
+    tasks = [],
     memory,
     fallbackHeight = 600,
     overscan = 6,
@@ -41,6 +42,8 @@
     requests?: RequestActions;
     /** Waiting requests are answered in the composer's place: the list shows a line for each. */
     requestsDocked?: boolean;
+    /** The chat's tasks: a subagent row shows its task's status (a background agent outlives its call). */
+    tasks?: readonly ChatTask[];
     /** Heights and scroll position to resume from (kept per chat across tab switches). */
     memory?: ListMemory;
     /** Viewport height used until the real one is measured (and in tests). */
@@ -55,6 +58,10 @@
   /** Within this distance of the top older items are requested. */
   const LOAD_OLDER_PX = 800;
 
+  const taskByToolUse = $derived(
+    new Map(tasks.flatMap((t) => (t.toolUseId === undefined ? [] : [[t.toolUseId, t] as const]))),
+  );
+
   setChatActions({
     get fork() {
       return onFork;
@@ -65,6 +72,7 @@
     get requestsDocked() {
       return requestsDocked;
     },
+    taskOf: (toolUseId) => taskByToolUse.get(toolUseId),
   });
 
   const mem: ListMemory = untrack(() => memory) ?? {

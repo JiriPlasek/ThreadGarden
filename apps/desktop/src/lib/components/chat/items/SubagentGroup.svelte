@@ -2,6 +2,10 @@
   import type { ChatItem } from '@threadgarden/protocol';
   import BotIcon from '@lucide/svelte/icons/bot';
   import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
+  import CircleDashedIcon from '@lucide/svelte/icons/circle-dashed';
+  import { agentRowStatus } from '../activity';
+  import { chatActions } from '../context';
+  import { elapsed } from '../format';
   import { buildRows, type ToolCallItem } from '../rows';
   import { str, summarize } from '../tools';
   import AssistantText from './AssistantText.svelte';
@@ -13,10 +17,24 @@
 
   /**
    * An Agent/Task call with the subagent's own items grouped under it and its
-   * live status (spec §6.4). Collapsed it shows the step count and, while
-   * running, the latest step.
+   * live status (spec §6.4), taken from the chat's task for the call when
+   * there is one: a background agent's call returns as soon as it starts.
+   * Collapsed it shows the step count and, while running, how long it has run
+   * and the latest step.
    */
   let { item, children = [] }: { item: ToolCallItem; children?: ChatItem[] } = $props();
+
+  const actions = chatActions();
+  const status = $derived(agentRowStatus(item, actions.taskOf?.(item.toolUseId)));
+  const running = $derived(status.icon === 'running');
+
+  let now = $state(Date.now());
+  $effect(() => {
+    if (status.since === undefined) return;
+    now = Date.now();
+    const timer = setInterval(() => (now = Date.now()), 1000);
+    return () => clearInterval(timer);
+  });
 
   const SHOWN = 100;
   let open = $state(false);
@@ -40,7 +58,9 @@
   });
   const steps = $derived(`${children.length} ${children.length === 1 ? 'step' : 'steps'}`);
   const statusText = $derived(
-    item.status === 'running' ? 'Running' : item.status === 'error' ? 'Failed' : 'Done',
+    status.since === undefined
+      ? status.text
+      : `${status.text} ${elapsed(Math.max(0, now - status.since))}`,
   );
 </script>
 
@@ -55,7 +75,11 @@
       class="text-muted-foreground size-4 shrink-0 transition-transform {open ? 'rotate-90' : ''}"
       aria-hidden="true"
     />
-    <ToolStatus status={item.status} />
+    {#if status.icon === 'idle'}
+      <CircleDashedIcon class="text-muted-foreground size-4 shrink-0" aria-label={status.text} />
+    {:else}
+      <ToolStatus status={status.icon} />
+    {/if}
     <BotIcon class="text-muted-foreground size-4 shrink-0" aria-hidden="true" />
     <span class="min-w-0 truncate font-medium">{summary.target || item.name}</span>
     {#if summary.detail}
@@ -64,7 +88,7 @@
       >
     {/if}
     <span class="text-muted-foreground shrink-0">· {statusText} · {steps}</span>
-    {#if item.status === 'running' && latest && !open}
+    {#if running && latest && !open}
       <span class="text-muted-foreground min-w-0 truncate italic">· {latest}</span>
     {/if}
   </button>
