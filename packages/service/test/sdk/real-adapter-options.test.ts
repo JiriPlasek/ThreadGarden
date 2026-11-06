@@ -41,6 +41,7 @@ describe('buildQueryOptions', () => {
     const o = buildQueryOptions(start());
     expect(Object.keys(o).sort()).toEqual(
       [
+        'allowDangerouslySkipPermissions',
         'canUseTool',
         'cwd',
         'env',
@@ -58,6 +59,17 @@ describe('buildQueryOptions', () => {
     // open-input session kills every background task (the CLI fails closed).
     expect(buildQueryOptions(start()).perTaskStopAffordance).toBe(true);
     expect(buildQueryOptions(start({ resume: 'abc' })).perTaskStopAffordance).toBe(true);
+  });
+
+  it('allows bypassPermissions on every session, so a running chat can switch to it', () => {
+    // SDK 0.3.314: bypassPermissions needs this opt-in at start, also for a later setPermissionMode.
+    expect(buildQueryOptions(start()).allowDangerouslySkipPermissions).toBe(true);
+    expect(buildQueryOptions(start({ resume: 'abc' })).allowDangerouslySkipPermissions).toBe(true);
+    const bypass = buildQueryOptions(start({ permissionMode: 'bypassPermissions' }));
+    expect(bypass).toMatchObject({
+      permissionMode: 'bypassPermissions',
+      allowDangerouslySkipPermissions: true,
+    });
   });
 
   it('passes model, effort and permission mode only when chosen', () => {

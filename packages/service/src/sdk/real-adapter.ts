@@ -82,6 +82,10 @@ export const buildSessionEnv = (
  * (Stop / Esc) only aborts the current turn and spares running background
  * agents and processes; without it the CLI fails closed and an interrupt
  * kills them all. Ending the session still ends them.
+ *
+ * `allowDangerouslySkipPermissions` only makes `bypassPermissions` available,
+ * like the CLI's `--allow-dangerously-skip-permissions`; it is set on every
+ * session so a running chat can be switched to bypass from its header.
  */
 export const buildQueryOptions = (o: StartOptions): Options => {
   const opts: Options = {
@@ -91,6 +95,7 @@ export const buildQueryOptions = (o: StartOptions): Options => {
     systemPrompt: { type: 'preset', preset: 'claude_code' },
     includePartialMessages: true,
     perTaskStopAffordance: true,
+    allowDangerouslySkipPermissions: true,
     canUseTool: o.canUseTool,
     env: { ...o.env, CLAUDE_CODE_STARTUP_FAILURE_RESULTS: '1' },
   };

@@ -6,8 +6,8 @@
  * names of the chats Threadgarden starts (v1.2 C1, `chat/titles.ts`).
  *
  * Validation that the protocol schema leaves open happens here: permission
- * modes are limited to what Threadgarden offers (Ruling R11: never
- * `bypassPermissions`), effort to the SDK's levels, models to non-empty names.
+ * modes are limited to what Threadgarden offers (never `dontAsk`), effort to
+ * the SDK's levels, models to non-empty names.
  *
  * Errors the UI acts on carry a code: `NOT_FOUND`, `NOT_LIVE`, `GAP` (the
  * client's seq is not replayable → `chat.open` again), `CLAUDE_MISSING`,
@@ -46,12 +46,13 @@ import type {
 import type { ClaudeFound, ClaudeProblem } from '../../sdk/claude-path.js';
 import { ServiceError, type Router } from '../router.js';
 
-/** Permission modes Threadgarden offers (Ruling R11). */
+/** Permission modes Threadgarden offers. */
 export const PERMISSION_MODES: readonly PermissionMode[] = [
   'default',
   'acceptEdits',
   'plan',
   'auto',
+  'bypassPermissions',
 ];
 export const EFFORT_LEVELS: readonly Effort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 
