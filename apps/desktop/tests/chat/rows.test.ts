@@ -1,5 +1,6 @@
+import type { ChatItem } from '@threadgarden/protocol';
 import { describe, expect, it } from 'vitest';
-import { buildRows } from '../../src/lib/components/chat/rows';
+import { buildRows, quietTail } from '../../src/lib/components/chat/rows';
 import { text, tool, unknownItem, user } from './fixtures';
 
 describe('buildRows', () => {
@@ -59,5 +60,53 @@ describe('buildRows', () => {
   it('maps every item id to its row', () => {
     const rows = buildRows([unknownItem('x1'), unknownItem('x2'), user('u1')]);
     expect(rows.flatMap((r) => r.itemIds)).toEqual(['x1', 'x2', 'u1']);
+  });
+});
+
+describe('quietTail', () => {
+  it('is quiet right after the user’s message', () => {
+    expect(quietTail([text('a0'), user('u1')])).toBe(true);
+  });
+
+  it('is quiet when the last turn’s output has all finished', () => {
+    expect(quietTail([user('u1'), tool('b1', 'Bash', { command: 'ls' }), text('a1')])).toBe(true);
+  });
+
+  it('is not quiet while text streams or a tool call runs', () => {
+    expect(quietTail([user('u1'), text('a1', 'Hel', { streaming: true })])).toBe(false);
+    expect(
+      quietTail([user('u1'), tool('b1', 'Bash', { command: 'ls' }, { status: 'running' })]),
+    ).toBe(false);
+  });
+
+  it('is not quiet while a request waits for the user', () => {
+    const request: ChatItem = {
+      kind: 'permissionRequest',
+      id: 'p1',
+      requestId: 'r1',
+      toolName: 'Bash',
+      input: {},
+      suggestions: [],
+      state: 'pending',
+      variant: 'tool',
+    };
+    expect(quietTail([user('u1'), request])).toBe(false);
+  });
+
+  it('ignores a call left running before the latest message', () => {
+    expect(
+      quietTail([tool('b1', 'Bash', { command: 'ls' }, { status: 'running' }), user('u2')]),
+    ).toBe(true);
+  });
+
+  it('ignores a subagent’s own output, which its row already shows', () => {
+    const agent = tool('t1', 'Agent', { description: 'Explore' }, { toolUseId: 'tu-agent' });
+    expect(
+      quietTail([
+        user('u1'),
+        agent,
+        text('c1', 'child', { parentToolUseId: 'tu-agent', streaming: true }),
+      ]),
+    ).toBe(true);
   });
 });

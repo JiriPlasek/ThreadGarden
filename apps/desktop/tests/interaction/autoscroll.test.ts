@@ -53,6 +53,9 @@ describe('autoscroll on send (v1.1 §5)', { timeout: 20_000 }, () => {
     const env = await renderChat({ status: 'working', items: manyItems(300) });
     const viewport = viewportOf(env.view.container);
     await waitFor(() => expect(viewport.scrollTop).toBeGreaterThan(1000));
+    // Nothing is moving in the working turn: the "Waiting for Claude" row joins the bottom.
+    await screen.findByRole('status', { name: /waiting for claude/i });
+    await new Promise((r) => setTimeout(r, 30));
     const bottom = viewport.scrollTop;
     await scrollUp(viewport);
     await fill(env.composer(), 'also this');

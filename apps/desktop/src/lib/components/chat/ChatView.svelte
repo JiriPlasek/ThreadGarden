@@ -728,6 +728,7 @@
             requests={readOnly ? undefined : requests}
             requestsDocked={!readOnly}
             tasks={machineAway ? [] : chat.tasks}
+            {working}
             memory={chat.view}
             stickRequests={chat.stickRequests}
           />

@@ -229,7 +229,9 @@ describe('activity panel', () => {
   it('does not tick when nothing runs; an ended task shows its final duration', async () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
     vi.setSystemTime(NOW);
+    // Idle: a working turn has its own ticking "Waiting for Claude" row.
     const { panel } = await renderChat({
+      status: 'idle',
       tasks: [shell({ status: 'stopped', startedAt: NOW - 30_000, endedAt: NOW - 18_000 })],
     });
     expect(vi.getTimerCount()).toBe(0);
@@ -438,6 +440,7 @@ describe('activity panel', () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
     vi.setSystemTime(NOW);
     const { panel } = await renderChat({
+      status: 'idle', // a working turn has its own ticking "Waiting for Claude" row
       tasks: [agent({ status: 'paused', startedAt: NOW - 42_000 })],
     });
     const row = within(panel()!).getByRole('listitem');
