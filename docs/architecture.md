@@ -176,7 +176,12 @@ arrive around the task frames in either order. The prompt, spawn depth and
 workflow name come from `task_started`. The UI orders each section (not
 ended first, then by end time), nests tasks under their `parentTaskId` and
 shows the panel on every chat while the one global `activity.open` setting
-is on; a narrow chat pane opens it as a drawer on request instead.
+is on; a narrow chat pane opens it as a drawer on request instead. A
+subagent's row in the messages takes its status from the same list, by the
+task's `toolUseId`: a background agent's Agent call returns as soon as the
+agent starts, so the row reads Running (with the elapsed time) until the task
+ends; without a task (an old chat) a background launch reads "Started in
+background", never Done.
 
 ## Protocol
 
@@ -508,7 +513,11 @@ with the live session's items (the live version wins for anything both have),
 plus the current seq. The normalized history of a chat is cached (bounded at
 about 32 Mi characters across chats) while the chat's indexed size and mtime
 are unchanged, or for the life of the session object while Threadgarden holds the
-chat. Older items page in with `chat.older`.
+chat. Older items page in with `chat.older`. While a turn of a chat
+Threadgarden runs is working and nothing since the latest user message streams,
+runs a tool or waits on the user (`quietTail` in `chat/rows.ts`), the list
+ends with a "Waiting for Claude…" row and the seconds waited; it appears after
+400 ms of quiet, so back-to-back outputs never make it flicker.
 
 **External sessions and resume safety** (§4.4, §6.3). The poller runs
 `claude agents --json --all` every 2 s while the window is visible and every
@@ -1398,6 +1407,16 @@ Windows 11, signed in with a subscription. What it established:
   or "Report from a subagent", …) and the full text on demand; the
   `<local-command-caveat>` entry is hidden, as in the terminal. The list is
   closed: any other tag still renders as the user's text.
+- **Loaded skills** (checked 2026-11-06 with Claude Code 2.1.319). When the
+  model calls the Skill tool, the live stream carries the skill's
+  instructions as a user message flagged `isSynthetic`, whose text starts
+  `Base directory for this skill: <dir>` followed by the SKILL.md body; the
+  transcript flags it `isMeta`, and `getSessionMessages` leaves it out. A
+  `/skill` typed as a message emits no user message live at all. The
+  normalizer turns a synthetic or meta message of that shape into one
+  collapsed system notice, "Skill: <folder name>", with the instructions on
+  demand, nested under the subagent that loaded it; the same text without
+  either flag (typed by the user) stays the user's message.
 - **Read-only.** All 1,794 files under the real `projects/` dir (except the
   temp repo's own project dir) and `settings.json` were hashed before the
   service started and after it shut down, around indexing the whole history,
