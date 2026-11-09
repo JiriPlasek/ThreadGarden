@@ -19,3 +19,11 @@ export const REMOTE_LOCAL_TOKEN = 'threadgarden-e2e-remote-token';
 export const FAKE_SWITCH_PORT = Number(process.env.THREADGARDEN_E2E_SWITCH_PORT ?? 47359);
 export const FAKE_SWITCH_PASSWORD = 'mock-switch';
 export const FAKE_PLUG = 'MockPlug';
+/**
+ * The phone (`phone.spec.ts`): a main mock answering like the phone's core
+ * (`MOCK_PHONE=1`), paired with the remote mock above, and a UI build for the
+ * phone (`VITE_THREADGARDEN_PHONE=1`) that connects to it.
+ */
+export const PHONE_MOCK_PORT = Number(process.env.THREADGARDEN_E2E_PHONE_MOCK_PORT ?? 47361);
+export const PHONE_MOCK_TOKEN = 'threadgarden-e2e-phone-token';
+export const PHONE_UI_PORT = Number(process.env.THREADGARDEN_E2E_PHONE_UI_PORT ?? 4318);

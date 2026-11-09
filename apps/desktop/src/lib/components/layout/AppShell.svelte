@@ -21,6 +21,7 @@
   import UsageDialog from '#lib/components/UsageDialog.svelte';
   import { scaleKeyAction } from '#lib/interface-scale.js';
   import { isPhone } from '#lib/native.js';
+  import PhoneShell from '#lib/components/phone/PhoneShell.svelte';
   import { useApp } from '#lib/state/context.js';
   import AgentsStrip from './AgentsStrip.svelte';
   import ChatList from './ChatList.svelte';
@@ -37,7 +38,8 @@
    * user can still browse history without it. Ctrl/Cmd+K opens the quick
    * switcher from anywhere, Ctrl/Cmd+/ the keyboard shortcuts, and Ctrl/Cmd
    * with = + - 0 changes the interface size; an older service shows the
-   * restart banner. The phone never runs Claude Code, so it never asks for it.
+   * restart banner. The phone never runs Claude Code, so it never asks for it,
+   * and shows one column at a time (`PhoneShell`) with the same dialogs.
    */
   const { settings, connection, places, interaction, power, machineUpdates } = useApp();
   /** Chats waiting for you, plus one per machine whose shutdown is paused by unpushed work. */
@@ -81,109 +83,113 @@
 
 <svelte:window ondragover={cancelFileDrag} ondrop={cancelFileDrag} onkeydown={onWindowKey} />
 
-<div class="bg-background text-foreground flex h-screen flex-col overflow-hidden">
-  {#if connection.status === 'reconnecting'}
-    <div
-      role="status"
-      class="shrink-0 bg-amber-500/15 px-3 py-1 text-xs text-amber-900 dark:text-amber-200"
-    >
-      Reconnecting to the Threadgarden service…
-    </div>
-  {:else}
-    <ServiceBanner />
-  {/if}
+{#if isPhone}
+  <PhoneShell />
+{:else}
+  <div class="bg-background text-foreground flex h-screen flex-col overflow-hidden">
+    {#if connection.status === 'reconnecting'}
+      <div
+        role="status"
+        class="shrink-0 bg-amber-500/15 px-3 py-1 text-xs text-amber-900 dark:text-amber-200"
+      >
+        Reconnecting to the Threadgarden service…
+      </div>
+    {:else}
+      <ServiceBanner />
+    {/if}
 
-  {#if interaction.claudeMissing && !interaction.setupDismissed && !isPhone}
-    <main class="flex min-h-0 flex-1 items-center justify-center overflow-y-auto">
-      <SetupScreen
-        kind="missing"
-        problem={interaction.status?.claude.problem}
-        {checking}
-        onRetry={checkAgain}
-        onDismiss={() => (interaction.setupDismissed = true)}
-      />
-    </main>
-  {:else}
-    <div class="flex min-h-0 flex-1">
-      {#if collapsed('places')}
-        <div class="bg-sidebar flex w-9 shrink-0 flex-col items-center gap-1 border-r py-1.5">
-          <IconButton
-            label="Show places"
-            side="right"
-            onclick={() => settings.setCollapsed('places', false)}
-          >
-            <PanelLeftOpenIcon />
-          </IconButton>
-          <IconButton
-            label={machineUpdates.anyBehind
-              ? 'Settings (a machine update is available)'
-              : 'Settings'}
-            side="right"
-            class="relative"
-            onclick={() => (interaction.settingsOpen = true)}
-          >
-            <SettingsIcon />
-            {#if machineUpdates.anyBehind}<span
-                aria-hidden="true"
-                class="absolute top-0.5 right-0.5 size-1.5 rounded-full bg-amber-500"
-              ></span>{/if}
-          </IconButton>
-          {#if needsYouCount > 0}
-            <button
-              type="button"
-              class="rounded-full bg-amber-500/20 px-1.5 text-[0.6875rem] leading-4 font-medium text-amber-800 tabular-nums dark:text-amber-300"
-              title="Needs you"
-              aria-label="Needs you: {needsYouCount}"
-              onclick={() => places.select({ kind: 'needsYou' })}>{needsYouCount}</button
-            >
-          {/if}
-        </div>
-      {:else}
-        <aside
-          class="bg-sidebar text-sidebar-foreground shrink-0"
-          style:width="{width('places')}px"
-        >
-          <PlacesColumn onCollapse={() => settings.setCollapsed('places', true)} />
-        </aside>
-        <Resizable
-          label="Resize places"
-          width={width('places')}
-          {...COLUMNS.places}
-          onChange={(w) => settings.setColumnWidth('places', w)}
+    {#if interaction.claudeMissing && !interaction.setupDismissed}
+      <main class="flex min-h-0 flex-1 items-center justify-center overflow-y-auto">
+        <SetupScreen
+          kind="missing"
+          problem={interaction.status?.claude.problem}
+          {checking}
+          onRetry={checkAgain}
+          onDismiss={() => (interaction.setupDismissed = true)}
         />
-      {/if}
-
-      {#if collapsed('list')}
-        <div class="flex w-9 shrink-0 flex-col items-center border-r py-1.5">
-          <IconButton
-            label="Show chat list"
-            side="right"
-            onclick={() => settings.setCollapsed('list', false)}
-          >
-            <PanelLeftOpenIcon />
-          </IconButton>
-        </div>
-      {:else}
-        <div class="shrink-0" style:width="{width('list')}px">
-          <ChatList onCollapse={() => settings.setCollapsed('list', true)} />
-        </div>
-        <Resizable
-          label="Resize chat list"
-          width={width('list')}
-          {...COLUMNS.list}
-          onChange={(w) => settings.setColumnWidth('list', w)}
-        />
-      {/if}
-
-      <main class="flex min-w-0 flex-1 flex-col">
-        <TabsBar />
-        <ChatPane />
       </main>
-    </div>
+    {:else}
+      <div class="flex min-h-0 flex-1">
+        {#if collapsed('places')}
+          <div class="bg-sidebar flex w-9 shrink-0 flex-col items-center gap-1 border-r py-1.5">
+            <IconButton
+              label="Show places"
+              side="right"
+              onclick={() => settings.setCollapsed('places', false)}
+            >
+              <PanelLeftOpenIcon />
+            </IconButton>
+            <IconButton
+              label={machineUpdates.anyBehind
+                ? 'Settings (a machine update is available)'
+                : 'Settings'}
+              side="right"
+              class="relative"
+              onclick={() => (interaction.settingsOpen = true)}
+            >
+              <SettingsIcon />
+              {#if machineUpdates.anyBehind}<span
+                  aria-hidden="true"
+                  class="absolute top-0.5 right-0.5 size-1.5 rounded-full bg-amber-500"
+                ></span>{/if}
+            </IconButton>
+            {#if needsYouCount > 0}
+              <button
+                type="button"
+                class="rounded-full bg-amber-500/20 px-1.5 text-[0.6875rem] leading-4 font-medium text-amber-800 tabular-nums dark:text-amber-300"
+                title="Needs you"
+                aria-label="Needs you: {needsYouCount}"
+                onclick={() => places.select({ kind: 'needsYou' })}>{needsYouCount}</button
+              >
+            {/if}
+          </div>
+        {:else}
+          <aside
+            class="bg-sidebar text-sidebar-foreground shrink-0"
+            style:width="{width('places')}px"
+          >
+            <PlacesColumn onCollapse={() => settings.setCollapsed('places', true)} />
+          </aside>
+          <Resizable
+            label="Resize places"
+            width={width('places')}
+            {...COLUMNS.places}
+            onChange={(w) => settings.setColumnWidth('places', w)}
+          />
+        {/if}
 
-    <AgentsStrip />
-  {/if}
-</div>
+        {#if collapsed('list')}
+          <div class="flex w-9 shrink-0 flex-col items-center border-r py-1.5">
+            <IconButton
+              label="Show chat list"
+              side="right"
+              onclick={() => settings.setCollapsed('list', false)}
+            >
+              <PanelLeftOpenIcon />
+            </IconButton>
+          </div>
+        {:else}
+          <div class="shrink-0" style:width="{width('list')}px">
+            <ChatList onCollapse={() => settings.setCollapsed('list', true)} />
+          </div>
+          <Resizable
+            label="Resize chat list"
+            width={width('list')}
+            {...COLUMNS.list}
+            onChange={(w) => settings.setColumnWidth('list', w)}
+          />
+        {/if}
+
+        <main class="flex min-w-0 flex-1 flex-col">
+          <TabsBar />
+          <ChatPane />
+        </main>
+      </div>
+
+      <AgentsStrip />
+    {/if}
+  </div>
+{/if}
 
 <NewChatDialog />
 <MoveChatDialog />

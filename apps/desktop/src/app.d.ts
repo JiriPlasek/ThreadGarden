@@ -7,7 +7,10 @@ declare global {
     // interface Error {}
     // interface Locals {}
     // interface PageData {}
-    // interface PageState {}
+    /** Shallow routing: the phone's level (`phone-nav.svelte.ts`), one history entry each. */
+    interface PageState {
+      phone?: 'places' | 'list' | 'chat';
+    }
     // interface Platform {}
   }
 }

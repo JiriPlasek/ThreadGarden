@@ -49,7 +49,14 @@
    * machine under its own heading, and no Analytics (This PC's history). With
    * no machine paired yet, Add machine is all there is.
    */
-  let { onCollapse }: { onCollapse?: () => void } = $props();
+  let {
+    onCollapse,
+    onSelect,
+  }: {
+    onCollapse?: () => void;
+    /** A place was chosen (the phone then shows its chats). */
+    onSelect?: (place: Place) => void;
+  } = $props();
 
   const { places, interaction, tabs, scopes, machines, power, machineUpdates } = useApp();
   const local = scopes.local();
@@ -182,7 +189,10 @@
 
   const isSelected = (place: Place): boolean =>
     samePlace(places.selected, place, scopes.local().machineId);
-  const select = (place: Place): void => places.select(place);
+  const select = (place: Place): void => {
+    places.select(place);
+    onSelect?.(place);
+  };
   const quiet = (p: Promise<unknown>): void => void p.catch(() => {});
 
   const itemClass = (selected: boolean): string =>

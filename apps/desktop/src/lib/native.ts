@@ -238,7 +238,8 @@ export type FileDropHandlers = {
  * where the composer handles HTML5 image drops instead.
  */
 export const onFileDrop = async (h: FileDropHandlers): Promise<() => void> => {
-  if (!isTauri) return () => {};
+  // The phone attaches images through the picker only.
+  if (!desktopTauri) return () => {};
   const { getCurrentWebview } = await import('@tauri-apps/api/webview');
   return getCurrentWebview().onDragDropEvent((e) => {
     const p = e.payload;
