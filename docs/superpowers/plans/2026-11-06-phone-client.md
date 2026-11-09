@@ -29,7 +29,7 @@
 - **Pairing order:** the machine's HMAC proof is checked against the certificate seen **before** the code is sent, as in `machine/pairing-client.ts`. A machine failing the proof never sees the code.
 - **Secrets** (device tokens, bridge passwords) are stored only in a file encrypted with an Android Keystore key, never logged, and never sent anywhere except the machine or bridge they belong to. Android backup excludes that file (`allowBackup="false"`).
 - **Never send** `ui.visibility` or `power.adopt` from the phone. Both would change state for the machine's other clients.
-- **Never offer** `bypassPermissions`, matching the desktop.
+- **Permission modes match the desktop.** The owner decided on 2026-11-07 (PR #29) that bypass becomes a normal mode behind a confirmation dialog. Once that lands, the phone offers it the same way, with the same confirmation; until then, it doesn't offer it.
 - **Foreground service:** type `specialUse`, with `PROPERTY_SPECIAL_USE_FGS_SUBTYPE` stating the reason. `minSdk` 26, `targetSdk` as Tauri's template, permissions `INTERNET`, `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_SPECIAL_USE`, `POST_NOTIFICATIONS`, `RECEIVE_BOOT_COMPLETED`, `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`, `ACCESS_NETWORK_STATE`. No others.
 - **Back-off:** an alert link retries from 2 s doubling to 60 s. A network change resets it. Ping every 15 s, and a missed pong by the next ping means dead, as in `server/relay.ts`.
 - **Copy:**
