@@ -4,6 +4,7 @@
   import CheckIcon from '@lucide/svelte/icons/check';
   import GaugeIcon from '@lucide/svelte/icons/gauge';
   import HandIcon from '@lucide/svelte/icons/hand';
+  import SquareIcon from '@lucide/svelte/icons/square';
   import XIcon from '@lucide/svelte/icons/x';
   import { tick, untrack } from 'svelte';
   import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
@@ -12,6 +13,7 @@
   import { imageCountText } from '#lib/format/images.js';
   import { agoText, clockTime, sendTimeText } from '#lib/format/usage.js';
   import { rowPx } from '#lib/interface-scale.js';
+  import { ariaKeyShortcuts, formatCombos, shortcut } from '#lib/shortcuts.js';
   import { retryOldCopy } from '#lib/move/move-chat.svelte.js';
   import { copyText } from '#lib/native.js';
   import { RequestError } from '#lib/service/client.js';
@@ -25,7 +27,8 @@
   import ActivityPanel from './ActivityPanel.svelte';
   import { cacheExpiresAt, cacheWarning } from './cache-warning';
   import ChatHeader from './ChatHeader.svelte';
-  import type { RequestActions } from './context';
+  import { setChatActions, type RequestActions } from './context';
+  import RequestCard from './items/RequestCard.svelte';
   import MessageList from './MessageList.svelte';
   import ScheduledSends from './ScheduledSends.svelte';
 
@@ -242,6 +245,12 @@
     respond: (p, answers) => chats.respond(sessionId, p, answers),
     decision: (requestId) => chats.get(sessionId)?.decisions.get(requestId),
   };
+  // For the request card docked in the composer's place (the list sets its own).
+  setChatActions({
+    get requests() {
+      return readOnly ? undefined : requests;
+    },
+  });
 
   // ── sending and resume safety ───────────────────────────────────────────
 
@@ -499,11 +508,34 @@
     });
   });
 
-  const showRequest = (): void => {
+  /**
+   * The oldest waiting request, answered in the composer's place (not on a
+   * machine that went off: there the answer is typed as a message).
+   */
+  const docked = $derived.by(() => {
     const first = pending[0];
-    list?.scrollToBottom();
-    if (first?.kind === 'permissionRequest') void focusRequest(first.requestId, true);
-  };
+    return !readOnly && first?.kind === 'permissionRequest' ? first : undefined;
+  });
+
+  // The next waiting request takes focus once the previous one is answered; when
+  // the last is answered the composer comes back with focus, as in the terminal.
+  let dockedBefore: string | null = null;
+  $effect(() => {
+    const id = docked?.requestId ?? null;
+    untrack(() => {
+      const before = dockedBefore;
+      dockedBefore = id;
+      if (id === before || before === null) return;
+      if (id !== null) {
+        void focusRequest(id);
+        return;
+      }
+      void tick().then(() => {
+        const a = document.activeElement;
+        if (!a || a === document.body) composerBox?.focus();
+      });
+    });
+  });
 
   /**
    * A startup failure that needs a Claude Code update: the setup notice sits
@@ -672,6 +704,7 @@
             onLoadOlder={() => void chats.loadOlder(sessionId)}
             onFork={readOnly ? undefined : fork}
             requests={readOnly ? undefined : requests}
+            requestsDocked={!readOnly}
             memory={chat.view}
             stickRequests={chat.stickRequests}
           />
@@ -766,22 +799,6 @@
                 <span class="flex-1"
                   >Claude asked this before {machineName} went off. Type your answer below; it's sent
                   as your next message.</span
-                >
-              </div>
-            {:else if pending.length > 0}
-              <div
-                class="flex items-center gap-2 rounded-md bg-amber-500/10 px-3 py-1 text-xs text-amber-900 dark:text-amber-200"
-              >
-                <HandIcon class="size-4 shrink-0" aria-hidden="true" />
-                <span class="flex-1"
-                  >Claude is waiting for you{pending.length > 1
-                    ? ` (${pending.length} requests)`
-                    : ''}</span
-                >
-                <button
-                  type="button"
-                  class="font-medium underline-offset-2 hover:underline"
-                  onclick={showRequest}>Show</button
                 >
               </div>
             {/if}
@@ -887,25 +904,58 @@
                 {queueRefusal}
               </p>
             {/if}
-            <Composer
-              bind:this={composer}
-              bind:textarea={composerBox}
-              draftKey={sessionId}
-              cwd={chat.summary?.cwd ?? ''}
-              commandScope={{ sessionId }}
-              {working}
-              queued={chat.queuedMessages}
-              onSubmit={submit}
-              onInterrupt={interrupt}
-              {onControl}
-              onSchedule={machineAway || heldBack ? undefined : schedule}
-              {resetAt}
-              limited={refusal !== undefined}
-              {editing}
-              autofocus={focusComposer}
-              disabled={machineAway && queueRefusal !== null}
-              {cacheNotice}
-            />
+            {#if docked}
+              <!-- The waiting request takes the composer's place, as in the terminal. -->
+              <div class="max-h-[60vh] overflow-y-auto" data-docked-request>
+                {#if pending.length > 1}
+                  <p class="text-muted-foreground mb-1 px-1 text-xs">
+                    1 of {pending.length} requests
+                  </p>
+                {/if}
+                <!-- A fresh card per request: nothing of the previous one's state carries over. -->
+                {#key docked.requestId}
+                  <RequestCard item={docked} docked />
+                {/key}
+                {#if working}
+                  <!-- Other work can run while one request waits: Stop stays in reach (Esc too). -->
+                  <div class="mt-1.5 flex justify-end">
+                    <button
+                      type="button"
+                      class="hover:bg-muted flex h-7 items-center gap-1 rounded-md border px-2 text-xs"
+                      title="Stop Claude · {formatCombos(shortcut('composer-stop').combos).join(
+                        ' or ',
+                      )}"
+                      aria-keyshortcuts={ariaKeyShortcuts(shortcut('composer-stop').combos)}
+                      onclick={interrupt}
+                    >
+                      <SquareIcon class="size-3.5 fill-current" aria-hidden="true" /> Stop
+                    </button>
+                  </div>
+                {/if}
+              </div>
+            {/if}
+            <!-- Hidden, not removed, while a request waits: the draft stays as typed. -->
+            <div class="contents" hidden={docked !== undefined}>
+              <Composer
+                bind:this={composer}
+                bind:textarea={composerBox}
+                draftKey={sessionId}
+                cwd={chat.summary?.cwd ?? ''}
+                commandScope={{ sessionId }}
+                {working}
+                queued={chat.queuedMessages}
+                onSubmit={submit}
+                onInterrupt={interrupt}
+                {onControl}
+                onSchedule={machineAway || heldBack ? undefined : schedule}
+                {resetAt}
+                limited={refusal !== undefined}
+                {editing}
+                autofocus={focusComposer}
+                disabled={machineAway && queueRefusal !== null}
+                {cacheNotice}
+              />
+            </div>
           </div>
         {/if}
       {/if}

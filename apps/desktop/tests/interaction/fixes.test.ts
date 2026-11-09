@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import AppShell from '../../src/lib/components/layout/AppShell.svelte';
 import { mentionForPath, pastedPathMention } from '../../src/lib/components/composer/drop';
 import { setup } from '../layout/harness';
-import { bashRequest, renderChat, request, SID } from './helpers';
+import { bashRequest, pushItems, renderChat, request, SID } from './helpers';
 
 const MODELS = [
   {
@@ -169,17 +169,18 @@ describe('in-chat setup notice', () => {
 
 describe('answers are given once', () => {
   it('a card stays disabled after a successful answer until the service settles it', async () => {
+    const plan = request({
+      requestId: 'r2',
+      id: 'perm:r2',
+      toolName: 'ExitPlanMode',
+      variant: 'plan',
+      input: { plan: 'do it' },
+    });
     const { server } = await renderChat({
       status: 'needsYou',
       items: [
         bashRequest(),
-        request({
-          requestId: 'r2',
-          id: 'perm:r2',
-          toolName: 'ExitPlanMode',
-          variant: 'plan',
-          input: { plan: 'do it' },
-        }),
+        plan,
         request({
           requestId: 'r3',
           id: 'perm:r3',
@@ -206,13 +207,16 @@ describe('answers are given once', () => {
     await waitFor(() => expect(server.calls('chat.respond')).toHaveLength(1));
     expect((allow as HTMLButtonElement).disabled).toBe(true);
     await userEvent.click(allow);
+    // Settled, the next waiting request takes its place.
+    pushItems(server, 2, [bashRequest({ state: 'allowed' })]);
 
-    const approve = screen.getByRole('button', { name: /^approve$/i });
+    const approve = await screen.findByRole('button', { name: /^approve$/i });
     await userEvent.click(approve);
     await waitFor(() => expect(server.calls('chat.respond')).toHaveLength(2));
     expect((approve as HTMLButtonElement).disabled).toBe(true);
+    pushItems(server, 3, [{ ...plan, state: 'allowed' }]);
 
-    await userEvent.click(screen.getByRole('radio', { name: /^a/i }));
+    await userEvent.click(await screen.findByRole('radio', { name: /^a/i }));
     const answer = screen.getByRole('button', { name: /^answer$/i });
     await userEvent.click(answer);
     await waitFor(() => expect(server.calls('chat.respond')).toHaveLength(3));

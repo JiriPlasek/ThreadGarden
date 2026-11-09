@@ -63,18 +63,29 @@ describe('permission card', () => {
       status: 'needsYou',
       items: [bashRequest(), bashRequest({ requestId: 'r2', id: 'perm:r2' })],
     });
-    const [first, second] = await screen.findAllByRole('group', { name: /permission request/i });
-    await userEvent.click(within(first!).getByRole('button', { name: /^allow$/i }));
+    // One at a time, the oldest first, in the composer's place.
+    expect(await screen.findByText('1 of 2 requests')).toBeTruthy();
+    const first = await screen.findByRole('group', { name: /permission request/i });
+    await userEvent.click(within(first).getByRole('button', { name: /^allow$/i }));
     await waitFor(() => expect(server.calls('chat.respond')).toHaveLength(1));
     expect(server.calls('chat.respond')[0]!.params).toEqual({
       sessionId: SID,
       requestId: 'r1',
       decision: 'allow',
     });
+    pushItems(server, 2, [bashRequest({ state: 'allowed' })]);
 
-    await userEvent.click(within(second!).getByRole('button', { name: /deny with feedback/i }));
-    await userEvent.type(within(second!).getByRole('textbox'), 'use git status instead');
-    await userEvent.click(within(second!).getByRole('button', { name: /^deny$/i }));
+    const second = await waitFor(() => {
+      const card = document.querySelector<HTMLElement>(
+        '[data-docked-request] [data-request-id="r2"]',
+      );
+      expect(card).toBeTruthy();
+      return card!;
+    });
+    expect(screen.queryByText(/of 2 requests/)).toBeNull();
+    await userEvent.click(within(second).getByRole('button', { name: /deny with feedback/i }));
+    await userEvent.type(within(second).getByRole('textbox'), 'use git status instead');
+    await userEvent.click(within(second).getByRole('button', { name: /^deny$/i }));
     await waitFor(() => expect(server.calls('chat.respond')).toHaveLength(2));
     expect(server.calls('chat.respond')[1]!.params).toEqual({
       sessionId: SID,
@@ -167,7 +178,11 @@ describe('question form', () => {
           multiSelect: false,
           options: [
             { label: 'Sidebar', description: 'Nav on the left', preview: '[nav] | content' },
-            { label: 'Top bar', description: 'Nav on top', preview: '[ nav ]\n content' },
+            {
+              label: 'Top bar',
+              description: 'Nav on top',
+              preview: '**Top**\n```\n[ nav ]\n  content\n```',
+            },
             { label: 'None', description: 'No nav' },
           ],
         },
@@ -185,7 +200,9 @@ describe('question form', () => {
 
     await userEvent.click(within(form).getByRole('radio', { name: /top bar/i }));
     expect(preview().getAttribute('aria-label')).toBe('Preview: Top bar');
-    expect(preview().querySelector('pre')?.textContent).toBe('[ nav ]\n content');
+    // Markdown, as the terminal renders it: a fenced block keeps its spacing.
+    expect(preview().querySelector('strong')?.textContent).toBe('Top');
+    expect(preview().querySelector('pre')?.textContent).toContain('[ nav ]\n  content');
 
     await userEvent.hover(within(form).getByText('Sidebar'));
     expect(preview().getAttribute('aria-label')).toBe('Preview: Sidebar');
@@ -252,19 +269,109 @@ describe('plan approval', () => {
   });
 });
 
-describe('needs-you focus', () => {
+describe('a waiting request takes the composer’s place', () => {
+  const composerHidden = (): boolean =>
+    screen.queryByRole('textbox', { name: /^message$/i }) === null;
+
+  it('docks the card at the bottom, leaves a line in the list, and gives the composer back', async () => {
+    const { server, composer, view } = await renderChat({ status: 'working' });
+    await userEvent.type(composer(), 'my draft');
+    pushItems(server, 2, [bashRequest()]);
+
+    const docked = await waitFor(() => {
+      const el = view.container.querySelector<HTMLElement>('[data-docked-request]');
+      expect(el).toBeTruthy();
+      return el!;
+    });
+    expect(within(docked).getByRole('group', { name: /permission request/i })).toBeTruthy();
+    expect(composerHidden()).toBe(true);
+    // Where Claude asked, one line.
+    expect(screen.getByText('Waiting for your answer below')).toBeTruthy();
+
+    await userEvent.click(within(docked).getByRole('button', { name: /^allow$/i }));
+    await waitFor(() => expect(server.calls('chat.respond')).toHaveLength(1));
+    pushItems(server, 3, [bashRequest({ state: 'allowed' })]);
+
+    // Answered: the composer is back with the draft as it was, and has focus.
+    await waitFor(() => expect(composerHidden()).toBe(false));
+    expect(composer().value).toBe('my draft');
+    await waitFor(() => expect(document.activeElement).toBe(composer()));
+    expect(view.container.querySelector('[data-docked-request]')).toBeNull();
+    expect(screen.queryByText('Waiting for your answer below')).toBeNull();
+  });
+
   it('a new request takes focus unless the user is typing', async () => {
     const { server, composer } = await renderChat({ status: 'working' });
     pushItems(server, 2, [bashRequest()]);
     const allow = await screen.findByRole('button', { name: /^allow$/i });
     await waitFor(() => expect(document.activeElement).toBe(allow));
+    await userEvent.click(allow);
+    pushItems(server, 3, [bashRequest({ state: 'allowed' })]);
+    await waitFor(() => expect(document.activeElement).toBe(composer()));
 
-    await userEvent.click(composer());
+    // Typing when the next one comes: it docks but does not take the keys (an
+    // Enter meant to send must not press Allow).
     await userEvent.type(composer(), 'typing');
-    pushItems(server, 3, [bashRequest({ requestId: 'r2', id: 'perm:r2' })]);
-    await waitFor(() =>
-      expect(screen.getAllByRole('button', { name: /^allow$/i })).toHaveLength(2),
-    );
-    expect(document.activeElement).toBe(composer());
+    pushItems(server, 4, [bashRequest({ requestId: 'r2', id: 'perm:r2' })]);
+    const next = await screen.findByRole('button', { name: /^allow$/i });
+    await new Promise((r) => setTimeout(r, 50));
+    expect(document.activeElement).not.toBe(next);
+  });
+
+  it('"Chat about this" declines a question the way the terminal does', async () => {
+    const { server, composer } = await renderChat({
+      status: 'needsYou',
+      items: [request({ toolName: 'AskUserQuestion', variant: 'question', input: QUESTION_INPUT })],
+    });
+    const form = await screen.findByRole('form', { name: /question/i });
+    await userEvent.click(within(form).getByRole('radio', { name: /rewrite/i }));
+    await userEvent.click(within(form).getByRole('button', { name: 'Chat about this' }));
+    await waitFor(() => expect(server.calls('chat.respond')).toHaveLength(1));
+    const params = server.calls('chat.respond')[0]!.params as { decision: string; reason: string };
+    expect(params.decision).toBe('deny');
+    expect(params.reason).toMatch(/^The user wants to clarify these questions\./);
+    expect(params.reason).toContain('Start by asking them what they would like to clarify.');
+    expect(params.reason).toContain('- "Which approach should I take?"\n  Answer: Rewrite');
+    expect(params.reason).toContain('- "Which checks should run?"');
+
+    pushItems(server, 2, [
+      request({
+        toolName: 'AskUserQuestion',
+        variant: 'question',
+        input: QUESTION_INPUT,
+        state: 'denied',
+      }),
+    ]);
+    await waitFor(() => expect(document.activeElement).toBe(composer()));
+  });
+
+  it("an answer carries the chosen option's preview, as the terminal sends it", async () => {
+    const input = {
+      questions: [
+        {
+          question: 'Which layout?',
+          header: 'Layout',
+          multiSelect: false,
+          options: [
+            { label: 'Sidebar', description: '', preview: '[nav] | content' },
+            { label: 'Top bar', description: '' },
+          ],
+        },
+      ],
+    };
+    const { server } = await renderChat({
+      status: 'needsYou',
+      items: [request({ toolName: 'AskUserQuestion', variant: 'question', input })],
+    });
+    const form = await screen.findByRole('form', { name: /question/i });
+    await userEvent.click(within(form).getByRole('radio', { name: /sidebar/i }));
+    await userEvent.click(within(form).getByRole('button', { name: /^answer$/i }));
+    await waitFor(() => expect(server.calls('chat.respond')).toHaveLength(1));
+    expect(server.calls('chat.respond')[0]!.params).toMatchObject({
+      updatedInput: {
+        answers: { 'Which layout?': 'Sidebar' },
+        annotations: { 'Which layout?': { preview: '[nav] | content' } },
+      },
+    });
   });
 });

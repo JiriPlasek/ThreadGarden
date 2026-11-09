@@ -1,12 +1,15 @@
 <script lang="ts">
   import MessageCircleQuestionIcon from '@lucide/svelte/icons/message-circle-question';
   import { untrack } from 'svelte';
+  import { renderMarkdown } from '#lib/markdown.js';
   import { chatActions } from '../context';
   import { prettyJson } from '../tools';
   import RequestSettled from './RequestSettled.svelte';
   import {
     answerText,
+    clarifyReason,
     parseQuestions,
+    questionAnnotations,
     questionUpdatedInput,
     type Question,
     type QuestionAnswer,
@@ -82,16 +85,23 @@
     if (!multi && text.trim()) a.selected = [];
   };
 
-  const send = async (decision: 'allow' | 'deny'): Promise<void> => {
+  /**
+   * `deny` declines the question; `chat` declines it the way the terminal's
+   * "Chat about this" does (Claude asks what to clarify, the composer comes back).
+   */
+  const send = async (decision: 'allow' | 'deny' | 'chat'): Promise<void> => {
     if (!requests || busy) return;
     busy = true;
     error = null;
     try {
-      if (decision === 'deny') {
+      if (decision === 'deny' || decision === 'chat') {
         await requests.respond({
           requestId: item.requestId,
           decision: 'deny',
-          reason: 'The user declined to answer.',
+          reason:
+            decision === 'chat' && questions
+              ? clarifyReason(questions, answers)
+              : 'The user declined to answer.',
         });
       } else if (questions) {
         const map: Record<string, string> = {};
@@ -100,7 +110,11 @@
           {
             requestId: item.requestId,
             decision: 'allow',
-            updatedInput: questionUpdatedInput(item.input, map),
+            updatedInput: questionUpdatedInput(
+              item.input,
+              map,
+              questionAnnotations(questions, answers),
+            ),
           },
           map,
         );
@@ -206,8 +220,17 @@
                 aria-label="Preview: {shown?.label ?? ''}"
               >
                 {#if shown?.preview}
-                  <pre
-                    class="max-h-80 overflow-auto font-mono text-xs leading-snug whitespace-pre">{shown.preview}</pre>
+                  <!-- Markdown in a monospace box, as the terminal renders it. Links stay inert: one would navigate the window. -->
+                  <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+                  <div
+                    class="md max-h-80 overflow-auto font-mono text-xs leading-snug [&_li]:whitespace-pre-wrap [&_p]:whitespace-pre-wrap"
+                    onclick={(e) => {
+                      if ((e.target as Element).closest('a')) e.preventDefault();
+                    }}
+                  >
+                    <!-- Sanitized by DOMPurify (markdown.ts). -->
+                    {@html renderMarkdown(shown.preview)}
+                  </div>
                 {:else}
                   <p class="text-muted-foreground text-xs">No preview for this option</p>
                 {/if}
@@ -238,6 +261,15 @@
           class="{btn} border-amber-600 bg-amber-500 text-amber-950 hover:bg-amber-400"
           disabled={busy || !complete}>Answer</button
         >
+        {#if questions}
+          <button
+            type="button"
+            class="{btn} bg-background hover:bg-muted"
+            title="Decline the question and talk it over with Claude instead"
+            disabled={busy}
+            onclick={() => send('chat')}>Chat about this</button
+          >
+        {/if}
         <button
           type="button"
           class="{btn} bg-background hover:bg-muted"

@@ -26,6 +26,7 @@
     onLoadOlder,
     onFork,
     requests,
+    requestsDocked = false,
     memory,
     fallbackHeight = 600,
     overscan = 6,
@@ -38,6 +39,8 @@
     onFork?: (itemId: string) => void;
     /** Answers permission requests, questions and plans (cards are read-only without it). */
     requests?: RequestActions;
+    /** Waiting requests are answered in the composer's place: the list shows a line for each. */
+    requestsDocked?: boolean;
     /** Heights and scroll position to resume from (kept per chat across tab switches). */
     memory?: ListMemory;
     /** Viewport height used until the real one is measured (and in tests). */
@@ -58,6 +61,9 @@
     },
     get requests() {
       return requests;
+    },
+    get requestsDocked() {
+      return requestsDocked;
     },
   });
 

@@ -71,11 +71,8 @@ describe('autoscroll on send (v1.1 §5)', { timeout: 20_000 }, () => {
     const bottom = viewport.scrollTop;
     await scrollUp(viewport);
 
-    // The card is far below; answer it through its "waiting for you" jump, then scroll up again.
-    await userEvent.click(screen.getByRole('button', { name: /^show$/i }));
+    // The card waits in the composer's place, in reach however far up the list is.
     const card = await screen.findByRole('group', { name: /permission request/i });
-    // Up a little, so the card stays rendered.
-    await scrollUp(viewport, bottom - 100);
     await userEvent.click(within(card).getByRole('button', { name: /^allow$/i }));
     await waitFor(() => expect(env.server.calls('chat.respond')).toHaveLength(1));
     await waitFor(() => expect(viewport.scrollTop).toBe(bottom));
