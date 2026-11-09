@@ -150,7 +150,11 @@ export type StartOptions = {
   moveGit?: MoveGit;
   /** Runs `git` and `gh` for New project and Clone (default: the real ones); tests inject a fake. */
   projectTools?: Tools;
-  /** Base environment of session processes (default `process.env`); the API key is added on top. */
+  /**
+   * Base environment of session processes (default `process.env`). An
+   * inherited `ANTHROPIC_API_KEY` is dropped and Threadgarden's API key, when
+   * set, is added on top (`buildSessionEnv`).
+   */
   sessionEnv?: NodeJS.ProcessEnv;
   /**
    * Timers for the session host (coalescing, idle reclaim) and `chat.end`'s

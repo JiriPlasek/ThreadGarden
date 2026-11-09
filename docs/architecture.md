@@ -1210,13 +1210,24 @@ measured automatically; the release checklist covers them by hand.
 ## Authentication
 
 By default Threadgarden never handles credentials: each session's `claude` process
-inherits the environment of the Threadgarden service, so it authenticates exactly as
-the user's installed Claude Code does (subscription login or an API key in
-the environment). If the user sets an API key in Threadgarden's settings,
-`buildSessionEnv` (`packages/service/src/sdk/real-adapter.ts`) copies the
-service environment and adds `ANTHROPIC_API_KEY` for every session Threadgarden
-starts. The SDK's `env` option replaces the child environment, so the copy
-keeps `PATH`, `HOME`, proxies and everything else.
+inherits the environment of the Threadgarden service, minus `ANTHROPIC_API_KEY`,
+so it runs on the user's Claude Code sign-in (or a gateway token or cloud
+provider set in the environment or Claude Code's settings). If the user sets an
+API key in Threadgarden's settings, `buildSessionEnv`
+(`packages/service/src/sdk/real-adapter.ts`) adds it as `ANTHROPIC_API_KEY`
+for every session Threadgarden starts; that is the only way a session gets an
+API key from the environment. The SDK's `env` option replaces the child
+environment, so the copy keeps `PATH`, `HOME`, proxies and everything else.
+
+An `ANTHROPIC_API_KEY` inherited from the service's environment is dropped on
+purpose. Interactive Claude Code asks once before such a key replaces the
+subscription login and remembers a refusal; an SDK session never asks and
+always uses the key (below, and Claude Code's
+[authentication precedence](https://code.claude.com/docs/en/authentication#authentication-precedence)).
+Passing it through quietly billed chats to the API for a user who expected
+their plan, with a key left in the environment for other tools. A key in Claude Code's own
+settings (an `env` block, `apiKeyHelper`) is the user's Claude Code
+configuration and still applies.
 
 ### Verified behaviour (spec §5.5)
 
