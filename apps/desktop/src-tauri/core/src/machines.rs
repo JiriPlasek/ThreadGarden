@@ -11,6 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use base64::Engine;
 use serde_json::{Value, json};
 
+use crate::alerts::Alerts;
 use crate::methods::{LocalEvents, MethodError, Router, blocking, string_param};
 use crate::pairing;
 use crate::relay::{self, Relays};
@@ -111,6 +112,8 @@ pub struct Machines {
     secrets: Arc<dyn Secrets>,
     events: LocalEvents,
     relays: Arc<Relays>,
+    /// The machines' alert links: started on pairing, moved and stopped with them.
+    alerts: Arc<Alerts>,
     /// All of pairing, closing included (`Timing::pairing`).
     pairing_timeout: Duration,
     /// The machines whose token `Secrets` holds, kept here so listing never
@@ -134,6 +137,7 @@ impl Machines {
         secrets: Arc<dyn Secrets>,
         events: LocalEvents,
         relays: Arc<Relays>,
+        alerts: Arc<Alerts>,
         pairing_timeout: Duration,
     ) -> Self {
         let unlocked = store
@@ -147,6 +151,7 @@ impl Machines {
             secrets,
             events,
             relays,
+            alerts,
             pairing_timeout,
             unlocked: Arc::new(Mutex::new(unlocked)),
             saving: Arc::new(Mutex::new(())),
@@ -274,6 +279,7 @@ impl Machines {
             self.give_back(&address, port, &paired);
             return Err(e);
         }
+        self.alerts.start(&id);
         self.changed();
         let machine = self.listed(&self.known(&id)?);
         Ok(json!({ "machine": machine, "token": paired.token }))
@@ -314,6 +320,7 @@ impl Machines {
         // Relays to the old address end; the screens reconnect to the new one (same pin).
         if moved {
             self.relays.drop_machine(&m.id, relay::UNREACHABLE);
+            self.alerts.restart(&m.id);
         }
         self.changed();
         Ok(self.listed(&m))
@@ -354,6 +361,7 @@ impl Machines {
         };
         // Forgotten, token included, before its relays close: one opened now finds nothing (4404).
         self.relays.drop_machine(&machine.id, relay::LOCKED);
+        self.alerts.stop(&machine.id);
         self.changed();
         let revoked = match (revoke, token) {
             (true, Some(token)) => {
@@ -413,6 +421,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(Store::open(dir.path()).unwrap());
         let secrets = Arc::new(MemorySecrets::default());
+        let alerts = crate::alerts::for_tests(dir.path());
         (
             dir,
             Machines::new(
@@ -425,6 +434,7 @@ mod tests {
                     crate::Timing::default(),
                     tokio::sync::broadcast::channel(1).0,
                 )),
+                alerts,
                 Duration::from_secs(10),
             ),
             secrets,
@@ -457,6 +467,7 @@ mod tests {
             secrets.clone(),
             LocalEvents::default(),
             m.relays.clone(),
+            m.alerts.clone(),
             Duration::from_secs(10),
         );
         assert_eq!(

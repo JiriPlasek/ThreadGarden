@@ -71,6 +71,9 @@ struct Data {
     drafts: BTreeMap<String, Draft>,
     #[serde(default)]
     machines: Vec<StoredMachine>,
+    /// The owner chose Disconnect: no alert links until Connect, after a reboot too.
+    #[serde(default)]
+    links_off: bool,
     /// What a newer build wrote that this one doesn't know: kept as it is.
     #[serde(flatten)]
     rest: Map<String, Value>,
@@ -178,6 +181,15 @@ impl Store {
                 );
             }
         })
+    }
+
+    /// Whether the owner chose Disconnect (and hasn't connected again since).
+    pub fn links_off(&self) -> bool {
+        self.lock().links_off
+    }
+
+    pub fn set_links_off(&self, off: bool) -> io::Result<()> {
+        self.change(|d| d.links_off = off)
     }
 
     /// The paired machines, in the order they were added.

@@ -1,5 +1,6 @@
 {
   "answered": [
+    "alerts.setActive",
     "away.list",
     "chat.commands",
     "chat.models",

@@ -68,6 +68,12 @@ struct Seen {
     protocols: Mutex<Vec<String>>,
     connections: AtomicUsize,
     on_revoke: Mutex<Option<Hook>>,
+    /// Device sockets open now.
+    devices_open: AtomicUsize,
+    /// Events for every open device socket (`emit`).
+    events: Mutex<Option<tokio::sync::broadcast::Sender<String>>>,
+    /// What `sessions.list` answers on a device socket.
+    sessions: Mutex<Vec<Value>>,
 }
 
 pub struct FakeMachine {
@@ -133,6 +139,7 @@ impl FakeMachine {
         let token = "7".repeat(64);
         let device_id = "device-phone".to_string();
         let seen = Arc::new(Seen::default());
+        *seen.events.lock().unwrap() = Some(tokio::sync::broadcast::channel(256).0);
         let me = Machine {
             behaviour: behaviour.clone(),
             fingerprint: fingerprint(&der),
@@ -166,6 +173,24 @@ impl FakeMachine {
     /// Every text frame it received, on any socket.
     pub fn frames(&self) -> Vec<String> {
         self.seen.frames.lock().unwrap().clone()
+    }
+
+    /// Sends an event to every open device socket, as a service does.
+    pub fn emit(&self, event: &str, data: Value) {
+        let frame = json!({ "event": event, "data": data }).to_string();
+        if let Some(tx) = self.seen.events.lock().unwrap().as_ref() {
+            let _ = tx.send(frame);
+        }
+    }
+
+    /// The chats `sessions.list` answers with (Needs you, on a device socket).
+    pub fn set_sessions(&self, items: Vec<Value>) {
+        *self.seen.sessions.lock().unwrap() = items;
+    }
+
+    /// Device sockets open now.
+    pub fn devices_open(&self) -> usize {
+        self.seen.devices_open.load(Ordering::SeqCst)
     }
 
     /// Every binary frame it received.
@@ -212,6 +237,17 @@ impl FakeMachine {
 impl Drop for FakeMachine {
     fn drop(&mut self) {
         self.stop();
+    }
+}
+
+/// Counts a device socket down when it ends, however it ends.
+struct OpenDevice(Option<Arc<Seen>>);
+
+impl Drop for OpenDevice {
+    fn drop(&mut self) {
+        if let Some(seen) = &self.0 {
+            seen.devices_open.fetch_sub(1, Ordering::SeqCst);
+        }
     }
 }
 
@@ -292,7 +328,38 @@ impl Machine {
                 std::future::pending::<()>().await;
             }
         }
-        while let Some(Ok(msg)) = ws.next().await {
+        let mut emitted = match (&kind, self.seen.events.lock().unwrap().as_ref()) {
+            (Socket::Device, Some(tx)) => Some(tx.subscribe()),
+            _ => None,
+        };
+        let is_device = matches!(kind, Socket::Device);
+        if is_device {
+            self.seen.devices_open.fetch_add(1, Ordering::SeqCst);
+        }
+        let _open = OpenDevice(is_device.then(|| self.seen.clone()));
+        loop {
+            let msg = tokio::select! {
+                msg = ws.next() => match msg {
+                    Some(Ok(msg)) => msg,
+                    _ => return,
+                },
+                event = async {
+                    match emitted.as_mut() {
+                        Some(rx) => rx.recv().await.ok(),
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    match event {
+                        Some(frame) => {
+                            if ws.send(Message::text(frame)).await.is_err() {
+                                return;
+                            }
+                        }
+                        None => emitted = None,
+                    }
+                    continue;
+                }
+            };
             let text = match msg {
                 Message::Text(text) => text,
                 Message::Binary(b) => {
@@ -307,7 +374,9 @@ impl Machine {
             self.seen.frames.lock().unwrap().push(text.to_string());
             let req: Value = serde_json::from_str(text.as_str()).unwrap_or_default();
             let method = req["method"].as_str().unwrap_or("");
-            if matches!(kind, Socket::Device) && method != "devices.revoke" {
+            if matches!(kind, Socket::Device)
+                && !matches!(method, "devices.revoke" | "hello" | "sessions.list")
+            {
                 // Not ours to answer: back as it came.
                 if ws.send(Message::Text(text)).await.is_err() {
                     return;
@@ -357,6 +426,14 @@ impl Machine {
                 Ok(
                     json!({ "deviceId": self.device_id, "token": self.token, "machine": info(&b.machine_id) }),
                 )
+            }
+            (Socket::Device, "hello") => Ok(json!({
+                "serviceVersion": "0.9.0",
+                "protocolVersion": 11,
+                "machine": info(&b.machine_id),
+            })),
+            (Socket::Device, "sessions.list") => {
+                Ok(json!({ "items": self.seen.sessions.lock().unwrap().clone() }))
             }
             (Socket::Device, "devices.revoke") => {
                 if let Some(hook) = self.seen.on_revoke.lock().unwrap().as_ref() {

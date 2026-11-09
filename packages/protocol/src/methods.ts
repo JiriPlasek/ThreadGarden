@@ -695,6 +695,15 @@ export const methods = {
     z.object({ items: z.array(AwayItemSchema), states: z.array(AwayStateSchema) }),
   ),
   'away.cancel': def(z.object({ id: z.string() }), empty),
+  // ── the phone (no protocol bump: local to the phone's core only) ──────────
+  /**
+   * The chat on the phone's screen, which the core's alert links leave out;
+   * null (or a null in it) when none is (the app is in the background).
+   */
+  'alerts.setActive': def(
+    z.object({ machineId: z.string().nullable(), sessionId: z.string().nullable() }).nullable(),
+    empty,
+  ),
   /** Tries the machine's failed messages again. */
   'away.retry': def(machineIdOnly, empty),
 } as const;

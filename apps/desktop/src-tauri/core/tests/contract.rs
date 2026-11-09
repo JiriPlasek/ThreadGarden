@@ -94,6 +94,11 @@ fn cases() -> Vec<(&'static str, Value)> {
             json!({ "machineId": "m1", "revoke": true }),
         ),
         ("power.list", json!({})),
+        (
+            "alerts.setActive",
+            json!({ "machineId": "m1", "sessionId": "s1" }),
+        ),
+        ("alerts.setActive", json!(null)),
     ]
 }
 

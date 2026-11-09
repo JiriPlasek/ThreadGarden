@@ -498,6 +498,7 @@ mod tests {
             "Phone".into(),
             LocalEvents::default(),
             relays,
+            crate::alerts::for_tests(dir.path()),
             crate::Timing::default().pairing,
         );
         for m in router.methods() {

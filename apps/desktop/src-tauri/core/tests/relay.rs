@@ -33,7 +33,10 @@ fn core(dir: &std::path::Path) -> (CoreHandle, Arc<MemorySecrets>) {
         ping: PING,
         ..Timing::default()
     };
-    (Core::spawn_with_timing(config, timing).unwrap(), secrets)
+    let core = Core::spawn_with_timing(config, timing).unwrap();
+    // Only the screens' relays here: the alert links (`alerts.rs`) would be machines' sockets too.
+    core.disconnect();
+    (core, secrets)
 }
 
 /// Pairs the core with `machine` (its id is `machine-desk` unless the behaviour says otherwise).

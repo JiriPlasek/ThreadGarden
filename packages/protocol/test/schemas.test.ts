@@ -196,6 +196,7 @@ describe('protocol schemas', () => {
       'away.list',
       'away.cancel',
       'away.retry',
+      'alerts.setActive',
     ];
     expect(Object.keys(methods).sort()).toEqual([...expected].sort());
     for (const name of expected) {
