@@ -25,7 +25,7 @@
   import ActivityPanel from './ActivityPanel.svelte';
   import ChatHeader from './ChatHeader.svelte';
   import type { RequestActions } from './context';
-  import { END_OTHER_DESCRIPTION, END_OTHER_TITLE, endOtherNeedsConfirm } from './end-other';
+  import { END_OTHER_DESCRIPTION, END_OTHER_TITLE } from './end-other';
   import MessageList from './MessageList.svelte';
   import ScheduledSends from './ScheduledSends.svelte';
 
@@ -228,10 +228,9 @@
   let sendError = $state<string | null>(null);
   let blocked = $state<{
     reason: string;
+    canStop?: boolean;
     command: string | null;
     copied: boolean;
-    /** End the process failed: why. */
-    endError?: string;
   } | null>(null);
 
   const fork = (itemId: string): void => {
@@ -328,7 +327,7 @@
       return false;
     }
     if (check.status === 'blocked') {
-      blocked = { reason: check.reason, command: null, copied: false };
+      blocked = { reason: check.reason, canStop: check.canStop, command: null, copied: false };
       return false;
     }
     blocked = null;
@@ -357,15 +356,7 @@
     blocked = null;
   };
   const endHolder = (): void => {
-    if (endOtherNeedsConfirm(chat?.status)) {
-      confirmEndHolder = true;
-      return;
-    }
-    if (blocked) blocked = { ...blocked, endError: undefined };
-    endHolderNow().catch((err: unknown) => {
-      if (blocked)
-        blocked = { ...blocked, endError: err instanceof Error ? err.message : String(err) };
-    });
+    confirmEndHolder = true;
   };
 
   // ── v1.3 B: usage limit and scheduled sends ─────────────────────────────
@@ -817,20 +808,19 @@
                     {#if blocked.copied}<CheckIcon class="size-3.5" aria-hidden="true" />{/if}
                     Copy resume command
                   </button>
-                  <button
-                    type="button"
-                    class="bg-background hover:bg-muted inline-flex h-6 items-center gap-1 rounded border px-2"
-                    onclick={endHolder}
-                  >
-                    End the process
-                  </button>
+                  {#if blocked.canStop}
+                    <button
+                      type="button"
+                      class="bg-background hover:bg-muted inline-flex h-6 items-center gap-1 rounded border px-2"
+                      onclick={endHolder}
+                    >
+                      End the process
+                    </button>
+                  {/if}
                   {#if blocked.command}
                     <code class="bg-muted rounded px-1.5 py-0.5 font-mono">{blocked.command}</code>
                   {/if}
                 </div>
-                {#if blocked.endError}
-                  <p class="text-destructive mt-1.5">{blocked.endError}</p>
-                {/if}
               </div>
             {/if}
             {#if refusal}

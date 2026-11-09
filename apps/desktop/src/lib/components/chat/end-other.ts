@@ -1,14 +1,4 @@
-import type { ChatStatus } from '@threadgarden/protocol';
-
-/**
- * Ending another Claude Code process that holds a chat (`external.stop`): End
- * the process in the chat header, beside its note, and in the blocked banner.
- * An idle holder is ended at once, since every message is already saved; one
- * mid-turn asks first, because ending it stops that turn.
- */
-export const endOtherNeedsConfirm = (status: ChatStatus | undefined): boolean =>
-  status === 'working' || status === 'needsYou';
-
+/** Confirmation for ending a process outside Threadgarden, regardless of its last reported status. */
 export const END_OTHER_TITLE = 'End the other process?';
 export const END_OTHER_DESCRIPTION =
-  'Another Claude Code process is in the middle of a turn in this chat. Ending it stops that turn; the messages so far are saved.';
+  'Ending this Claude Code process stops any running turn and may stop background tasks or a dev server it started. Any unsent prompt in that process may be lost. Saved messages remain available.';

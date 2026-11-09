@@ -194,8 +194,8 @@ describe('external.stop', () => {
   it('reports a process that is still listed after ending it', async () => {
     const t = stopSetup(AGENTS, false, { staysListed: true });
     expect(await t.stop('term')).toMatchObject({
-      code: 'STOP_FAILED',
-      message: expect.stringMatching(/9 is still running/),
+      code: 'STOP_PENDING',
+      message: expect.stringMatching(/signal was sent to process 9.*not been confirmed/),
     });
   });
 

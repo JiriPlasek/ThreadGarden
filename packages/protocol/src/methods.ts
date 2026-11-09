@@ -289,6 +289,7 @@ export const methods = {
       status: z.enum(['ok', 'blocked', 'unverified']),
       reason: z.string(),
       recentlyModified: z.boolean(),
+      canStop: z.boolean().optional(),
     }),
   ),
   'chat.commands': def(

@@ -63,9 +63,18 @@ describe('chats running outside Threadgarden', () => {
     const end = screen.getByRole('button', { name: /end session/i }) as HTMLButtonElement;
     expect(end.disabled).toBe(true);
     await userEvent.click(button);
+    expect(server.calls('external.stop')).toHaveLength(0);
+    let dialog = await screen.findByRole('alertdialog');
+    expect(dialog.textContent).toMatch(/any running turn/);
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(server.calls('external.stop')).toHaveLength(0);
+    await userEvent.click(button);
+    dialog = await screen.findByRole('alertdialog');
+    await userEvent.click(within(dialog).getByRole('button', { name: /end process/i }));
     await waitFor(() => expect(server.calls('external.stop')).toHaveLength(1));
     expect(server.calls('external.stop')[0]!.params).toEqual({ sessionId: SID });
-    expect(screen.queryByRole('alertdialog')).toBeNull();
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
     expect(server.calls('chat.end')).toHaveLength(0);
   });
 

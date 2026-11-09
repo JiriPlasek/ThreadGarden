@@ -78,7 +78,10 @@ export const registerExternalHandlers = (router: Router, deps: ExternalHandlerDe
       const now = await list.current();
       if (now && !now.some((e) => e.sessionId === sessionId && e.pid === pid)) return;
       if (Date.now() >= until) {
-        throw new ServiceError('STOP_FAILED', `Process ${pid} is still running.`);
+        throw new ServiceError(
+          'STOP_PENDING',
+          `A stop signal was sent to process ${pid}, but its exit has not been confirmed yet. It may need more time; refresh before trying to continue here.`,
+        );
       }
       await new Promise((r) => setTimeout(r, STOP_POLL_MS));
     }
@@ -119,7 +122,10 @@ export const registerExternalHandlers = (router: Router, deps: ExternalHandlerDe
       return {};
     }
     if (entry.kind !== 'background' || !entry.shortId || !SHORT_ID.test(entry.shortId)) {
-      throw new ServiceError('NOT_STOPPABLE', 'This chat is running in a terminal. Stop it there.');
+      throw new ServiceError(
+        'NOT_STOPPABLE',
+        'This chat has no usable process id or background session id. Stop it in the application running it.',
+      );
     }
     try {
       await deps.run(['stop', entry.shortId]);

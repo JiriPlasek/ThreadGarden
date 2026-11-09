@@ -24,7 +24,7 @@
   import { taskRunning, type ChatState } from '#lib/state/chats.svelte.js';
   import { useApp, useScope } from '#lib/state/context.js';
   import { machineNameOf } from '#lib/state/machines.svelte.js';
-  import { END_OTHER_DESCRIPTION, END_OTHER_TITLE, endOtherNeedsConfirm } from './end-other';
+  import { END_OTHER_DESCRIPTION, END_OTHER_TITLE } from './end-other';
   import { endSessionWarning } from './end-session';
   import { tokens, usd } from './format';
   import RunningTaskList from './RunningTaskList.svelte';
@@ -84,7 +84,13 @@
   /** Run by Claude Code's background service: `claude stop <id>` can stop it. */
   const background = $derived(external?.kind === 'background' && !!external.shortId);
   /** Held by another Claude Code process that `external.stop` can end by its pid. */
-  const holder = $derived(!!external && !background && external.pid !== undefined);
+  const holder = $derived(
+    !!external &&
+      external.kind !== 'background' &&
+      external.pid !== undefined &&
+      Number.isSafeInteger(external.pid) &&
+      external.pid > 0,
+  );
   const project = $derived(
     summary
       ? (places.projects.find((p) => p.projectId === summary.projectId)?.displayName ??
@@ -187,14 +193,7 @@
 
   let confirmEndOther = $state(false);
   const endOther = (): void => {
-    if (endOtherNeedsConfirm(status)) {
-      confirmEndOther = true;
-      return;
-    }
-    error = null;
-    stopNow().catch((err: unknown) => {
-      error = err instanceof Error ? err.message : String(err);
-    });
+    confirmEndOther = true;
   };
 
   const bucket = $derived(summary?.bucket ?? 'active');
