@@ -30,21 +30,37 @@
   onMount(start);
 
   /**
-   * The phone's levels are history entries (shallow routing), so the back
-   * gesture, which goes back in the webview, moves up one level; from the top
-   * it leaves the app as usual. Only Back (popstate) moves the level here.
+   * The phone's levels (and an open dialog) are history entries (shallow
+   * routing), so the back gesture, which goes back in the webview, moves up
+   * one level or closes the dialog; from the top it leaves the app as usual.
+   * The entries change one at a time, each after the one before has landed.
    */
   if (isPhone) {
-    let pushes = Promise.resolve();
+    let queue = Promise.resolve();
     let popped = false;
+    const then = (step: () => Promise<void>): void => {
+      queue = queue.then(step).catch(() => {});
+    };
+    const traversed = (): Promise<void> =>
+      new Promise((resolve) =>
+        window.addEventListener('popstate', () => resolve(), { once: true }),
+      );
     phoneNav.bind({
-      // One at a time: a chat opened from the places pushes its list first.
-      push: (level) => {
-        pushes = pushes
-          .then(() => goto(page.url.href, { state: { phone: level }, shallow: true }))
-          .catch(() => {});
-      },
-      back: (steps) => history.go(-steps),
+      push: (level, o) =>
+        then(() =>
+          goto(page.url.href, {
+            state: { phone: level, ...(o?.dialog ? { dialog: true } : {}) },
+            shallow: true,
+          }),
+        ),
+      replace: (level) =>
+        then(() => goto(page.url.href, { state: { phone: level }, shallow: true, replace: true })),
+      back: (steps) =>
+        then(async () => {
+          const done = traversed();
+          history.go(-steps);
+          await done;
+        }),
     });
     onMount(() => {
       const onPop = (): void => {
@@ -54,10 +70,10 @@
       return () => window.removeEventListener('popstate', onPop);
     });
     $effect(() => {
-      const level = page.state.phone;
+      const state = page.state;
       if (!popped) return;
       popped = false;
-      phoneNav.shown(level);
+      phoneNav.popped(state.phone);
     });
   }
 

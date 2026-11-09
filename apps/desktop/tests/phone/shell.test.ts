@@ -3,8 +3,9 @@ import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import AppShell from '../../src/lib/components/layout/AppShell.svelte';
 import PhoneShell from '../../src/lib/components/phone/PhoneShell.svelte';
-import { PhoneNavState, type PhoneLevel } from '../../src/lib/state/phone-nav.svelte';
+import { PhoneNavState } from '../../src/lib/state/phone-nav.svelte';
 import { M1, project, setupTwoMachines, summary } from '../layout/harness';
+import type { ChatRef } from '../../src/lib/state/refs';
 
 vi.mock('../../src/lib/native', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../src/lib/native')>()),
@@ -13,24 +14,64 @@ vi.mock('../../src/lib/native', async (importOriginal) => ({
 
 describe('the phone navigation', () => {
   it('goes down one entry per level, and back up one level at a time', () => {
-    const pushed: PhoneLevel[] = [];
+    const ops: string[] = [];
     const nav = new PhoneNavState();
-    let backs = 0;
-    nav.bind({ push: (l) => void pushed.push(l), back: (n) => void (backs += n) });
-    // A chat opened from the places (search, a notification) still has its list above it.
+    nav.bind({
+      push: (l, o) => void ops.push(`push ${l}${o?.dialog ? ' dialog' : ''}`),
+      replace: (l) => void ops.push(`replace ${l}`),
+      back: (n) => void ops.push(`back ${n}`),
+    });
+    // A chat opened from the places (search, an alert) still has its list above it.
     nav.go('chat');
-    expect(pushed).toEqual(['list', 'chat']);
+    expect(ops).toEqual(['push list', 'push chat']);
     expect(nav.level).toBe('chat');
     nav.up();
-    expect(backs).toBe(1);
+    expect(ops.at(-1)).toBe('back 1');
     // The history moved: the level follows it.
-    nav.shown('list');
+    nav.popped('list');
+    expect(nav.level).toBe('list');
     nav.go('places');
-    expect(backs).toBe(2);
-    nav.shown(undefined);
+    expect(ops.at(-1)).toBe('back 1');
+    nav.popped(undefined);
     expect(nav.level).toBe('places');
     nav.up();
-    expect(backs).toBe(2);
+    expect(ops.at(-1)).toBe('back 1');
+    expect(ops).toHaveLength(4);
+  });
+
+  it('Back with a dialog open closes the dialog and keeps the level', () => {
+    const ops: string[] = [];
+    const nav = new PhoneNavState();
+    let closed = 0;
+    nav.onCloseDialogs(() => closed++);
+    nav.bind({
+      push: (l, o) => void ops.push(`push ${l}${o?.dialog ? ' dialog' : ''}`),
+      replace: (l) => void ops.push(`replace ${l}`),
+      back: (n) => void ops.push(`back ${n}`),
+    });
+    nav.go('list');
+    nav.dialogOpened();
+    expect(ops.at(-1)).toBe('push list dialog');
+    // Back: the history leaves the dialog's entry.
+    nav.popped('list');
+    expect(closed).toBe(1);
+    expect(nav.level).toBe('list');
+    // It closes: its entry is already gone.
+    nav.dialogClosed();
+    expect(ops).toEqual(['push list', 'push list dialog']);
+
+    // Closed by itself (its X): its entry goes.
+    nav.dialogOpened();
+    nav.dialogClosed();
+    expect(ops.slice(-2)).toEqual(['push list dialog', 'back 1']);
+
+    // New chat starting a chat: the dialog's entry becomes the chat's.
+    nav.dialogOpened();
+    nav.go('chat');
+    expect(ops.slice(-2)).toEqual(['push list dialog', 'replace chat']);
+    nav.dialogClosed();
+    expect(ops.at(-1)).toBe('replace chat');
+    expect(nav.level).toBe('chat');
   });
 
   it('without a page history, Back shows the level above at once', () => {
@@ -86,6 +127,26 @@ describe('the phone shell', () => {
     await waitFor(() => expect(nav.level).toBe('chat'));
     env.app.tabs.close({ machineId: M1, sessionId: 'r1' });
     await waitFor(() => expect(nav.level).toBe('list'));
+  });
+
+  it('an opened alert shows its chat, also when it is the active tab already', async () => {
+    const env = await start();
+    await env.app.tabs.restore();
+    env.app.tabs.openTab({ machineId: M1, sessionId: 'r1' });
+    const nav = new PhoneNavState();
+    let open: ((chat: ChatRef) => void) | undefined;
+    const onOpenChat = async (cb: (chat: ChatRef) => void) => {
+      open = cb;
+      return () => {};
+    };
+    render(PhoneShell, { context: env.context, props: { nav, onOpenChat } });
+    await screen.findByRole('navigation', { name: 'Places' });
+    await waitFor(() => expect(open).toBeDefined());
+    open!({ machineId: M1, sessionId: 'r1' });
+    await waitFor(() => expect(nav.level).toBe('chat'));
+    expect(env.app.tabs.active).toBe(`${M1}/r1`);
+    // Its title is in the phone's bar.
+    expect(await screen.findByText('Chat r1', { selector: 'header span' })).toBeTruthy();
   });
 
   it('AppShell picks the phone shell: no tabs bar, no agents strip, no resizable columns', async () => {

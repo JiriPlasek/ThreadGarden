@@ -217,6 +217,111 @@ test('recent chats switch', async ({ page }) => {
   await expect(chatList(page)).toBeVisible();
 });
 
+test('a long title keeps Recent chats on screen, and Close works', async ({ page }) => {
+  // A made-up title far wider than the phone.
+  const long =
+    'A very long made-up chat title about the phone layout that never ends anywhere soon';
+  await remoteCall('meta.update', { sessionId: 'session-14', customTitle: long });
+  try {
+    await openPhone(page);
+    await openChat(page, 'session-14');
+    await page.getByRole('button', { name: 'Back to chats' }).tap();
+    await row(page, 'session-15').tap();
+    await expect(composer(page)).toBeVisible();
+    await page.getByRole('button', { name: 'Recent chats (2)' }).tap();
+    const recent = page.getByRole('dialog', { name: 'Recent chats' });
+    const close = recent.getByRole('button', { name: `Close ${long}` });
+    await expect(close).toBeInViewport({ ratio: 1 });
+    await close.tap();
+    await expect(recent.getByRole('button', { name: long, exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Recent chats (1)' })).toBeVisible();
+  } finally {
+    await remoteCall('meta.update', { sessionId: 'session-14', customTitle: null });
+  }
+});
+
+test('Back closes New chat and stays at the list; the same for Recent chats', async ({ page }) => {
+  await openPhone(page);
+  await openProject(page);
+  await page.getByRole('button', { name: 'New chat' }).tap();
+  const newChat = page.getByRole('dialog', { name: 'New chat' });
+  await expect(newChat).toBeVisible();
+  await page.goBack();
+  await expect(newChat).toHaveCount(0);
+  await expect(chatList(page)).toBeVisible();
+  // Closed by its own X, its entry goes: Back then leaves the list.
+  await page.getByRole('button', { name: 'New chat' }).tap();
+  await expect(newChat).toBeVisible();
+  await newChat.getByRole('button', { name: 'Close' }).tap();
+  await expect(newChat).toHaveCount(0);
+  await page.goBack();
+  await expect(places(page)).toBeVisible();
+
+  await openChat(page, 'session-3');
+  await page.getByRole('button', { name: 'Back to chats' }).tap();
+  await row(page, 'session-4').tap();
+  await page.getByRole('button', { name: 'Recent chats (2)' }).tap();
+  const recent = page.getByRole('dialog', { name: 'Recent chats' });
+  await expect(recent).toBeVisible();
+  await page.goBack();
+  await expect(recent).toHaveCount(0);
+  await expect(composer(page)).toBeVisible();
+  await page.goBack();
+  await expect(chatList(page)).toBeVisible();
+});
+
+test("the chat header fits the phone's width, before and after a turn", async ({ page }) => {
+  await openPhone(page);
+  await openChat(page, 'session-12');
+  const title = await titleOf('session-12');
+  // The title is in the phone's bar; the header is one row of controls.
+  await expect(page.getByRole('banner').first()).toContainText(title);
+  const overflow = () =>
+    page.evaluate(() => {
+      const width = document.documentElement.clientWidth;
+      const header = document.querySelector('main header');
+      if (!header) return ['no header'];
+      return [...header.querySelectorAll<HTMLElement>('*')]
+        .filter((el) => el.getBoundingClientRect().right > width + 0.5)
+        .map((el) => `${el.tagName.toLowerCase()} ${el.getAttribute('aria-label') ?? ''}`);
+    });
+  expect(await overflow()).toEqual([]);
+  // The pickers read as words, not a letter.
+  for (const name of ['Model', 'Permission mode']) {
+    const box = await page.getByRole('combobox', { name }).boundingBox();
+    expect(box!.width).toBeGreaterThanOrEqual(80);
+  }
+  await send(page, 'Hello from the header test');
+  await expect(page.getByText('This is the Threadgarden mock service answering.')).toBeVisible();
+  // After a turn: usage, cost and the plan don't push it wider.
+  await expect(page.getByRole('combobox', { name: 'Permission mode' })).toBeEnabled();
+  expect(await overflow()).toEqual([]);
+  // Activity, Copy resume command and End session are in the menu.
+  await page.getByRole('button', { name: 'Chat state' }).tap();
+  const menu = page.getByRole('menu');
+  await expect(menu.getByRole('menuitem', { name: /activity/i })).toBeVisible();
+  await expect(menu.getByRole('menuitem', { name: 'Copy resume command' })).toBeVisible();
+  await expect(menu.getByRole('menuitem', { name: 'End session' })).toBeVisible();
+  await page.keyboard.press('Escape');
+});
+
+test('Settings shows nothing that needs a keyboard, and no tooltip stays after a tap', async ({
+  page,
+}) => {
+  await openPhone(page);
+  await page.getByRole('button', { name: 'Settings' }).tap();
+  const settings = page.getByRole('dialog', { name: 'Settings' });
+  await expect(settings).toBeVisible();
+  await expect(settings.getByText(/Enter sends/)).toHaveCount(0);
+  await expect(settings.getByRole('button', { name: /Keyboard shortcuts/ })).toHaveCount(0);
+  await expect(settings.getByText(/Ctrl\+|⌘/)).toHaveCount(0);
+  await expect(settings.getByLabel('Interface size')).toBeVisible();
+  await page.goBack();
+  await expect(settings).toHaveCount(0);
+  await expect(places(page)).toBeVisible();
+  await expect(page.getByRole('tooltip')).toHaveCount(0);
+});
+
 test("the keyboard doesn't cover the composer", async ({ page }) => {
   await openPhone(page);
   await openChat(page, 'session-11');

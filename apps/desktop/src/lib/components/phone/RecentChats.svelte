@@ -6,6 +6,7 @@
   import { machineNameOf } from '#lib/state/machines.svelte.js';
   import { parseChatKey } from '#lib/state/refs.js';
   import { cn } from '#lib/utils.js';
+  import { chatTitle } from './chat-title';
 
   /**
    * The phone's tabs: the chats opened lately (the desktop's open tabs, most
@@ -16,19 +17,7 @@
 
   let open = $state(false);
 
-  const titleOf = (key: string): string => {
-    const ref = parseChatKey(key);
-    const scope = ref ? scopes.get(ref.machineId) : undefined;
-    if (!ref || !scope) return 'Loading…';
-    const listed = scope.sessions.items.find((c) => c.sessionId === ref.sessionId);
-    const chat = scope.chats.get(ref.sessionId);
-    return (
-      listed?.title ??
-      chat?.summary?.title ??
-      scope.chats.summaryOf(ref.sessionId)?.title ??
-      'Loading…'
-    );
-  };
+  const titleOf = (key: string): string => chatTitle(scopes, key);
 
   /** Most recent first: tabs open at the end. */
   const recent = $derived([...tabs.open].reverse());
@@ -51,15 +40,16 @@
 </button>
 
 <Dialog.Root bind:open>
-  <Dialog.Content class="gap-2 p-3">
+  <!-- One column that never grows past the dialog: a long title truncates, Close stays on screen. -->
+  <Dialog.Content class="grid-cols-[minmax(0,1fr)] gap-2 p-3">
     <Dialog.Header>
       <Dialog.Title class="text-base">Recent chats</Dialog.Title>
       <Dialog.Description class="sr-only">Switch to a chat you opened lately</Dialog.Description>
     </Dialog.Header>
-    <ul class="grid gap-1" aria-label="Recent chats">
+    <ul class="grid min-w-0 grid-cols-[minmax(0,1fr)] gap-1" aria-label="Recent chats">
       {#each recent as key (key)}
         {@const ref = parseChatKey(key)}
-        <li class="flex items-center gap-1">
+        <li class="flex min-w-0 items-center gap-1">
           <button
             type="button"
             class={cn(

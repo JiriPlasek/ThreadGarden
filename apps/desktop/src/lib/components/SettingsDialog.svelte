@@ -258,11 +258,12 @@
           </p>
         </div>
       {/if}
-      <label class={checkClass}>
-        <input type="checkbox" bind:checked={form.enterToSend} /> Enter sends the message (Shift+Enter
-        for a new line)
-      </label>
       {#if !isPhone}
+        <!-- A hardware keyboard's setting: on the phone it keeps its value, and the composer's button sends. -->
+        <label class={checkClass}>
+          <input type="checkbox" bind:checked={form.enterToSend} /> Enter sends the message (Shift+Enter
+          for a new line)
+        </label>
         <label class={checkClass}>
           <input type="checkbox" bind:checked={form.externalPolling} /> Show sessions running outside
           Threadgarden
@@ -287,7 +288,7 @@
 
         <div class="grid gap-1">
           <label for="settings-scale" class="text-muted-foreground text-xs"
-            >Interface size ({scaleUp} / {scaleDown})</label
+            >{isPhone ? 'Interface size' : `Interface size (${scaleUp} / ${scaleDown})`}</label
           >
           <select
             id="settings-scale"
@@ -467,9 +468,13 @@
     {/if}
 
     <Dialog.Footer class="sm:justify-between">
-      <Button variant="ghost" size="sm" class="text-muted-foreground" onclick={showShortcuts}>
-        <KeyboardIcon aria-hidden="true" /> Keyboard shortcuts…
-      </Button>
+      {#if isPhone}
+        <span></span>
+      {:else}
+        <Button variant="ghost" size="sm" class="text-muted-foreground" onclick={showShortcuts}>
+          <KeyboardIcon aria-hidden="true" /> Keyboard shortcuts…
+        </Button>
+      {/if}
       <div class="flex flex-col-reverse gap-2 sm:flex-row">
         <Button variant="outline" size="sm" onclick={close}>Cancel</Button>
         <Button size="sm" disabled={saving || idle === null} onclick={() => void save()}

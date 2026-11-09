@@ -276,6 +276,18 @@ export const setActiveChat = async (
   if (phoneTauri) await invoke('alerts_set_active', { machineId, sessionId });
 };
 
+/**
+ * The phone: the owner opened an alert, and the chat it names is to be shown.
+ * The core's alert says so with the `alerts://open` event (Task 10's service
+ * sends it); elsewhere nothing does. Resolves to an unsubscribe function.
+ */
+export const onOpenChat = async (
+  cb: (chat: { machineId: string; sessionId: string }) => void,
+): Promise<() => void> =>
+  phoneTauri
+    ? listen<{ machineId: string; sessionId: string }>('alerts://open', (e) => cb(e.payload))
+    : () => {};
+
 /** Number of chats waiting on the user, shown on the tray icon (the phone has none). */
 export const setTrayNeedsYou = async (n: number): Promise<void> => {
   if (desktopTauri) await invoke('set_tray_needs_you', { count: Math.max(0, Math.floor(n)) });

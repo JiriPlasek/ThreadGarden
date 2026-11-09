@@ -10,6 +10,8 @@ declare global {
     /** Shallow routing: the phone's level (`phone-nav.svelte.ts`), one history entry each. */
     interface PageState {
       phone?: 'places' | 'list' | 'chat';
+      /** An open dialog's entry on top of the level's: Back closes the dialog. */
+      dialog?: boolean;
     }
     // interface Platform {}
   }

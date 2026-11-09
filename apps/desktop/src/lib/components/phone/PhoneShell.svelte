@@ -4,8 +4,11 @@
   import ChatList from '#lib/components/layout/ChatList.svelte';
   import ChatPane from '#lib/components/layout/ChatPane.svelte';
   import PlacesColumn from '#lib/components/layout/PlacesColumn.svelte';
+  import { onOpenChat as nativeOnOpenChat } from '#lib/native.js';
   import { useApp } from '#lib/state/context.js';
+  import type { ChatRef } from '#lib/state/refs.js';
   import { phoneNav, type PhoneNavState } from '#lib/state/phone-nav.svelte.js';
+  import { chatTitle } from './chat-title';
   import PhoneNav from './PhoneNav.svelte';
   import RecentChats from './RecentChats.svelte';
 
@@ -21,7 +24,14 @@
    * stays above it. Interactive elements are at least 44 px (`data-phone`,
    * layout.css).
    */
-  let { nav = phoneNav }: { nav?: PhoneNavState } = $props();
+  let {
+    nav = phoneNav,
+    onOpenChat = nativeOnOpenChat,
+  }: {
+    nav?: PhoneNavState;
+    /** Where an opened alert asks for its chat (the core's event). */
+    onOpenChat?: typeof nativeOnOpenChat;
+  } = $props();
 
   const { connection, tabs, places, scopes, interaction } = useApp();
 
@@ -35,6 +45,59 @@
         : null;
     interaction.openNewChat(project?.path ?? null, scope?.machineId ?? null);
   };
+
+  /** The chat on screen's title, in the phone bar (the chat's own header has no room for it). */
+  const title = $derived(tabs.active ? chatTitle(scopes, tabs.active) : '');
+
+  /**
+   * An alert opened: its chat, at the chat level, also when it is already the
+   * active tab (the tabs don't change, so nothing else would show it).
+   */
+  const showChat = (ref: ChatRef): void => {
+    tabs.openTab(ref);
+    nav.go('chat');
+  };
+  $effect(() => {
+    let off: (() => void) | undefined;
+    let stopped = false;
+    void onOpenChat(showChat).then((f) => (stopped ? f() : (off = f)));
+    return () => {
+      stopped = true;
+      off?.();
+    };
+  });
+
+  /**
+   * An open dialog (New chat, Recent chats, Settings, Move to…, a
+   * confirmation) has a history entry: Back closes it, as Escape does, and the
+   * level stays. Closed by itself, its entry goes.
+   */
+  $effect(() => {
+    const OPEN = '[role="dialog"][data-state="open"], [role="alertdialog"][data-state="open"]';
+    let open = false;
+    const check = (): void => {
+      const now = document.querySelector(OPEN) !== null;
+      if (now === open) return;
+      open = now;
+      if (now) nav.dialogOpened();
+      else nav.dialogClosed();
+    };
+    nav.onCloseDialogs(() => {
+      const top = [...document.querySelectorAll<HTMLElement>(OPEN)].at(-1);
+      top?.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }),
+      );
+    });
+    const observer = new MutationObserver(check);
+    observer.observe(document.body, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      attributeFilter: ['data-state'],
+    });
+    check();
+    return () => observer.disconnect();
+  });
 
   /**
    * A chat opened from anywhere (New chat, Recent chats, a list) is shown; the
@@ -115,7 +178,7 @@
       <ChatList onOpen={() => nav.go('chat')} />
     </div>
   {:else}
-    <PhoneNav back="Chats" onBack={nav.up}>
+    <PhoneNav back="Chats" onBack={nav.up} {title}>
       {#snippet actions()}
         <RecentChats />
       {/snippet}

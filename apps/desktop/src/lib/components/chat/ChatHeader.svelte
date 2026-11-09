@@ -18,7 +18,7 @@
   import IconButton from '#lib/components/layout/IconButton.svelte';
   import ProjectIcon from '#lib/components/layout/ProjectIcon.svelte';
   import StatusIcon from '#lib/components/layout/StatusIcon.svelte';
-  import { copyText } from '#lib/native.js';
+  import { copyText, isPhone } from '#lib/native.js';
   import { supportsMove } from '#lib/projects.js';
   import { shortcut } from '#lib/shortcuts.js';
   import { taskRunning, type ChatState } from '#lib/state/chats.svelte.js';
@@ -197,228 +197,287 @@
     else void buckets.activate([summary]);
   };
 
-  const selectClass =
-    'bg-background hover:bg-muted h-6 max-w-40 truncate rounded border px-1 text-xs disabled:cursor-not-allowed disabled:opacity-60';
+  const selectClass = isPhone
+    ? // Readable on the phone: a share of the row each, never squeezed to a letter.
+      'bg-background hover:bg-muted min-w-[5.5rem] max-w-[9rem] flex-1 truncate rounded border px-1 text-xs disabled:cursor-not-allowed disabled:opacity-60'
+    : 'bg-background hover:bg-muted h-6 max-w-40 truncate rounded border px-1 text-xs disabled:cursor-not-allowed disabled:opacity-60';
 </script>
 
-<header class="shrink-0 border-b">
-  <div class="flex h-10 items-center gap-2 px-4">
-    {#if chat.loaded}
-      <StatusIcon {status} raw={rawStatus(summary)} />
-    {/if}
-    <h1 class="min-w-0 truncate text-sm font-semibold">{summary?.title ?? 'Loading…'}</h1>
-    {#if machineName}
-      <span
-        class="bg-muted text-muted-foreground max-w-40 shrink-0 truncate rounded px-1.5 text-xs leading-5"
-        title="Runs on {machineName}">{machineName}</span
-      >
-    {/if}
-    {#if project && summary}
-      <span class="text-muted-foreground flex shrink-0 items-center gap-1.5 text-xs">
-        <ProjectIcon projectId={summary.projectId} name={project} icons={places.icons} />
-        {project}
-      </span>
-    {/if}
-    {#if bucket === 'onHold'}
-      <span
-        class="bg-muted text-muted-foreground flex min-w-0 shrink items-center gap-1 rounded px-1.5 text-xs leading-5"
-      >
-        <PauseIcon class="size-3.5 shrink-0" aria-hidden="true" />
-        <span class="shrink-0" title={summary?.holdUntil ? fullTime(summary.holdUntil) : undefined}
-          >On hold{summary?.holdUntil !== undefined
-            ? ` until ${formatHoldUntil(summary.holdUntil, now)}`
-            : ''}</span
-        >
-        {#if summary?.holdNote}
-          <span class="text-foreground/80 min-w-0 truncate" title={summary.holdNote}
-            >{summary.holdNote}</span
+{#snippet stateMenu()}
+  {#if summary}
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger>
+        {#snippet child({ props })}
+          <Button
+            {...props}
+            variant="ghost"
+            size="icon-xs"
+            class="text-muted-foreground hover:text-foreground"
+            aria-label="Chat state"
+            title="Chat state: Active, On hold or Archived"
           >
+            <EllipsisIcon />
+          </Button>
+        {/snippet}
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Content align="end" class="min-w-40">
+        {#if bucket !== 'active'}
+          <DropdownMenu.Item class="py-1 text-xs" onSelect={() => moveTo('active')}>
+            <InboxIcon /> Make active
+          </DropdownMenu.Item>
         {/if}
-      </span>
-    {:else if bucket === 'archived'}
-      <span
-        class="bg-muted text-muted-foreground flex shrink-0 items-center gap-1 rounded px-1.5 text-xs leading-5"
-      >
-        <ArchiveIcon class="size-3.5" aria-hidden="true" />Archived
-      </span>
-    {/if}
-    <div class="ml-auto flex shrink-0 items-center gap-0.5">
-      {#if summary}
-        <DropdownMenu.Root>
-          <DropdownMenu.Trigger>
-            {#snippet child({ props })}
-              <Button
-                {...props}
-                variant="ghost"
-                size="icon-xs"
-                class="text-muted-foreground hover:text-foreground"
-                aria-label="Chat state"
-                title="Chat state: Active, On hold or Archived"
-              >
-                <EllipsisIcon />
-              </Button>
-            {/snippet}
-          </DropdownMenu.Trigger>
-          <DropdownMenu.Content align="end" class="min-w-40">
-            {#if bucket !== 'active'}
-              <DropdownMenu.Item class="py-1 text-xs" onSelect={() => moveTo('active')}>
-                <InboxIcon /> Make active
-              </DropdownMenu.Item>
-            {/if}
-            <DropdownMenu.Item class="py-1 text-xs" onSelect={() => moveTo('onHold')}>
-              <PauseIcon /> Put on hold…
+        <DropdownMenu.Item class="py-1 text-xs" onSelect={() => moveTo('onHold')}>
+          <PauseIcon /> Put on hold…
+        </DropdownMenu.Item>
+        {#if bucket !== 'archived'}
+          <DropdownMenu.Item class="py-1 text-xs" onSelect={() => moveTo('archived')}>
+            <ArchiveIcon /> Archive
+          </DropdownMenu.Item>
+        {/if}
+        {#if machines.several && !chat.movedTo && supportsMove(machines.get(machineId))}
+          <DropdownMenu.Separator />
+          <DropdownMenu.Item
+            class="py-1 text-xs"
+            onSelect={() => interaction.openMoveChat({ machineId, sessionId }, summary)}
+          >
+            <ArrowRightLeftIcon /> Move to…
+          </DropdownMenu.Item>
+        {/if}
+        {#if isPhone}
+          <!-- The phone's header has room for one row: these live here. -->
+          <DropdownMenu.Separator />
+          {#if onToggleActivity}
+            <DropdownMenu.Item class="py-1 text-xs" onSelect={onToggleActivity}>
+              <ActivityIcon />
+              {activityOpen ? 'Hide activity' : 'Show activity'}
             </DropdownMenu.Item>
-            {#if bucket !== 'archived'}
-              <DropdownMenu.Item class="py-1 text-xs" onSelect={() => moveTo('archived')}>
-                <ArchiveIcon /> Archive
-              </DropdownMenu.Item>
-            {/if}
-            {#if machines.several && !chat.movedTo && supportsMove(machines.get(machineId))}
-              <DropdownMenu.Separator />
-              <DropdownMenu.Item
-                class="py-1 text-xs"
-                onSelect={() => interaction.openMoveChat({ machineId, sessionId }, summary)}
-              >
-                <ArrowRightLeftIcon /> Move to…
-              </DropdownMenu.Item>
-            {/if}
-          </DropdownMenu.Content>
-        </DropdownMenu.Root>
-      {/if}
-      {#if onToggleActivity}
-        <IconButton
-          label="Activity panel"
-          shortcut={shortcut('activity-toggle').combos[0]}
-          pressed={activityOpen}
-          class="relative"
-          onclick={onToggleActivity}
-        >
-          <ActivityIcon />
-          {#if !activityOpen && !readOnly && chat.running > 0}
-            <!-- Running tasks while the panel is hidden: the tab badge says how many. -->
-            <span
-              class="absolute top-0.5 right-0.5 size-1.5 rounded-full bg-emerald-600 dark:bg-emerald-400"
-              aria-hidden="true"
-            ></span>
           {/if}
-        </IconButton>
-      {/if}
-      <IconButton label="Copy resume command" onclick={copyResume}>
-        {#if copied}<CheckIcon />{:else}<TerminalIcon />{/if}
-      </IconButton>
-      {#if external && background}
-        <IconButton label="Stop background session" onclick={() => (confirmStop = true)}>
-          <CircleStopIcon />
-        </IconButton>
-      {:else}
-        <IconButton label="End session" onclick={end} disabled={!live}>
-          <PowerIcon />
-        </IconButton>
-      {/if}
-    </div>
-  </div>
+          <DropdownMenu.Item class="py-1 text-xs" onSelect={() => void copyResume()}>
+            <TerminalIcon /> Copy resume command
+          </DropdownMenu.Item>
+          {#if external && background}
+            <DropdownMenu.Item class="py-1 text-xs" onSelect={() => (confirmStop = true)}>
+              <CircleStopIcon /> Stop background session
+            </DropdownMenu.Item>
+          {:else}
+            <DropdownMenu.Item class="py-1 text-xs" disabled={!live} onSelect={end}>
+              <PowerIcon /> End session
+            </DropdownMenu.Item>
+          {/if}
+        {/if}
+      </DropdownMenu.Content>
+    </DropdownMenu.Root>
+  {/if}
+{/snippet}
 
-  <div
-    class="text-muted-foreground flex h-8 items-center gap-2 overflow-hidden px-4 text-xs"
-    title={live
-      ? undefined
-      : external
-        ? 'This chat is running outside Threadgarden'
-        : 'Settings apply to running chats; send a message to resume this one'}
+{#snippet pickers()}
+  <select
+    aria-label="Model"
+    class={selectClass}
+    disabled={!live || modelOptions.length === 0}
+    value={header.model ?? ''}
+    onchange={change(chats.setModel, () => header.model ?? '')}
   >
-    {#if external && !background}
-      <span class="text-foreground/80 shrink-0">Running in a terminal — stop it there</span>
-    {:else if external}
-      <span class="text-foreground/80 shrink-0">Running in Claude Code's background service</span>
+    {#if modelOptions.length === 0}
+      <option value="">Model</option>
     {/if}
+    {#each modelOptions as o (o.value)}
+      <option value={o.value}>{o.label}</option>
+    {/each}
+  </select>
+  {#if effortOptions.length > 0}
     <select
-      aria-label="Model"
+      aria-label="Effort"
       class={selectClass}
-      disabled={!live || modelOptions.length === 0}
-      value={header.model ?? ''}
-      onchange={change(chats.setModel, () => header.model ?? '')}
+      disabled={!live}
+      value={header.effort ?? ''}
+      onchange={change(chats.setEffort, () => header.effort ?? '')}
     >
-      {#if modelOptions.length === 0}
-        <option value="">Model</option>
+      {#if !header.effort}
+        <option value="">Effort</option>
       {/if}
-      {#each modelOptions as o (o.value)}
+      {#each effortOptions as o (o.value)}
         <option value={o.value}>{o.label}</option>
       {/each}
     </select>
-    {#if effortOptions.length > 0}
-      <select
-        aria-label="Effort"
-        class={selectClass}
-        disabled={!live}
-        value={header.effort ?? ''}
-        onchange={change(chats.setEffort, () => header.effort ?? '')}
+  {/if}
+  <select
+    aria-label="Permission mode"
+    class={selectClass}
+    disabled={!live}
+    value={header.permissionMode ?? 'default'}
+    onchange={change(chats.setPermissionMode, () => header.permissionMode ?? 'default')}
+  >
+    {#each modeOptions as o (o.value)}
+      <option value={o.value} disabled={!PERMISSION_MODES.some((m) => m.value === o.value)}
+        >{o.label}</option
       >
-        {#if !header.effort}
-          <option value="">Effort</option>
-        {/if}
-        {#each effortOptions as o (o.value)}
-          <option value={o.value}>{o.label}</option>
-        {/each}
-      </select>
-    {/if}
-    <select
-      aria-label="Permission mode"
-      class={selectClass}
-      disabled={!live}
-      value={header.permissionMode ?? 'default'}
-      onchange={change(chats.setPermissionMode, () => header.permissionMode ?? 'default')}
-    >
-      {#each modeOptions as o (o.value)}
-        <option value={o.value} disabled={!PERMISSION_MODES.some((m) => m.value === o.value)}
-          >{o.label}</option
+    {/each}
+  </select>
+{/snippet}
+
+{#if isPhone}
+  <!-- The phone: one row under its bar, which shows the title; the rest is in the menu. -->
+  <header class="shrink-0 border-b">
+    <h1 class="sr-only">{summary?.title ?? 'Loading…'}</h1>
+    <div class="flex min-w-0 items-center gap-1.5 px-2 py-1">
+      {#if chat.loaded}
+        <StatusIcon {status} raw={rawStatus(summary)} />
+      {/if}
+      {#if external}
+        <span class="text-foreground/80 min-w-0 truncate text-xs"
+          >{background ? 'Running in the background service' : 'Running in a terminal'}</span
         >
-      {/each}
-    </select>
-
+      {/if}
+      {@render pickers()}
+      <span class="ml-auto flex shrink-0 items-center">
+        {#if copied}<CheckIcon class="text-muted-foreground size-4" aria-label="Copied" />{/if}
+        {@render stateMenu()}
+      </span>
+    </div>
     {#if error}
-      <span class="text-destructive min-w-0 truncate" role="alert" title={error}>{error}</span>
+      <p class="text-destructive px-3 pb-1 text-xs" role="alert">{error}</p>
     {/if}
-
-    <div class="ml-auto flex shrink-0 items-center gap-3">
-      {#if usage}
-        <span class="flex items-center gap-1.5" title="Context: {usage.text}">
-          <span
-            class="bg-muted relative h-1.5 w-16 overflow-hidden rounded-full"
-            role="meter"
-            aria-label="Context used"
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-valuenow={usage.pct}
-            aria-valuetext={usage.text}
-          >
-            <span
-              class="absolute inset-y-0 left-0 rounded-full {usage.pct >= 80
-                ? 'bg-amber-500'
-                : 'bg-foreground/50'}"
-              style:width="{usage.pct}%"
-            ></span>
-          </span>
-          {usage.pct}%
+  </header>
+{:else}
+  <header class="shrink-0 border-b">
+    <div class="flex h-10 items-center gap-2 px-4">
+      {#if chat.loaded}
+        <StatusIcon {status} raw={rawStatus(summary)} />
+      {/if}
+      <h1 class="min-w-0 truncate text-sm font-semibold">{summary?.title ?? 'Loading…'}</h1>
+      {#if machineName}
+        <span
+          class="bg-muted text-muted-foreground max-w-40 shrink-0 truncate rounded px-1.5 text-xs leading-5"
+          title="Runs on {machineName}">{machineName}</span
+        >
+      {/if}
+      {#if project && summary}
+        <span class="text-muted-foreground flex shrink-0 items-center gap-1.5 text-xs">
+          <ProjectIcon projectId={summary.projectId} name={project} icons={places.icons} />
+          {project}
         </span>
       {/if}
-      {#if header.costUsd !== undefined}
-        <span title="Session cost">{usd(header.costUsd)}</span>
-      {/if}
-      {#if header.auth}
+      {#if bucket === 'onHold'}
         <span
-          title={header.auth.kind === 'apiKey'
-            ? 'API billing'
-            : header.auth.kind === 'subscription'
-              ? 'Subscription'
-              : 'Authentication'}>{header.auth.label}</span
+          class="bg-muted text-muted-foreground flex min-w-0 shrink items-center gap-1 rounded px-1.5 text-xs leading-5"
         >
+          <PauseIcon class="size-3.5 shrink-0" aria-hidden="true" />
+          <span
+            class="shrink-0"
+            title={summary?.holdUntil ? fullTime(summary.holdUntil) : undefined}
+            >On hold{summary?.holdUntil !== undefined
+              ? ` until ${formatHoldUntil(summary.holdUntil, now)}`
+              : ''}</span
+          >
+          {#if summary?.holdNote}
+            <span class="text-foreground/80 min-w-0 truncate" title={summary.holdNote}
+              >{summary.holdNote}</span
+            >
+          {/if}
+        </span>
+      {:else if bucket === 'archived'}
+        <span
+          class="bg-muted text-muted-foreground flex shrink-0 items-center gap-1 rounded px-1.5 text-xs leading-5"
+        >
+          <ArchiveIcon class="size-3.5" aria-hidden="true" />Archived
+        </span>
       {/if}
-      {#if header.claudeVersion}
-        <span title="Claude Code version">claude {header.claudeVersion}</span>
-      {/if}
+      <div class="ml-auto flex shrink-0 items-center gap-0.5">
+        {@render stateMenu()}
+        {#if onToggleActivity}
+          <IconButton
+            label="Activity panel"
+            shortcut={shortcut('activity-toggle').combos[0]}
+            pressed={activityOpen}
+            class="relative"
+            onclick={onToggleActivity}
+          >
+            <ActivityIcon />
+            {#if !activityOpen && !readOnly && chat.running > 0}
+              <!-- Running tasks while the panel is hidden: the tab badge says how many. -->
+              <span
+                class="absolute top-0.5 right-0.5 size-1.5 rounded-full bg-emerald-600 dark:bg-emerald-400"
+                aria-hidden="true"
+              ></span>
+            {/if}
+          </IconButton>
+        {/if}
+        <IconButton label="Copy resume command" onclick={copyResume}>
+          {#if copied}<CheckIcon />{:else}<TerminalIcon />{/if}
+        </IconButton>
+        {#if external && background}
+          <IconButton label="Stop background session" onclick={() => (confirmStop = true)}>
+            <CircleStopIcon />
+          </IconButton>
+        {:else}
+          <IconButton label="End session" onclick={end} disabled={!live}>
+            <PowerIcon />
+          </IconButton>
+        {/if}
+      </div>
     </div>
-  </div>
-</header>
+
+    <div
+      class="text-muted-foreground flex h-8 items-center gap-2 overflow-hidden px-4 text-xs"
+      title={live
+        ? undefined
+        : external
+          ? 'This chat is running outside Threadgarden'
+          : 'Settings apply to running chats; send a message to resume this one'}
+    >
+      {#if external && !background}
+        <span class="text-foreground/80 shrink-0">Running in a terminal — stop it there</span>
+      {:else if external}
+        <span class="text-foreground/80 shrink-0">Running in Claude Code's background service</span>
+      {/if}
+      {@render pickers()}
+
+      {#if error}
+        <span class="text-destructive min-w-0 truncate" role="alert" title={error}>{error}</span>
+      {/if}
+
+      <div class="ml-auto flex shrink-0 items-center gap-3">
+        {#if usage}
+          <span class="flex items-center gap-1.5" title="Context: {usage.text}">
+            <span
+              class="bg-muted relative h-1.5 w-16 overflow-hidden rounded-full"
+              role="meter"
+              aria-label="Context used"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={usage.pct}
+              aria-valuetext={usage.text}
+            >
+              <span
+                class="absolute inset-y-0 left-0 rounded-full {usage.pct >= 80
+                  ? 'bg-amber-500'
+                  : 'bg-foreground/50'}"
+                style:width="{usage.pct}%"
+              ></span>
+            </span>
+            {usage.pct}%
+          </span>
+        {/if}
+        {#if header.costUsd !== undefined}
+          <span title="Session cost">{usd(header.costUsd)}</span>
+        {/if}
+        {#if header.auth}
+          <span
+            title={header.auth.kind === 'apiKey'
+              ? 'API billing'
+              : header.auth.kind === 'subscription'
+                ? 'Subscription'
+                : 'Authentication'}>{header.auth.label}</span
+          >
+        {/if}
+        {#if header.claudeVersion}
+          <span title="Claude Code version">claude {header.claudeVersion}</span>
+        {/if}
+      </div>
+    </div>
+  </header>
+{/if}
 
 <ConfirmDialog
   bind:open={confirmEnd}
