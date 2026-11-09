@@ -230,6 +230,22 @@ const sendFirst = async (env: Env): Promise<string> => {
 };
 
 describe('a new chat on a machine that is away', () => {
+  it('keeps a confirmed bypass mode on the queued first message', async () => {
+    const env = await start();
+    const { dialog } = await openDialog(env);
+    const mode = within(dialog).getByRole('combobox', { name: /permission mode/i });
+    await userEvent.selectOptions(mode, 'bypassPermissions');
+    const confirmation = await screen.findByRole('alertdialog', {
+      name: 'Enable bypass permissions?',
+    });
+    await userEvent.click(
+      within(confirmation).getByRole('button', { name: 'Enable bypass permissions' }),
+    );
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    await userEvent.type(message(dialog), 'Set up CI{Enter}');
+    await waitFor(() => expect(queued(env)).toHaveLength(1));
+    expect(queued(env)[0]).toMatchObject({ permissionMode: 'bypassPermissions', machineId: M1 });
+  });
   it('New chat offers an away machine with its copied folders and Home', async () => {
     const env = await start();
     const { dialog, machine } = await openDialog(env, false);

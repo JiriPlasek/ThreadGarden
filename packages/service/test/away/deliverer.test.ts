@@ -97,6 +97,7 @@ describe('the away deliverer', () => {
       text: 'first',
       cwd: '/work',
       model: 'opus',
+      permissionMode: 'bypassPermissions',
     });
     const second = t.deliverer.queue({
       machineId: 'm-1',
@@ -117,7 +118,13 @@ describe('the away deliverer', () => {
     expect(t.calls).toEqual([
       {
         method: 'chat.create',
-        params: { sessionId: SESSION, cwd: '/work', text: 'first', model: 'opus' },
+        params: {
+          sessionId: SESSION,
+          cwd: '/work',
+          text: 'first',
+          model: 'opus',
+          permissionMode: 'bypassPermissions',
+        },
       },
       {
         method: 'chat.send',

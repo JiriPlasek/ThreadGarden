@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CanUseTool, OneShotOptions, StartOptions } from '../../src/sdk/adapter.js';
 import {
   buildOneShotOptions,
@@ -17,6 +17,8 @@ const start = (over: Partial<StartOptions> = {}): StartOptions => ({
 });
 
 describe('buildQueryOptions', () => {
+  beforeEach(() => vi.stubGlobal('process', { ...process, getuid: () => 1000 }));
+  afterEach(() => vi.unstubAllGlobals());
   it('buildQueryOptions sets preset system prompt, settingSources user/project/local, includePartialMessages, pathToClaudeCodeExecutable', () => {
     const o = buildQueryOptions(start());
     expect(o.systemPrompt).toEqual({ type: 'preset', preset: 'claude_code' });
@@ -41,6 +43,7 @@ describe('buildQueryOptions', () => {
     const o = buildQueryOptions(start());
     expect(Object.keys(o).sort()).toEqual(
       [
+        'allowDangerouslySkipPermissions',
         'canUseTool',
         'cwd',
         'env',
@@ -58,6 +61,38 @@ describe('buildQueryOptions', () => {
     // open-input session kills every background task (the CLI fails closed).
     expect(buildQueryOptions(start()).perTaskStopAffordance).toBe(true);
     expect(buildQueryOptions(start({ resume: 'abc' })).perTaskStopAffordance).toBe(true);
+  });
+
+  it('allows bypassPermissions on non-root sessions, so a running chat can switch to it', () => {
+    // SDK 0.3.314: bypassPermissions needs this opt-in at start, also for a later setPermissionMode.
+    expect(buildQueryOptions(start()).allowDangerouslySkipPermissions).toBe(true);
+    expect(buildQueryOptions(start({ resume: 'abc' })).allowDangerouslySkipPermissions).toBe(true);
+    const bypass = buildQueryOptions(start({ permissionMode: 'bypassPermissions' }));
+    expect(bypass).toMatchObject({
+      permissionMode: 'bypassPermissions',
+      allowDangerouslySkipPermissions: true,
+    });
+  });
+
+  it('omits the bypass opt-in for root on both new and resumed sessions', () => {
+    process.getuid = () => 0;
+    expect(buildQueryOptions(start())).not.toHaveProperty('allowDangerouslySkipPermissions');
+    expect(buildQueryOptions(start({ resume: 'abc', permissionMode: 'plan' }))).toMatchObject({
+      resume: 'abc',
+      permissionMode: 'plan',
+    });
+    expect(buildQueryOptions(start({ resume: 'abc' }))).not.toHaveProperty(
+      'allowDangerouslySkipPermissions',
+    );
+    // An explicit mode is never silently downgraded, even if the CLI will reject it.
+    expect(buildQueryOptions(start({ permissionMode: 'bypassPermissions' })).permissionMode).toBe(
+      'bypassPermissions',
+    );
+  });
+
+  it('keeps the opt-in on platforms without a Unix uid API', () => {
+    Reflect.deleteProperty(process, 'getuid');
+    expect(buildQueryOptions(start()).allowDangerouslySkipPermissions).toBe(true);
   });
 
   it('passes model, effort and permission mode only when chosen', () => {
@@ -122,13 +157,41 @@ describe('buildSessionEnv', () => {
     expect(base).not.toHaveProperty('ANTHROPIC_API_KEY');
   });
 
-  it('keeps an inherited ANTHROPIC_API_KEY when Threadgarden has no key of its own', () => {
-    expect(buildSessionEnv({ ANTHROPIC_API_KEY: 'from-shell' }, null)).toEqual({
-      ANTHROPIC_API_KEY: 'from-shell',
-    });
-    expect(buildSessionEnv({ ANTHROPIC_API_KEY: 'from-shell' }, 'threadgarden')).toEqual({
+  // An ANTHROPIC_API_KEY left in the shell would bill the API: SDK sessions use
+  // it without the approval prompt interactive Claude Code shows. Only the key
+  // set in Threadgarden's settings reaches a session.
+  it('drops an inherited ANTHROPIC_API_KEY, so only the key set in Threadgarden is used', () => {
+    const shell = { PATH: '/usr/bin', ANTHROPIC_API_KEY: 'from-shell' };
+    const inherit = buildSessionEnv(shell, null);
+    expect(inherit).toEqual({ PATH: '/usr/bin' });
+    expect(inherit).not.toHaveProperty('ANTHROPIC_API_KEY');
+    expect(shell.ANTHROPIC_API_KEY).toBe('from-shell');
+
+    expect(buildSessionEnv(shell, 'threadgarden')).toEqual({
+      PATH: '/usr/bin',
       ANTHROPIC_API_KEY: 'threadgarden',
     });
+  });
+
+  // A headless machine's environment is its systemd unit, set on purpose, and
+  // Threadgarden's own key never reaches it: the key is kept there.
+  it('keeps an inherited ANTHROPIC_API_KEY for a headless service', () => {
+    const unit = { PATH: '/usr/bin', ANTHROPIC_API_KEY: 'from-unit' };
+    expect(buildSessionEnv(unit, null, { keepInheritedKey: true })).toEqual(unit);
+    expect(buildSessionEnv(unit, 'threadgarden', { keepInheritedKey: true })).toEqual({
+      PATH: '/usr/bin',
+      ANTHROPIC_API_KEY: 'threadgarden',
+    });
+    expect(buildSessionEnv(unit, null, { keepInheritedKey: false })).toEqual({ PATH: '/usr/bin' });
+  });
+
+  it('keeps the other credentials Claude Code reads, which are chosen on purpose', () => {
+    const base = {
+      ANTHROPIC_AUTH_TOKEN: 'gateway',
+      ANTHROPIC_BASE_URL: 'https://gateway.example',
+      CLAUDE_CODE_USE_BEDROCK: '1',
+    };
+    expect(buildSessionEnv(base, null)).toEqual(base);
   });
 });
 

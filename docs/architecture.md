@@ -519,7 +519,8 @@ live, `chat.send` runs the command again (fresh, not the last poll):
 
 - **blocked** when the session is listed with a live pid or as working or
   blocked: the UI explains why and offers the hand-off commands
-  (`claude --resume <id>`, `claude attach <short id>`);
+  (`claude --resume <id>`, `claude attach <short id>`) and End the process
+  (`external.stop`, below);
 - **ok** when it is listed only as finished without a pid, or not listed;
 - **unverified** when the command cannot be run: the UI asks the user to
   confirm, and also warns when the transcript was modified in the last 2
@@ -1144,9 +1145,14 @@ folder in step 3. Tests and the mock service inject the git reads (`moveGit` in
   the machine they moved to. On the way a transcript passes through the
   desktop: over loopback for This PC's service, over the pinned TLS link for
   a paired machine.
-- **Permissions.** Threadgarden offers the default, acceptEdits, plan and auto
-  permission modes, never `bypassPermissions`, and it filters out "always
-  allow" suggestions that would switch a session to bypass.
+- **Permissions.** Threadgarden offers the default, acceptEdits, plan, auto
+  and bypassPermissions permission modes. Selecting bypass in either mode picker
+  requires confirmation; cancelling keeps the previous mode. Non-root sessions
+  start with the SDK's `allowDangerouslySkipPermissions`, so a running chat can
+  switch to bypass. Root sessions omit this flag because the CLI refuses to start
+  with it; explicitly selecting bypass as root remains unsupported by the CLI.
+  Bypass is only ever chosen in the mode picker, and "always allow"
+  suggestions that would switch a session to bypass are filtered out.
 - **Capabilities.** The window gets only the Tauri permissions it uses: core
   defaults, notifications, the open-folder dialog, clipboard write, autostart
   and URL opening.
@@ -1210,13 +1216,32 @@ measured automatically; the release checklist covers them by hand.
 ## Authentication
 
 By default Threadgarden never handles credentials: each session's `claude` process
-inherits the environment of the Threadgarden service, so it authenticates exactly as
-the user's installed Claude Code does (subscription login or an API key in
-the environment). If the user sets an API key in Threadgarden's settings,
-`buildSessionEnv` (`packages/service/src/sdk/real-adapter.ts`) copies the
-service environment and adds `ANTHROPIC_API_KEY` for every session Threadgarden
-starts. The SDK's `env` option replaces the child environment, so the copy
-keeps `PATH`, `HOME`, proxies and everything else.
+inherits the environment of the Threadgarden service, minus `ANTHROPIC_API_KEY`
+on a desktop, so it runs on the user's Claude Code sign-in (or a gateway token
+or cloud provider set in the environment or Claude Code's settings). If the
+user sets an API key in Threadgarden's settings, `buildSessionEnv`
+(`packages/service/src/sdk/real-adapter.ts`) adds it as `ANTHROPIC_API_KEY`
+for every session Threadgarden starts; on a desktop that is the only way a
+session gets an API key from the environment. The SDK's `env` option replaces
+the child environment, so the copy keeps `PATH`, `HOME`, proxies and
+everything else.
+
+An `ANTHROPIC_API_KEY` inherited from the service's environment is dropped on
+purpose. Interactive Claude Code asks once before such a key replaces the
+subscription login and remembers a refusal; an SDK session never asks and
+always uses the key (below, and Claude Code's
+[authentication precedence](https://code.claude.com/docs/en/authentication#authentication-precedence)).
+Passing it through quietly billed chats to the API for a user who expected
+their plan, with a key left in the environment for other tools. A key in Claude Code's own
+settings (an `env` block, `apiKeyHelper`) is the user's Claude Code
+configuration and still applies.
+
+A headless service keeps an inherited key (`keepInheritedKey`). Its
+environment comes only from its systemd unit (inside a WSL worker's distro
+too), which someone wrote on purpose, and the key set in a desktop's Settings
+never reaches a remote machine (`auth.setApiKey` is local only). So
+`Environment=ANTHROPIC_API_KEY=…` in `systemctl --user edit threadgarden` is
+how a machine runs on an API key instead of a sign-in.
 
 ### Verified behaviour (spec §5.5)
 
@@ -1358,11 +1383,11 @@ startup failures, which credential a session picks).
 
 Decisions made during the build that change behaviour described in the design:
 
-- **Stopping background sessions.** The design kept sessions run by other processes hand-off only. Threadgarden now also stops a background session that Claude Code's background service runs, via the documented `claude stop <id>` (`external.stop`), after a confirmation; only ids shaped like `claude agents` short ids are passed. Sessions open in a terminal are still never stopped from Threadgarden, and the chat header's End session and pickers apply only to chats Threadgarden itself runs.
-- **No bypass mode** (§6.4 listed it). The SDK requires an explicit
-  dangerous opt-in for `bypassPermissions`; Threadgarden offers default,
-  acceptEdits, plan and auto only, and drops "always allow" suggestions that
-  would switch to bypass.
+- **Stopping background sessions.** The design kept sessions run by other processes hand-off only. Threadgarden now also stops a background session that Claude Code's background service runs, via the documented `claude stop <id>` (`external.stop`), after a confirmation; only ids shaped like `claude agents` short ids are passed. A chat another Claude Code process holds (a terminal, an editor's agent) can be ended too, with End the process, shown beside the chat header's "Running in another Claude Code process" and in the blocked banner: `external.stop` ends the pid `claude agents` lists for that chat (Claude Code checks it against the process's start time), with its child processes on Windows (`taskkill /T`) and SIGTERM elsewhere, and waits until the chat leaves the list. Both the header and blocked banner always ask for confirmation, regardless of the last reported status. The warning covers any running turn, unsent input and background tasks or dev servers. The banner only offers stopping when a fresh resume check finds a usable pid or background short id. If exit is not confirmed within five seconds, the message says the signal was sent and more time may be needed. The chat header's End session and pickers still apply only to chats Threadgarden itself runs.
+- **Bypass mode** (§6.4). Left out at first; now offered as "Bypass
+  permissions" in the mode pickers after confirmation. Non-root sessions set
+  the SDK's dangerous opt-in; root sessions omit it so the CLI can start.
+  "Always allow" suggestions that would switch to bypass are still dropped.
 - **Notification clicks** (§6.2 "clicking it opens the chat"). Tauri's
   notification plugin reports no clicks on desktop. Clicking a notification
   focuses Threadgarden; if the window gains focus within 30 s of a needs-you

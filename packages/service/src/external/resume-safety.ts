@@ -29,6 +29,7 @@ export type ResumeCheck = {
   status: 'ok' | 'blocked' | 'unverified';
   reason: string;
   recentlyModified: boolean;
+  canStop?: boolean;
 };
 
 export const checkResume = (o: {
@@ -59,6 +60,10 @@ export const checkResume = (o: {
           : 'in another Claude Code process';
     return {
       status: 'blocked',
+      canStop:
+        live.kind === 'background'
+          ? !!live.shortId && /^[A-Za-z0-9][A-Za-z0-9_]*$/.test(live.shortId)
+          : live.pid !== undefined && Number.isSafeInteger(live.pid) && live.pid > 0,
       reason: `This chat is running ${where}. Resuming it here would mix both into one conversation.`,
       recentlyModified,
     };

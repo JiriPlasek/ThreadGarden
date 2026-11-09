@@ -8,6 +8,7 @@ import ResultFooter from '../../src/lib/components/chat/items/ResultFooter.svelt
 import ToolCallRow from '../../src/lib/components/chat/items/ToolCallRow.svelte';
 import { finishedAt } from '../../src/lib/format/time';
 import { LOCAL, here, setup, summary } from '../layout/harness';
+import { RpcFail } from '../service/fake-ws';
 import { manyItems, text, tool, unknownItem, user } from './fixtures';
 
 const rows = (root: HTMLElement) => root.querySelectorAll('[data-row]');
@@ -314,6 +315,7 @@ describe('chat view', () => {
         command: `claude --resume ${(p as { sessionId: string }).sessionId}`,
       });
       server.handlers['chat.setModel'] = () => ({});
+      server.handlers['chat.setPermissionMode'] = () => ({});
       server.handlers['chat.end'] = () => ({});
       server.handlers['chat.fork'] = () => ({ sessionId: 'forked-1' });
     });
@@ -382,7 +384,7 @@ describe('chat view', () => {
     await waitFor(() => expect(writeText).toHaveBeenCalledWith('claude --resume abc-123'));
   });
 
-  it('header pickers change the model of a live chat', async () => {
+  it('header pickers change the model and permission mode of a live chat', async () => {
     const { server, app, context } = await streamingSetup();
     await app.chats.open('s');
     render(ChatView, { context, props: { ref: { machineId: LOCAL, sessionId: 's' } } });
@@ -399,7 +401,58 @@ describe('chat view', () => {
     const modes = within(mode)
       .getAllByRole('option')
       .map((o) => (o as HTMLOptionElement).value);
-    expect(modes).toEqual(['default', 'acceptEdits', 'plan', 'auto']);
+    expect(modes).toEqual(['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions']);
+    await userEvent.selectOptions(mode, 'acceptEdits');
+    await waitFor(() => expect((mode as HTMLSelectElement).value).toBe('acceptEdits'));
+    const beforeBypass = server.calls('chat.setPermissionMode').length;
+    await userEvent.selectOptions(mode, 'bypassPermissions');
+    const cancelled = await screen.findByRole('alertdialog', {
+      name: 'Enable bypass permissions?',
+    });
+    expect((mode as HTMLSelectElement).value).toBe('acceptEdits');
+    expect(server.calls('chat.setPermissionMode')).toHaveLength(beforeBypass);
+    await userEvent.click(within(cancelled).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect((mode as HTMLSelectElement).value).toBe('acceptEdits');
+    expect(server.calls('chat.setPermissionMode')).toHaveLength(beforeBypass);
+    await userEvent.selectOptions(mode, 'bypassPermissions');
+    const confirmation = await screen.findByRole('alertdialog', {
+      name: 'Enable bypass permissions?',
+    });
+    await userEvent.click(
+      within(confirmation).getByRole('button', { name: 'Enable bypass permissions' }),
+    );
+    await waitFor(() =>
+      expect(server.calls('chat.setPermissionMode').at(-1)?.params).toEqual({
+        sessionId: 's',
+        value: 'bypassPermissions',
+      }),
+    );
+    await waitFor(() => expect((mode as HTMLSelectElement).value).toBe('bypassPermissions'));
+  });
+
+  it('keeps the prior mode and confirmation open when enabling bypass fails', async () => {
+    const { server, app, context } = await streamingSetup();
+    server.handlers['chat.setPermissionMode'] = () => {
+      throw new RpcFail('INTERNAL_ERROR', 'Bypass unavailable');
+    };
+    await app.chats.open('s');
+    render(ChatView, { context, props: { ref: { machineId: LOCAL, sessionId: 's' } } });
+    const mode = await screen.findByRole('combobox', { name: /permission mode/i });
+    await userEvent.selectOptions(mode, 'bypassPermissions');
+    const confirmation = await screen.findByRole('alertdialog', {
+      name: 'Enable bypass permissions?',
+    });
+    await userEvent.click(
+      within(confirmation).getByRole('button', { name: 'Enable bypass permissions' }),
+    );
+    expect(await within(confirmation).findByRole('alert')).toHaveProperty(
+      'textContent',
+      'Bypass unavailable',
+    );
+    expect((mode as HTMLSelectElement).value).toBe('default');
+    expect(app.chats.get('s')?.header.permissionMode).toBe('default');
+    await userEvent.click(within(confirmation).getByRole('button', { name: 'Cancel' }));
   });
 
   it('pickers are disabled for a history-only chat', async () => {

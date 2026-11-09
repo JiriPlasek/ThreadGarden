@@ -21,6 +21,18 @@ describe('checkResume', () => {
     expect(r.reason).not.toBe('');
   });
 
+  it('offers stopping only for a usable pid or background short id', () => {
+    expect(check([ext({ sessionId: 's1', pid: 42 })]).canStop).toBe(true);
+    expect(check([ext({ sessionId: 's1', status: 'busy' })]).canStop).toBe(false);
+    expect(check([ext({ sessionId: 's1', kind: 'background', shortId: 'abc123' })]).canStop).toBe(
+      true,
+    );
+    expect(check([ext({ sessionId: 's1', kind: 'background' })]).canStop).toBe(false);
+    expect(check([ext({ sessionId: 's1', kind: 'background', shortId: '-rf' })]).canStop).toBe(
+      false,
+    );
+  });
+
   it('blocked when state working or blocked', () => {
     for (const state of ['working', 'blocked']) {
       const r = check([ext({ sessionId: 's1', kind: 'background', state })]);

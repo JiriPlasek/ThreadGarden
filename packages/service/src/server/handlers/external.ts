@@ -1,4 +1,5 @@
 /** Router handlers for external sessions, resume safety and system status. */
+import { endProcessTree } from '../../external/end-process.js';
 import type { ExternalPoller } from '../../external/poller.js';
 import { checkResume, resumeCommand, type ResumeCheck } from '../../external/resume-safety.js';
 import type { ClaudeFound, ClaudeProblem } from '../../sdk/claude-path.js';
@@ -23,7 +24,14 @@ export type ExternalHandlerDeps = {
   now?: () => number;
   /** Runs `claude <args>` (the poller's runner); needed by `external.stop`. */
   run?: (args: string[]) => Promise<string>;
+  /** Ends another process holding a chat (`external.stop`). Default: `endProcessTree`. */
+  endProcess?: (pid: number) => Promise<void>;
+  /** How long `external.stop` waits for an ended process to leave `claude agents`. */
+  stopWaitMs?: number;
 };
+
+export const STOP_WAIT_MS = 5_000;
+const STOP_POLL_MS = 250;
 
 /** Background-session short ids as `claude agents` prints them; anything else is refused. */
 const SHORT_ID = /^[A-Za-z0-9][A-Za-z0-9_]*$/;
@@ -55,6 +63,30 @@ export const registerExternalHandlers = (router: Router, deps: ExternalHandlerDe
   const { poller } = deps;
   const resumeCheck = makeResumeChecker(deps);
 
+  /** Ends the process holding `sessionId`, then waits until `claude agents` no longer lists it. */
+  const endHolder = async (list: ExternalPoller, sessionId: string, pid: number): Promise<void> => {
+    try {
+      await (deps.endProcess ?? endProcessTree)(pid);
+    } catch (err) {
+      throw new ServiceError(
+        'STOP_FAILED',
+        `Ending process ${pid} failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    const until = Date.now() + (deps.stopWaitMs ?? STOP_WAIT_MS);
+    for (;;) {
+      const now = await list.current();
+      if (now && !now.some((e) => e.sessionId === sessionId && e.pid === pid)) return;
+      if (Date.now() >= until) {
+        throw new ServiceError(
+          'STOP_PENDING',
+          `A stop signal was sent to process ${pid}, but its exit has not been confirmed yet. It may need more time; refresh before trying to continue here.`,
+        );
+      }
+      await new Promise((r) => setTimeout(r, STOP_POLL_MS));
+    }
+  };
+
   router.register('ui.visibility', async (p) => {
     poller?.setVisible(p.visible);
     return {};
@@ -67,9 +99,10 @@ export const registerExternalHandlers = (router: Router, deps: ExternalHandlerDe
   }));
 
   /**
-   * Stops a background session run by Claude Code's own background service,
-   * through its documented `claude stop <id>`. Sessions open in a terminal are
-   * not Threadgarden's to stop.
+   * Stops a chat running outside Threadgarden. A background session goes through
+   * Claude Code's documented `claude stop <id>`; one held by another process (a
+   * terminal, an editor's agent) is ended by the pid `claude agents` lists for
+   * it, which Claude Code checks against the process's start time.
    */
   router.register('external.stop', async (p) => {
     await deps.located?.();
@@ -84,8 +117,15 @@ export const registerExternalHandlers = (router: Router, deps: ExternalHandlerDe
     const entry = list.find((e) => e.sessionId === p.sessionId);
     if (!entry)
       throw new ServiceError('NOT_EXTERNAL', 'This chat is not running outside Threadgarden.');
+    if (entry.kind !== 'background' && entry.pid !== undefined) {
+      await endHolder(poller, p.sessionId, entry.pid);
+      return {};
+    }
     if (entry.kind !== 'background' || !entry.shortId || !SHORT_ID.test(entry.shortId)) {
-      throw new ServiceError('NOT_STOPPABLE', 'This chat is running in a terminal. Stop it there.');
+      throw new ServiceError(
+        'NOT_STOPPABLE',
+        'This chat has no usable process id or background session id. Stop it in the application running it.',
+      );
     }
     try {
       await deps.run(['stop', entry.shortId]);

@@ -129,6 +129,49 @@ export class TabsState {
     if (this.remove(this.keyOf(chat))) this.changed();
   };
 
+  /** "Close others" (the tab menu): every tab but `chat`'s goes, the Analytics tab too, and `chat` is shown. */
+  closeOthers = (chat: ChatRef | string): void => {
+    const key = this.keyOf(chat);
+    if (!this.open.includes(key)) return;
+    this.open = [key];
+    this.dropAnalytics();
+    this.active = key;
+    this.changed();
+  };
+
+  /** "Close to the right": the tabs after `chat`'s go; if the active one went, `chat` is shown instead. */
+  closeToRight = (chat: ChatRef | string): void => {
+    const key = this.keyOf(chat);
+    const i = this.open.indexOf(key);
+    if (i < 0 || i === this.open.length - 1) return;
+    const kept = this.open.slice(0, i + 1);
+    this.open = kept;
+    if (this.active !== null && !kept.includes(this.active)) this.active = key;
+    if (this.behindAnalytics !== null && !kept.includes(this.behindAnalytics)) {
+      this.behindAnalytics = key;
+    }
+    this.changed();
+  };
+
+  /** Every chat tab goes; the Analytics tab, if open, stays and is shown ("Close others" on it). */
+  closeChats = (): void => {
+    if (this.open.length === 0) return;
+    this.open = [];
+    this.active = null;
+    this.behindAnalytics = null;
+    this.analyticsShown = this.analyticsOpen;
+    this.changed();
+  };
+
+  /** "Close all": every tab goes, the Analytics tab too. */
+  closeAll = (): void => {
+    if (this.open.length === 0 && !this.analyticsOpen) return;
+    this.open = [];
+    this.active = null;
+    this.dropAnalytics();
+    this.changed();
+  };
+
   /** Closes the tabs of every machine not in `machineIds` (they were removed meanwhile). */
   keepMachines = (machineIds: ReadonlySet<string>): void => {
     const keys = this.open.filter((k) => {
@@ -199,6 +242,13 @@ export class TabsState {
     return ref?.machineId === LOCAL_FALLBACK_ID
       ? chatKey({ machineId: this.localId(), sessionId: ref.sessionId })
       : this.keyOf(stored);
+  };
+
+  /** Closes the Analytics tab without bringing back the chat behind it (the caller sets `active`). */
+  private dropAnalytics = (): void => {
+    this.analyticsOpen = false;
+    this.analyticsShown = false;
+    this.behindAnalytics = null;
   };
 
   /** Drops the tab of `key` (without notifying); false when it was not open. */
