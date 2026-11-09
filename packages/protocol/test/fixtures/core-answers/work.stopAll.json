@@ -1,0 +1,11 @@
+{
+  "cases": [
+    {
+      "params": {},
+      "result": {
+        "stopped": 0
+      }
+    }
+  ],
+  "method": "work.stopAll"
+}

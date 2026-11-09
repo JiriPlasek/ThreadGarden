@@ -1,0 +1,11 @@
+{
+  "cases": [
+    {
+      "params": {
+        "machineId": "m1"
+      },
+      "result": {}
+    }
+  ],
+  "method": "copies.tails"
+}

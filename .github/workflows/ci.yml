@@ -62,7 +62,9 @@ jobs:
       - run: rustc --version && cargo clippy --version
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: apps/desktop/src-tauri
+          workspaces: |
+            apps/desktop/src-tauri
+            apps/desktop/src-tauri/core
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -77,6 +79,14 @@ jobs:
         working-directory: apps/desktop/src-tauri
       - run: cargo test
         working-directory: apps/desktop/src-tauri
+      # The phone's core, a crate of its own for now; its tests include the
+      # check that the protocol's contract fixtures match its answers.
+      - run: cargo fmt --check
+        working-directory: apps/desktop/src-tauri/core
+      - run: cargo clippy --all-targets -- -D warnings
+        working-directory: apps/desktop/src-tauri/core
+      - run: cargo test
+        working-directory: apps/desktop/src-tauri/core
 
   # Release bundles with the Node sidecar and the bundled service, then the UI's
   # end-to-end and performance specs (Playwright, Chromium) against the mock service.

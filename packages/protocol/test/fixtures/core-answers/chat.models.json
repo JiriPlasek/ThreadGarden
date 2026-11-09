@@ -1,0 +1,11 @@
+{
+  "cases": [
+    {
+      "params": {
+        "cwd": "/home/someone/project"
+      },
+      "result": []
+    }
+  ],
+  "method": "chat.models"
+}

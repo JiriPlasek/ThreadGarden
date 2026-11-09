@@ -1,0 +1,11 @@
+{
+  "cases": [
+    {
+      "params": {
+        "machineId": "m1"
+      },
+      "result": null
+    }
+  ],
+  "method": "copies.get"
+}
