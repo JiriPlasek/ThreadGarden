@@ -4,6 +4,8 @@
   import { imageCountText } from '#lib/format/images.js';
   import { isThreadgardenNote } from '#lib/move/note.js';
   import { chatActions } from '../context';
+  import UserText from './UserText.svelte';
+  import { restoreMessage, sentImageMap } from '../../composer/tags';
 
   /**
    * A user message. Top-level messages offer "Fork from this message" (spec §6.4);
@@ -23,8 +25,9 @@
   const actions = chatActions();
   const LONG = 3000;
   let expanded = $state(false);
-  const long = $derived(item.text.length > LONG);
-  const shown = $derived(long && !expanded ? `${item.text.slice(0, LONG)}…` : item.text);
+  const display = $derived(restoreMessage(item.text).text);
+  const long = $derived(display.length > LONG);
+  const mapped = $derived(Object.keys(sentImageMap(display, item.images ?? [])).length);
   const fromThreadgarden = $derived(isThreadgardenNote(item.text));
 </script>
 
@@ -33,7 +36,7 @@
     <div class="text-muted-foreground mb-1 text-[0.6875rem] font-medium">Sent by Threadgarden</div>
   {/if}
   {#if item.text}
-    <div class="pr-6 break-words whitespace-pre-wrap">{shown}</div>
+    <UserText text={item.text} images={item.images} limit={long && !expanded ? LONG : undefined} />
   {/if}
   {#if long}
     <button
@@ -41,12 +44,12 @@
       class="text-muted-foreground hover:text-foreground mt-1 text-xs underline-offset-2 hover:underline"
       aria-expanded={expanded}
       onclick={() => (expanded = !expanded)}
-      >{expanded ? 'Show less' : `Show all ${item.text.length.toLocaleString()} characters`}</button
+      >{expanded ? 'Show less' : `Show all ${display.length.toLocaleString()} characters`}</button
     >
   {/if}
-  {#if item.images?.length}
+  {#if item.images?.length && mapped < item.images.length}
     <div class="mt-1.5 flex flex-wrap gap-1.5">
-      {#each item.images as img, i (i)}
+      {#each item.images.slice(mapped) as img, i (i)}
         <img
           src="data:{img.mediaType};base64,{img.data}"
           alt="Attached image {i + 1}"

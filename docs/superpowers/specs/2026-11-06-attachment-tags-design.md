@@ -4,7 +4,9 @@ Date: 2026-11-06. Status: agreed with the owner in chat (the CLI-style tags,
 drawn as badges, with hover previews in the box and in sent messages), checked
 by a builder (its two questions settled under My calls: attachments kept per
 draft across tab switches, and which image a sent badge shows); awaiting the
-owner's read of this document.
+owner's read of this document in the original session. Continued and implemented
+on 2026-11-09 at the owner's request; implementation plan:
+`../plans/2026-11-09-attachment-tags.md`.
 
 ## Why
 
@@ -129,6 +131,7 @@ same badges, and hovering them shows the image and the text again.
 ## What the owner sees
 
 **Writing.**
+
 - Paste an image (or drop it, or pick it with the attach button): `[Image #1]`
   appears at the caret (at the end when the box isn't focused), separated from
   the text before it by a space, as `insertText` does for mentions today. The
@@ -145,6 +148,7 @@ same badges, and hovering them shows the image and the text again.
   as above).
 
 **Sent.**
+
 - The user message shows the same badges where the tags were, in the message's
   text. `<pasted_content …>` blocks show as `[Pasted text #N +K lines]` badges
   again, numbered in order of appearance.

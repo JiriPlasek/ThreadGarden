@@ -127,7 +127,7 @@ describe('chats on another machine', () => {
         "Files from This PC can't be attached to chats on Ubuntu PC.",
       ),
     );
-    expect(composer().value).toBe('');
+    await waitFor(() => expect(composer().value).toBe('[Image #1]'));
     const thumbs = await screen.findByRole('list', { name: /attached images/i });
     expect(within(thumbs).getAllByRole('listitem')).toHaveLength(1);
   });

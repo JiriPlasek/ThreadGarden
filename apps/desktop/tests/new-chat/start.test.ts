@@ -1,12 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   moveDraft,
+  asNow,
   notStartedText,
   sendOf,
   startInMade,
   type NotStarted,
 } from '../../src/lib/components/new-chat/start';
 import type { MachineScope } from '../../src/lib/state/scope';
+import { InteractionState } from '../../src/lib/state/interaction.svelte';
+import { outgoing, restoreMessage } from '../../src/lib/components/composer/tags';
 
 const target = { machineId: 'm1' } as MachineScope;
 const send = sendOf({
@@ -60,6 +63,29 @@ describe('startInMade', () => {
 });
 
 describe('moveDraft', () => {
+  it('moves the full paste and image registry, and asNow uses the current attachments', () => {
+    const interaction = new InteractionState();
+    const image = { mediaType: 'image/png', data: 'YWJj' };
+    const wire = '<pasted_content id="abcd">\nfull log\n</pasted_content id="abcd"> [Image #2]';
+    const draft = restoreMessage(wire, [image]);
+    interaction.saveAttachments('source', draft);
+    interaction.saveDraft('source', outgoing(draft.text, draft.attachments).text);
+    moveDraft(interaction, {
+      machineId: 'm1',
+      name: 'p',
+      path: '/p',
+      reason: '',
+      draftKey: 'source',
+      text: '',
+    });
+    expect(interaction.cachedAttachments('source')).toBeUndefined();
+    expect(interaction.cachedAttachments('new:/p')).toBe(draft);
+    const current = asNow({ ...send, target: { interaction } as MachineScope, draftKey: 'new:/p' });
+    expect(current.chat.images).toEqual([image]);
+    expect(current.chat.text).toContain('full log');
+    expect(current.chat.text).not.toContain('[Pasted text');
+    interaction.clearDraft('new:/p');
+  });
   const left: NotStarted = {
     machineId: 'm1',
     name: 'plant',
@@ -72,6 +98,7 @@ describe('moveDraft', () => {
     cachedDraft: vi.fn(() => cached),
     saveDraft: vi.fn(),
     clearDraft: vi.fn(),
+    moveAttachments: vi.fn(),
   });
 
   it('moves the message as it is now to the folder’s draft', () => {

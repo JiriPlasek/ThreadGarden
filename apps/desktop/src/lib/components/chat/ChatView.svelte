@@ -1,5 +1,10 @@
 <script lang="ts">
-  import type { AwayItem, ImageRef, ScheduledSend } from '@threadgarden/protocol';
+  import {
+    messagePreview,
+    type AwayItem,
+    type ImageRef,
+    type ScheduledSend,
+  } from '@threadgarden/protocol';
   import ArrowRightLeftIcon from '@lucide/svelte/icons/arrow-right-left';
   import CheckIcon from '@lucide/svelte/icons/check';
   import GaugeIcon from '@lucide/svelte/icons/gauge';
@@ -899,7 +904,7 @@
                 data-away-item
               >
                 {#if w.text}
-                  <p class="text-sm break-words whitespace-pre-wrap">{w.text}</p>
+                  <p class="text-sm break-words whitespace-pre-wrap">{messagePreview(w.text)}</p>
                 {/if}
                 {#if w.imageCount > 0}
                   <p class="text-muted-foreground">{imageCountText(w.imageCount)}</p>

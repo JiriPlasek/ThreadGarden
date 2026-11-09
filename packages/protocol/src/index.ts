@@ -1,4 +1,5 @@
 export * from './version.js';
+export * from './pastes.js';
 export * from './items.js';
 export * from './chat.js';
 export * from './order.js';

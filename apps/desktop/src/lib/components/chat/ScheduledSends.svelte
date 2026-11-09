@@ -1,7 +1,7 @@
 <script lang="ts">
   import CalendarClockIcon from '@lucide/svelte/icons/calendar-clock';
   import OctagonAlertIcon from '@lucide/svelte/icons/octagon-alert';
-  import type { ScheduledSend } from '@threadgarden/protocol';
+  import { messagePreview, type ScheduledSend } from '@threadgarden/protocol';
   import ScheduleDialog from '#lib/components/composer/ScheduleDialog.svelte';
   import { imageCountText } from '#lib/format/images.js';
   import { fullTime } from '#lib/format/time.js';
@@ -55,7 +55,7 @@
   };
 
   const preview = (s: ScheduledSend): string => {
-    const line = s.text.trim().split('\n')[0] ?? '';
+    const line = messagePreview(s.text).trim().split('\n')[0] ?? '';
     if (line) return line;
     return imageCountText(s.imageCount);
   };
@@ -79,7 +79,7 @@
                 aria-hidden="true"
               />
             {/if}
-            <span class="min-w-0 flex-1 truncate" title={s.text}>
+            <span class="min-w-0 flex-1 truncate" title={messagePreview(s.text)}>
               {preview(s)}{#if s.imageCount > 0 && s.text.trim()}
                 <span class="text-muted-foreground"> · {imageCountText(s.imageCount)}</span>{/if}
             </span>

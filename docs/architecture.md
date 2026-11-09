@@ -519,6 +519,20 @@ runs a tool or waits on the user (`quietTail` in `chat/rows.ts`), the list
 ends with a "Waiting for Claude…" row and the seconds waited; it appears after
 400 ms of quiet, so back-to-back outputs never make it flicker.
 
+**Attachment tags.** The textarea keeps ordinary `[Image #N]` and
+`[Pasted text #N +K lines]` text, with a synchronized backdrop drawing badges.
+Image attachment inserts a tag at the caret; text pasted over 8 lines or 800
+characters collapses. Badges preview on hover or keyboard focus; sent paste
+badges also expand inline. Removed tags exclude their attachments from send,
+while registries remain in memory for undo. Those registries live by draft key
+in `InteractionState`, so tab switches keep them. Draft writes, scheduling and
+the away queue carry expanded CLI-style `<pasted_content>` blocks, parsed back
+on load; images stay memory-only and show as missing after restart. Sent images
+map to the highest distinct tag numbers in ascending order, including CLI
+messages whose only image is numbered above 1. Untagged older images still use
+thumbnails. Parsing and readable summary helpers live in the protocol package;
+the message wire schema is unchanged.
+
 **External sessions and resume safety** (§4.4, §6.3). The poller runs
 `claude agents --json --all` every 2 s while the window is visible and every
 10 s while it is hidden, parses it leniently, and drops Threadgarden's own sessions

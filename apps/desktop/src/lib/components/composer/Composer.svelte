@@ -16,6 +16,20 @@
   import type { FileSuggestion, SlashCommand } from '#lib/state/interaction.svelte.js';
   import type { SendWhen } from '#lib/state/scheduled.svelte.js';
   import Attachments from './Attachments.svelte';
+  import TagBackdrop from './TagBackdrop.svelte';
+  import { pasteLabel } from '@threadgarden/protocol';
+  import {
+    activeImages,
+    emptyAttachments,
+    expandPastes,
+    imageLabel,
+    longPaste,
+    nextNumber,
+    outgoing,
+    pasteId,
+    restoreMessage,
+    type AttachmentsState,
+  } from './tags';
   import { caretLineTop } from './caret';
   import {
     localCommand,
@@ -143,8 +157,39 @@
   const SUGGEST_DELAY_MS = 80;
   const MAX_HEIGHT_PX = 240;
 
-  let text = $state(untrack(() => interaction.cachedDraft(draftKey)) ?? '');
-  let images = $state.raw<ImageRef[]>([]);
+  const initial = untrack(
+    () =>
+      interaction.cachedAttachments(draftKey) ??
+      restoreMessage(interaction.cachedDraft(draftKey) ?? ''),
+  );
+  let text = $state(initial.text);
+  let attachments = $state.raw<AttachmentsState>(initial.attachments);
+  const numberedImages = $derived(activeImages(text, attachments));
+  const images = $derived(numberedImages.map(([, image]) => image));
+  const saveDraft = (): void => {
+    const value = text;
+    const state = attachments;
+    interaction.saveAttachments(draftKey, { text: value, attachments: state });
+    interaction.saveDraft(draftKey, value, () => expandPastes(value, state));
+  };
+  const addImages = async (added: ImageRef[]): Promise<void> => {
+    const labels: string[] = [];
+    let state = { ...attachments, images: { ...attachments.images } };
+    for (const image of added) {
+      const number = nextNumber(text, state, 'image');
+      state.images[number] = image;
+      state.nextImage = number + 1;
+      labels.push(imageLabel(number));
+    }
+    attachments = state;
+    if (labels.length) await insertText(labels.join(' '));
+  };
+  const removeImage = async (i: number): Promise<void> => {
+    const number = numberedImages[i]?.[0];
+    if (number === undefined) return;
+    const label = imageLabel(number);
+    await replaceSelection(0, text.length, text.split(label).join(''));
+  };
   let imageError = $state<string | null>(null);
   let sending = $state(false);
   let dragging = $state(false);
@@ -194,11 +239,26 @@
     const end = focused ? (el.selectionEnd ?? start) : text.length;
     const before = text.slice(0, start);
     const pad = before && !/\s$/.test(before) ? ' ' : '';
-    const next = replaceRange(text, start, end, pad + insert);
-    text = next.text;
-    interaction.saveDraft(draftKey, text);
-    await tick();
+    await replaceSelection(start, end, pad + insert);
+  };
+
+  /** Browser editing preserves the textarea's native undo stack. */
+  const replaceSelection = async (start: number, end: number, insert: string): Promise<void> => {
+    const el = textarea;
     el?.focus();
+    el?.setSelectionRange(start, end);
+    const next = replaceRange(text, start, end, insert);
+    if (
+      el &&
+      typeof document.execCommand === 'function' &&
+      document.execCommand('insertText', false, insert)
+    ) {
+      text = el.value;
+    } else {
+      text = next.text;
+    }
+    saveDraft();
+    await tick();
     el?.setSelectionRange(next.caret, next.caret);
     resize();
   };
@@ -272,7 +332,7 @@
       if (c?.control) {
         closePicker();
         text = replaceRange(text, 0, p.token.end, '').text.trimStart();
-        interaction.saveDraft(draftKey, text);
+        saveDraft();
         runControl(c.control);
         return;
       }
@@ -281,7 +341,7 @@
     if (!next) return;
     closePicker();
     text = next.text;
-    interaction.saveDraft(draftKey, text);
+    saveDraft();
     await tick();
     textarea?.focus();
     textarea?.setSelectionRange(next.caret, next.caret);
@@ -302,21 +362,22 @@
 
   const oninput = (): void => {
     notice = null;
-    interaction.saveDraft(draftKey, text);
+    saveDraft();
     resize();
     updatePicker();
   };
 
   /** What the box holds now (kept while a scheduled message is edited in it). */
-  export const current = (): { text: string; images: ImageRef[] } => ({ text, images });
+  export const current = (): { text: string; images: ImageRef[] } => outgoing(text, attachments);
 
   /** Puts a message back into the box (Edit of a scheduled message), replacing what is there. */
   export const load = async (value: string, imgs: ImageRef[]): Promise<void> => {
-    text = value;
-    images = imgs;
+    const restored = restoreMessage(value, imgs);
+    text = restored.text;
+    attachments = restored.attachments;
     imageError = null;
     notice = null;
-    interaction.saveDraft(draftKey, text);
+    saveDraft();
     await tick();
     resize();
     textarea?.focus();
@@ -336,7 +397,8 @@
     send: (text: string, images: ImageRef[]) => Promise<boolean> = editing?.onSave ?? onSubmit,
     rethrow = false,
   ): Promise<void> => {
-    const value = text.trim();
+    const prepared = outgoing(text, attachments);
+    const value = prepared.text.trim();
     if ((!value && images.length === 0) || sending || disabled) return;
     sending = true;
     try {
@@ -350,13 +412,15 @@
         }
         if (local?.control) {
           text = '';
+          attachments = emptyAttachments();
           interaction.clearDraft(draftKey);
           runControl(local.control);
           return;
         }
       }
       const sentText = text;
-      const sentImages = images;
+      const sentImages = prepared.images;
+      const sentAttachments = attachments;
       let sent: boolean;
       try {
         sent = await send(value, sentImages);
@@ -369,11 +433,22 @@
         // Text typed while the message was on its way stays in the box.
         if (text === sentText) {
           text = '';
+          attachments = emptyAttachments();
           interaction.clearDraft(draftKey);
         } else {
-          interaction.saveDraft(draftKey, text);
+          saveDraft();
         }
-        images = images.filter((img) => !sentImages.includes(img));
+        if (text) {
+          // A newly typed reference to a sent paste must still carry its contents.
+          // Sent images are removed; images attached during the request remain.
+          attachments = {
+            ...attachments,
+            images: Object.fromEntries(
+              Object.entries(attachments.images).filter(([, image]) => !sentImages.includes(image)),
+            ),
+          };
+          saveDraft();
+        } else if (attachments === sentAttachments) attachments = emptyAttachments();
         imageError = null;
         notice = null;
         closePicker();
@@ -429,8 +504,9 @@
     }
     try {
       const fit = fitImages(images, await Promise.all(ok.map(readImage)));
-      images = [...images, ...fit.accepted];
       if (fit.problem) problems.push(fit.problem);
+      imageError = problems.length ? problems.join('; ') : null;
+      await addImages(fit.accepted);
     } catch (err) {
       problems.push(err instanceof Error ? err.message : String(err));
     }
@@ -440,6 +516,7 @@
   const onpaste = (e: ClipboardEvent): void => {
     const list = imageFiles(e.clipboardData);
     if (list.length > 0) {
+      e.preventDefault();
       void attach(list);
       return;
     }
@@ -451,6 +528,19 @@
     } else if (mention) {
       e.preventDefault();
       void insertText(mention);
+    } else if (longPaste(pasted)) {
+      e.preventDefault();
+      const number = nextNumber(text, attachments, 'paste');
+      try {
+        attachments = {
+          ...attachments,
+          nextPaste: number + 1,
+          pastes: { ...attachments.pastes, [number]: { text: pasted, id: pasteId(pasted) } },
+        };
+        void insertText(pasteLabel(number, pasted));
+      } catch (err) {
+        notice = err instanceof Error ? err.message : String(err);
+      }
     }
   };
 
@@ -500,7 +590,7 @@
       }
     }
     const fit = fitImages(images, read);
-    if (fit.accepted.length > 0) images = [...images, ...fit.accepted];
+    if (fit.accepted.length > 0) await addImages(fit.accepted);
     if (fit.problem) problems.push(fit.problem);
     imageError = problems.length > 0 ? problems.join('; ') : null;
   };
@@ -522,7 +612,9 @@
         .loadDraft(key)
         .then((saved) => {
           if (!text && saved) {
-            text = saved;
+            const restored = restoreMessage(saved);
+            text = restored.text;
+            attachments = restored.attachments;
             void tick().then(resize);
           }
         })
@@ -581,7 +673,11 @@
       >
     </div>
   {/if}
-  <Attachments {images} onRemove={(i) => (images = images.filter((_, j) => j !== i))} />
+  <Attachments
+    {images}
+    numbers={numberedImages.map(([n]) => n)}
+    onRemove={(i) => void removeImage(i)}
+  />
 
   <div class="relative">
     {#if picker}
@@ -610,11 +706,12 @@
         {/if}
       </div>
     {/if}
+    <TagBackdrop {text} {attachments} {textarea} />
     <textarea
       bind:this={textarea}
       bind:value={text}
       rows="1"
-      class="placeholder:text-muted-foreground block w-full resize-none overflow-hidden bg-transparent px-3 pt-2.5 pb-1 text-sm leading-5 outline-none disabled:cursor-not-allowed disabled:opacity-50"
+      class="tag-textarea placeholder:text-muted-foreground relative block w-full resize-none overflow-hidden bg-transparent px-3 pt-2.5 pb-1 text-sm leading-5 outline-none disabled:cursor-not-allowed disabled:opacity-50"
       aria-label={label}
       aria-autocomplete="list"
       aria-controls={picker ? listId : undefined}
@@ -750,3 +847,18 @@
 {#if onSchedule}
   <ScheduleDialog bind:open={scheduleOpen} {resetAt} onPick={schedule} />
 {/if}
+
+<style>
+  .tag-textarea {
+    color: transparent;
+    caret-color: var(--foreground);
+  }
+  .tag-textarea::selection {
+    background: color-mix(in srgb, var(--primary) 25%, transparent);
+  }
+  @media (forced-colors: active) {
+    .tag-textarea {
+      color: CanvasText;
+    }
+  }
+</style>
