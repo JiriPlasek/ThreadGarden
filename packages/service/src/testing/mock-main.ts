@@ -644,9 +644,20 @@ class ScriptedSession extends FakeSession {
           question,
           header: 'Approach',
           multiSelect: false,
+          // Previews show beside the options, as in the terminal.
           options: [
-            { label: 'Small refactor', description: 'Keep the structure, tidy the code' },
-            { label: 'Rewrite', description: 'Start the module again' },
+            {
+              label: 'Small refactor',
+              description: 'Keep the structure, tidy the code',
+              preview:
+                'src/parser/\n├── index.ts      (tidied)\n├── tokens.ts\n└── rules.ts      (tidied)',
+            },
+            {
+              label: 'Rewrite',
+              description: 'Start the module again',
+              preview:
+                'src/parser/\n├── index.ts      (new)\n├── lexer.ts      (new)\n└── grammar.ts    (new)',
+            },
           ],
         },
       ],

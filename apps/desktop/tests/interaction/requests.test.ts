@@ -158,6 +158,52 @@ describe('question form', () => {
     });
   });
 
+  it("shows an option's preview beside the options: the hovered one, else the chosen one", async () => {
+    const input = {
+      questions: [
+        {
+          question: 'Which layout?',
+          header: 'Layout',
+          multiSelect: false,
+          options: [
+            { label: 'Sidebar', description: 'Nav on the left', preview: '[nav] | content' },
+            { label: 'Top bar', description: 'Nav on top', preview: '[ nav ]\n content' },
+            { label: 'None', description: 'No nav' },
+          ],
+        },
+      ],
+    };
+    await renderChat({
+      status: 'needsYou',
+      items: [request({ toolName: 'AskUserQuestion', variant: 'question', input })],
+    });
+    const form = await screen.findByRole('form', { name: /question/i });
+    const preview = () => within(form).getByRole('figure');
+    // Nothing chosen yet: the first option that has one.
+    expect(preview().getAttribute('aria-label')).toBe('Preview: Sidebar');
+    expect(preview().textContent).toContain('[nav] | content');
+
+    await userEvent.click(within(form).getByRole('radio', { name: /top bar/i }));
+    expect(preview().getAttribute('aria-label')).toBe('Preview: Top bar');
+    expect(preview().querySelector('pre')?.textContent).toBe('[ nav ]\n content');
+
+    await userEvent.hover(within(form).getByText('Sidebar'));
+    expect(preview().getAttribute('aria-label')).toBe('Preview: Sidebar');
+    await userEvent.hover(within(form).getByText('None'));
+    expect(preview().textContent).toContain('No preview');
+    await userEvent.unhover(within(form).getByText('None'));
+    expect(preview().getAttribute('aria-label')).toBe('Preview: Top bar');
+  });
+
+  it('a question without previews has no preview panel', async () => {
+    await renderChat({
+      status: 'needsYou',
+      items: [request({ toolName: 'AskUserQuestion', variant: 'question', input: QUESTION_INPUT })],
+    });
+    const form = await screen.findByRole('form', { name: /question/i });
+    expect(within(form).queryByRole('figure')).toBeNull();
+  });
+
   it('parses questions leniently and passes the input through', () => {
     expect(parseQuestions({ nope: true })).toBeNull();
     expect(parseQuestions(QUESTION_INPUT)?.[1]?.multiSelect).toBe(true);

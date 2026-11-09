@@ -65,7 +65,12 @@ export const suggestionLabel = (s: unknown): string => {
 
 // ── AskUserQuestion ────────────────────────────────────────────────────────
 
-export type QuestionOption = { label: string; description: string };
+export type QuestionOption = {
+  label: string;
+  description: string;
+  /** A mockup, code snippet or diagram the terminal shows beside the options while this one is focused. */
+  preview?: string;
+};
 export type Question = {
   question: string;
   header: string;
@@ -85,7 +90,11 @@ export const parseQuestions = (input: unknown): Question[] | null => {
       multiSelect: q.multiSelect === true,
       options: (Array.isArray(q.options) ? q.options : [])
         .filter(isRec)
-        .map((o) => ({ label: str(o.label), description: str(o.description) }))
+        .map((o) => ({
+          label: str(o.label),
+          description: str(o.description),
+          ...(str(o.preview) ? { preview: str(o.preview) } : {}),
+        }))
         .filter((o) => o.label),
     });
   }
