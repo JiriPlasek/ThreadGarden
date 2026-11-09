@@ -1364,10 +1364,10 @@ startup failures, which credential a session picks).
 Decisions made during the build that change behaviour described in the design:
 
 - **Stopping background sessions.** The design kept sessions run by other processes hand-off only. Threadgarden now also stops a background session that Claude Code's background service runs, via the documented `claude stop <id>` (`external.stop`), after a confirmation; only ids shaped like `claude agents` short ids are passed. Sessions open in a terminal are still never stopped from Threadgarden, and the chat header's End session and pickers apply only to chats Threadgarden itself runs.
-- **Bypass mode** (§6.4). Left out at first; now offered as "Bypass
-  permissions" in the mode pickers, with the SDK's dangerous opt-in set on
-  every session. "Always allow" suggestions that would switch to bypass are
-  still dropped.
+- **Bypass mode** (?6.4). Left out at first; now offered as "Bypass
+  permissions" in the mode pickers after confirmation. Non-root sessions set
+  the SDK's dangerous opt-in; root sessions omit it so the CLI can start.
+  "Always allow" suggestions that would switch to bypass are still dropped.
 - **Notification clicks** (§6.2 "clicking it opens the chat"). Tauri's
   notification plugin reports no clicks on desktop. Clicking a notification
   focuses Threadgarden; if the window gains focus within 30 s of a needs-you
