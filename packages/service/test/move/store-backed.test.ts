@@ -153,7 +153,7 @@ describe('store-backed chats', () => {
     addLocal(adapter, S1);
     await start(adapter, 1);
     const opened = await ok<{ items: ChatItem[] }>('chat.open', { sessionId: S1, tail: 50 });
-    expect(ids(opened.items)).toEqual(['moved-u0', 'moved-a0']);
+    expect(ids(opened.items)).toEqual(['moved-u0', 'moved-a0', 'turn-end:moved-a0']);
     expect((await list())[0]).toMatchObject({ sessionId: S1, cwd: movedCwd() });
   });
 
@@ -212,7 +212,7 @@ describe('store-backed chats', () => {
     ]);
     await eventually(async () => (await list())[0]?.lastActivity === Date.parse(later));
     const opened = await ok<{ items: ChatItem[] }>('chat.open', { sessionId: S1, tail: 50 });
-    expect(ids(opened.items)).toEqual(['moved-u0', 'moved-a0', 'moved-u1']);
+    expect(ids(opened.items)).toEqual(['moved-u0', 'moved-a0', 'turn-end:moved-a0', 'moved-u1']);
   });
 
   it('chat.fork on a store-backed chat is refused', async () => {

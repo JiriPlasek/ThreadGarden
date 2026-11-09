@@ -1,30 +1,47 @@
 <script lang="ts">
   import type { ChatItem } from '@threadgarden/protocol';
-  import { duration, tokens, usd } from '../format';
+  import { finishedAt, fullTime } from '#lib/format/time.js';
+  import { duration, tokens } from '../format';
 
-  /** The end-of-turn line: duration, cost and tokens, or that the turn failed. */
+  /**
+   * The end-of-turn line: how long the turn took, the tokens it added and
+   * when it finished ("Turn finished · 13.1 s · 14k tokens · 6:04 AM"), or
+   * that it failed. The tokens are this turn's new ones: uncached input, cache
+   * writes and output. Cache reads, the earlier context read again on every
+   * step, are left out (the tooltip says how many). No cost: the SDK's is the
+   * whole chat's running total at API prices.
+   */
   let { item }: { item: Extract<ChatItem, { kind: 'result' }> } = $props();
 
+  type Segment = { text: string; title?: string };
+
   const num = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
-  const usage = $derived.by(() => {
+  const usage = $derived.by((): Segment | null => {
     const u = (typeof item.usage === 'object' && item.usage !== null ? item.usage : {}) as Record<
       string,
       unknown
     >;
-    const input =
-      num(u.input_tokens) + num(u.cache_read_input_tokens) + num(u.cache_creation_input_tokens);
+    const input = num(u.input_tokens);
+    const written = num(u.cache_creation_input_tokens);
+    const read = num(u.cache_read_input_tokens);
     const output = num(u.output_tokens);
-    return input + output > 0 ? `${tokens(input)} in · ${tokens(output)} out` : null;
+    const added = input + written + output;
+    if (added + read === 0) return null;
+    return {
+      text: `${tokens(added)} tokens`,
+      title:
+        `New this turn: ${tokens(input)} input, ${tokens(written)} cache writes, ` +
+        `${tokens(output)} output. Not counted: ${tokens(read)} cache reads ` +
+        '(the earlier context, read again).',
+    };
   });
-  const label = $derived(
+  const segments = $derived(
     [
-      item.isError ? 'Turn ended with an error' : 'Turn finished',
-      item.durationMs !== undefined ? duration(item.durationMs) : null,
-      item.costUsd !== undefined ? usd(item.costUsd) : null,
+      { text: item.isError ? 'Turn ended with an error' : 'Turn finished' },
+      item.durationMs !== undefined ? { text: duration(item.durationMs) } : null,
       usage,
-    ]
-      .filter((p): p is string => p !== null)
-      .join(' · '),
+      item.ts !== undefined ? { text: finishedAt(item.ts), title: fullTime(item.ts) } : null,
+    ].filter((s): s is Segment => s !== null && s.text !== ''),
   );
 </script>
 
@@ -34,6 +51,9 @@
     : 'text-muted-foreground'}"
 >
   <span class="bg-border h-px flex-1" aria-hidden="true"></span>
-  <span>{label}</span>
+  <span
+    >{#each segments as s, i (i)}{#if i > 0}{' · '}{/if}<span title={s.title}>{s.text}</span
+      >{/each}</span
+  >
   <span class="bg-border h-px flex-1" aria-hidden="true"></span>
 </div>

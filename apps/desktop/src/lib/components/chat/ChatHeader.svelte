@@ -32,8 +32,10 @@
 
   /**
    * Title row plus the chat's controls (spec §6.4): model, effort and permission
-   * mode pickers (chats Threadgarden runs only), context usage, cost, auth, Claude
-   * Code version, End session and Copy resume command. A chat running outside
+   * mode pickers (chats Threadgarden runs only), context usage (a running chat's,
+   * else the history's: a bar when the window's size is known, the tokens alone
+   * when not), the session cost for a chat on an API key, auth, Claude Code
+   * version, End session and Copy resume command. A chat running outside
    * Threadgarden gets Stop when Claude Code's background service runs it, and End
    * the process beside its note when another Claude Code process (a terminal,
    * an editor's agent) holds it. The Activity button
@@ -439,8 +441,15 @@
           {usage.pct}%
         </span>
       {/if}
-      {#if header.costUsd !== undefined}
-        <span title="Session cost">{usd(header.costUsd)}</span>
+      {#if !usage && header.contextTokens !== undefined}
+        <!-- From the history, when no run of this chat (or its model) has said the window's size. -->
+        <span title="Context: {tokens(header.contextTokens)} tokens"
+          >{tokens(header.contextTokens)} tokens</span
+        >
+      {/if}
+      {#if header.auth?.kind === 'apiKey' && header.costUsd !== undefined}
+        <!-- On an API key the SDK's running total is what the chat has cost; on a subscription it means little. -->
+        <span title="Session cost (API billing)">{usd(header.costUsd)}</span>
       {/if}
       {#if header.auth}
         <span

@@ -193,7 +193,11 @@ describe('service end-to-end', () => {
     expect(seqs[0]).toBe(seq + 1);
     expect(seqs).toEqual(seqs.map((_, i) => seq + 1 + i));
     expect(missed.seq).toBe(seqs.at(-1));
-    expect(missed.events.flatMap((e) => e.items ?? []).map((i) => i.id)).toEqual(['a1', 'r1']);
+    // The result is the footer of the turn: it takes the id of the turn's last reply.
+    expect(missed.events.flatMap((e) => e.items ?? []).map((i) => i.id)).toEqual([
+      'a1',
+      'turn-end:a1',
+    ]);
     expect(missed.events.at(-1)).toMatchObject({ sessionId, status: 'idle' });
   });
 

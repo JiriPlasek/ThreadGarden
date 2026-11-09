@@ -14,6 +14,8 @@ export type ChatActions = {
   fork?: (itemId: string) => void;
   /** Undefined where requests cannot be answered (read-only renderings). */
   requests?: RequestActions;
+  /** Waiting requests are answered elsewhere (in the composer's place): the list shows a line. */
+  requestsDocked?: boolean;
 };
 
 const KEY = Symbol('threadgarden.chat-actions');

@@ -4,7 +4,9 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ChatView from '../../src/lib/components/chat/ChatView.svelte';
 import MessageList from '../../src/lib/components/chat/MessageList.svelte';
+import ResultFooter from '../../src/lib/components/chat/items/ResultFooter.svelte';
 import ToolCallRow from '../../src/lib/components/chat/items/ToolCallRow.svelte';
+import { finishedAt } from '../../src/lib/format/time';
 import { LOCAL, here, setup, summary } from '../layout/harness';
 import { RpcFail } from '../service/fake-ws';
 import { manyItems, text, tool, unknownItem, user } from './fixtures';
@@ -189,6 +191,42 @@ describe('scroll anchoring', () => {
   });
 });
 
+describe('turn footer', () => {
+  it("reads duration, this turn's new tokens and when it finished; never the cost", () => {
+    const ts = Date.now() - 60_000;
+    const { container } = render(ResultFooter, {
+      item: {
+        kind: 'result',
+        id: 'turn-end:a1',
+        isError: false,
+        durationMs: 13_100,
+        costUsd: 740.71,
+        ts,
+        usage: {
+          input_tokens: 120,
+          cache_creation_input_tokens: 13_000,
+          cache_read_input_tokens: 648_000,
+          output_tokens: 1_100,
+        },
+      },
+    });
+    // Cache reads are the old context read again: not this turn's tokens.
+    expect(container.textContent?.trim()).toBe(
+      `Turn finished · 13.1 s · 14k tokens · ${finishedAt(ts)}`,
+    );
+    expect(container.textContent).not.toContain('$');
+    const tokens = screen.getByText('14k tokens');
+    expect(tokens.getAttribute('title')).toContain('648k cache reads');
+  });
+
+  it('shows what it knows: a history turn without usage or time is just its end', () => {
+    const { container } = render(ResultFooter, {
+      item: { kind: 'result', id: 'turn-end:a1', isError: true },
+    });
+    expect(container.textContent?.trim()).toBe('Turn ended with an error');
+  });
+});
+
 describe('tool rows', () => {
   it('Edit tool renders a diff', async () => {
     const item = tool('e1', 'Edit', {
@@ -228,6 +266,23 @@ describe('tool rows', () => {
     await userEvent.click(toggle);
     expect(screen.getByText(/output truncated/i)).toBeTruthy();
     expect(screen.getByText(/FAIL/)).toBeTruthy();
+  });
+
+  it('a call waiting on its permission check says so, until it is no longer running', async () => {
+    const item = tool(
+      'p1',
+      'Bash',
+      { command: 'rm -rf build' },
+      { status: 'running', checkingPermission: true },
+    );
+    const { rerender } = render(ToolCallRow, { item });
+    expect(screen.getByRole('button', { name: /Bash/ }).textContent).toContain(
+      'Checking permission…',
+    );
+    await rerender({ item: { ...item, status: 'ok', resultText: '' } });
+    expect(screen.getByRole('button', { name: /Bash/ }).textContent).not.toContain(
+      'Checking permission',
+    );
   });
 
   it('unknown tools show the name and compact JSON', () => {
@@ -290,6 +345,50 @@ describe('chat view', () => {
     expect(container.querySelectorAll('[data-item-id="s1"]')).toHaveLength(1);
     expect(container.querySelector('[data-item-id="s1"]')).toBe(el);
     expect(el.querySelector('strong')?.textContent).toBe('streaming');
+  });
+
+  it('an idle chat whose cache ran out says the next message re-reads it; no cost in the header', async () => {
+    const { app, context } = await setup((server) => {
+      server.handlers['chat.open'] = (p) => ({
+        summary: summary((p as { sessionId: string }).sessionId, { status: 'idle', live: true }),
+        header: {
+          model: 'opus',
+          costUsd: 740.71,
+          // History only: the window's size is not known.
+          contextTokens: 180_000,
+          lastReply: { at: Date.now() - 2 * 3_600_000, cacheTtlMs: 3_600_000 },
+        },
+        items: [user('u1', 'hi'), text('a1', 'hello')],
+        hasMore: false,
+        seq: 1,
+      });
+      server.handlers['chat.models'] = () => [];
+    });
+    await app.chats.open('cold');
+    const { container } = render(ChatView, {
+      context,
+      props: { ref: { machineId: LOCAL, sessionId: 'cold' } },
+    });
+    expect(await screen.findByText('Cache expired · re-reads 180k tokens')).toBeTruthy();
+    expect(screen.getByText('180k tokens')).toBeTruthy();
+    expect(container.textContent).not.toContain('$');
+  });
+
+  it('a chat on an API key shows its session cost in the header', async () => {
+    const { app, context } = await setup((server) => {
+      server.handlers['chat.open'] = (p) => ({
+        summary: summary((p as { sessionId: string }).sessionId, { status: 'idle', live: true }),
+        header: { model: 'opus', costUsd: 0.42, auth: { kind: 'apiKey', label: 'API key' } },
+        items: [user('u1', 'hi'), text('a1', 'hello')],
+        hasMore: false,
+        seq: 1,
+      });
+      server.handlers['chat.models'] = () => [];
+    });
+    await app.chats.open('keyed');
+    render(ChatView, { context, props: { ref: { machineId: LOCAL, sessionId: 'keyed' } } });
+    const cost = await screen.findByText('$0.4200');
+    expect(cost.getAttribute('title')).toBe('Session cost (API billing)');
   });
 
   it('copy resume command copies claude --resume <id>', async () => {

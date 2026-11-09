@@ -482,9 +482,9 @@ describe('a machine that is away', () => {
         "Claude asked this before Ubuntu PC went off. Type your answer below; it's sent as your next message.",
       ),
     ).toBeTruthy();
-    // The card can't be answered: nothing goes to the machine or the queue.
+    // The card can't be answered: it offers no buttons, and the composer stays.
     const card = screen.getByRole('group', { name: 'Permission request: Bash' });
-    await userEvent.click(within(card).getByRole('button', { name: 'Allow' }));
+    expect(within(card).queryByRole('button', { name: 'Allow' })).toBeNull();
     expect(queued(env)).toHaveLength(0);
     // A typed answer waits as the next message.
     await userEvent.type(composer(), 'No, keep it{Enter}');

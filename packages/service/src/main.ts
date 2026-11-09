@@ -801,6 +801,8 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
           // After the session has finished handling this result.
           setImmediate(() => scheduledRef.current?.turnEnded(id, refused));
         },
+        // The header's context bar for a chat no process runs (after a restart, say).
+        onContextWindow: (id, model, tokens) => opened.setContextWindow(id, model, tokens),
       });
       host = sessionHost;
       // v1.3 B: the meter keeps up by itself, from a running chat's usage reading.

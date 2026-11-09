@@ -17,6 +17,7 @@
 import type {
   ChatHeaderInfo,
   ChatItem,
+  ChatStatus,
   ChatTask,
   EventMsg,
   ImageRef,
@@ -29,7 +30,7 @@ import {
   type Timers,
   type UserInput,
 } from '../../chat/live-session.js';
-import { Normalizer } from '../../chat/normalize.js';
+import { Normalizer, type LastReply } from '../../chat/normalize.js';
 import type { SessionHost } from '../../chat/session-host.js';
 import type { ChatTitles } from '../../chat/titles.js';
 import type { ResumeCheck } from '../../external/resume-safety.js';
@@ -134,8 +135,13 @@ type CacheEntry = {
   /** For history-only chats: the indexed `lastModified:fileSize` at read time. */
   key: string | undefined;
   items: ChatItem[];
+  /** The history's last main-thread reply (the header's fallback). */
+  lastReply: LastReply | undefined;
   chars: number;
 };
+
+/** A turn is under way: the history's last turn has not ended. */
+const BUSY: ReadonlySet<ChatStatus> = new Set(['working', 'needsYou', 'unknown']);
 
 type Command = { name: string; description: string; argumentHint: string };
 type Model = {
@@ -298,8 +304,12 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
    *   drop the object, so the next open reads again;
    * - for a history-only chat, while its indexed `lastModified`/`fileSize`
    *   stay the same.
+   * History has no `result`s: each turn ends with a footer built from its
+   * replies (`turnEnds`), the last one too.
    */
-  const historyItems = async (sessionId: string): Promise<ChatItem[]> => {
+  const historyItems = async (
+    sessionId: string,
+  ): Promise<{ items: ChatItem[]; lastReply: LastReply | undefined }> => {
     const owner = host.get(sessionId);
     const row = owner ? undefined : db.getSession(sessionId);
     const key = row ? `${row.lastModified}:${row.fileSize}` : undefined;
@@ -310,26 +320,53 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
     if (hit && valid) {
       historyCache.delete(sessionId); // most recently used last
       historyCache.set(sessionId, hit);
-      return hit.items;
+      return hit;
     }
     const messages = await adapter.getSessionMessages(sessionId, historyOf(sessionId));
-    const normalizer = new Normalizer();
+    const normalizer = new Normalizer({ turnEnds: true });
     const byId = new Map<string, ChatItem>();
     for (const m of messages) for (const item of normalizer.push(m).items) byId.set(item.id, item);
+    for (const item of normalizer.finish().items) byId.set(item.id, item);
     const items = [...byId.values()];
+    const lastReply = normalizer.lastReply();
     forget(sessionId);
     // Only cache what has a validity window; and only if the chat was not
     // taken over or released while the read ran.
     if ((owner && host.get(sessionId) === owner) || (!owner && key !== undefined)) {
       const chars = items.reduce((n, i) => n + itemChars(i), 0);
-      historyCache.set(sessionId, { owner, key, items, chars });
+      historyCache.set(sessionId, { owner, key, items, lastReply, chars });
       cachedChars += chars;
       for (const old of historyCache.keys()) {
         if (cachedChars <= cacheBudget || old === sessionId) break;
         forget(old);
       }
     }
-    return items;
+    return { items, lastReply };
+  };
+
+  /**
+   * What the history says for the header, beneath whatever a process reports:
+   * the last reply (when, the cache's lifetime) and the context it left, with
+   * the window size a run of this chat (or of its model) last reported when
+   * there is one that fits.
+   */
+  const historyHeader = (sessionId: string, last: LastReply | undefined): ChatHeaderInfo => {
+    if (!last) return {};
+    const max = db.contextWindow(sessionId, last.model);
+    const used = last.contextTokens;
+    return {
+      ...(last.at === undefined
+        ? {}
+        : {
+            lastReply: {
+              at: last.at,
+              cacheTtlMs: last.cacheTtlMs,
+              ...(last.compacted ? { compacted: true as const } : {}),
+            },
+          }),
+      contextTokens: used,
+      ...(max !== undefined && max > 0 && used <= max ? { contextUsage: { used, max } } : {}),
+    };
   };
 
   /**
@@ -338,14 +375,17 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
    * process already rendered — same id, or a streamed item's final message
    * (`resolveItemId`) — are dropped in favour of the live version. The live
    * snapshot is taken after the history read, so `seq` covers every item
-   * (and the task list, which only a chat the host holds has).
+   * (and the task list, which only a chat the host holds has). While a turn
+   * is under way the history's last turn is that turn: its footer waits for
+   * the `result`.
    */
   const view = async (
     sessionId: string,
   ): Promise<{ items: ChatItem[]; seq: number; header: ChatHeaderInfo; tasks: ChatTask[] }> => {
     let history: ChatItem[];
+    let lastReply: LastReply | undefined;
     try {
-      history = await historyItems(sessionId);
+      ({ items: history, lastReply } = await historyItems(sessionId));
     } catch (err) {
       // A chat Threadgarden runs may not have a transcript yet; a history-only chat needs one.
       if (!host.get(sessionId)) throw err;
@@ -353,14 +393,19 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
       history = [];
     }
     const s = host.get(sessionId);
-    if (!s) return { items: history, seq: host.seqOf(sessionId), header: {}, tasks: [] };
+    const status = s ? s.status : catalog.summary(sessionId)?.status;
+    if (status !== undefined && BUSY.has(status) && history.at(-1)?.kind === 'result') {
+      history = history.slice(0, -1);
+    }
+    const fallback = historyHeader(sessionId, lastReply);
+    if (!s) return { items: history, seq: host.seqOf(sessionId), header: fallback, tasks: [] };
     const snap = s.snapshot(Number.MAX_SAFE_INTEGER);
     const own = new Set(snap.items.map((i) => i.id));
     const earlier = history.filter((i) => !own.has(i.id) && !own.has(s.resolveItemId(i.id) ?? ''));
     return {
       items: [...earlier, ...snap.items],
       seq: snap.seq,
-      header: snap.header,
+      header: { ...fallback, ...snap.header },
       tasks: snap.tasks,
     };
   };

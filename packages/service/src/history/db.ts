@@ -1013,6 +1013,25 @@ export class Db implements LiveRegistry {
       .run(key, JSON.stringify(value));
   }
 
+  // --- Context windows ----------------------------------------------------------------
+
+  /** Remembers the window size a run of `sessionId` reported, for it and for `model`. */
+  setContextWindow(sessionId: string, model: string | undefined, tokens: number): void {
+    const stmt = this.raw.prepare(
+      'INSERT INTO context_windows (key, tokens) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET tokens = excluded.tokens',
+    );
+    stmt.run(`chat:${sessionId}`, Math.round(tokens));
+    if (model !== undefined) stmt.run(`model:${model}`, Math.round(tokens));
+  }
+
+  /** The window size last reported for `sessionId`, else for `model`; undefined when neither was. */
+  contextWindow(sessionId: string, model: string | undefined): number | undefined {
+    const get = this.raw.prepare('SELECT tokens FROM context_windows WHERE key = ?');
+    const own = get.get(`chat:${sessionId}`);
+    const row = own ?? (model === undefined ? undefined : get.get(`model:${model}`));
+    return row ? (row.tokens as number) : undefined;
+  }
+
   // --- "Your turn" (v1.1) -----------------------------------------------------------
   //
   // A chat is unread while its last turn ended after Threadgarden last saw it. The

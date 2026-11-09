@@ -310,6 +310,15 @@ const steps: string[] = [
   );
   CREATE INDEX IF NOT EXISTS away_queue_machine ON away_queue (machine_id, seq);
   `,
+  // the context window's size as a run of the chat last reported it (`chat:<id>`),
+  // and per API model (`model:<id>`): the header's context bar for a chat no
+  // process runs, whose history gives the tokens but not the window.
+  `
+  CREATE TABLE IF NOT EXISTS context_windows (
+    key TEXT PRIMARY KEY,
+    tokens INTEGER NOT NULL
+  );
+  `,
 ];
 
 /** Runs the steps not run yet; `upTo` stops early (tests build older schemas with it). */

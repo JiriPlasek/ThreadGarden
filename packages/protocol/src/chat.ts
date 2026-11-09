@@ -123,6 +123,18 @@ export const ChatHeaderInfoSchema = z.object({
     .object({ kind: z.enum(['subscription', 'apiKey', 'other']), label: z.string() })
     .optional(),
   contextUsage: z.object({ used: z.number(), max: z.number() }).optional(),
+  /** Tokens the context holds, for when its window size (`contextUsage.max`) is not known. */
+  contextTokens: z.number().optional(),
+  /**
+   * The last main-thread reply: when it arrived, and how long the prompt cache
+   * it used lives (5 min or 1 h). Past `at + cacheTtlMs` the next message
+   * re-reads the whole context uncached, unless a compaction came after it
+   * (`compacted`: Claude Code's idle compaction, `/compact`), when it sends
+   * the summary instead.
+   */
+  lastReply: z
+    .object({ at: z.number(), cacheTtlMs: z.number(), compacted: z.literal(true).optional() })
+    .optional(),
   costUsd: z.number().optional(),
 });
 export type ChatHeaderInfo = z.infer<typeof ChatHeaderInfoSchema>;
