@@ -76,8 +76,9 @@ export const loadOrCreateTlsIdentity = async (
   // Valid from a day ago: a device whose clock is behind this machine's must
   // not find a brand-new certificate "not yet valid" (devices check the dates).
   const notBeforeDate = new Date(now - BACKDATE_MS);
-  // Loaded only here: a headless service needs it once, the desktop's never
-  // (a static import would load it and its polyfills at every service start).
+  // Loaded only here: a headless service needs it once, a desktop's only when
+  // Let my phone connect is first turned on (a static import would load it and
+  // its polyfills at every service start).
   const { generate } = await import('selfsigned');
   const pems = await generate([{ name: 'commonName', value: commonName }], {
     keyType: 'ec',

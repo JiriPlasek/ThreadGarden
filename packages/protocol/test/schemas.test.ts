@@ -197,6 +197,8 @@ describe('protocol schemas', () => {
       'away.cancel',
       'away.retry',
       'alerts.setActive',
+      'phoneAccess.get',
+      'phoneAccess.set',
     ];
     expect(Object.keys(methods).sort()).toEqual([...expected].sort());
     for (const name of expected) {
@@ -230,6 +232,8 @@ describe('protocol schemas', () => {
         'power.changed',
         'update.progress',
         'away.changed',
+        // Let my phone connect
+        'phoneAccess.changed',
       ].sort(),
     );
   });

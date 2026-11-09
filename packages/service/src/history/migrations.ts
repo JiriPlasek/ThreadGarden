@@ -310,6 +310,13 @@ const steps: string[] = [
   );
   CREATE INDEX IF NOT EXISTS away_queue_machine ON away_queue (machine_id, seq);
   `,
+  // Let my phone connect: one row, apart from the settings a paired device may change.
+  `
+  CREATE TABLE IF NOT EXISTS phone_access (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    enabled INTEGER NOT NULL
+  );
+  `,
 ];
 
 /** Runs the steps not run yet; `upTo` stops early (tests build older schemas with it). */

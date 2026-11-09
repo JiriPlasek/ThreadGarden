@@ -26,6 +26,7 @@ import {
   MachineInfoSchema,
   MachinePortSchema,
   PairedMachineSchema,
+  PhoneAccessSchema,
 } from './machines.js';
 import { GitStateSchema, MoveBusySchema, MoveKeySchema, MovePeerSchema } from './move.js';
 import {
@@ -149,6 +150,15 @@ export const methods = {
     z.object({ machineId: z.string(), revoke: z.boolean() }),
     z.object({ revoked: z.boolean() }),
   ),
+  // ── Let my phone connect (local only, no protocol bump) ────────────────────
+  /** Whether this desktop listens for paired devices, and where. */
+  'phoneAccess.get': def(empty, PhoneAccessSchema),
+  /**
+   * Turns listening on (a certificate is made the first time) or off (every
+   * device socket closes at once; pairings stay). `HEADLESS` on a headless
+   * machine, which always listens.
+   */
+  'phoneAccess.set': def(z.object({ enabled: z.boolean() }), PhoneAccessSchema),
   /** v1.2: `active`, `onHold`, `archived` per bucket; `all` (= `active`) stays for older UIs. */
   'places.counts': def(
     empty,

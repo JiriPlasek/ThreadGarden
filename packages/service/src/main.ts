@@ -11,6 +11,7 @@ import {
   type ChatStatus,
   type EventMsg,
   type MachineInfo,
+  type PhoneAccess,
 } from '@threadgarden/protocol';
 import pkg from '../package.json' with { type: 'json' };
 import { nextSeqEpoch, seqBaseForEpoch } from './chat/event-log.js';
@@ -69,7 +70,7 @@ import { LatestRelease, type Fetch } from './update/github.js';
 import { MachineUpdater, type Run, type Updater } from './update/updater.js';
 import { PowerHub } from './power/hub.js';
 import { REMOTE_PORT, startRemoteServer } from './server/remote-server.js';
-import { Router } from './server/router.js';
+import { Router, ServiceError } from './server/router.js';
 import { createRelay, type Relay } from './server/relay.js';
 import { startWsServer } from './server/ws-server.js';
 import { ScheduledSends } from './usage/scheduled.js';
@@ -386,8 +387,13 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   let server: Awaited<ReturnType<typeof startWsServer>> | undefined;
   /** The remote listener (headless) while it listens; see `moveRemote`. */
   let remote: Awaited<ReturnType<typeof startRemoteServer>> | undefined;
-  /** What every remote listener starts with (headless, with a database). */
+  /**
+   * What every remote listener starts with (headless, or a desktop while Let
+   * my phone connect is on; with a database). None stops it following addresses.
+   */
   let listen: { tls: TlsIdentity; devices: DeviceRegistry } | undefined;
+  /** Let my phone connect is on (a desktop; a headless machine always listens). */
+  let phoneAccessOn = false;
   /** The UI's connections to paired machines (with a database). */
   let relay: Relay | undefined;
   let poller: ExternalPoller | undefined;
@@ -575,6 +581,21 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         opts.pairingRandom ? { random: opts.pairingRandom } : {},
       );
       let tls: TlsIdentity | undefined;
+      /** The desktop's identity, made the first time Let my phone connect is on, kept after. */
+      let phoneTls: TlsIdentity | undefined;
+      const loadTls = (): Promise<TlsIdentity> =>
+        loadOrCreateTlsIdentity(dataDir, machineOf(opened).name, {
+          onRegenerate: (reason) =>
+            log.warn(
+              `TLS identity was ${reason}; created a new one — paired devices must pair again`,
+            ),
+        });
+      if (!headless && opened.getPhoneAccess()) {
+        // The owner left it on: listening again from the start, with the same certificate.
+        phoneTls = await loadTls();
+        phoneAccessOn = true;
+        listen = { tls: phoneTls, devices };
+      }
       if (headless) {
         // Loaded up front, whether or not there is an address yet: the handlers
         // get it once, and `pair.proof` always has it on a headless machine.
@@ -624,13 +645,55 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         away: deliverer,
         devices,
         identity: () => machineOf(opened),
-        ...(tls ? { tls } : {}),
+        // A desktop proves with its certificate once it has one (Let my phone connect).
+        ...(tls ? { tls } : { tls: () => phoneTls }),
         paired,
         relay: machineRelay,
         // Paired machines are this machine's business: never told to its devices.
         emitLocal: (e) => server?.broadcast(e),
       });
       registerPowerClientHandlers(router, { hub });
+
+      // Let my phone connect (local only): its own row, never a setting a device may change.
+      const phoneState = (): PhoneAccess => ({
+        enabled: headless || phoneAccessOn,
+        addresses: remote ? [...remote.addresses] : [],
+        port: remote ? remote.port : (opts.remote?.port ?? REMOTE_PORT),
+      });
+      /** Turns it on or off; one at a time, after any move of the listener under way. */
+      let switching: Promise<void> = Promise.resolve();
+      const switchPhoneAccess = (enabled: boolean): Promise<void> => {
+        const next = switching.then(async () => {
+          await following;
+          opened.setPhoneAccess(enabled);
+          phoneAccessOn = enabled;
+          if (enabled) {
+            phoneTls ??= await loadTls();
+            listen = { tls: phoneTls, devices };
+            await moveRemote(wantedAddresses());
+          } else {
+            // Closing the listener closes every device socket at once; the pairings stay.
+            await moveRemote([]);
+            listen = undefined;
+          }
+          if (server && !closing) await writeOwnDiscovery(server.port);
+          server?.broadcast({ event: 'phoneAccess.changed', data: phoneState() });
+        });
+        switching = next.catch(() => {});
+        return next;
+      };
+      router.register('phoneAccess.get', async () => phoneState(), { localOnly: true });
+      router.register(
+        'phoneAccess.set',
+        async ({ enabled }) => {
+          if (headless) {
+            throw new ServiceError('HEADLESS', 'A headless machine always listens for its devices');
+          }
+          await switchPhoneAccess(enabled);
+          return phoneState();
+        },
+        { localOnly: true },
+      );
       // This machine's own power control: open to paired devices, announced to all.
       if (idle) {
         // Keep awake outlives a restart (an expired `until` comes back as off).
@@ -1198,7 +1261,8 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       return true; // when unsure, stay: exiting would leave a message behind
     }
   };
-  // A headless service belongs to its machine: it never exits on its own.
+  // A headless service belongs to its machine: it never exits on its own. Nor
+  // does a desktop's while Let my phone connect is on (the phone may come any time).
   const timer = setTimer(() => {
     sweepHolds();
     checkScheduled();
@@ -1214,7 +1278,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     }
     if (liveCount() > 0 || localClients + remoteClients > 0 || sendsPending() || awayWaiting()) {
       lastActive = clock();
-    } else if (!headless && clock() - lastActive >= IDLE_EXIT_MS) {
+    } else if (!headless && !phoneAccessOn && clock() - lastActive >= IDLE_EXIT_MS) {
       log.info('idle for 30 minutes, exiting');
       void close();
     }
