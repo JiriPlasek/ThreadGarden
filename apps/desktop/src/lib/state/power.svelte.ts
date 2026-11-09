@@ -14,7 +14,7 @@ import {
   type PlugReading,
   type PowerConfig,
 } from '@threadgarden/protocol';
-import { powerPasswords } from '../native';
+import { isPhone, powerPasswords } from '../native';
 import { RequestError } from '../service/client';
 import type { Api } from './api';
 import type { MachineEntry, MachinesState, MachineStatus } from './machines.svelte';
@@ -501,6 +501,8 @@ export class PowerState {
   };
 
   private adopt = async (m: MachineEntry, config: PowerConfig | null): Promise<boolean> => {
+    // Never from the phone: it would overwrite the machine's copy, which is the desktop's.
+    if (isPhone) return true;
     try {
       const password = config ? await this.passwords.get(m.id) : null;
       await m.client.request('power.adopt', {

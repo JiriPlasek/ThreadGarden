@@ -20,6 +20,7 @@
   import SetupScreen from '#lib/components/SetupScreen.svelte';
   import UsageDialog from '#lib/components/UsageDialog.svelte';
   import { scaleKeyAction } from '#lib/interface-scale.js';
+  import { isPhone } from '#lib/native.js';
   import { useApp } from '#lib/state/context.js';
   import AgentsStrip from './AgentsStrip.svelte';
   import ChatList from './ChatList.svelte';
@@ -36,7 +37,7 @@
    * user can still browse history without it. Ctrl/Cmd+K opens the quick
    * switcher from anywhere, Ctrl/Cmd+/ the keyboard shortcuts, and Ctrl/Cmd
    * with = + - 0 changes the interface size; an older service shows the
-   * restart banner.
+   * restart banner. The phone never runs Claude Code, so it never asks for it.
    */
   const { settings, connection, places, interaction, power, machineUpdates } = useApp();
   /** Chats waiting for you, plus one per machine whose shutdown is paused by unpushed work. */
@@ -92,7 +93,7 @@
     <ServiceBanner />
   {/if}
 
-  {#if interaction.claudeMissing && !interaction.setupDismissed}
+  {#if interaction.claudeMissing && !interaction.setupDismissed && !isPhone}
     <main class="flex min-h-0 flex-1 items-center justify-center overflow-y-auto">
       <SetupScreen
         kind="missing"

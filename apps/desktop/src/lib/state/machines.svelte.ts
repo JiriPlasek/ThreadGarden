@@ -50,8 +50,16 @@ export type MachinesOptions = {
   relayUrl(machineId: string): string;
   /** The local service's token, which the relay accepts too. */
   localToken(): string;
-  tokens?: Pick<typeof machineTokens, 'get' | 'set' | 'clear'>;
+  tokens?: TokenStore;
   makeClient?: (o: ClientOptions) => ServiceClient;
+};
+
+/**
+ * Where the device tokens are kept. `heldByCore` (the phone): the core keeps
+ * and uses them itself, so a machine is never unlocked from here.
+ */
+export type TokenStore = Pick<typeof machineTokens, 'get' | 'set' | 'clear'> & {
+  heldByCore?: boolean;
 };
 
 /** `uiState` key: the machines whose group in the places column is collapsed (their ids). */
@@ -126,7 +134,7 @@ export class MachinesState {
   private localApi!: Api;
   private localClient!: ServiceClient;
   private opts!: MachinesOptions;
-  private tokens: Pick<typeof machineTokens, 'get' | 'set' | 'clear'> = machineTokens;
+  private tokens: TokenStore = machineTokens;
   private makeClient: (o: ClientOptions) => ServiceClient = (o) => new ServiceClient(o);
   private everOn = new Set<string>();
   private pairing = 0;
@@ -135,7 +143,7 @@ export class MachinesState {
   private readonly added = new Set<(m: MachineEntry) => void>();
   private readonly removedCbs = new Set<(id: string) => void>();
   private readonly listedCbs = new Set<() => void>();
-  private everListed = false;
+  private everListed = $state(false);
   /** Refines a link status with power control (`PowerState.status`); the link status alone until set. */
   private derive = $state.raw<(id: string, link: MachineStatus) => MachineStatus>(
     (_, link) => link,
@@ -532,11 +540,14 @@ export class MachinesState {
   /**
    * Hands the keychain token (or `token`, just paired) to the local service and
    * (re)connects the machine's relay client. No token: the machine stays locked.
+   * On the phone the core holds the tokens: only the relay is (re)connected.
    */
   private connectEntry = (id: string, token?: string): void => {
     void (async () => {
       if (this.removing.has(id) || !this.paired.some((e) => e.id === id)) return;
       try {
+        // The core has the token already (it paired, and keeps it): straight to the relay.
+        if (this.tokens.heldByCore) return this.openRelay(id);
         const t = token ?? (await this.tokens.get(id));
         if (this.removing.has(id)) return;
         if (!t) return this.lock(id, true);
@@ -545,11 +556,16 @@ export class MachinesState {
         // Unlock failed (local link down or machine unknown): the next local open retries.
         return this.lock(id, false);
       }
-      const e = this.paired.find((x) => x.id === id);
-      if (!e || this.removing.has(id)) return;
-      e.status = 'connecting';
-      e.client.connect(this.opts.relayUrl(id), this.opts.localToken()).catch(() => {});
+      this.openRelay(id);
     })();
+  };
+
+  /** (Re)connects the machine's relay client. */
+  private openRelay = (id: string): void => {
+    const e = this.paired.find((x) => x.id === id);
+    if (!e || this.removing.has(id)) return;
+    e.status = 'connecting';
+    e.client.connect(this.opts.relayUrl(id), this.opts.localToken()).catch(() => {});
   };
 
   private lock = (id: string, closeClient: boolean): void => {

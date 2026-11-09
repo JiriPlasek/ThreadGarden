@@ -11,11 +11,13 @@
   import PanelLeftCloseIcon from '@lucide/svelte/icons/panel-left-close';
   import PinIcon from '@lucide/svelte/icons/pin';
   import PinOffIcon from '@lucide/svelte/icons/pin-off';
+  import PlusIcon from '@lucide/svelte/icons/plus';
   import SettingsIcon from '@lucide/svelte/icons/settings';
   import logo from '#lib/assets/logo.png';
   import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
   import * as ContextMenu from '#lib/components/ui/context-menu/index.js';
   import * as Tooltip from '#lib/components/ui/tooltip/index.js';
+  import { isPhone } from '#lib/native.js';
   import { samePlace, type Place } from '#lib/state/places.svelte.js';
   import { useApp } from '#lib/state/context.js';
   import type { MachineEntry } from '#lib/state/machines.svelte.js';
@@ -42,6 +44,10 @@
    * folders" and "Hidden projects"; pinning and hiding act on the project's
    * machine. With This PC alone there is no group: the projects sit under a
    * plain "This PC" heading, as they always sat under "Projects".
+   *
+   * The phone (`isPhone`) has no local machine: no This PC group, every paired
+   * machine under its own heading, and no Analytics (This PC's history). With
+   * no machine paired yet, Add machine is all there is.
    */
   let { onCollapse }: { onCollapse?: () => void } = $props();
 
@@ -53,15 +59,24 @@
   /** This PC first (also before its service said who it is), then the paired machines. */
   const groups = $derived.by((): Group[] => {
     const here = machines.get(local.machineId) ?? machines.local ?? undefined;
-    const out: Group[] = [{ machine: here, scope: local }];
+    const out: Group[] = isPhone ? [] : [{ machine: here, scope: local }];
     for (const m of machines.list) {
       const scope = m.local ? undefined : scopes.get(m.id);
       if (scope && scope !== local) out.push({ machine: m, scope });
     }
     return out;
   });
-  /** Grouped by machine: the same test as the machine chips. */
-  const multi = $derived(machines.several);
+  /** Grouped by machine: the same test as the machine chips (always on the phone, which has no This PC). */
+  const multi = $derived(isPhone || machines.several);
+  /** The phone with no machine paired: there are no places to show. */
+  const noMachines = $derived(isPhone && groups.length === 0);
+
+  /** Add machine lives in Settings → Machines. */
+  const addMachine = (): void => {
+    interaction.settingsSection = 'machines';
+    interaction.settingsOpen = true;
+    interaction.addMachineOpen = true;
+  };
 
   /**
    * A machine's "Missing folders" group is expanded: This PC's as always
@@ -264,7 +279,13 @@
   </header>
 
   <div class="min-h-0 flex-1 overflow-y-auto px-2 pb-3 [scrollbar-width:thin]">
-    <ul class="space-y-px">
+    {#if noMachines && machines.listed}
+      <button type="button" class={itemClass(false)} onclick={addMachine}>
+        <PlusIcon class="text-muted-foreground size-4 shrink-0" aria-hidden="true" />
+        <span class="truncate">Add machine…</span>
+      </button>
+    {/if}
+    <ul class="space-y-px" hidden={noMachines}>
       <li>
         <button
           type="button"
@@ -289,18 +310,21 @@
           {@render badge(places.counts.running, 'green', 'Working agents')}
         </button>
       </li>
-      <li>
-        <!-- v1.3: opens the Analytics view in the main pane (not a list place). -->
-        <button
-          type="button"
-          class={itemClass(tabs.analyticsShown)}
-          aria-current={tabs.analyticsShown ? 'page' : undefined}
-          onclick={tabs.showAnalytics}
-        >
-          <ChartColumnIcon class="text-muted-foreground size-4 shrink-0" aria-hidden="true" />
-          <span class="truncate">Analytics</span>
-        </button>
-      </li>
+      <!-- This PC's history: the phone has none. -->
+      {#if !isPhone}
+        <li>
+          <!-- v1.3: opens the Analytics view in the main pane (not a list place). -->
+          <button
+            type="button"
+            class={itemClass(tabs.analyticsShown)}
+            aria-current={tabs.analyticsShown ? 'page' : undefined}
+            onclick={tabs.showAnalytics}
+          >
+            <ChartColumnIcon class="text-muted-foreground size-4 shrink-0" aria-hidden="true" />
+            <span class="truncate">Analytics</span>
+          </button>
+        </li>
+      {/if}
       {#each BUCKETS as b (b.kind)}
         {@const place = { kind: b.kind }}
         <li>

@@ -3,6 +3,11 @@
  * function calls a Rust command or plugin; in a plain browser (tests, UI work
  * against the mock service) harmless stubs stand in, and the service
  * connection comes from `VITE_THREADGARDEN_MOCK_URL` / `VITE_THREADGARDEN_MOCK_TOKEN`.
+ *
+ * On the phone (`isPhone`) the app has no local machine: the phone's core
+ * stands in for the service, holds the machines' tokens and posts the alerts.
+ * The desktop's credential store, tray, autostart and updater have no Android
+ * commands, so their functions are stubs there.
  */
 import { invoke, isTauri as detectTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
@@ -24,6 +29,21 @@ export type ServiceConnection = {
 export type TrayEvent = 'stop-all' | 'quit-all';
 
 export const isTauri: boolean = detectTauri();
+
+/**
+ * The phone build, decided by platform and never by window width: Tauri's
+ * Android build (`TAURI_ENV_PLATFORM`, which the Tauri CLI sets for the
+ * frontend build), or `VITE_THREADGARDEN_PHONE=1` for the browser against the
+ * mock service.
+ */
+export const isPhone: boolean =
+  import.meta.env.TAURI_ENV_PLATFORM === 'android' ||
+  import.meta.env.VITE_THREADGARDEN_PHONE === '1';
+
+/** On the phone in Tauri: a Rust command exists there (in a browser, the stubs stand in). */
+const phoneTauri = isPhone && isTauri;
+/** In Tauri on a desktop: the desktop's own Rust commands and plugins exist. */
+const desktopTauri = isTauri && !isPhone;
 
 /** This build's version (the app and its bundled service share it). */
 export const appVersion: string = pkg.version;
@@ -54,20 +74,26 @@ export const serviceConnection = async (): Promise<ServiceConnection> =>
  * a browser (the mock service is not restarted).
  */
 export const stopService = async (): Promise<void> => {
-  if (isTauri) await invoke('service_stop');
+  // The phone's core is part of the app: there's no service to stop.
+  if (desktopTauri) await invoke('service_stop');
 };
 
 let browserApiKey: string | null = null;
 
-/** Threadgarden's optional Anthropic API key, kept in the OS credential store (in memory in a browser). */
+/**
+ * Threadgarden's optional Anthropic API key, kept in the OS credential store
+ * (in memory in a browser). The phone runs no chats, so it never has one.
+ */
 export const apiKey = {
   get: async (): Promise<string | null> =>
-    isTauri ? invoke<string | null>('api_key_get') : browserApiKey,
+    isPhone ? null : isTauri ? invoke<string | null>('api_key_get') : browserApiKey,
   set: async (key: string): Promise<void> => {
+    if (isPhone) throw new Error('The phone runs no chats, so it has no API key');
     if (isTauri) await invoke('api_key_set', { key });
     else browserApiKey = key;
   },
   clear: async (): Promise<void> => {
+    if (isPhone) return;
     if (isTauri) await invoke('api_key_clear');
     else browserApiKey = null;
   },
@@ -75,17 +101,27 @@ export const apiKey = {
 
 const browserMachineTokens = new Map<string, string>();
 
-/** A paired machine's device token, kept in the OS credential store (in memory in a browser). */
+/**
+ * A paired machine's device token, kept in the OS credential store (in memory
+ * in a browser). On the phone the core holds them (`heldByCore`), since it
+ * reconnects without the screens: these are no-ops there, and the UI never
+ * unlocks a machine with one.
+ */
 export const machineTokens = {
+  heldByCore: isPhone,
   get: async (id: string): Promise<string | null> =>
-    isTauri
-      ? invoke<string | null>('machine_token_get', { machineId: id })
-      : (browserMachineTokens.get(id) ?? null),
+    isPhone
+      ? null
+      : isTauri
+        ? invoke<string | null>('machine_token_get', { machineId: id })
+        : (browserMachineTokens.get(id) ?? null),
   set: async (id: string, token: string): Promise<void> => {
+    if (isPhone) return;
     if (isTauri) await invoke('machine_token_set', { machineId: id, token });
     else browserMachineTokens.set(id, token);
   },
   clear: async (id: string): Promise<void> => {
+    if (isPhone) return;
     if (isTauri) await invoke('machine_token_clear', { machineId: id });
     else browserMachineTokens.delete(id);
   },
@@ -93,17 +129,25 @@ export const machineTokens = {
 
 const browserPowerPasswords = new Map<string, string>();
 
-/** A machine's power switch web password, kept in the OS credential store (in memory in a browser). */
+/**
+ * A machine's power switch web password, kept in the OS credential store (in
+ * memory in a browser). On the phone the core will keep the plug's password
+ * (encrypted like the tokens), so nothing is kept here.
+ */
 export const powerPasswords = {
   get: async (id: string): Promise<string | null> =>
-    isTauri
-      ? invoke<string | null>('power_password_get', { machineId: id })
-      : (browserPowerPasswords.get(id) ?? null),
+    isPhone
+      ? null
+      : isTauri
+        ? invoke<string | null>('power_password_get', { machineId: id })
+        : (browserPowerPasswords.get(id) ?? null),
   set: async (id: string, password: string): Promise<void> => {
+    if (isPhone) throw new Error("The phone keeps a plug's password in its own settings");
     if (isTauri) await invoke('power_password_set', { machineId: id, password });
     else browserPowerPasswords.set(id, password);
   },
   clear: async (id: string): Promise<void> => {
+    if (isPhone) return;
     if (isTauri) await invoke('power_password_clear', { machineId: id });
     else browserPowerPasswords.delete(id);
   },
@@ -116,7 +160,8 @@ export const powerPasswords = {
  * taken for a click: coming back to the window changes nothing.
  */
 export const notify = async (title: string, body: string, chatKey: string): Promise<void> => {
-  if (!isTauri) return;
+  // On the phone the core alerts, also while the screens are closed.
+  if (!desktopTauri) return;
   const n = await import('@tauri-apps/plugin-notification');
   let granted = await n.isPermissionGranted();
   if (!granted) granted = (await n.requestPermission()) === 'granted';
@@ -216,9 +261,21 @@ export const readDroppedImage = async (path: string): Promise<ImageRef> => {
   return invoke<ImageRef>('read_dropped_image', { path });
 };
 
-/** Number of chats waiting on the user, shown on the tray icon. */
+/**
+ * The chat in front of the owner (null: none, or the app is in the
+ * background). On the phone the core is told, so it doesn't alert for the chat
+ * being read; elsewhere a no-op, since the webview's own notifications check it.
+ */
+export const setActiveChat = async (
+  machineId: string | null,
+  sessionId: string | null,
+): Promise<void> => {
+  if (phoneTauri) await invoke('alerts_set_active', { machineId, sessionId });
+};
+
+/** Number of chats waiting on the user, shown on the tray icon (the phone has none). */
 export const setTrayNeedsYou = async (n: number): Promise<void> => {
-  if (isTauri) await invoke('set_tray_needs_you', { count: Math.max(0, Math.floor(n)) });
+  if (desktopTauri) await invoke('set_tray_needs_you', { count: Math.max(0, Math.floor(n)) });
 };
 
 /**
@@ -226,7 +283,7 @@ export const setTrayNeedsYou = async (n: number): Promise<void> => {
  * "Quit Threadgarden completely…"). Resolves to an unsubscribe function.
  */
 export const onTray = async (event: TrayEvent, cb: () => void): Promise<() => void> =>
-  isTauri ? listen(`tray://${event}`, () => cb()) : () => {};
+  desktopTauri ? listen(`tray://${event}`, () => cb()) : () => {};
 
 /** Exits the app only; the service and its agents keep running. */
 export const quitApp = async (): Promise<void> => {
@@ -234,7 +291,7 @@ export const quitApp = async (): Promise<void> => {
 };
 
 export const setAutostart = async (on: boolean): Promise<void> => {
-  if (!isTauri) return;
+  if (!desktopTauri) return;
   const autostart = await import('@tauri-apps/plugin-autostart');
   if (on) await autostart.enable();
   else await autostart.disable();
@@ -261,11 +318,11 @@ export type Updater = {
 
 /**
  * Self-update from GitHub Releases (the updater and process plugins). Outside
- * the desktop app nothing is ever found.
+ * the desktop app nothing is ever found: the phone's update notice is its own.
  */
 export const updater: Updater = {
   check: async () => {
-    if (!isTauri) return null;
+    if (!desktopTauri) return null;
     const { check } = await import('@tauri-apps/plugin-updater');
     const update = await check();
     if (!update) return null;
@@ -285,9 +342,9 @@ export const updater: Updater = {
     };
   },
   relaunch: async () => {
-    if (!isTauri) return;
+    if (!desktopTauri) return;
     const { relaunch } = await import('@tauri-apps/plugin-process');
     await relaunch();
   },
-  installKind: async () => (isTauri ? invoke<InstallKind>('install_kind') : 'unsupported'),
+  installKind: async () => (desktopTauri ? invoke<InstallKind>('install_kind') : 'unsupported'),
 };

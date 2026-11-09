@@ -20,6 +20,7 @@
     type Send,
   } from '#lib/components/new-chat/start.js';
   import * as Dialog from '#lib/components/ui/dialog/index.js';
+  import { isPhone } from '#lib/native.js';
   import { nameProblem, projectsApi, supportsProjects } from '#lib/projects.js';
   import { useApp } from '#lib/state/context.js';
   import { awayRefusal } from '#lib/state/copy-api.js';
@@ -49,6 +50,10 @@
    * its projects and its home folder, as Existing folder only. The first
    * message waits on this device until the machine is up, and the chat's tab
    * opens at once ("Starting ‹machine›…").
+   *
+   * The phone (`isPhone`) has no This PC: the Machine select is always there
+   * and never offers it, and the dialog opens on the last machine a chat was
+   * started on (while it can take one), else the first that can.
    */
   const { interaction, places, tabs, settings, scopes, machines, power } = useApp();
 
@@ -105,6 +110,7 @@
    */
   const choices = $derived(
     machines.list.flatMap((m) => {
+      if (isPhone && m.local) return [];
       if (m.status === 'on' && power.takesWork(m.id) && scopes.get(m.id)) {
         return [{ id: m.id, label: machineLabel(m), disabled: false }];
       }
@@ -121,20 +127,28 @@
   /** A machine a chat can start on now: it has its stores and takes work, or its message can wait for it. */
   const usable = (id: string | null | undefined): id is string =>
     !!id &&
+    !(isPhone && id === local.machineId) &&
     ((!!scopes.get(id) && machines.get(id)?.status === 'on' && power.takesWork(id)) ||
       awayOffer(id)?.refusal === null);
   /** The chosen machine is away: only its existing folders can be offered. */
   const away = $derived(!onThisPc && machineAway(machines, scope.machineId));
+  /** The phone's: the machine the last chat was started on. */
+  let lastUsed = $state<string | null>(null);
+
   /**
    * The machine the dialog opens on: the one asked for, else the selected
    * project place's, when it is on (or away, with its message able to wait);
-   * else This PC.
+   * else This PC. On the phone, else the last machine used, else the first
+   * that can take a chat.
    */
   const startMachine = (): string => {
     const sel = places.selected;
     const want =
       interaction.newChat.machineId ?? (sel.kind === 'project' ? sel.machineId : undefined);
-    return usable(want) ? want : local.machineId;
+    if (usable(want)) return want;
+    if (!isPhone) return local.machineId;
+    if (usable(lastUsed)) return lastUsed;
+    return choices.find((m) => !m.disabled)?.id ?? local.machineId;
   };
 
   const projects = $derived(
@@ -247,10 +261,11 @@
     if (updateHint && tab !== 'existing') tab = 'existing';
   });
 
-  // The chosen machine was removed while the dialog is open: back to This PC, with its folder.
+  // The chosen machine was removed while the dialog is open: back to This PC (on the
+  // phone, the first machine that can take a chat), with its folder.
   $effect(() => {
     if (!interaction.newChat.open || scopes.get(machineId)) return;
-    untrack(() => chooseMachine(local.machineId));
+    untrack(() => chooseMachine(isPhone ? startMachine() : local.machineId));
   });
 
   /** The folder the models are asked for: the chosen one, else where a new project goes. */
@@ -314,6 +329,7 @@
       });
     pendingNew = null;
     created = true;
+    lastUsed = target.machineId;
     target.interaction.focusComposer(id);
     tabs.openTab({ machineId: target.machineId, sessionId: id });
     interaction.closeNewChat();
@@ -429,7 +445,7 @@
       >
     </Dialog.Header>
 
-    {#if machines.several}
+    {#if machines.several || isPhone}
       <div class="grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-2 text-xs">
         <label for="new-chat-machine" class="text-muted-foreground">Machine</label>
         <select
@@ -440,7 +456,12 @@
           onchange={(e) => chooseMachine(e.currentTarget.value)}
         >
           {#if !choices.some((m) => m.id === scope.machineId)}
-            <option value={scope.machineId}>{machineNameOf(machines, scope.machineId)}</option>
+            <!-- The phone's own scope is never a machine to start on: it's what's left with none on. -->
+            <option value={scope.machineId}
+              >{isPhone && onThisPc
+                ? 'No machine is on'
+                : machineNameOf(machines, scope.machineId)}</option
+            >
           {/if}
           {#each choices as m (m.id)}
             <option value={m.id} disabled={m.disabled}>{m.label}</option>

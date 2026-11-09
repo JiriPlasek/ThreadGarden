@@ -82,6 +82,16 @@
  * Its plug switched on through the fake Tasmota while it's away, as
  * Threadgarden does to deliver a message, brings it back about 2 s later
  * (`MOCK_BOOT_MS`). The main mock has neither method.
+ *
+ * The phone (`MOCK_PHONE=1`, or `--phone`): the main mock answers like the
+ * phone's core, for the UI built with `VITE_THREADGARDEN_PHONE=1`. Its `hello`
+ * names an empty machine as the core does (`linux`, not headless, no home, no
+ * capabilities), it has no chats, projects, external sessions or usage of its
+ * own, and `system.status` finds no Claude Code. With `--pair-port <port>
+ * --pairing-code <code>` it pairs as "Phone" with the remote mock whose device
+ * listener is on 127.0.0.1:`<port>`, once that one answers, and holds its
+ * token, as the core does: the UI never unlocks it. The port has no default,
+ * so the mock never tries a real machine's.
  */
 import { randomUUID } from 'node:crypto';
 import { appendFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -852,6 +862,11 @@ export type MockOptions = {
   remote?: { port: number; pairingCode: string };
   /** Plan 4: a fake Tasmota Zigbee bridge with the plug `MockPlug` (port 0: any free one). */
   fakeTasmota?: { port: number };
+  /**
+   * Answer like the phone's core (see the file comment), paired with the remote
+   * mock whose device listener is on 127.0.0.1:`pairWith.port`, when given.
+   */
+  phone?: { pairWith?: { port: number; pairingCode: string } };
 };
 
 /** What the mock does where a machine would power off. */
@@ -869,6 +884,8 @@ export type MockService = {
   adapter: FakeAdapter;
   /** The fake switch, when `fakeTasmota` was asked for; closed with the service. */
   fakeTasmota?: FakeTasmota;
+  /** The phone's: resolves once it paired with `phone.pairWith` (rejects when it gave up). */
+  paired?: Promise<void>;
   /** Resolves once the temp dirs are gone after the service closed. */
   removed: Promise<void>;
 };
@@ -1179,6 +1196,79 @@ const addMockMethods = (
   };
 };
 
+/** The phone's name, as the phone's core and the remote mock's devices list say it. */
+export const PHONE_NAME = 'Phone';
+/** How long the phone mock keeps trying to pair while the remote mock isn't up yet. */
+const PHONE_PAIR_TRIES = 240;
+const PHONE_PAIR_RETRY_MS = 500;
+
+/**
+ * The phone's core answers `hello` with an empty machine and has no Claude
+ * Code (as `methods.rs` in the core does): the main mock answers the same.
+ */
+const answerLikeThePhone = (svc: ServiceHandle): void => {
+  const dispatch = svc.router.dispatch.bind(svc.router);
+  svc.router.dispatch = async (req, ctx) => {
+    const res = await dispatch(req, ctx);
+    if (!('result' in res)) return res;
+    if (req.method === 'hello') {
+      const hello = res.result as { machine?: Record<string, unknown> };
+      if (!hello.machine) return res;
+      return {
+        ...res,
+        result: {
+          ...hello,
+          machine: {
+            id: hello.machine.id,
+            name: PHONE_NAME,
+            platform: 'linux',
+            headless: false,
+            home: '',
+            capabilities: [],
+          },
+        },
+      };
+    }
+    if (req.method === 'system.status') {
+      return {
+        ...res,
+        result: {
+          claude: { found: false },
+          externalAvailable: false,
+          indexing: { done: 0, total: 0 },
+        },
+      };
+    }
+    return res;
+  };
+};
+
+/** Pairs the phone mock with the remote mock, waiting for it to answer; throws when it never does. */
+const pairPhone = async (
+  svc: ServiceHandle,
+  to: { port: number; pairingCode: string },
+): Promise<void> => {
+  let closed = false;
+  svc.onClosed(() => (closed = true));
+  let last: unknown;
+  for (let i = 0; i < PHONE_PAIR_TRIES; i++) {
+    if (closed) return;
+    try {
+      await callLocal(svc, 'machines.pair', {
+        address: '127.0.0.1',
+        port: to.port,
+        code: to.pairingCode,
+        deviceName: PHONE_NAME,
+      });
+      return;
+    } catch (err) {
+      last = err;
+      await sleep(PHONE_PAIR_RETRY_MS);
+    }
+  }
+  throw last instanceof Error ? last : new Error(String(last));
+};
+
 /** Calls `method` as this machine's own desktop would (origin local); throws its error. */
 const callLocal = async (svc: ServiceHandle, method: string, params: unknown): Promise<void> => {
   const res = await svc.router.dispatch(
@@ -1191,10 +1281,12 @@ const callLocal = async (svc: ServiceHandle, method: string, params: unknown): P
 /** Starts the mock service; its temp dirs are removed when it closes. */
 export const startMockService = async (o: MockOptions = {}): Promise<MockService> => {
   const remote = o.remote;
-  if (remote && !isWellFormedPairingCode(remote.pairingCode)) {
-    throw new Error(
-      `Invalid pairing code ${remote.pairingCode}: 12 of ${PAIRING_ALPHABET}, dashes allowed`,
-    );
+  const phone = o.phone;
+  if (remote && phone) throw new Error('The mock is a remote machine or the phone, not both');
+  for (const code of [remote?.pairingCode, phone?.pairWith?.pairingCode]) {
+    if (code !== undefined && !isWellFormedPairingCode(code)) {
+      throw new Error(`Invalid pairing code ${code}: 12 of ${PAIRING_ALPHABET}, dashes allowed`);
+    }
   }
   const root = await mkdtemp(join(tmpdir(), 'threadgarden-mock-'));
   const dataDir = join(root, 'data');
@@ -1202,9 +1294,10 @@ export const startMockService = async (o: MockOptions = {}): Promise<MockService
   await mkdir(join(claudeDir, 'projects'), { recursive: true });
   const adapter = new ScriptedAdapter(claudeDir);
   const corpus = generateCorpus({
-    sessions: o.sessions ?? (remote ? REMOTE_SESSIONS : 1000),
-    projects: o.projects ?? (remote ? 1 : 50),
-    bigSessionMessages: o.bigSessionMessages ?? (remote ? 0 : 2000),
+    // The phone runs no chats: it has none of its own.
+    sessions: o.sessions ?? (phone ? 0 : remote ? REMOTE_SESSIONS : 1000),
+    projects: o.projects ?? (phone ? 0 : remote ? 1 : 50),
+    bigSessionMessages: o.bigSessionMessages ?? (remote || phone ? 0 : 2000),
     // Dated up to now, with models, tokens and tool calls: the Analytics view has data.
     recent: { now: Date.now(), days: HISTORY_DAYS },
   });
@@ -1213,11 +1306,11 @@ export const startMockService = async (o: MockOptions = {}): Promise<MockService
     if (remote) s.info.cwd = REMOTE_PROJECT_PATH;
     adapter.sessions.set(id, s);
   }
-  const iconDirs = remote ? new Map<string, string>() : await writeMockIcons(root);
+  const iconDirs = remote || phone ? new Map<string, string>() : await writeMockIcons(root);
 
   // One "external" Claude Code session (This PC's mock only), so the UI's
   // external states and resume block show.
-  const externalId = remote ? undefined : corpus.sessions.keys().next().value;
+  const externalId = remote || phone ? undefined : corpus.sessions.keys().next().value;
   const externals = externalId
     ? [
         {
@@ -1285,6 +1378,7 @@ export const startMockService = async (o: MockOptions = {}): Promise<MockService
     updater.attach(svc);
     presence?.attach(svc);
     addMockMethods(svc, updater, presence);
+    if (phone) answerLikeThePhone(svc);
     if (remote) {
       // The real service retries a listener that failed to start; a test mock must say so at once.
       if (!svc.remote) {
@@ -1309,18 +1403,28 @@ export const startMockService = async (o: MockOptions = {}): Promise<MockService
       svc.onClosed(() => clearInterval(timer));
     }
     // The mock account's usage is known from the start (v1.3 B), so the meter shows at once.
-    svc.usage?.observeEvent('mock', {
-      status: 'allowed',
-      rateLimitType: 'five_hour',
-      utilization: MOCK_USAGE_START,
-      resetsAt: Math.floor((Date.now() + MOCK_WINDOW_MS) / 1000),
-    });
-    svc.usage?.observeEvent('mock', {
-      status: 'allowed',
-      rateLimitType: 'seven_day',
-      utilization: 0.23,
-      resetsAt: Math.floor((Date.now() + 4 * 24 * 3_600_000) / 1000),
-    });
+    // The phone runs no chats, so it has no usage of its own.
+    if (!phone) {
+      svc.usage?.observeEvent('mock', {
+        status: 'allowed',
+        rateLimitType: 'five_hour',
+        utilization: MOCK_USAGE_START,
+        resetsAt: Math.floor((Date.now() + MOCK_WINDOW_MS) / 1000),
+      });
+      svc.usage?.observeEvent('mock', {
+        status: 'allowed',
+        rateLimitType: 'seven_day',
+        utilization: 0.23,
+        resetsAt: Math.floor((Date.now() + 4 * 24 * 3_600_000) / 1000),
+      });
+    }
+    // In the background: the remote mock may still be starting.
+    const paired = phone?.pairWith ? pairPhone(svc, phone.pairWith) : undefined;
+    paired?.catch((err: unknown) =>
+      process.stderr.write(
+        `The phone mock could not pair: ${err instanceof Error ? err.message : String(err)}\n`,
+      ),
+    );
     const removed = new Promise<void>((resolve) =>
       svc.onClosed(() => {
         void fakeTasmota?.close().catch(() => {});
@@ -1329,7 +1433,15 @@ export const startMockService = async (o: MockOptions = {}): Promise<MockService
           .finally(resolve);
       }),
     );
-    return { svc, dataDir, claudeDir, adapter, ...(fakeTasmota ? { fakeTasmota } : {}), removed };
+    return {
+      svc,
+      dataDir,
+      claudeDir,
+      adapter,
+      ...(fakeTasmota ? { fakeTasmota } : {}),
+      ...(paired ? { paired } : {}),
+      removed,
+    };
   } catch (err) {
     await fakeTasmota?.close().catch(() => {});
     await rm(root, { recursive: true, force: true }).catch(() => {});
@@ -1380,8 +1492,27 @@ if (isEntry()) {
   const fakeTasmota = flag('fake-tasmota')
     ? { port: portOption('fake-tasmota-port') ?? 0 }
     : undefined;
+  let phone: MockOptions['phone'];
+  if (process.env.MOCK_PHONE === '1' || flag('phone')) {
+    if (remote) {
+      process.stderr.write('MOCK_PHONE is the main mock: it does not take --remote\n');
+      process.exit(1);
+    }
+    const pairingCode = option('pairing-code');
+    // No default port: 47380 may be a real machine's, and the mock must never pair with one.
+    const pairPort = portOption('pair-port');
+    if ((pairingCode === undefined) !== (pairPort === undefined)) {
+      process.stderr.write('MOCK_PHONE pairs with --pair-port <port> and --pairing-code <code>\n');
+      process.exit(1);
+    }
+    phone =
+      pairingCode === undefined || pairPort === undefined
+        ? {}
+        : { pairWith: { port: pairPort, pairingCode } };
+  }
   startMockService({
     ...(fakeTasmota ? { fakeTasmota } : {}),
+    ...(phone ? { phone } : {}),
     ...(port === undefined ? {} : { port }),
     ...(token === undefined ? {} : { token }),
     ...(remote ? { remote } : {}),
