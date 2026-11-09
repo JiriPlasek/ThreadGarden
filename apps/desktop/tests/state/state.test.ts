@@ -313,6 +313,96 @@ describe('tabs', () => {
     expect(t.active).toBeNull();
   });
 
+  it('close others keeps one tab, shows it and persists', async () => {
+    const t = new TabsState();
+    t.init(client);
+    ['a', 'b', 'c', 'd'].forEach(t.openTab);
+    t.activate('a');
+    t.closeOthers('c');
+    expect(t.open).toEqual([k('c')]);
+    expect(t.active).toBe(k('c'));
+    await flushAsync();
+    expect(store.get('tabs')).toEqual({ open: [k('c')], active: k('c') });
+  });
+
+  it('close others also closes the Analytics tab', () => {
+    const t = new TabsState();
+    t.init(client);
+    ['a', 'b'].forEach(t.openTab);
+    t.showAnalytics();
+    t.closeOthers('a');
+    expect(t.open).toEqual([k('a')]);
+    expect(t.active).toBe(k('a'));
+    expect(t.analyticsOpen).toBe(false);
+    expect(t.analyticsShown).toBe(false);
+  });
+
+  it('close to the right keeps the active tab when it stays, else shows the clicked one', () => {
+    const t = new TabsState();
+    t.init(client);
+    ['a', 'b', 'c', 'd'].forEach(t.openTab);
+    t.activate('a');
+    t.closeToRight('c');
+    expect(t.open).toEqual([k('a'), k('b'), k('c')]);
+    expect(t.active).toBe(k('a'));
+    t.activate('c');
+    t.closeToRight('a');
+    expect(t.open).toEqual([k('a')]);
+    expect(t.active).toBe(k('a'));
+  });
+
+  it('close to the right of the last tab changes nothing', () => {
+    const t = new TabsState();
+    t.init(client);
+    ['a', 'b'].forEach(t.openTab);
+    const changes = vi.fn();
+    t.subscribe(changes);
+    t.closeToRight('b');
+    expect(t.open).toEqual([k('a'), k('b')]);
+    expect(changes).not.toHaveBeenCalled();
+  });
+
+  it('close to the right behind the Analytics view brings back the clicked tab after', () => {
+    const t = new TabsState();
+    t.init(client);
+    ['a', 'b', 'c'].forEach(t.openTab);
+    t.showAnalytics();
+    t.closeToRight('a');
+    expect(t.open).toEqual([k('a')]);
+    expect(t.analyticsShown).toBe(true);
+    expect(t.active).toBeNull();
+    t.closeAnalytics();
+    expect(t.active).toBe(k('a'));
+  });
+
+  it('close chats keeps the Analytics tab and shows it', () => {
+    const t = new TabsState();
+    t.init(client);
+    ['a', 'b'].forEach(t.openTab);
+    t.showAnalytics();
+    t.activate('b');
+    t.closeChats();
+    expect(t.open).toEqual([]);
+    expect(t.active).toBeNull();
+    expect(t.analyticsShown).toBe(true);
+    t.closeAnalytics();
+    expect(t.active).toBeNull();
+  });
+
+  it('close all closes every tab, the Analytics tab too', async () => {
+    const t = new TabsState();
+    t.init(client);
+    ['a', 'b'].forEach(t.openTab);
+    t.showAnalytics();
+    t.closeAll();
+    expect(t.open).toEqual([]);
+    expect(t.active).toBeNull();
+    expect(t.analyticsOpen).toBe(false);
+    expect(t.analyticsShown).toBe(false);
+    await flushAsync();
+    expect(store.get('tabs')).toEqual({ open: [], active: null });
+  });
+
   it('restore tolerates empty or malformed state', async () => {
     store.set('tabs', { open: ['x', 5, 'x'], active: 'gone' });
     const t = new TabsState();
