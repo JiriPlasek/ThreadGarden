@@ -229,7 +229,7 @@
   };
 
   let root = $state<HTMLDivElement | null>(null);
-  let composerBox = $state<HTMLTextAreaElement | null>(null);
+  let composerBox = $state<HTMLDivElement | null>(null);
   let list = $state<ReturnType<typeof MessageList> | null>(null);
   let composer = $state<ReturnType<typeof Composer> | null>(null);
 
@@ -493,7 +493,7 @@
     const a = document.activeElement;
     if (!a || a === document.body) return false;
     if (!root?.contains(a)) return true;
-    if (a === composerBox) return composerBox.value.trim() !== '';
+    if (a === composerBox) return (composerBox.textContent ?? '').trim() !== '';
     return (
       a instanceof HTMLInputElement ||
       a instanceof HTMLTextAreaElement ||
@@ -976,7 +976,7 @@
             <div class="contents" hidden={docked !== undefined}>
               <Composer
                 bind:this={composer}
-                bind:textarea={composerBox}
+                bind:editorElement={composerBox}
                 draftKey={sessionId}
                 cwd={chat.summary?.cwd ?? ''}
                 commandScope={{ sessionId }}

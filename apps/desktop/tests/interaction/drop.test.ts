@@ -39,7 +39,7 @@ describe('native file drop (ruling R24)', () => {
       { x: 10, y: 10 },
     );
     await waitFor(() =>
-      expect(composer().value).toBe('@src/app.ts @"/elsewhere/My Notes.md" [Image #1]'),
+      expect(composer().textContent).toBe('@src/app.ts @"/elsewhere/My Notes.md" [Image #1]'),
     );
     const thumbs = await screen.findByRole('list', { name: /attached images/i });
     expect(within(thumbs).getAllByRole('listitem')).toHaveLength(1);
@@ -50,6 +50,6 @@ describe('native file drop (ruling R24)', () => {
     const { composer } = await renderChat();
     pointAt(document.body);
     await routeFileDrop(['/work/alpha/src/app.ts'], { x: 1, y: 1 });
-    expect(composer().value).toBe('');
+    expect(composer().textContent).toBe('');
   });
 });

@@ -11,7 +11,6 @@
   const mapped = $derived(sentImageMap(message.text, images));
   const display = $derived(message.text);
   const shown = $derived(limit === undefined ? display : display.slice(0, limit));
-  let opened = $state<Record<number, boolean>>({});
   const parts = $derived.by(() => {
     let start = 0;
     const out = [];
@@ -31,11 +30,5 @@
       label={part.tag.label}
       image={part.image}
       text={part.paste?.text}
-      onclick={part.paste
-        ? () => (opened = { ...opened, [part.tag.number]: !opened[part.tag.number] })
-        : undefined}
-    />{#if part.paste && opened[part.tag.number]}<pre
-        aria-label="Pasted text #{part.tag.number}"
-        class="my-2 max-h-96 overflow-auto rounded border p-2 font-mono text-xs whitespace-pre-wrap">{part
-          .paste.text}</pre>{/if}{/each}{parts.tail}{#if shown.length < display.length}…{/if}
+    />{/each}{parts.tail}{#if shown.length < display.length}…{/if}
 </div>

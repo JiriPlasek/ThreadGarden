@@ -1,5 +1,14 @@
 # Image and pasted-text tags in the composer: design
 
+**Local review revision, 2026-11-09:** the owner requested real, non-editable
+attachment chips. This supersedes the textarea, backdrop and character-by-character
+editing portions below. The editor now accepts plain text and atomic attachment
+elements; the serialized text and attachment lifetime rules remain the same.
+Clicking a badge pins its preview until an outside click or Escape. Wheel input
+over a text badge scrolls its preview without requiring a click. These rules
+also apply to sent badges, replacing click-to-expand-inline. See
+`../plans/2026-11-09-atomic-attachment-chips.md`.
+
 Date: 2026-11-06. Status: agreed with the owner in chat (the CLI-style tags,
 drawn as badges, with hover previews in the box and in sent messages), checked
 by a builder (its two questions settled under My calls: attachments kept per

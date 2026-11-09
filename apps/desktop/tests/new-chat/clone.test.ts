@@ -99,7 +99,7 @@ const openClone = async (env: Env) => {
 };
 
 const message = (dialog: HTMLElement) =>
-  within(dialog).getByRole('textbox', { name: /message/i }) as HTMLTextAreaElement;
+  within(dialog).getByRole('textbox', { name: /message/i }) as HTMLDivElement;
 
 const repoRows = async (dialog: HTMLElement) => {
   await waitFor(() => expect(within(dialog).getAllByRole('radio').length).toBeGreaterThan(0));
@@ -214,7 +214,7 @@ describe('New chat: Clone', () => {
     expect(
       (within(dialog).getByRole('radio', { name: /Jiri\/Plant/ }) as HTMLInputElement).checked,
     ).toBe(true);
-    expect(message(dialog).value).toBe('fix the build');
+    expect(message(dialog).textContent).toBe('fix the build');
     expect(env.remote.calls('chat.create')).toHaveLength(0);
   });
 
@@ -258,7 +258,7 @@ describe('New chat: Clone', () => {
     expect(existing.getAttribute('aria-selected')).toBe('true');
     const folder = within(dialog).getByRole('combobox', { name: /folder/i }) as HTMLSelectElement;
     expect(folder.value).toBe(CLONED);
-    await waitFor(() => expect(message(dialog).value).toBe('look around'));
+    await waitFor(() => expect(message(dialog).textContent).toBe('look around'));
   });
 
   it('Cancel stops the clone and keeps the message', async () => {
@@ -271,7 +271,7 @@ describe('New chat: Clone', () => {
     await userEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
     await waitFor(() => expect(within(dialog).queryByText('Cloning Jiri/Plant…')).toBeNull());
     expect(env.remote.calls('projects.cancel').map((c) => c.params)).toEqual([{ jobId: 'j1' }]);
-    expect(message(dialog).value).toBe('hello');
+    expect(message(dialog).textContent).toBe('hello');
     expect(env.remote.calls('chat.create')).toHaveLength(0);
   });
 

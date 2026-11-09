@@ -519,11 +519,16 @@ runs a tool or waits on the user (`quietTail` in `chat/rows.ts`), the list
 ends with a "Waiting for Claude…" row and the seconds waited; it appears after
 400 ms of quiet, so back-to-back outputs never make it flicker.
 
-**Attachment tags.** The textarea keeps ordinary `[Image #N]` and
-`[Pasted text #N +K lines]` text, with a synchronized backdrop drawing badges.
+**Attachment tags.** The plain-text contenteditable editor renders `[Image #N]`
+and `[Pasted text #N +K lines]` as non-editable, atomic attachment chips.
 Image attachment inserts a tag at the caret; text pasted over 8 lines or 800
-characters collapses. Badges preview on hover or keyboard focus; sent paste
-badges also expand inline. Removed tags exclude their attachments from send,
+characters collapses. Badges preview on hover or keyboard focus; clicking pins
+the preview until an outside click or Escape. Scrolling over a pasted-text
+badge scrolls its preview without a click. This also works in sent messages.
+Caret movement and deletion treat a chip as one unit. Copy/cut carries the
+actual attachments, renumbered on paste, alongside a plain-text representation.
+The editor maintains text/selection history for undo, including IME edits.
+Removed tags exclude their attachments from send,
 while registries remain in memory for undo. Those registries live by draft key
 in `InteractionState`, so tab switches keep them. Draft writes, scheduling and
 the away queue carry expanded CLI-style `<pasted_content>` blocks, parsed back

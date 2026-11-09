@@ -9,6 +9,8 @@
     top,
     onmouseenter,
     onmouseleave,
+    scrollElement = $bindable(null),
+    element = $bindable(null),
   }: {
     image?: ImageRef;
     text?: string;
@@ -18,10 +20,14 @@
     top: number;
     onmouseenter?: () => void;
     onmouseleave?: () => void;
+    scrollElement?: HTMLPreElement | null;
+    element?: HTMLDivElement | null;
   } = $props();
 </script>
 
 <div
+  bind:this={element}
+  data-attachment-preview
   role="tooltip"
   aria-label={label}
   {onmouseenter}
@@ -40,6 +46,8 @@
   {:else if missing}
     <p>This image wasn't kept; attach it again.</p>
   {:else}
-    <pre class="max-h-72 overflow-auto font-mono whitespace-pre-wrap">{text}</pre>
+    <pre
+      bind:this={scrollElement}
+      class="max-h-72 overflow-auto font-mono whitespace-pre-wrap">{text}</pre>
   {/if}
 </div>

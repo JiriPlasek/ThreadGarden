@@ -41,7 +41,7 @@ describe('terminal-only slash commands (ruling R25)', () => {
     expect(screen.getByRole('status', { name: /command notice/i }).textContent).toMatch(
       /\/config is unavailable in Threadgarden/i,
     );
-    expect(composer().value).toBe('/con');
+    expect(composer().textContent).toBe('/con');
 
     await userEvent.clear(composer());
     await userEvent.type(composer(), '/login{Escape}{Enter}');
@@ -50,7 +50,7 @@ describe('terminal-only slash commands (ruling R25)', () => {
     expect(screen.getByRole('status', { name: /command notice/i }).textContent).toMatch(
       /\/login is unavailable in Threadgarden/i,
     );
-    expect(composer().value).toBe('/login');
+    expect(composer().textContent).toBe('/login');
   });
 
   it('/model opens the model picker instead of sending', async () => {
@@ -67,7 +67,7 @@ describe('terminal-only slash commands (ruling R25)', () => {
     await waitFor(() =>
       expect(document.activeElement).toBe(screen.getByRole('combobox', { name: 'Model' })),
     );
-    expect(composer().value).toBe('');
+    expect(composer().textContent).toBe('');
     expect(server.calls('chat.send')).toHaveLength(0);
   });
 
@@ -79,7 +79,7 @@ describe('terminal-only slash commands (ruling R25)', () => {
         screen.getByRole('combobox', { name: 'Permission mode' }),
       ),
     );
-    expect(composer().value).toBe('');
+    expect(composer().textContent).toBe('');
     expect(server.calls('chat.send')).toHaveLength(0);
   });
 
@@ -116,7 +116,7 @@ describe('dropped and pasted paths (ruling R24)', () => {
     });
     fireEvent(composer(), paste);
     expect(paste.defaultPrevented).toBe(true);
-    await waitFor(() => expect(composer().value).toBe('look at @src/lib/x.ts '));
+    await waitFor(() => expect(composer().textContent).toBe('look at @src/lib/x.ts '));
   });
 });
 
@@ -239,7 +239,7 @@ describe('sending keeps what was typed meanwhile', () => {
     await userEvent.type(composer(), ' and more');
     release({ queued: false });
     await new Promise((r) => setTimeout(r, 20));
-    expect(composer().value).toBe('first and more');
+    expect(composer().textContent).toBe('first and more');
   });
 
   it('the box clears when nothing changed during the send', async () => {
@@ -252,7 +252,7 @@ describe('sending keeps what was typed meanwhile', () => {
     await userEvent.type(composer(), 'only this{Enter}');
     await waitFor(() => expect(server.calls('chat.send')).toHaveLength(1));
     release({ queued: false });
-    await waitFor(() => expect(composer().value).toBe(''));
+    await waitFor(() => expect(composer().textContent).toBe(''));
     expect(SID).toBe('s1');
   });
 });

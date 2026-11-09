@@ -108,6 +108,42 @@ export const outgoing = (
   images: activeImages(text, state).map(([, image]) => image),
 });
 
+/** Clipboard attachments receive fresh numbers in the destination draft. */
+export const importMessage = (
+  value: string,
+  images: ImageRef[],
+  text: string,
+  current: AttachmentsState,
+): ComposerDraft => {
+  const imported = restoreMessage(value, images);
+  const attachments = { ...current, images: { ...current.images }, pastes: { ...current.pastes } };
+  const labels = new Map<string, string>();
+  for (const tag of tagsIn(imported.text)) {
+    if (labels.has(tag.label)) continue;
+    const image = tag.kind === 'image' ? imported.attachments.images[tag.number] : undefined;
+    const paste = tag.kind === 'paste' ? imported.attachments.pastes[tag.number] : undefined;
+    if (!image && !paste) continue;
+    const number = nextNumber(text + imported.text, attachments, tag.kind);
+    if (image) {
+      attachments.images[number] = image;
+      attachments.nextImage = number + 1;
+      labels.set(tag.label, imageLabel(number));
+    }
+    if (paste) {
+      attachments.pastes[number] = paste;
+      attachments.nextPaste = number + 1;
+      labels.set(tag.label, labelForPaste(number, paste));
+    }
+  }
+  let result = '';
+  let start = 0;
+  for (const tag of tagsIn(imported.text)) {
+    result += imported.text.slice(start, tag.start) + (labels.get(tag.label) ?? tag.label);
+    start = tag.end;
+  }
+  return { text: result + imported.text.slice(start), attachments };
+};
+
 /** Collapse saved/wire text, consuming only the padding added by serialization. */
 export const restoreMessage = (value: string, images: ImageRef[] = []): ComposerDraft => {
   const state = emptyAttachments();

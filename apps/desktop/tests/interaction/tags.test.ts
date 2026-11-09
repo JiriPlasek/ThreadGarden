@@ -7,6 +7,7 @@ import {
   longPaste,
   nextNumber,
   outgoing,
+  importMessage,
   restoreMessage,
   sentImageMap,
 } from '../../src/lib/components/composer/tags';
@@ -14,6 +15,22 @@ import {
 const image = { mediaType: 'image/png', data: 'YWJj' };
 
 describe('attachment text and wire forms', () => {
+  it('renumbers copied attachments without changing the source draft', () => {
+    const current = emptyAttachments();
+    current.images[1] = image;
+    current.nextImage = 2;
+    const copied = importMessage(
+      '[Image #1] <pasted_content id="abcd">\nlog contents\n</pasted_content id="abcd">',
+      [image],
+      '[Image #1]',
+      current,
+    );
+    expect(copied.text).toContain('[Image #2]');
+    expect(outgoing(copied.text, copied.attachments).images).toEqual([image]);
+    expect(outgoing(copied.text, copied.attachments).text).toContain('log contents');
+    expect(Object.keys(current.images)).toEqual(['1']);
+    expect(current.pastes).toEqual({});
+  });
   it('collapses only pastes over either threshold', () => {
     expect(longPaste('x'.repeat(800))).toBe(false);
     expect(longPaste('x'.repeat(801))).toBe(true);
