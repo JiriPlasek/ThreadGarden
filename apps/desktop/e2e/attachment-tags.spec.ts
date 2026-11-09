@@ -1,7 +1,14 @@
 import { expect, test } from '@playwright/test';
-import { openApp, resetTabs, slack, timeKey } from './helpers';
+import { openApp, resetTabs, serviceCall, slack, timeKey } from './helpers';
 
-test.beforeEach(resetTabs);
+const endOfMessage = process.platform === 'darwin' ? 'Meta+ArrowDown' : 'Control+End';
+
+test.beforeEach(async () => {
+  await resetTabs();
+  // All specs share one mock service. A failed test must not leave paste
+  // contents/counters in the next test's restored draft.
+  await serviceCall('drafts.set', { key: 'session-998', text: '' });
+});
 
 test('sent previews escape virtual-list clipping and follow badges near the top while scrolling', async ({
   page,
@@ -109,15 +116,15 @@ test('chips delete as a whole, copy with their content, and support pinned and w
   await expect(popup).toHaveCount(0);
 
   await box.focus();
-  await box.press('Control+End');
+  await box.press(endOfMessage);
   await box.press('ArrowLeft');
   // An arrow crosses the whole chip, so typing inserts beside it.
   await box.press('x');
   await expect(box).toHaveText('before x[Pasted text #1 +100 lines]');
-  await box.press('Control+End');
+  await box.press(endOfMessage);
   await box.press('Backspace');
   await expect(box).toHaveText('before x');
-  await box.press('Control+z');
+  await box.press('ControlOrMeta+z');
   await expect(chip).toHaveCount(1);
 
   const copied = await box.evaluate((el) => {
@@ -148,6 +155,10 @@ test('chips delete as a whole, copy with their content, and support pinned and w
   }, copied);
   await expect(chip).toHaveText('[Pasted text #2 +100 lines]');
   await box.press('Enter');
+  // Streaming legitimately moves the message list while it follows the tail.
+  // Measure wheel isolation only after that turn has settled.
+  await expect(box).toHaveText('');
+  await expect(page.getByRole('button', { name: 'Stop', exact: true })).toHaveCount(0);
   const sentBadge = page
     .getByLabel('Messages', { exact: true })
     .getByRole('button', { name: '[Pasted text #1 +100 lines]', exact: true })
@@ -224,9 +235,9 @@ test('paste badges wrap, preview, undo and survive tab switches', async ({ page 
   expect(rect).not.toBeNull();
   await page.mouse.move(rect!.x + 6, rect!.y + 6);
   await expect(page.getByRole('tooltip')).toContainText('line 40');
-  await box.press('Control+z');
+  await box.press('ControlOrMeta+z');
   await expect(box).toHaveText('Check the following log: ');
-  await box.press('Control+Shift+z');
+  await box.press('ControlOrMeta+Shift+z');
   await expect(box).toHaveText('Check the following log: [Pasted text #1 +40 lines]');
 
   await list.locator('[data-session-id="session-997"]').click();
