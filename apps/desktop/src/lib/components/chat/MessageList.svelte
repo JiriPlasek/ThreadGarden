@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { ChatItem } from '@threadgarden/protocol';
+  import type { ChatItem, QueuedMessage } from '@threadgarden/protocol';
   import ArrowDownIcon from '@lucide/svelte/icons/arrow-down';
   import { onDestroy, untrack } from 'svelte';
   import type { ListMemory } from '#lib/state/chats.svelte.js';
@@ -8,6 +8,7 @@
   import ItemView from './items/ItemView.svelte';
   import ToolGroup from './items/ToolGroup.svelte';
   import UnknownItem from './items/UnknownItem.svelte';
+  import UserItem from './items/UserItem.svelte';
   import { buildRows, type Row } from './rows';
   import { captureAnchor, computeOffsets, restoreAnchor, visibleRange } from './virtual';
 
@@ -18,9 +19,18 @@
    * sticks there (streaming); otherwise the row at the top of the viewport stays
    * put when rows above it are measured or older items are prepended. Near the
    * top it asks for older items.
+   *
+   * Messages Claude has not read yet (`queued`) follow the conversation, greyed
+   * out, as the terminal shows them. Each has its message's id as its row key,
+   * so when Claude reads it and it joins `items` (last, at that moment) the same
+   * row just stops being greyed.
    */
+  type QueuedRow = { kind: 'queued'; key: string; message: QueuedMessage; itemIds: string[] };
+  type ListRow = Row | QueuedRow;
+
   let {
     items,
+    queued = [],
     hasMore = false,
     loadingOlder = false,
     onLoadOlder,
@@ -33,6 +43,8 @@
     stickRequests = 0,
   }: {
     items: readonly ChatItem[];
+    /** Messages sent while Claude worked that it has not read yet, oldest first. */
+    queued?: readonly QueuedMessage[];
     hasMore?: boolean;
     loadingOlder?: boolean;
     onLoadOlder?: () => void;
@@ -82,7 +94,15 @@
   /** Mirrors `mem.stick` for the "jump to latest" button. */
   let stuck = $state(mem.stick);
 
-  const rows = $derived(buildRows(items));
+  const rows: ListRow[] = $derived([
+    ...buildRows(items),
+    ...queued.map((message): QueuedRow => ({
+      kind: 'queued',
+      key: message.id,
+      message,
+      itemIds: [message.id],
+    })),
+  ]);
   /** Anchors name a row by its first item id: stable when runs grow or regroup. */
   const anchorKeys = $derived(rows.map((r) => r.itemIds[0] ?? r.key));
   const rowOfItem = $derived.by(() => {
@@ -100,12 +120,16 @@
     return i < 0 ? undefined : i;
   };
 
-  const estimate = (row: Row): number => {
+  const userHeight = (text: string): number =>
+    44 + 20 * Math.min(20, Math.floor(text.length / 110));
+
+  const estimate = (row: ListRow): number => {
+    if (row.kind === 'queued') return userHeight(row.message.text) + 16;
     if (row.kind !== 'item') return 28;
     const it = row.item;
     switch (it.kind) {
       case 'user':
-        return 44 + 20 * Math.min(20, Math.floor(it.text.length / 110));
+        return userHeight(it.text);
       case 'assistantText':
         return 32 + 21 * Math.min(120, Math.ceil(it.markdown.length / 110));
       case 'todo':
@@ -338,6 +362,27 @@
           >
             {#if row.kind === 'item'}
               <ItemView item={row.item} children={row.children} />
+            {:else if row.kind === 'queued'}
+              <!-- Sent, not read yet: greyed out, and no fork (the transcript does not have it). -->
+              <div
+                class="opacity-50"
+                role="group"
+                aria-label="Queued message"
+                title="Queued: Claude reads this at its next step"
+                data-queued-message
+              >
+                <UserItem
+                  item={{
+                    kind: 'user',
+                    id: row.message.id,
+                    text: row.message.text,
+                    ts: row.message.ts,
+                    ...(row.message.imageCount ? { imageCount: row.message.imageCount } : {}),
+                  }}
+                  nested
+                />
+                <p class="text-muted-foreground mt-0.5 text-right text-[0.6875rem]">Queued</p>
+              </div>
             {:else if row.kind === 'unknownGroup'}
               <ItemBoundary item={row.items}><UnknownItem items={row.items} /></ItemBoundary>
             {:else}

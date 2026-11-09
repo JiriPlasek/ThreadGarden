@@ -9,7 +9,15 @@ import type { Logger } from '../../src/logger.js';
 import { startService, type ServiceHandle, type StartOptions } from '../../src/main.js';
 import type { PermissionUpdate, SessionMessage } from '../../src/sdk/adapter.js';
 import { FakeAdapter } from '../../src/testing/fake-adapter.js';
-import { notification, result, sdk, settle, started, streamEvent } from '../chat/live-helpers.js';
+import {
+  lifecycle,
+  notification,
+  result,
+  sdk,
+  settle,
+  started,
+  streamEvent,
+} from '../chat/live-helpers.js';
 import { eventually } from '../e2e/ws-client.js';
 
 let dir: string;
@@ -508,6 +516,31 @@ describe('chat handlers', () => {
     );
     const taskEvents = since.events.filter((e) => e.tasks !== undefined);
     expect(taskEvents.at(-1)?.tasks).toEqual([expect.objectContaining({ status: 'stopped' })]);
+  });
+
+  it('chat.open lists a message Claude has not read yet apart from the transcript', async () => {
+    const adapter = new FakeAdapter();
+    await start(adapter);
+    const { sessionId } = await ok<{ sessionId: string }>('chat.create', {
+      cwd: dir,
+      text: 'first',
+    });
+    const fake = adapter.lastSession();
+    fake.emit(lifecycle(fake.sent[0]!.uuid!, 'started'));
+    await settle();
+    expect(await ok('chat.send', { sessionId, text: 'also this' })).toEqual({ queued: true });
+    const queuedId = fake.sent[1]!.uuid!;
+
+    type WithQueue = Opened & { queued: { id: string; text: string }[] };
+    const before = await ok<WithQueue>('chat.open', { sessionId, tail: 50 });
+    expect(before.queued).toEqual([{ id: queuedId, text: 'also this', ts: expect.any(Number) }]);
+    expect(ids(before.items)).not.toContain(queuedId);
+
+    fake.emit(lifecycle(queuedId, 'started'));
+    await settle();
+    const after = await ok<WithQueue>('chat.open', { sessionId, tail: 50 });
+    expect(after.queued).toEqual([]);
+    expect(after.items.at(-1)).toMatchObject({ id: queuedId, kind: 'user', text: 'also this' });
   });
 
   it('chat.since for a seq this service never issued is a GAP', async () => {

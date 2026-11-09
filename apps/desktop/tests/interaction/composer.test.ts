@@ -11,8 +11,9 @@ import {
   mentionText,
   slashAt,
 } from '../../src/lib/components/composer/input';
+import { user } from '../chat/fixtures';
 import { LOCAL } from '../layout/harness';
-import { CWD, fill, pushStatus, renderChat, SID } from './helpers';
+import { CWD, fill, pushItems, pushStatus, renderChat, SID } from './helpers';
 
 type SendParams = { sessionId: string; text: string; images?: unknown[] };
 
@@ -135,17 +136,53 @@ describe('composer', () => {
     expect(composer().value).toBe('/compact ');
   });
 
-  it('typing while working shows queued', async () => {
-    const { server, composer } = await renderChat({ status: 'working' });
+  it('a message sent while working shows greyed out until Claude reads it', async () => {
+    const { server, composer, app } = await renderChat({
+      status: 'working',
+      items: [user('u1', 'fix the build')],
+    });
     await userEvent.type(composer(), 'and also check the docs');
-    expect(screen.getByText(/will be queued/i)).toBeTruthy();
+    expect(screen.getByText(/claude reads it at its next step/i)).toBeTruthy();
     await userEvent.keyboard('{Enter}');
     await waitFor(() => expect(server.calls('chat.send')).toHaveLength(1));
-    expect(await screen.findByText(/1 message queued/i)).toBeTruthy();
+    // The service lists it as queued: it follows the conversation, greyed out.
+    const queued = [{ id: 'q1', text: 'and also check the docs', ts: 1 }];
+    server.push('chat.status', { sessionId: SID, seq: 2, status: 'working', queued });
+    const bubble = await screen.findByRole('group', { name: /queued message/i });
+    expect(within(bubble).getByText('and also check the docs')).toBeTruthy();
+    expect(bubble.className).toContain('opacity-50');
+    // Not in the transcript yet, so there is nothing to fork from.
+    expect(within(bubble).queryByRole('button', { name: /fork/i })).toBeNull();
+    expect(screen.getByText(/1 message queued/i)).toBeTruthy();
 
-    // The turn ends: the queue has been taken up.
-    pushStatus(server, 2, 'idle');
-    await waitFor(() => expect(screen.queryByText(/queued/i)).toBeNull());
+    // Claude reads it at its next step: the same message, no longer greyed out.
+    pushItems(server, 3, [user('q1', 'and also check the docs')]);
+    server.push('chat.status', { sessionId: SID, seq: 4, status: 'working', queued: [] });
+    await waitFor(() =>
+      expect(screen.queryByRole('group', { name: /queued message/i })).toBeNull(),
+    );
+    expect(screen.getByText('and also check the docs')).toBeTruthy();
+    expect(screen.queryByText(/queued/i)).toBeNull();
+    expect(app.chats.get(SID)?.items.map((i) => i.id)).toEqual(['u1', 'q1']);
+  });
+
+  it('a queued message with images says how many', async () => {
+    const { server } = await renderChat({ status: 'working', items: [user('u1')] });
+    const queued = [{ id: 'q1', text: 'like this', imageCount: 2, ts: 1 }];
+    server.push('chat.status', { sessionId: SID, seq: 2, status: 'working', queued });
+    const bubble = await screen.findByRole('group', { name: /queued message/i });
+    expect(within(bubble).getByText(/2 images/i)).toBeTruthy();
+  });
+
+  it('the queue does not outlive a status without one (an older service)', async () => {
+    const { server } = await renderChat({ status: 'working', items: [user('u1')] });
+    const queued = [{ id: 'q1', text: 'one', ts: 1 }];
+    server.push('chat.status', { sessionId: SID, seq: 2, status: 'working', queued });
+    await screen.findByRole('group', { name: /queued message/i });
+    pushStatus(server, 3, 'idle');
+    await waitFor(() =>
+      expect(screen.queryByRole('group', { name: /queued message/i })).toBeNull(),
+    );
   });
 
   it('draft survives remount', async () => {

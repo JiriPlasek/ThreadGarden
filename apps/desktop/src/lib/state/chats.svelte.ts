@@ -11,6 +11,7 @@ import {
   type ChatTask,
   type ChatTasksEvent,
   type MovePeer,
+  type QueuedMessage,
   type Result,
 } from '@threadgarden/protocol';
 import { SvelteMap } from 'svelte/reactivity';
@@ -157,8 +158,12 @@ export class ChatState {
 
   /** Answers given here, by request id (shows "Always allowed" / the chosen answers). */
   readonly decisions = new SvelteMap<string, Decision>();
-  /** Messages sent while Claude was working that the service queued (spec §6.4). */
-  queuedMessages = $state(0);
+  /**
+   * Messages sent while Claude was working that it has not read yet, as the
+   * service last listed them (`chat.open`, then every `chat.status`). Each
+   * joins `items` where Claude reads it.
+   */
+  queuedMessages = $state.raw<QueuedMessage[]>([]);
 
   /** Permission requests the user still has to answer. */
   pendingRequests = $derived(
@@ -360,6 +365,8 @@ export class ChatsState {
       chat.hasMore = r.hasMore;
       // An older service has no task tracking: no tasks.
       chat.tasks = Array.isArray(r.tasks) ? r.tasks : [];
+      // One that predates the queue list shows a queued message in the transcript at once.
+      chat.queuedMessages = r.queued ?? [];
       chat.movedTo = r.movedTo ?? null;
       chat.seq = r.seq;
       chat.loaded = true;
@@ -466,7 +473,10 @@ export class ChatsState {
     chat.stickRequests += 1;
   };
 
-  /** Sends a message; resolves to whether the service queued it behind the running turn. */
+  /**
+   * Sends a message; resolves to whether the service queued it behind the
+   * running turn (it then shows in `queuedMessages` until Claude reads it).
+   */
   send = async (sessionId: string, text: string, images?: ImageRef[]): Promise<boolean> => {
     if (!this.api) throw new Error('Not connected to the Threadgarden service');
     this.stickToBottom(sessionId);
@@ -475,8 +485,6 @@ export class ChatsState {
       text,
       ...(images?.length ? { images } : {}),
     });
-    const chat = this.byId.get(sessionId);
-    if (r.queued && chat) chat.queuedMessages += 1;
     return r.queued;
   };
 
@@ -678,8 +686,11 @@ export class ChatsState {
     } else {
       chat.status = e.status;
       chat.waitingFor = e.waitingFor;
-      // The turn ended: whatever was queued has been taken up.
-      if (e.status !== 'working' && e.status !== 'needsYou') chat.queuedMessages = 0;
+      const queued = e.queued ?? [];
+      // A message leaving the queue joined the items just before this event: show
+      // them now, not a frame later, so it never vanishes for a frame.
+      if (queued.length < chat.queuedMessages.length && chat.queued.length > 0) this.flush();
+      chat.queuedMessages = queued;
       if (e.header) chat.header = { ...chat.header, ...e.header };
     }
   };

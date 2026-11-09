@@ -721,6 +721,7 @@
           <MessageList
             bind:this={list}
             items={chat.items}
+            queued={chat.queuedMessages}
             hasMore={chat.hasMore}
             loadingOlder={chat.loadingOlder}
             onLoadOlder={() => void chats.loadOlder(sessionId)}
@@ -974,7 +975,7 @@
                 cwd={chat.summary?.cwd ?? ''}
                 commandScope={{ sessionId }}
                 {working}
-                queued={chat.queuedMessages}
+                queued={chat.queuedMessages.length}
                 onSubmit={submit}
                 onInterrupt={interrupt}
                 {onControl}

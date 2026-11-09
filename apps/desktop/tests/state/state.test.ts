@@ -133,6 +133,22 @@ describe('chats', () => {
     expect(chat.header).toEqual({ model: 'm', effort: 'high' });
   });
 
+  it('a message leaving the queue is in the items the moment it leaves', async () => {
+    const { chats } = setup();
+    await chats.open('s1');
+    const chat = chats.get('s1')!;
+    const queued = [{ id: 'q1', text: 'also this', ts: 1 }];
+    server.push('chat.status', { sessionId: 's1', seq: 11, status: 'working', queued });
+    expect(chat.queuedMessages).toEqual(queued);
+    // Claude reads it: the service sends its item, then a status without it.
+    const user: ChatItem = { kind: 'user', id: 'q1', text: 'also this', ts: 1 };
+    server.push('chat.items', { sessionId: 's1', seq: 12, items: [user] });
+    server.push('chat.status', { sessionId: 's1', seq: 13, status: 'working', queued: [] });
+    // No frame has run: it would otherwise be in neither place until the next one.
+    expect(chat.queuedMessages).toEqual([]);
+    expect(chat.items.map((i) => i.id)).toEqual(['a', 'q1']);
+  });
+
   it('keeps events that arrive while chat.open is in flight', async () => {
     const { chats, runFrame } = setup();
     server.silent.add('chat.open');

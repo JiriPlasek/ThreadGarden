@@ -32,7 +32,12 @@ check in the pull request or release notes.
       that needs permission shows the card; Allow, Deny and Always allow work.
 - [ ] Ask a question that makes Claude use AskUserQuestion, and one in plan
       mode: the question form and the plan approval work.
-- [ ] Send a message while Claude is working: it is queued and sent next.
+- [ ] Send a message while Claude is making tool calls: it shows greyed out
+      after the conversation, Claude's next steps appear above it, and at the
+      step where Claude reads it it is no longer greyed; Claude answers it in
+      the same turn.
+- [ ] Start a new chat and send a second message right away: both are
+      answered, and the chat ends idle with one "finished" notification.
 - [ ] Type `@` and pick a file; the reply shows Claude saw the file.
 - [ ] Type `/`: commands from Claude Code are listed; `/model` opens the
       model picker; `/config` is shown as unavailable.

@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { AwayItemSchema, AwayStateSchema } from './away.js';
 import { ChatHeaderInfoSchema, ChatStatusSchema } from './chat.js';
-import { ChatItemSchema } from './items.js';
+import { ChatItemSchema, QueuedMessageSchema } from './items.js';
 import { PairedMachineSchema, PhoneAccessSchema } from './machines.js';
 import { MachinePowerStatusSchema } from './power.js';
 import { ChatTaskSchema } from './tasks.js';
@@ -22,6 +22,12 @@ export const ChatStatusEventSchema = z.object({
   status: ChatStatusSchema,
   header: ChatHeaderInfoSchema.optional(),
   waitingFor: z.string().optional(),
+  /**
+   * Messages sent while Claude was working that it has not read yet, oldest
+   * first (the whole list, replacing the last one). Absent from services that
+   * predate it; empty when nothing waits.
+   */
+  queued: z.array(QueuedMessageSchema).optional(),
 });
 export type ChatStatusEvent = z.infer<typeof ChatStatusEventSchema>;
 

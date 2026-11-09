@@ -267,9 +267,34 @@ class ScriptedSession extends FakeSession {
     return this.options.resume ?? this.options.sessionId ?? 'mock';
   }
 
+  /**
+   * Like Claude Code, each message runs after the turns before it, with its
+   * `command_lifecycle` frames: queued on arrival, started when its turn
+   * begins, completed when it ends.
+   */
   override send(m: SDKUserMessage): void {
     super.send(m);
-    this.turn = this.turn.then(() => this.reply(m)).catch(() => {});
+    this.lifecycle(m, 'queued');
+    this.turn = this.turn
+      .then(async () => {
+        this.lifecycle(m, 'started');
+        await this.reply(m);
+        this.lifecycle(m, 'completed');
+      })
+      .catch(() => {});
+  }
+
+  private lifecycle(m: SDKUserMessage, state: 'queued' | 'started' | 'completed'): void {
+    if (m.uuid === undefined) return;
+    this.out(
+      msg({
+        type: 'command_lifecycle',
+        command_uuid: m.uuid,
+        state,
+        uuid: randomUUID(),
+        session_id: this.id,
+      }),
+    );
   }
 
   override async interrupt(): Promise<void> {
@@ -332,7 +357,25 @@ class ScriptedSession extends FakeSession {
       uuid: m.uuid ?? randomUUID(),
       message: { role: 'user', content: text },
     });
-    if (text.startsWith('/')) return; // e.g. `/effort high`: no turn
+    if (text.startsWith('/')) {
+      // e.g. `/effort high`: no model turn, but a result, as Claude Code 2.1.319 sends one.
+      this.out(
+        msg({
+          type: 'result',
+          subtype: 'success',
+          uuid: randomUUID(),
+          session_id: this.id,
+          is_error: false,
+          duration_ms: 0,
+          total_cost_usd: 0,
+          usage: {},
+          modelUsage: {},
+          num_turns: 0,
+          result: '',
+        }),
+      );
+      return;
+    }
     this.abort = new AbortController();
     const started = Date.now();
     // Threadgarden's first note in a moved chat gets the plain reply: it says "stop and ask".

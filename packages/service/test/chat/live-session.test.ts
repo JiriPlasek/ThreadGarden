@@ -98,7 +98,8 @@ describe('LiveSession', () => {
     expect(fake.sent).toHaveLength(1);
     const sent = fake.sent[0]!;
     expect(sent).not.toHaveProperty('client_composed');
-    expect(sent.priority).toBeUndefined();
+    // Starts at once on an idle process; see queued-messages.test.ts for why every message has it.
+    expect(sent.priority).toBe('next');
     expect(sent.message).toEqual({
       role: 'user',
       content: [
@@ -164,7 +165,7 @@ describe('LiveSession', () => {
     expect(s.status).toBe('idle');
 
     expect(s.send({ text: 'third' })).toEqual({ queued: false });
-    expect(fake.sent[2]!.priority).toBeUndefined();
+    expect(fake.sent[2]!.priority).toBe('next');
     expect(s.status).toBe('working');
   });
 

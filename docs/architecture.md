@@ -390,8 +390,33 @@ skipped when it equals the first prompt or the chat has a provisional title
 (without a title of its own, the SDK's summary is just the latest prompt). All
 but a custom title are cut to 80 characters.
 
+**Messages sent while Claude works.** Every message goes to Claude Code with
+`priority: 'next'`: an idle process starts on it at once, and a working one
+reads it at the turn's next step, between two tool calls, as the terminal does
+with a message typed while Claude works. (A message with no priority may be
+held until the whole turn ends, which is why none goes without one.) Claude
+Code reports what happens to each message with `command_lifecycle` frames
+(`queued`, `started` when a turn takes it up, then `completed` or
+`cancelled`), and `system/status` and `result` frames list the messages a
+turn has read. Until a message sent while Claude works is `started`, the
+service keeps it out of the transcript and lists it as *queued* in
+`chat.status` and `chat.open` (`queued`); then it joins the transcript where
+Claude read it, which is also where history has it. The UI shows queued
+messages after the conversation, greyed out, as the terminal does (the queue
+says how many images a message has, not the images); when Claude reads one it
+stays where it is and is no longer greyed. As in the terminal, a turn blocked
+on one long tool call (a ten-minute build, a foreground subagent) reads a
+queued message only when that call ends. A turn that ends while a message is
+still queued is not finished (Claude goes straight on to it, so the chat stays
+working until that message's own `result`, or, should one ever come without a
+result, until every message taken up since has completed); a message Claude
+read during the turn does not hold the turn's end back. A message Claude never
+read because the process ended is noted in the chat. With a Claude Code that
+sends no lifecycle frames, queued messages join the transcript at the next
+`result`, where such a CLI takes them up.
+
 **Your turn.** When a Threadgarden chat's turn ends (a `result` that leaves it
-waiting for the user, not one followed by queued input, and not one of a turn
+waiting for the user, not one with a message still queued, and not one of a turn
 the user stopped from Threadgarden with Stop or Esc), the service stores
 the time in `threadgarden.db` (`turn_state`, Threadgarden's own table) and emits
 `chatFinished`. A chat is `unread` while its last turn ended after it was last
@@ -1423,6 +1448,34 @@ Windows 11, signed in with a subscription. What it established:
   ran, and no longer listed it at the first poll after it ended (under 0.4 s),
   well within the 15 s grace.
 
+**Messages sent while Claude works.** Probed on 2026-11-06 with Claude Code
+2.1.319 and SDK 0.3.314 on Windows 11 (a subscription login, `haiku`), one
+streaming-input `query` per case, the follow-up sent with `priority: 'next'`
+unless said otherwise:
+
+- Every message gets `command_lifecycle` frames keyed by the uuid it was sent
+  under (`queued`, `started`, `completed`; `cancelled` for one a turn ran when
+  that turn was aborted), with or without `--replay-user-messages`; `system/init`
+  lists the `msg_lifecycle_v1` capability. `system/status` (`requesting`) and
+  `result` carry `user_message_uuids`, the messages the turn has read.
+- A follow-up sent 1 s after a new chat's first message ran as a turn of its
+  own after the first one; sent while the first turn was making tool calls,
+  it was `started` right after the next tool result and answered in the same
+  turn, whose `result` listed both messages. History
+  (`getSessionMessages`) has it there, as a user message with the uuid it was
+  sent under.
+- `priority: 'next'` to an idle process starts a turn at once.
+- A slash command (`/effort low`), idle or queued behind a turn, runs with no
+  model turn but still ends with a `result` (`num_turns: 0`) after its output.
+- A follow-up sent while a 30 s foreground command ran was read only when the
+  command ended. `priority: 'now'` did not help: it waited for the command too,
+  then cancelled the turn. `backgroundTasks()` once the command was running
+  returned the tool call at once ("Command was manually backgrounded by
+  user"), the follow-up was answered within 4 s, and the command's end came
+  later as a task notification that started a new turn. Called before the
+  command's `task_started` (the shell takes a few seconds to start on
+  Windows), it moved nothing.
+
 `test/real/smoke.real.test.ts` covers the lower-level facts recorded under
 [Authentication](#authentication) (session id, no echo of sent messages,
 startup failures, which credential a session picks).
@@ -1478,8 +1531,9 @@ Decisions made during the build that change behaviour described in the design:
   archived are left out) plus external sessions that need you or are working.
 - **Messages that produce no item.** SDK messages that carry no content for
   the reader (progress, status, rate-limit and init events, the CLI's
-  `command_lifecycle` telemetry, successful hook output, which the terminal
-  does not show either) produce no chat item. Failed hooks and other
+  `command_lifecycle` frames, which only move queued messages into the
+  transcript, successful hook output, which the terminal does not show
+  either) produce no chat item. Failed hooks and other
   content-bearing system messages appear as system lines. Truly unknown types
   still render raw, and consecutive unknown items are collapsed into one
   expandable "N unrecognised items" row.

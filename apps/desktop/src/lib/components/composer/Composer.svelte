@@ -96,7 +96,7 @@
     commandScope: { sessionId?: string; cwd?: string };
     /** Claude is working: a message now is queued, and Stop is offered. */
     working?: boolean;
-    /** Messages sent while working that wait for the current turn. */
+    /** Messages sent while working that Claude has not read yet. */
     queued?: number;
     placeholder?: string;
     label?: string;
@@ -547,7 +547,7 @@
 
   const hint = $derived(
     working && text.trim() && !editing
-      ? 'Claude is working: this message will be queued and sent when the current turn ends.'
+      ? 'Claude is working: this message is queued, and Claude reads it at its next step.'
       : null,
   );
   const empty = $derived(!text.trim() && images.length === 0);

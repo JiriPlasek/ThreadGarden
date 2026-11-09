@@ -18,7 +18,7 @@ import {
   SettingsSchema,
 } from './chat.js';
 import { ChatItemsEventSchema, ChatStatusEventSchema, ChatTasksEventSchema } from './events.js';
-import { ChatItemSchema, ImageRefSchema } from './items.js';
+import { ChatItemSchema, ImageRefSchema, QueuedMessageSchema } from './items.js';
 import {
   DeviceSchema,
   DeviceTokenSchema,
@@ -235,6 +235,8 @@ export const methods = {
       seq: z.number(),
       /** Tasks of the chat's running process (empty unless Threadgarden runs it). */
       tasks: z.array(ChatTaskSchema),
+      /** Messages Claude has not read yet (see `chat.status`); absent from older services. */
+      queued: z.array(QueuedMessageSchema).optional(),
       /** Protocol 9: where the chat went when it was moved away; absent or null otherwise. */
       movedTo: MovePeerSchema.nullable().optional(),
     }),
