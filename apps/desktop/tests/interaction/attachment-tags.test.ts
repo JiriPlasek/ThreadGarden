@@ -1,11 +1,19 @@
 import { setEditorSelection } from '../../src/lib/components/composer/editor';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { pasteBlocks } from '@threadgarden/protocol';
 import ChatView from '../../src/lib/components/chat/ChatView.svelte';
 import { LOCAL } from '../layout/harness';
 import { fill, renderChat, SID } from './helpers';
+
+beforeEach(() => {
+  // jsdom has no layout; preview visibility now follows the anchor's actual bounds.
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(
+    new DOMRect(10, 350, 100, 20),
+  );
+});
+afterEach(() => vi.restoreAllMocks());
 
 const paste = Array.from({ length: 40 }, (_, i) => `line ${i + 1}`).join('\n');
 const pasteText = async (el: HTMLDivElement, text = paste) => {
@@ -153,6 +161,28 @@ describe('attachment tags in the composer', () => {
 });
 
 describe('sent attachment badges', () => {
+  it('keeps legacy plain text, raw pastes and untagged image thumbnails readable', async () => {
+    const original = `Old message\n${'raw pasted log line\n'.repeat(20)}end`;
+    await renderChat({
+      items: [
+        {
+          kind: 'user',
+          id: 'legacy',
+          ts: 0,
+          text: original,
+          images: [
+            { mediaType: 'image/png', data: 'YWJj' },
+            { mediaType: 'image/png', data: 'ZGVm' },
+          ],
+        },
+      ],
+    });
+    const messages = screen.getByLabelText('Messages');
+    expect(messages.textContent).toContain(original);
+    // An old message without positional tags keeps both thumbnails.
+    expect(within(messages).getAllByRole('img', { name: /Attached image/ })).toHaveLength(2);
+    expect(within(messages).queryByRole('button', { name: /Pasted text|Image #/ })).toBeNull();
+  });
   it('maps a lone CLI image to #2 and pins a pasted-text preview on click', async () => {
     await renderChat({
       items: [
@@ -175,8 +205,8 @@ describe('sent attachment badges', () => {
     const pasted = within(messages).getByRole('button', { name: '[Pasted text #1 +40 lines]' });
     await userEvent.click(pasted);
     await fireEvent.mouseLeave(pasted);
-    expect(within(messages).getByRole('tooltip').textContent).toBe(paste);
+    expect(screen.getByRole('tooltip').textContent).toBe(paste);
     await userEvent.click(screen.getByRole('textbox', { name: /message/i }));
-    expect(within(messages).queryByRole('tooltip')).toBeNull();
+    expect(screen.queryByRole('tooltip')).toBeNull();
   });
 });

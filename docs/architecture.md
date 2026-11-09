@@ -525,6 +525,9 @@ Image attachment inserts a tag at the caret; text pasted over 8 lines or 800
 characters collapses. Badges preview on hover or keyboard focus; clicking pins
 the preview until an outside click or Escape. Scrolling over a pasted-text
 badge scrolls its preview without a click. This also works in sent messages.
+Previews render in the document body, outside the virtual list's transformed
+and clipped rows. Their measured bounds determine above/below placement;
+scrolling and resizing update the badge anchor and keep the popup in the viewport.
 Caret movement and deletion treat a chip as one unit. Copy/cut carries the
 actual attachments, renumbered on paste, alongside a plain-text representation.
 The editor maintains text/selection history for undo, including IME edits.

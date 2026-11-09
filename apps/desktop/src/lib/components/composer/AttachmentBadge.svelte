@@ -99,6 +99,7 @@
     {text}
     {missing}
     {...anchor}
+    anchor={button ?? undefined}
     onmouseenter={keep}
     onmouseleave={hide}
     bind:scrollElement

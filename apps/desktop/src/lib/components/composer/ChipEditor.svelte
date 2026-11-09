@@ -202,6 +202,7 @@
     number: number;
     left: number;
     top: number;
+    anchor: HTMLElement;
   } | null>(null);
   let pinned = $state(false);
   let previewScroll = $state<HTMLPreElement | null>(null);
@@ -230,6 +231,7 @@
       number: Number(chip.dataset.number),
       left: r.left,
       top: r.top - 6,
+      anchor: chip,
     };
     pinned = pin;
   };
@@ -337,6 +339,7 @@
     missing={hovered.kind === 'image' && !attachments.images[hovered.number]}
     left={hovered.left}
     top={hovered.top}
+    anchor={hovered.anchor}
     bind:scrollElement={previewScroll}
     bind:element={previewElement}
     onmouseenter={keep}
@@ -363,8 +366,8 @@
     display: inline-block;
     white-space: nowrap;
     border-radius: 0.3rem;
-    background: color-mix(in srgb, var(--primary) 12%, transparent);
-    color: var(--foreground);
+    background: color-mix(in srgb, #0ea5e9 15%, transparent);
+    color: #0c4a6e;
     padding: 0 0.25rem;
     margin: 0 0.05rem;
     font-size: 0.85em;
@@ -375,6 +378,9 @@
   }
   .chip-editor :global(.attachment-chip[data-missing]) {
     color: var(--muted-foreground);
+  }
+  :global([data-theme='dark']) .chip-editor :global(.attachment-chip:not([data-missing])) {
+    color: #bae6fd;
   }
   .chip-editor :global(.attachment-chip:focus-visible) {
     outline: 2px solid var(--ring);

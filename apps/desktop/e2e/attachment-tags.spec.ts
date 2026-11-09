@@ -3,6 +3,64 @@ import { openApp, resetTabs, slack, timeKey } from './helpers';
 
 test.beforeEach(resetTabs);
 
+test('sent previews escape virtual-list clipping and follow badges near the top while scrolling', async ({
+  page,
+}) => {
+  await openApp(page);
+  await page
+    .getByRole('region', { name: 'Chat list' })
+    .locator('[data-session-id="session-998"]')
+    .click();
+  const box = page.getByRole('textbox', { name: 'Message' });
+  await box.fill('Preview placement example: ');
+  await box.evaluate((el) => {
+    const data = new DataTransfer();
+    data.setData('text/plain', Array(100).fill('sample log line').join('\n'));
+    el.dispatchEvent(
+      new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }),
+    );
+  });
+  await box.press('Enter');
+  await expect(box).toHaveText('');
+  await box.fill('context '.repeat(400));
+  await box.press('Enter');
+  await expect(box).toHaveText('');
+  const messages = page.getByLabel('Messages', { exact: true });
+  const badge = messages.getByRole('button', { name: '[Pasted text #1 +100 lines]', exact: true });
+  await badge.scrollIntoViewIfNeeded();
+  const offset = (await badge.boundingBox())!.y - (await messages.boundingBox())!.y - 24;
+  await messages.evaluate((el, offset) => {
+    el.scrollTop += offset;
+  }, offset);
+  await badge.click();
+  await page.mouse.move(300, 100);
+  const popup = page.getByRole('tooltip', { name: '[Pasted text #1 +100 lines]', exact: true });
+  await expect(popup).toBeVisible();
+  expect(await popup.evaluate((el) => el.parentElement === document.body)).toBe(true);
+  expect(
+    await messages
+      .locator(':scope > div > div')
+      .evaluate((el) => new DOMMatrix(getComputedStyle(el).transform).m42),
+  ).toBeGreaterThan(0);
+  const gap = async () => {
+    const a = (await badge.boundingBox())!;
+    const p = (await popup.boundingBox())!;
+    return Math.round(p.y - a.y - a.height);
+  };
+  await expect.poll(gap).toBe(6);
+  await messages.evaluate((el) => {
+    el.scrollTop -= 20;
+  });
+  await expect.poll(gap).toBe(6);
+  await page.setViewportSize({ width: 1050, height: 650 });
+  await expect.poll(gap).toBe(6);
+  const p = (await popup.boundingBox())!;
+  expect(p.x).toBeGreaterThanOrEqual(8);
+  expect(p.x + p.width).toBeLessThanOrEqual(1042);
+  expect(p.y + p.height).toBeLessThanOrEqual(642);
+  await page.screenshot({ path: 'test-results/preview-placement.png' });
+});
+
 test('chips delete as a whole, copy with their content, and support pinned and wheel previews', async ({
   page,
 }) => {
@@ -29,6 +87,14 @@ test('chips delete as a whole, copy with their content, and support pinned and w
   });
   const chip = box.locator('[data-attachment]');
   await expect(chip).toHaveAttribute('contenteditable', 'false');
+  await page.evaluate(() => {
+    document.documentElement.dataset.theme = 'dark';
+  });
+  await expect(chip).toHaveCSS('color', 'rgb(186, 230, 253)');
+  await page.evaluate(() => {
+    document.documentElement.dataset.theme = 'light';
+  });
+  await expect(chip).toHaveCSS('color', 'rgb(12, 74, 110)');
   await chip.hover();
   const popup = page.getByRole('tooltip', { name: '[Pasted text #1 +100 lines]', exact: true });
   await expect(popup).toBeVisible();
@@ -84,7 +150,8 @@ test('chips delete as a whole, copy with their content, and support pinned and w
   await box.press('Enter');
   const sentBadge = page
     .getByLabel('Messages', { exact: true })
-    .getByRole('button', { name: '[Pasted text #1 +100 lines]', exact: true });
+    .getByRole('button', { name: '[Pasted text #1 +100 lines]', exact: true })
+    .last();
   await sentBadge.hover();
   await expect(popup).toBeVisible();
   await page.mouse.wheel(0, 160);
@@ -172,6 +239,6 @@ test('paste badges wrap, preview, undo and survive tab switches', async ({ page 
   await expect(badge).toBeVisible();
   await badge.click();
   await expect(
-    messages.getByRole('tooltip', { name: '[Pasted text #1 +40 lines]', exact: true }),
+    page.getByRole('tooltip', { name: '[Pasted text #1 +40 lines]', exact: true }),
   ).toBeVisible();
 });

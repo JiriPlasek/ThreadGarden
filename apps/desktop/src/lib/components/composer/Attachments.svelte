@@ -9,7 +9,13 @@
     numbers = [],
     onRemove,
   }: { images: readonly ImageRef[]; numbers?: number[]; onRemove: (i: number) => void } = $props();
-  let preview = $state<{ image: ImageRef; number: number; left: number; top: number } | null>(null);
+  let preview = $state<{
+    image: ImageRef;
+    number: number;
+    left: number;
+    top: number;
+    anchor: HTMLElement;
+  } | null>(null);
 </script>
 
 {#if images.length > 0}
@@ -21,11 +27,23 @@
           aria-label="Preview image {numbers[i] ?? i + 1}"
           onmouseenter={(e) => {
             const r = e.currentTarget.getBoundingClientRect();
-            preview = { image: img, number: numbers[i] ?? i + 1, left: r.left, top: r.top - 6 };
+            preview = {
+              image: img,
+              number: numbers[i] ?? i + 1,
+              left: r.left,
+              top: r.top - 6,
+              anchor: e.currentTarget,
+            };
           }}
           onfocus={(e) => {
             const r = e.currentTarget.getBoundingClientRect();
-            preview = { image: img, number: numbers[i] ?? i + 1, left: r.left, top: r.top - 6 };
+            preview = {
+              image: img,
+              number: numbers[i] ?? i + 1,
+              left: r.left,
+              top: r.top - 6,
+              anchor: e.currentTarget,
+            };
           }}
           onmouseleave={() => (preview = null)}
           onblur={() => (preview = null)}
@@ -57,4 +75,5 @@
     label="Image #{preview.number}"
     left={preview.left}
     top={preview.top}
+    anchor={preview.anchor}
   />{/if}
