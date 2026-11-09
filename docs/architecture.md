@@ -519,7 +519,8 @@ live, `chat.send` runs the command again (fresh, not the last poll):
 
 - **blocked** when the session is listed with a live pid or as working or
   blocked: the UI explains why and offers the hand-off commands
-  (`claude --resume <id>`, `claude attach <short id>`);
+  (`claude --resume <id>`, `claude attach <short id>`) and End the process
+  (`external.stop`, below);
 - **ok** when it is listed only as finished without a pid, or not listed;
 - **unverified** when the command cannot be run: the UI asks the user to
   confirm, and also warns when the transcript was modified in the last 2

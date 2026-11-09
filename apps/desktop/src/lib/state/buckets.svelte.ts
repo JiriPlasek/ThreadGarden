@@ -240,7 +240,7 @@ export class BucketsState {
     }
     if (running.length === 1 && targets.length === 1) {
       parts.push(
-        `“${titleOf(running[0]!.sessionId)}” is running outside Threadgarden. Stop it there, then archive it.`,
+        `“${titleOf(running[0]!.sessionId)}” is running outside Threadgarden. Open the chat and stop its process before archiving it.`,
       );
     } else if (running.length > 0) {
       parts.push(

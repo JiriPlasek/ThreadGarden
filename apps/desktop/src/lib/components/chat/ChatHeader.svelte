@@ -25,6 +25,7 @@
   import { taskRunning, type ChatState } from '#lib/state/chats.svelte.js';
   import { useApp, useScope } from '#lib/state/context.js';
   import { machineNameOf } from '#lib/state/machines.svelte.js';
+  import { END_OTHER_DESCRIPTION, END_OTHER_TITLE } from './end-other';
   import { endSessionWarning } from './end-session';
   import { tokens, usd } from './format';
   import RunningTaskList from './RunningTaskList.svelte';
@@ -33,8 +34,9 @@
    * Title row plus the chat's controls (spec §6.4): model, effort and permission
    * mode pickers (chats Threadgarden runs only), context usage, cost, auth, Claude
    * Code version, End session and Copy resume command. A chat running outside
-   * Threadgarden gets Stop when Claude Code's background service runs it, and a
-   * "stop it there" note when it is open in a terminal. The Activity button
+   * Threadgarden gets Stop when Claude Code's background service runs it, and End
+   * the process beside its note when another Claude Code process (a terminal,
+   * an editor's agent) holds it. The Activity button
    * shows or hides the Activity panel (Ctrl/Cmd+., handled by ChatView). The
    * "Chat state" menu moves the chat between Active, On hold and Archived; an
    * on-hold chat shows until when and its note (v1.2 §3). With more than one
@@ -82,6 +84,14 @@
   const status = $derived(shownStatus(chat.status, readOnly));
   /** Run by Claude Code's background service: `claude stop <id>` can stop it. */
   const background = $derived(external?.kind === 'background' && !!external.shortId);
+  /** Held by another Claude Code process that `external.stop` can end by its pid. */
+  const holder = $derived(
+    !!external &&
+      external.kind !== 'background' &&
+      external.pid !== undefined &&
+      Number.isSafeInteger(external.pid) &&
+      external.pid > 0,
+  );
   const project = $derived(
     summary
       ? (places.projects.find((p) => p.projectId === summary.projectId)?.displayName ??
@@ -192,6 +202,11 @@
   let confirmStop = $state(false);
   const stopNow = async (): Promise<void> => {
     await chats.stopExternal(sessionId);
+  };
+
+  let confirmEndOther = $state(false);
+  const endOther = (): void => {
+    confirmEndOther = true;
   };
 
   const bucket = $derived(summary?.bucket ?? 'active');
@@ -340,7 +355,17 @@
         : 'Settings apply to running chats; send a message to resume this one'}
   >
     {#if external && !background}
-      <span class="text-foreground/80 shrink-0">Running in a terminal — stop it there</span>
+      <span class="text-foreground/80 shrink-0">Running in another Claude Code process</span>
+      {#if holder}
+        <button
+          type="button"
+          class="text-foreground bg-background hover:bg-muted inline-flex h-6 shrink-0 items-center gap-1 rounded border px-2"
+          onclick={endOther}
+        >
+          <CircleStopIcon class="text-destructive size-3.5" aria-hidden="true" />
+          End the process
+        </button>
+      {/if}
     {:else if external}
       <span class="text-foreground/80 shrink-0">Running in Claude Code's background service</span>
     {/if}
@@ -457,5 +482,13 @@
   description="Claude Code's background service runs this chat. Stopping ends its current work (claude stop); the chat stays in your history and can be resumed."
   confirmLabel="Stop session"
   destructive
+  onConfirm={stopNow}
+/>
+
+<ConfirmDialog
+  bind:open={confirmEndOther}
+  title={END_OTHER_TITLE}
+  description={END_OTHER_DESCRIPTION}
+  confirmLabel="End process"
   onConfirm={stopNow}
 />

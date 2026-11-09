@@ -5,11 +5,12 @@ import { RpcFail } from '../service/fake-ws';
 import { renderChat, SID } from './helpers';
 
 const resumeAnswer =
-  (status: string, reason = '', recentlyModified = false) =>
+  (status: string, reason = '', recentlyModified = false, canStop = true) =>
   () => ({
     status,
     reason,
     recentlyModified,
+    canStop,
   });
 
 describe('resume safety (spec §4.4)', () => {
@@ -34,6 +35,73 @@ describe('resume safety (spec §4.4)', () => {
     await userEvent.click(within(alert).getByRole('button', { name: /copy resume command/i }));
     await waitFor(() => expect(server.calls('chat.resumeCommand')).toHaveLength(1));
     expect(within(alert).getByText(`claude --resume ${SID}`)).toBeTruthy();
+  });
+
+  it.each([
+    'This chat is running in another Claude Code process (pid 4242).',
+    'This chat is running as a background session.',
+  ])('confirms stopping from the banner: %s', async (reason) => {
+    const { server, composer } = await renderChat({
+      status: 'history',
+      configure: (s) => {
+        s.handlers['chat.resumeCheck'] = resumeAnswer('blocked', reason);
+        s.handlers['external.stop'] = () => ({});
+      },
+    });
+    await userEvent.type(composer(), 'continue please{Enter}');
+    const alert = await screen.findByRole('alert');
+    await userEvent.click(within(alert).getByRole('button', { name: /end the process/i }));
+    let confirmation = await screen.findByRole('alertdialog');
+    expect(server.calls('external.stop')).toHaveLength(0);
+    expect(confirmation.textContent).toMatch(/background tasks or a dev server/);
+    await userEvent.click(within(confirmation).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(server.calls('external.stop')).toHaveLength(0);
+    expect(alert.textContent).toContain(reason);
+    await userEvent.click(within(alert).getByRole('button', { name: /end the process/i }));
+    confirmation = await screen.findByRole('alertdialog');
+    await userEvent.click(within(confirmation).getByRole('button', { name: /end process/i }));
+    await waitFor(() => expect(server.calls('external.stop')).toHaveLength(1));
+    expect(server.calls('external.stop')[0]!.params).toEqual({ sessionId: SID });
+    await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
+    // Press Enter again to send it here.
+    expect(composer().value).toBe('continue please');
+  });
+
+  it('a failed End the process stays in the confirmation dialog', async () => {
+    const { composer } = await renderChat({
+      status: 'history',
+      configure: (s) => {
+        s.handlers['chat.resumeCheck'] = resumeAnswer('blocked', 'Running in pid 4242.');
+        s.handlers['external.stop'] = () => {
+          throw new RpcFail('STOP_FAILED', 'Process 4242 is still running.');
+        };
+      },
+    });
+    await userEvent.type(composer(), 'x{Enter}');
+    const alert = await screen.findByRole('alert');
+    await userEvent.click(within(alert).getByRole('button', { name: /end the process/i }));
+    const confirmation = await screen.findByRole('alertdialog');
+    await userEvent.click(within(confirmation).getByRole('button', { name: /end process/i }));
+    expect(await within(confirmation).findByText(/process 4242 is still running/i)).toBeTruthy();
+  });
+
+  it('hides End the process when the fresh resume check has no stoppable holder', async () => {
+    const { composer } = await renderChat({
+      status: 'history',
+      configure: (s) => {
+        s.handlers['chat.resumeCheck'] = resumeAnswer(
+          'blocked',
+          'No process id is available.',
+          false,
+          false,
+        );
+      },
+    });
+    await userEvent.type(composer(), 'go{Enter}');
+    const alert = await screen.findByRole('alert');
+    expect(within(alert).queryByRole('button', { name: /end the process/i })).toBeNull();
+    expect(within(alert).getByRole('button', { name: /copy resume command/i })).toBeTruthy();
   });
 
   it('unverified resume asks confirmation', async () => {

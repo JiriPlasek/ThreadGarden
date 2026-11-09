@@ -289,6 +289,8 @@ export const methods = {
       status: z.enum(['ok', 'blocked', 'unverified']),
       reason: z.string(),
       recentlyModified: z.boolean(),
+      /** Fresh holder has a usable pid or background short id; absent on older services. */
+      canStop: z.boolean().optional(),
     }),
   ),
   'chat.commands': def(
@@ -313,6 +315,12 @@ export const methods = {
    * chat), `UNKNOWN_TASK`, `STOP_FAILED`.
    */
   'chat.stopTask': def(z.object({ sessionId: z.string(), taskId: z.string() }), empty),
+  /**
+   * Stops a chat running outside Threadgarden: a background session with
+   * `claude stop <id>`, one another Claude Code process holds by ending that
+   * process. Errors: `EXTERNAL_UNAVAILABLE`, `NOT_EXTERNAL`, `NOT_STOPPABLE`,
+   * `STOP_FAILED`, `STOP_PENDING` (signal sent, exit not yet confirmed).
+   */
   'external.stop': def(sessionIdOnly, z.object({})),
   'files.suggest': def(
     z.object({ cwd: z.string(), query: z.string(), limit: z.number() }),
