@@ -251,8 +251,8 @@ fn a_dead_link_is_noticed_within_two_pings() {
         assert_eq!(code, Some(4502));
         let took = at - started;
         assert!(
-            took >= PING,
-            "closed after {took:?}: before a ping went unanswered"
+            took >= PING * 2,
+            "closed after {took:?}: before the first ping's pong was due"
         );
         assert!(took <= PING * 3, "closed after {took:?}");
     });
@@ -336,5 +336,238 @@ fn a_certificate_date_error_reads_as_unreachable_not_another_machine() {
         assert!(reason.contains("certificate date check failed"), "{reason}");
         assert!(!reason.contains(&desk.token));
     }
+    core.stop();
+}
+
+#[test]
+fn a_healthy_link_stays_open_past_three_pings() {
+    let dir = tempfile::tempdir().unwrap();
+    let (core, _) = core(dir.path());
+    let desk = FakeMachine::start(Behaviour::default());
+    block_on(async {
+        pair(&core, &desk).await;
+        let mut ws = relay(&core, "machine-desk").await;
+        ws.send(Message::text("{\"n\":1}")).await.unwrap();
+        assert!(matches!(next(&mut ws).await, Next::Frame(v) if v == json!({ "n": 1 })));
+        // Pings go out and pongs come back: nothing ends.
+        tokio::time::sleep(PING * 4).await;
+        ws.send(Message::text("{\"n\":2}")).await.unwrap();
+        assert!(matches!(next(&mut ws).await, Next::Frame(v) if v == json!({ "n": 2 })));
+    });
+    core.stop();
+}
+
+/// Has the machine stream to every relay until about 32 MiB went out (or the link backs up).
+fn stream_hard(desk: &FakeMachine) {
+    let chunk = "x".repeat(512 * 1024);
+    for seq in 0..64 {
+        desk.emit(
+            "chat.items",
+            json!({ "sessionId": "s1", "seq": seq, "text": chunk }),
+        );
+    }
+}
+
+#[test]
+fn a_screen_that_stops_reading_is_still_closed_by_a_move() {
+    let dir = tempfile::tempdir().unwrap();
+    let (core, _) = core(dir.path());
+    let desk = FakeMachine::start(Behaviour::default());
+    block_on(async {
+        pair(&core, &desk).await;
+        let mut stalled = relay(&core, "machine-desk").await;
+        stalled.send(Message::text("{\"n\":1}")).await.unwrap();
+        assert!(matches!(next(&mut stalled).await, Next::Frame(_)));
+        // The screen reads no more (a frozen webview) while the machine streams.
+        stream_hard(&desk);
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let mut ws = open(&core).await;
+        call(
+            &mut ws,
+            2,
+            "machines.update",
+            json!({ "machineId": "machine-desk", "port": 1 }),
+        )
+        .await;
+        // The relay ends: its link to the machine closes, though the screen still doesn't read.
+        let started = Instant::now();
+        while desk.devices_open() > 0 {
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "the relay is stuck"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        drop(stalled);
+    });
+    core.stop();
+}
+
+#[test]
+fn a_screen_that_stops_reading_doesnt_hold_up_stopping() {
+    let dir = tempfile::tempdir().unwrap();
+    let (core, _) = core(dir.path());
+    let desk = FakeMachine::start(Behaviour::default());
+    // One runtime for the screen throughout: it stays connected, unread.
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let stalled = rt.block_on(async {
+        pair(&core, &desk).await;
+        let mut stalled = relay(&core, "machine-desk").await;
+        stalled.send(Message::text("{\"n\":1}")).await.unwrap();
+        assert!(matches!(next(&mut stalled).await, Next::Frame(_)));
+        stream_hard(&desk);
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        stalled
+    });
+    let started = Instant::now();
+    core.stop();
+    // Every task ended by itself, well before the runtime's 2 s grace runs out.
+    assert!(
+        started.elapsed() < Duration::from_millis(1500),
+        "stopping took {:?}",
+        started.elapsed()
+    );
+    drop(stalled);
+}
+
+#[test]
+fn stopping_the_core_closes_relays_1001() {
+    let dir = tempfile::tempdir().unwrap();
+    let (core, _) = core(dir.path());
+    let desk = FakeMachine::start(Behaviour::default());
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let mut ws = rt.block_on(async {
+        pair(&core, &desk).await;
+        let mut ws = relay(&core, "machine-desk").await;
+        ws.send(Message::text("{\"n\":1}")).await.unwrap();
+        assert!(matches!(next(&mut ws).await, Next::Frame(_)));
+        ws
+    });
+    let stopping = std::thread::spawn(move || core.stop());
+    rt.block_on(async { assert_eq!(closes(&mut ws).await.0, Some(1001)) });
+    stopping.join().unwrap();
+}
+
+#[test]
+fn more_than_32_mib_before_the_link_is_up_closes_1009() {
+    let dir = tempfile::tempdir().unwrap();
+    let (core, _) = core(dir.path());
+    let desk = FakeMachine::start(Behaviour::default());
+    let silent = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let silent_port = silent.local_addr().unwrap().port();
+    block_on(async {
+        pair(&core, &desk).await;
+        let mut ws = open(&core).await;
+        call(
+            &mut ws,
+            2,
+            "machines.update",
+            json!({ "machineId": "machine-desk", "port": silent_port }),
+        )
+        .await;
+        let mut relayed = relay(&core, "machine-desk").await;
+        // Two frames under the screen's limit each, over it together.
+        let big = "y".repeat(threadgarden_core::MAX_REQUEST_BYTES / 2 + 1);
+        relayed.send(Message::text(big.clone())).await.unwrap();
+        let _ = relayed.send(Message::text(big)).await;
+        assert_eq!(closes(&mut relayed).await.0, Some(1009));
+    });
+    drop(silent);
+    core.stop();
+}
+
+#[test]
+fn the_screen_leaving_closes_the_link_1000() {
+    let dir = tempfile::tempdir().unwrap();
+    let (core, _) = core(dir.path());
+    let desk = FakeMachine::start(Behaviour::default());
+    block_on(async {
+        pair(&core, &desk).await;
+        let mut ws = relay(&core, "machine-desk").await;
+        ws.send(Message::text("{\"n\":1}")).await.unwrap();
+        assert!(matches!(next(&mut ws).await, Next::Frame(_)));
+        ws.close(None).await.unwrap();
+        let started = Instant::now();
+        while desk.closes().is_empty() {
+            assert!(
+                started.elapsed() < Duration::from_secs(5),
+                "the link never closed"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    });
+    assert_eq!(desk.closes(), [Some(1000)]);
+    core.stop();
+}
+
+/// Secrets whose first read waits until the test lets it go (a slow Keystore).
+struct Gated {
+    inner: MemorySecrets,
+    gate: std::sync::Mutex<Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>>,
+}
+
+impl Secrets for Gated {
+    fn get(&self, key: &str) -> Result<Option<String>, threadgarden_core::secrets::SecretsError> {
+        // Read now, handed back later: what a read that was under way gives.
+        let value = self.inner.get(key);
+        let gate = self.gate.lock().unwrap().take();
+        if let Some((entered, release)) = gate {
+            entered.send(()).unwrap();
+            release.recv().unwrap();
+        }
+        value
+    }
+    fn set(&self, key: &str, value: &str) -> Result<(), threadgarden_core::secrets::SecretsError> {
+        self.inner.set(key, value)
+    }
+    fn delete(&self, key: &str) -> Result<(), threadgarden_core::secrets::SecretsError> {
+        self.inner.delete(key)
+    }
+}
+
+#[test]
+fn a_machine_removed_while_its_relay_starts_gets_no_link() {
+    let dir = tempfile::tempdir().unwrap();
+    let secrets = Arc::new(Gated {
+        inner: MemorySecrets::default(),
+        gate: std::sync::Mutex::new(None),
+    });
+    let config = CoreConfig {
+        secrets: secrets.clone(),
+        ..config(dir.path())
+    };
+    let timing = Timing {
+        link_timeout: LINK_TIMEOUT,
+        ping: PING,
+        ..Timing::default()
+    };
+    let core = Core::spawn_with_timing(config, timing).unwrap();
+    core.disconnect();
+    let desk = FakeMachine::start(Behaviour::default());
+    block_on(async {
+        pair(&core, &desk).await;
+        let (entered_tx, entered) = std::sync::mpsc::channel();
+        let (release, release_rx) = std::sync::mpsc::channel();
+        *secrets.gate.lock().unwrap() = Some((entered_tx, release_rx));
+        // The relay reads the token (and waits there) ...
+        let mut relayed = relay(&core, "machine-desk").await;
+        tokio::task::spawn_blocking(move || entered.recv().unwrap())
+            .await
+            .unwrap();
+        // ... while the machine is removed.
+        let mut ws = open(&core).await;
+        let removed = call(
+            &mut ws,
+            1,
+            "machines.remove",
+            json!({ "machineId": "machine-desk", "revoke": false }),
+        )
+        .await;
+        assert_eq!(removed["result"], json!({ "revoked": false }));
+        release.send(()).unwrap();
+        assert_eq!(closes(&mut relayed).await.0, Some(4404));
+    });
+    // No link was opened for it.
+    assert_eq!(desk.protocols(), ["threadgarden-pair"]);
     core.stop();
 }

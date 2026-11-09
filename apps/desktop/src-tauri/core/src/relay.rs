@@ -12,13 +12,14 @@
 //! - 4502 `unreachable`: it couldn't be reached, or the link dropped (the screen retries).
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
 use tokio::sync::{broadcast, watch};
-use tokio::time::{Instant, interval_at};
+use tokio::time::{Instant, MissedTickBehavior, interval_at};
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::protocol::CloseFrame;
@@ -134,8 +135,35 @@ impl Relays {
         machine_id: Option<String>,
         mut shutdown: watch::Receiver<bool>,
     ) {
-        let machine =
-            machine_id.and_then(|id| self.store.machines().into_iter().find(|m| m.id == id));
+        let Some(machine_id) = machine_id else {
+            return end(&mut ui, LOCKED).await;
+        };
+        // Registered before anything is awaited: a move or a removal from now on reaches it.
+        let key = self.next.fetch_add(1, Ordering::Relaxed);
+        let (ender, mut dropped) = watch::channel(None);
+        self.open().insert(key, (machine_id.clone(), ender));
+        let code = self
+            .relay(&mut ui, &machine_id, &mut dropped, &mut shutdown)
+            .await;
+        self.open().remove(&key);
+        if let Some(code) = code {
+            end(&mut ui, code).await;
+        }
+    }
+
+    /// Runs the relay; the code to close the screen with, if it's still to be told.
+    async fn relay(
+        &self,
+        ui: &mut Ws,
+        machine_id: &str,
+        dropped: &mut watch::Receiver<Option<u16>>,
+        shutdown: &mut watch::Receiver<bool>,
+    ) -> Option<u16> {
+        let machine = self
+            .store
+            .machines()
+            .into_iter()
+            .find(|m| m.id == machine_id);
         let token = match &machine {
             Some(m) => {
                 let (secrets, key) = (self.secrets.clone(), token_key(&m.id));
@@ -147,27 +175,13 @@ impl Relays {
             }
             None => None,
         };
+        // Moved or removed while the token was read: what that says, not a link.
+        if let Some(code) = *dropped.borrow_and_update() {
+            return Some(code);
+        }
         let (Some(machine), Some(token)) = (machine, token) else {
-            return end(&mut ui, LOCKED).await;
+            return Some(LOCKED);
         };
-        let key = self.next.fetch_add(1, Ordering::Relaxed);
-        let (ender, mut dropped) = watch::channel(None);
-        self.open().insert(key, (machine.id.clone(), ender));
-        let code = self
-            .pipe(&mut ui, &machine, &token, &mut dropped, &mut shutdown)
-            .await;
-        self.open().remove(&key);
-        end(&mut ui, code).await;
-    }
-
-    async fn pipe(
-        &self,
-        ui: &mut Ws,
-        machine: &StoredMachine,
-        token: &str,
-        dropped: &mut watch::Receiver<Option<u16>>,
-        shutdown: &mut watch::Receiver<bool>,
-    ) -> u16 {
         let protocol = format!("{DEVICE_PROTOCOL_PREFIX}{token}");
         let opening = pairing::open_link(
             &machine.address,
@@ -181,92 +195,161 @@ impl Relays {
         // What the screen sends before the link is up waits for it (bounded all the same).
         let mut waiting = Vec::new();
         let mut waiting_bytes = 0;
-        let mut link = loop {
+        let link = loop {
             tokio::select! {
                 opened = &mut opening => match opened {
                     Ok((link, _)) => break link,
                     Err(e) => {
                         self.failed(&machine.id, describe(&e));
-                        return failure_code(&e);
+                        return Some(failure_code(&e));
                     }
                 },
                 frame = ui.next() => match frame {
                     Some(Ok(m @ (Message::Text(_) | Message::Binary(_)))) => {
                         waiting_bytes += m.len();
                         if waiting_bytes > MAX_REQUEST_BYTES {
-                            return 1009;
+                            return Some(1009);
                         }
                         waiting.push(m);
                     }
-                    Some(Ok(Message::Close(_))) | Some(Err(_)) | None => return 1000,
+                    Some(Ok(Message::Close(_))) | Some(Err(_)) | None => return Some(1000),
                     Some(Ok(_)) => {}
                 },
-                _ = dropped.changed() => return dropped.borrow().unwrap_or(UNREACHABLE),
-                _ = shutdown.changed() => return 1001,
+                _ = dropped.changed() => return Some(dropped.borrow().unwrap_or(UNREACHABLE)),
+                _ = shutdown.changed() => return Some(1001),
             }
         };
-        let code = self
-            .linked(ui, &mut link, waiting, &machine.id, dropped, shutdown)
+        self.linked(ui, link, waiting, &machine, dropped, shutdown)
             .await;
-        let _ = tokio::time::timeout(std::time::Duration::from_secs(1), link.close(None)).await;
-        code
+        None
     }
 
+    /// Pipes an open link. Each direction runs on its own, so a side that
+    /// stops reading (a frozen webview, a machine gone quiet) holds up only
+    /// that direction: a move, a removal, stopping and the pings still act.
+    /// The screen is told why first, then the link closed (1000), as `relay.ts`.
     async fn linked(
         &self,
         ui: &mut Ws,
-        link: &mut pairing::Link,
+        link: pairing::Link,
         waiting: Vec<Message>,
-        machine_id: &str,
+        machine: &StoredMachine,
         dropped: &mut watch::Receiver<Option<u16>>,
         shutdown: &mut watch::Receiver<bool>,
-    ) -> u16 {
-        for m in waiting {
-            if link.send(m).await.is_err() {
-                return UNREACHABLE;
-            }
-        }
-        // A link whose pong hasn't come back by the next ping is dead (a Wi-Fi drop sends no close).
-        let mut pings = interval_at(Instant::now() + self.timing.ping, self.timing.ping);
-        let mut answered = true;
-        loop {
-            tokio::select! {
-                frame = ui.next() => match frame {
-                    Some(Ok(m @ (Message::Text(_) | Message::Binary(_)))) => {
-                        if link.send(m).await.is_err() {
+    ) {
+        let (link_sink, mut link_stream) = link.split();
+        let link_sink = tokio::sync::Mutex::new(link_sink);
+        let answered = AtomicBool::new(true);
+        let ping = self.timing.ping;
+        let code = {
+            let (mut ui_sink, mut ui_stream) = (&mut *ui).split();
+            let code = {
+                // Screen to machine (what waited first).
+                let up = async {
+                    for m in waiting {
+                        if link_sink.lock().await.send(m).await.is_err() {
                             return UNREACHABLE;
                         }
                     }
-                    Some(Ok(Message::Close(_))) | Some(Err(_)) | None => return 1000,
-                    Some(Ok(_)) => {}
-                },
-                frame = link.next() => match frame {
-                    Some(Ok(m @ (Message::Text(_) | Message::Binary(_)))) => {
-                        if ui.send(m).await.is_err() {
-                            return 1000;
+                    loop {
+                        match ui_stream.next().await {
+                            Some(Ok(m @ (Message::Text(_) | Message::Binary(_)))) => {
+                                if link_sink.lock().await.send(m).await.is_err() {
+                                    return UNREACHABLE;
+                                }
+                            }
+                            Some(Ok(Message::Close(_))) | Some(Err(_)) | None => return 1000,
+                            Some(Ok(_)) => {}
                         }
                     }
-                    Some(Ok(Message::Pong(_))) => answered = true,
-                    Some(Ok(Message::Close(frame))) => return close_for(frame.map(|f| f.code.into())),
-                    Some(Ok(_)) => {}
-                    Some(Err(_)) | None => return UNREACHABLE,
-                },
-                _ = pings.tick() => {
-                    if !answered {
-                        self.failed(machine_id, "no pong: the link is dead".into());
-                        return UNREACHABLE;
+                };
+                // Machine to screen.
+                let down = async {
+                    loop {
+                        match link_stream.next().await {
+                            Some(Ok(m @ (Message::Text(_) | Message::Binary(_)))) => {
+                                if ui_sink.send(m).await.is_err() {
+                                    return 1000;
+                                }
+                            }
+                            Some(Ok(Message::Pong(_))) => answered.store(true, Ordering::SeqCst),
+                            Some(Ok(Message::Close(frame))) => {
+                                return close_for(frame.map(|f| f.code.into()));
+                            }
+                            Some(Ok(_)) => {}
+                            Some(Err(_)) | None => return UNREACHABLE,
+                        }
                     }
-                    answered = false;
-                    if link.send(Message::Ping(Vec::new().into())).await.is_err() {
-                        return UNREACHABLE;
+                };
+                // A link whose pong hasn't come back by the next ping is dead (a Wi-Fi drop sends no close).
+                let pinger = async {
+                    let mut pings = interval_at(Instant::now() + ping, ping);
+                    pings.set_missed_tick_behavior(MissedTickBehavior::Delay);
+                    loop {
+                        pings.tick().await;
+                        if !answered.swap(false, Ordering::SeqCst) {
+                            self.failed(&machine.id, "no pong: the link is dead".into());
+                            return UNREACHABLE;
+                        }
+                        let sent = async {
+                            link_sink
+                                .lock()
+                                .await
+                                .send(Message::Ping(Vec::new().into()))
+                                .await
+                        };
+                        // A machine that stopped reading (its link backed up) is as good as dead.
+                        if !matches!(tokio::time::timeout(ping, sent).await, Ok(Ok(()))) {
+                            self.failed(&machine.id, "the link stopped taking frames".into());
+                            return UNREACHABLE;
+                        }
                     }
-                }
-                _ = dropped.changed() => return dropped.borrow().unwrap_or(UNREACHABLE),
-                _ = shutdown.changed() => return 1001,
-            }
-        }
+                };
+                tokio::pin!(up, down, pinger);
+                let code = tokio::select! {
+                    // What has arrived (a pong among it) is read before a ping is checked.
+                    biased;
+                    _ = dropped.changed() => dropped.borrow().unwrap_or(UNREACHABLE),
+                    _ = shutdown.changed() => 1001,
+                    code = &mut down => code,
+                    code = &mut up => code,
+                    code = &mut pinger => code,
+                };
+                code
+            };
+            // The screen first: why it ended (bounded, as it may not be reading).
+            let frame = CloseFrame {
+                code: CloseCode::from(code),
+                reason: reason(code).into(),
+            };
+            let _ =
+                tokio::time::timeout(CLOSE_WAIT, ui_sink.send(Message::Close(Some(frame)))).await;
+            code
+        };
+        // Then the machine: a normal close.
+        let normal = CloseFrame {
+            code: CloseCode::Normal,
+            reason: "".into(),
+        };
+        let _ = tokio::time::timeout(CLOSE_WAIT, async {
+            link_sink
+                .lock()
+                .await
+                .send(Message::Close(Some(normal)))
+                .await
+        })
+        .await;
+        let _ = code;
+        // The screen's own close, briefly.
+        let _ = tokio::time::timeout(Duration::from_secs(2), async {
+            while ui.next().await.is_some() {}
+        })
+        .await;
     }
 }
+
+/// How long a close may take to go out to a side that may not be reading.
+const CLOSE_WAIT: Duration = Duration::from_millis(500);
 
 /// Closes the screen's socket with `code`, waiting briefly for its close.
 async fn end(ui: &mut Ws, code: u16) {
@@ -274,8 +357,8 @@ async fn end(ui: &mut Ws, code: u16) {
         code: CloseCode::from(code),
         reason: reason(code).into(),
     };
-    let _ = ui.send(Message::Close(Some(frame))).await;
-    let _ = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+    let _ = tokio::time::timeout(CLOSE_WAIT, ui.send(Message::Close(Some(frame)))).await;
+    let _ = tokio::time::timeout(Duration::from_secs(2), async {
         while ui.next().await.is_some() {}
     })
     .await;

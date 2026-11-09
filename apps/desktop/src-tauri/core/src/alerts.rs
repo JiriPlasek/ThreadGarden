@@ -41,6 +41,8 @@ use crate::{AlertKind, CoreEvent, LinkStatus, PROTOCOL_VERSION, Timing, settings
 const LINK_MAX_FRAME: usize = 100 * 1024 * 1024;
 /// How many waiting chats a catch-up reads, as the desktop's.
 const CATCH_UP_LIMIT: u64 = 200;
+/// The longest a ping may take to go out (it's a few bytes: longer means the link backed up).
+const SEND_WAIT: Duration = Duration::from_secs(1);
 const HELLO_ID: u64 = 1;
 const CATCH_UP_ID: u64 = 2;
 
@@ -371,9 +373,11 @@ impl Alerts {
                         break End::Dropped;
                     }
                     answered = false;
-                    // A machine that stopped reading doesn't hold this link up past a ping.
+                    // A ping goes out at once on a working link. One that can't (the
+                    // machine stopped reading) means the link is dead, and it mustn't
+                    // hold up Disconnect, a move or a network change meanwhile.
                     let ping = link.send(Message::Ping(Vec::new().into()));
-                    if !matches!(tokio::time::timeout(self.timing.ping, ping).await, Ok(Ok(()))) {
+                    if !matches!(tokio::time::timeout(SEND_WAIT, ping).await, Ok(Ok(()))) {
                         break End::Dropped;
                     }
                 }

@@ -162,6 +162,8 @@ struct Inner {
     methods: Vec<&'static str>,
     events: broadcast::Sender<CoreEvent>,
     alerts: Arc<alerts::Alerts>,
+    /// Sockets the server is serving now.
+    live: Arc<std::sync::atomic::AtomicUsize>,
     shutdown: watch::Sender<bool>,
     runtime: Mutex<Option<Runtime>>,
 }
@@ -169,6 +171,16 @@ struct Inner {
 impl Inner {
     fn stop(&self) {
         let _ = self.shutdown.send(true);
+        // The sockets close themselves (screens and relays 1001) before the
+        // runtime goes: shutting it down cancels whatever is still running.
+        if tokio::runtime::Handle::try_current().is_err() {
+            let deadline = std::time::Instant::now() + Duration::from_secs(1);
+            while self.live.load(std::sync::atomic::Ordering::SeqCst) > 0
+                && std::time::Instant::now() < deadline
+            {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
         let Some(runtime) = self
             .runtime
             .lock()
@@ -346,11 +358,13 @@ impl Core {
         );
         let methods = router.methods();
         let (shutdown, stopped) = watch::channel(false);
+        let live = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let server = Arc::new(server::Server {
             token: token.clone(),
             router,
             events: local_events,
             relays,
+            live: live.clone(),
         });
         runtime.spawn(server::serve(listener, server, stopped));
         // A link to every paired machine, unless the owner chose Disconnect.
@@ -361,6 +375,7 @@ impl Core {
             methods,
             events,
             alerts,
+            live,
             shutdown,
             runtime: Mutex::new(Some(runtime)),
         })))

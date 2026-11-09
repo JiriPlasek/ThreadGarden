@@ -74,6 +74,8 @@ struct Seen {
     events: Mutex<Option<tokio::sync::broadcast::Sender<String>>>,
     /// What `sessions.list` answers on a device socket.
     sessions: Mutex<Vec<Value>>,
+    /// The close codes device sockets were closed with (None: no code).
+    closes: Mutex<Vec<Option<u16>>>,
 }
 
 pub struct FakeMachine {
@@ -186,6 +188,11 @@ impl FakeMachine {
     /// The chats `sessions.list` answers with (Needs you, on a device socket).
     pub fn set_sessions(&self, items: Vec<Value>) {
         *self.seen.sessions.lock().unwrap() = items;
+    }
+
+    /// The codes device sockets were closed with by the other side.
+    pub fn closes(&self) -> Vec<Option<u16>> {
+        self.seen.closes.lock().unwrap().clone()
     }
 
     /// Device sockets open now.
@@ -340,6 +347,13 @@ impl Machine {
         loop {
             let msg = tokio::select! {
                 msg = ws.next() => match msg {
+                    Some(Ok(Message::Close(frame))) => {
+                        if is_device {
+                            self.seen.closes.lock().unwrap().push(frame.map(|f| f.code.into()));
+                        }
+                        while ws.next().await.is_some() {}
+                        return;
+                    }
                     Some(Ok(msg)) => msg,
                     _ => return,
                 },

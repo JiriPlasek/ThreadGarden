@@ -5,6 +5,7 @@
 //! own screens (closed 4404 until Task 7 relays them).
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
@@ -35,6 +36,24 @@ pub(crate) struct Server {
     /// Events for every screen (never for a relay).
     pub events: LocalEvents,
     pub relays: Arc<Relays>,
+    /// Sockets being served now (screens and relays), so stopping can let them close first.
+    pub live: Arc<AtomicUsize>,
+}
+
+/// Counts a served socket, down again however it ends.
+struct Live(Arc<AtomicUsize>);
+
+impl Live {
+    fn new(count: &Arc<AtomicUsize>) -> Self {
+        count.fetch_add(1, Ordering::SeqCst);
+        Live(count.clone())
+    }
+}
+
+impl Drop for Live {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 /// What a socket asked for, decided during its handshake.
@@ -115,6 +134,7 @@ async fn connection(
     shutdown: watch::Receiver<bool>,
     slot: OwnedSemaphorePermit,
 ) {
+    let _live = Live::new(&server.live);
     let mut route = Route::Unauthorized;
     // The error type is tungstenite's callback signature (an HTTP response), and it's never returned.
     #[allow(clippy::result_large_err)]
