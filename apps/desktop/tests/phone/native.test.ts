@@ -30,7 +30,7 @@ describe('native on the phone', () => {
     await expect(native.machineTokens.clear('m1')).resolves.toBeUndefined();
     await expect(native.apiKey.get()).resolves.toBeNull();
     await expect(native.updater.installKind()).resolves.toBe('unsupported');
+    // In a browser: nothing to tell (native-tauri.test.ts covers the Tauri side).
     await expect(native.setActiveChat('m1', 's1')).resolves.toBeUndefined();
-    await expect(native.notify('t', 'b', 'm1/s1')).resolves.toBeUndefined();
   });
 });

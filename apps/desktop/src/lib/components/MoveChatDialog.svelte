@@ -7,7 +7,7 @@
   import { Button } from '#lib/components/ui/button/index.js';
   import * as Dialog from '#lib/components/ui/dialog/index.js';
   import { leftBehind, MoveChat } from '#lib/move/move-chat.svelte.js';
-  import { isTauri, pickFolder } from '#lib/native.js';
+  import { isPhone, isTauri, pickFolder } from '#lib/native.js';
   import { projectsApi, supportsMove, supportsProjects } from '#lib/projects.js';
   import { taskRunning } from '#lib/state/chats.svelte.js';
   import { useApp } from '#lib/state/context.js';
@@ -65,7 +65,12 @@
   };
 
   const choices = $derived(
-    ref ? machines.list.filter((m) => m.id !== ref.machineId).map(choiceOf) : [],
+    ref
+      ? machines.list
+          // The phone's own entry is its core: no chat can move there.
+          .filter((m) => m.id !== ref.machineId && !(isPhone && m.local))
+          .map(choiceOf)
+      : [],
   );
   const outdated = $derived(choices.filter((c) => c.outdated));
 

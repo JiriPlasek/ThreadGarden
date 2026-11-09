@@ -5,7 +5,7 @@ import {
   type MachineInfo,
   type PairedMachine,
 } from '@threadgarden/protocol';
-import { machineTokens } from '../native';
+import { isPhone, machineTokens } from '../native';
 import { ServiceClient, type ClientOptions, type ClientStatus } from '../service/client';
 import { quietly, type Api } from './api';
 import { LOCAL_FALLBACK_ID, THIS_PC } from './refs';
@@ -95,9 +95,12 @@ export const machineAway = (machines: Pick<MachinesState, 'get'>, id: string): b
   return !!m && !m.local && m.status !== 'on';
 };
 
-/** The names of the machines that are on (This PC first), e.g. for "Stop all work". */
+/**
+ * The names of the machines that are on (This PC first), e.g. for "Stop all
+ * work". The phone's own entry is its core, which runs nothing: never named.
+ */
 export const onMachineNames = (machines: Pick<MachinesState, 'list'>): string[] =>
-  machines.list.filter((m) => m.status === 'on').map(machineLabel);
+  machines.list.filter((m) => m.status === 'on' && !(isPhone && m.local)).map(machineLabel);
 
 /** A machine's relay on the local service (the UI never connects anywhere but loopback). */
 export const relayUrl = (localPort: number, machineId: string): string =>
@@ -160,10 +163,11 @@ export class MachinesState {
 
   /**
    * More than one machine: the places column groups projects by machine and
-   * cross-machine rows carry a machine chip (one test for both).
+   * cross-machine rows carry a machine chip (one test for both). The phone's
+   * own entry is no machine to tell apart: it counts the paired ones only.
    */
   get several(): boolean {
-    return this.list.length > 1;
+    return (isPhone ? this.paired.length : this.list.length) > 1;
   }
 
   get = (id: string): MachineEntry | undefined => this.list.find((m) => m.id === id);

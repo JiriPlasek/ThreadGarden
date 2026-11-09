@@ -34,11 +34,13 @@ export const isTauri: boolean = detectTauri();
  * The phone build, decided by platform and never by window width: Tauri's
  * Android build (`TAURI_ENV_PLATFORM`, which the Tauri CLI sets for the
  * frontend build), or `VITE_THREADGARDEN_PHONE=1` for the browser against the
- * mock service.
+ * mock service. Tauri on an Android webview counts too, for a frontend built
+ * without the CLI's environment.
  */
 export const isPhone: boolean =
   import.meta.env.TAURI_ENV_PLATFORM === 'android' ||
-  import.meta.env.VITE_THREADGARDEN_PHONE === '1';
+  import.meta.env.VITE_THREADGARDEN_PHONE === '1' ||
+  (isTauri && typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent));
 
 /** On the phone in Tauri: a Rust command exists there (in a browser, the stubs stand in). */
 const phoneTauri = isPhone && isTauri;

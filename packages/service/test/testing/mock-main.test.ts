@@ -16,6 +16,7 @@ import {
   MOCK_FORGET_MOVES,
   PHONE_NAME,
   REMOTE_MACHINE_NAME,
+  refusedByThePhone,
   REMOTE_PROJECT_PATH,
   startMockService,
   type MockService,
@@ -777,6 +778,19 @@ describe('mock service MOCK_PHONE (phone plan, Task 11)', () => {
       expect(await c.call('places.counts', {})).toMatchObject({ needsYou: 0, running: 0, all: 0 });
       expect(await c.call<{ windows: unknown[] }>('usage.get', {})).toMatchObject({ windows: [] });
       expect(await c.call('system.status', {})).toMatchObject({ claude: { found: false } });
+
+      // What the core refuses, the mock refuses (the core's contract table): chats and
+      // projects of This PC, analytics, its updater, and pairing until the core can.
+      for (const method of ['chat.create', 'projects.create', 'analytics.get', 'update.latest']) {
+        await expect(c.call(method, {}), method).rejects.toMatchObject({
+          code: 'METHOD_NOT_FOUND',
+        });
+      }
+      await expect(
+        c.call('machines.pair', { address: '127.0.0.1', code: 'TEST-TEST-TEST', deviceName: 'X' }),
+      ).rejects.toMatchObject({ code: 'METHOD_NOT_FOUND' });
+      expect(refusedByThePhone()).toContain('chat.send');
+      expect(refusedByThePhone()).not.toContain('machines.list');
 
       // The remote mock, paired and unlocked by the mock itself (the core holds the token).
       await mock.paired;

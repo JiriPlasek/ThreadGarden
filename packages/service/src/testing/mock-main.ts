@@ -87,13 +87,17 @@
  * phone's core, for the UI built with `VITE_THREADGARDEN_PHONE=1`. Its `hello`
  * names an empty machine as the core does (`linux`, not headless, no home, no
  * capabilities), it has no chats, projects, external sessions or usage of its
- * own, and `system.status` finds no Claude Code. With `--pair-port <port>
+ * own, and `system.status` finds no Claude Code. It refuses (`METHOD_NOT_FOUND`)
+ * what the core refuses, read from the core's contract table
+ * (`packages/protocol/test/fixtures/core-answers/methods.json`), Add machine's
+ * `machines.pair` included until the core pairs. With `--pair-port <port>
  * --pairing-code <code>` it pairs as "Phone" with the remote mock whose device
  * listener is on 127.0.0.1:`<port>`, once that one answers, and holds its
  * token, as the core does: the UI never unlocks it. The port has no default,
  * so the mock never tries a real machine's.
  */
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { appendFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, posix } from 'node:path';
@@ -1203,12 +1207,38 @@ const PHONE_PAIR_TRIES = 240;
 const PHONE_PAIR_RETRY_MS = 500;
 
 /**
- * The phone's core answers `hello` with an empty machine and has no Claude
- * Code (as `methods.rs` in the core does): the main mock answers the same.
+ * The core's own table of the methods it answers and refuses, which its
+ * contract test writes (`core-answers/methods.json`, from `REFUSED` in the
+ * core's `methods.rs`): read, not copied, so the mock can't drift from it.
  */
-const answerLikeThePhone = (svc: ServiceHandle): void => {
+const CORE_METHODS = new URL(
+  '../../../protocol/test/fixtures/core-answers/methods.json',
+  import.meta.url,
+);
+
+/** The methods the phone's core answers with `METHOD_NOT_FOUND`. */
+export const refusedByThePhone = (): string[] => {
+  const table = JSON.parse(readFileSync(CORE_METHODS, 'utf8')) as { refused?: unknown };
+  if (!Array.isArray(table.refused)) throw new Error(`No refused list in ${CORE_METHODS.href}`);
+  return table.refused.filter((m): m is string => typeof m === 'string');
+};
+
+/**
+ * The phone's core answers `hello` with an empty machine, has no Claude Code
+ * and refuses what it doesn't answer (as `methods.rs` in the core does): the
+ * main mock answers the same. Resolves to the service's own dispatch, which
+ * the mock pairs through as the core would (its pairing isn't the core's yet).
+ */
+const answerLikeThePhone = (svc: ServiceHandle): ServiceHandle['router']['dispatch'] => {
   const dispatch = svc.router.dispatch.bind(svc.router);
+  const refused = new Set(refusedByThePhone());
   svc.router.dispatch = async (req, ctx) => {
+    if (refused.has(req.method)) {
+      return {
+        id: req.id,
+        error: { code: 'METHOD_NOT_FOUND', message: `Unknown method ${req.method}` },
+      };
+    }
     const res = await dispatch(req, ctx);
     if (!('result' in res)) return res;
     if (req.method === 'hello') {
@@ -1241,11 +1271,17 @@ const answerLikeThePhone = (svc: ServiceHandle): void => {
     }
     return res;
   };
+  return dispatch;
 };
 
-/** Pairs the phone mock with the remote mock, waiting for it to answer; throws when it never does. */
+/**
+ * Pairs the phone mock with the remote mock through the service's own
+ * `dispatch` (the screens' `machines.pair` is refused, as by the core),
+ * waiting for it to answer; throws when it never does.
+ */
 const pairPhone = async (
   svc: ServiceHandle,
+  dispatch: ServiceHandle['router']['dispatch'],
   to: { port: number; pairingCode: string },
 ): Promise<void> => {
   let closed = false;
@@ -1254,12 +1290,20 @@ const pairPhone = async (
   for (let i = 0; i < PHONE_PAIR_TRIES; i++) {
     if (closed) return;
     try {
-      await callLocal(svc, 'machines.pair', {
-        address: '127.0.0.1',
-        port: to.port,
-        code: to.pairingCode,
-        deviceName: PHONE_NAME,
-      });
+      const res = await dispatch(
+        {
+          id: 0,
+          method: 'machines.pair',
+          params: {
+            address: '127.0.0.1',
+            port: to.port,
+            code: to.pairingCode,
+            deviceName: PHONE_NAME,
+          },
+        },
+        { clientId: 'mock', origin: 'local' },
+      );
+      if ('error' in res) throw new Error(`machines.pair: ${res.error.message}`);
       return;
     } catch (err) {
       last = err;
@@ -1378,7 +1422,7 @@ export const startMockService = async (o: MockOptions = {}): Promise<MockService
     updater.attach(svc);
     presence?.attach(svc);
     addMockMethods(svc, updater, presence);
-    if (phone) answerLikeThePhone(svc);
+    const ownDispatch = phone ? answerLikeThePhone(svc) : undefined;
     if (remote) {
       // The real service retries a listener that failed to start; a test mock must say so at once.
       if (!svc.remote) {
@@ -1419,7 +1463,8 @@ export const startMockService = async (o: MockOptions = {}): Promise<MockService
       });
     }
     // In the background: the remote mock may still be starting.
-    const paired = phone?.pairWith ? pairPhone(svc, phone.pairWith) : undefined;
+    const paired =
+      phone?.pairWith && ownDispatch ? pairPhone(svc, ownDispatch, phone.pairWith) : undefined;
     paired?.catch((err: unknown) =>
       process.stderr.write(
         `The phone mock could not pair: ${err instanceof Error ? err.message : String(err)}\n`,
