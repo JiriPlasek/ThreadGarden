@@ -13,7 +13,7 @@
 //!
 //! `core-contract.test.ts` parses every answer with the protocol's schemas.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -67,6 +67,15 @@ type Handler = Arc<dyn Fn(Value) -> BoxFuture<'static, Answer> + Send + Sync>;
 #[derive(Default, Clone)]
 pub struct Router {
     handlers: HashMap<&'static str, Handler>,
+    /// The methods that write the store: one screen's are applied in the order it sent them.
+    ordered: HashSet<&'static str>,
+}
+
+/// A request frame read as the protocol has it.
+pub struct Request {
+    pub id: Value,
+    pub method: String,
+    pub params: Value,
 }
 
 impl Router {
@@ -101,6 +110,7 @@ impl Router {
         F: Fn(Value) -> Answer + Send + Sync + 'static,
     {
         let handler = Arc::new(handler);
+        self.ordered.insert(method);
         self.register(method, move |p| {
             let handler = handler.clone();
             async move {
@@ -117,11 +127,44 @@ impl Router {
         names
     }
 
-    /// Answers one request frame (`{ id, method, params }`) with the response frame.
+    /// Answers one request frame (`{ id, method, params }`) with the response
+    /// frame. The server parses first instead, to keep a screen's writes in order.
+    #[cfg(test)]
     pub async fn dispatch(&self, frame: &str) -> Value {
-        let Some((id, method, params)) = parse_request(frame) else {
-            return json!({ "id": 0, "error": { "code": "INVALID_PARAMS", "message": "Malformed request" } });
-        };
+        match Router::parse(frame) {
+            Ok(req) => self.answer_request(req).await,
+            Err(refusal) => refusal,
+        }
+    }
+
+    /// Reads a request frame, or the answer to one that isn't a request.
+    pub fn parse(frame: &str) -> Result<Request, Value> {
+        parse_request(frame)
+            .map(|(id, method, params)| Request { id, method, params })
+            .ok_or_else(|| {
+                json!({ "id": 0, "error": { "code": "INVALID_PARAMS", "message": "Malformed request" } })
+            })
+    }
+
+    /// Puts a method that reads the store in the screen's order too, so it
+    /// sees the writes that screen sent before it (as on the service, where
+    /// they're handled one message after the other).
+    pub fn in_order(&mut self, method: &'static str) {
+        assert!(
+            self.handlers.contains_key(method),
+            "{method} isn't registered"
+        );
+        self.ordered.insert(method);
+    }
+
+    /// Whether `method` touches the store, so must wait for the screen's earlier writes.
+    pub fn is_ordered(&self, method: &str) -> bool {
+        self.ordered.contains(method)
+    }
+
+    /// The response frame to a request.
+    pub async fn answer_request(&self, req: Request) -> Value {
+        let Request { id, method, params } = req;
         let answer = match self.handlers.get(method.as_str()) {
             Some(handler) => handler(params).await,
             None => Err(MethodError::new(
@@ -232,6 +275,10 @@ pub fn register(router: &mut Router, deps: Deps) {
             .map_err(|_| MethodError::internal())?;
         Ok(json!({}))
     });
+
+    for read in ["settings.get", "uiState.get", "drafts.get"] {
+        router.in_order(read);
+    }
 
     // ── This PC has nothing: empty answers ────────────────────────────────
     let empties = [

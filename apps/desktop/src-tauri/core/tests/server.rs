@@ -524,3 +524,53 @@ fn sockets_that_never_authenticate_are_capped_at_8() {
     });
     core.stop();
 }
+
+#[test]
+fn one_screens_writes_land_in_the_order_it_sent_them() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = core(dir.path());
+    block_on(async {
+        let mut ws = open(&core).await;
+        let mut id = 0;
+        // Fifty rounds, so a pass isn't luck.
+        for round in 0..50 {
+            for n in 1..=20 {
+                id += 1;
+                let frame = json!({ "id": id, "method": "uiState.set",
+                                    "params": { "key": "k", "value": [round, n] } });
+                ws.send(Message::text(frame.to_string())).await.unwrap();
+            }
+            id += 1;
+            let answer = call(&mut ws, id, "uiState.get", json!({ "key": "k" })).await;
+            assert_eq!(
+                answer["result"]["value"],
+                json!([round, 20]),
+                "round {round}"
+            );
+        }
+    });
+    core.stop();
+}
+
+#[test]
+fn a_refused_socket_is_closed_by_the_core_at_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = core(dir.path());
+    block_on(async {
+        let wrong = [format!("threadgarden.{}", "0".repeat(64))];
+        let mut ws = open_with(core.port(), "/", &wrong).await.unwrap();
+        let started = std::time::Instant::now();
+        // As a browser does: the close frame, then wait for the core to end the connection.
+        assert!(matches!(next(&mut ws).await, Next::Closed(Some(4401))));
+        loop {
+            match next(&mut ws).await {
+                Next::Closed(None) | Next::Error(_) => break,
+                Next::Timeout => panic!("the core never closed the connection"),
+                _ => {}
+            }
+        }
+        let took = started.elapsed();
+        assert!(took < Duration::from_millis(500), "took {took:?}");
+    });
+    core.stop();
+}

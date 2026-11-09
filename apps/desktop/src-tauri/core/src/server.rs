@@ -9,8 +9,9 @@ use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use subtle::ConstantTimeEq;
+use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, watch};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot, watch};
 use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::http::header::SEC_WEBSOCKET_PROTOCOL;
@@ -144,6 +145,9 @@ async fn refuse(mut ws: WebSocketStream<TcpStream>) {
         return;
     }
     let tcp = ws.get_mut();
+    // The core ends the connection first (a FIN), so the peer needn't wait
+    // for it; reading on below keeps that a FIN rather than a reset.
+    let _ = tcp.shutdown().await;
     let mut buf = [0u8; 4096];
     let mut drained = 0;
     let _ = tokio::time::timeout(Duration::from_secs(2), async {
@@ -196,6 +200,8 @@ async fn screen(
         }
         let _ = sink.close().await;
     });
+    // The end of this screen's latest write, which the next one waits for.
+    let mut last_write: Option<oneshot::Receiver<()>> = None;
     loop {
         let frame = tokio::select! {
             frame = frames.next() => frame,
@@ -216,9 +222,33 @@ async fn screen(
             }
             Some(Err(_)) => break,
         };
+        let req = match Router::parse(&text) {
+            Ok(req) => req,
+            Err(refusal) => {
+                let _ = tx.send(Message::text(refusal.to_string()));
+                continue;
+            }
+        };
+        // A write waits for this screen's write before it, as the service
+        // applies them in message order; everything else runs at once.
+        let turn = server.router.is_ordered(&req.method).then(|| {
+            let (done, next) = oneshot::channel::<()>();
+            (last_write.replace(next), done)
+        });
         let (server, tx) = (server.clone(), tx.clone());
         tokio::spawn(async move {
-            let answer = server.router.dispatch(&text).await;
+            let done = match turn {
+                Some((before, done)) => {
+                    if let Some(before) = before {
+                        // Sent or dropped, the write before is over either way.
+                        let _ = before.await;
+                    }
+                    Some(done)
+                }
+                None => None,
+            };
+            let answer = server.router.answer_request(req).await;
+            drop(done);
             let _ = tx.send(Message::text(answer.to_string()));
         });
     }

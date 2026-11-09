@@ -77,6 +77,7 @@ impl Machines {
     pub fn register(&self, router: &mut Router) {
         let m = self.clone();
         router.answer("machines.list", move |_| Ok(m.list()));
+        router.in_order("machines.list");
         // The core reads tokens itself, so a handed-over one changes nothing: accepted for a known machine.
         let m = self.clone();
         router.answer("machines.unlock", move |p| {
