@@ -18,6 +18,8 @@
         ? 'error'
         : 'ok',
   );
+  /** A call in the run waits on its automatic permission check (shown while the group is closed). */
+  const checking = $derived(items.some((i) => i.checkingPermission && i.status === 'running'));
   const targets = $derived(
     items
       .map((i) => {
@@ -44,6 +46,9 @@
     <span class="shrink-0 font-medium">{groupLabel(name, items.length)}</span>
     {#if !open}
       <span class="text-muted-foreground min-w-0 truncate font-mono">{targets}</span>
+      {#if checking}
+        <span class="text-muted-foreground shrink-0">· Checking permission…</span>
+      {/if}
     {/if}
   </button>
   {#if open}

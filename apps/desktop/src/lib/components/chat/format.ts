@@ -5,9 +5,6 @@ export const tokens = (n: number): string => {
   return `${(n / 1_000_000).toFixed(1)}M`;
 };
 
-/** US-dollar cost with enough precision for small turns. */
-export const usd = (n: number): string => `$${n < 1 ? n.toFixed(4) : n.toFixed(2)}`;
-
 /** 850 ms, 12.3 s, 4m 05s. */
 export const duration = (ms: number): string => {
   if (ms < 1000) return `${Math.round(ms)} ms`;

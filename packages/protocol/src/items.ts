@@ -33,6 +33,8 @@ export const ChatItemSchema = z.discriminatedUnion('kind', [
     name: z.string(),
     input: z.unknown(),
     status: z.enum(['running', 'ok', 'error']),
+    /** Running, and waiting longer than usual (about 4 s) on its automatic permission check. */
+    checkingPermission: z.literal(true).optional(),
     resultText: z.string().optional(),
     resultTruncated: z.boolean().optional(),
     parentToolUseId: z.string().nullable(),
@@ -76,6 +78,8 @@ export const ChatItemSchema = z.discriminatedUnion('kind', [
     durationMs: z.number().optional(),
     costUsd: z.number().optional(),
     usage: z.unknown().optional(),
+    /** When the turn finished (epoch ms): the `result`'s arrival, or the turn's last reply in history. */
+    ts: z.number().optional(),
   }),
   z.object({
     kind: z.literal('unknown'),

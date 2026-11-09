@@ -252,6 +252,27 @@ describe('Db', () => {
 
 // ── v1.2 C1: chat titles ──
 
+describe('context windows', () => {
+  it("a chat's own size first, else its model's; the latest report wins", () => {
+    const db = openDb(':memory:');
+    expect(db.contextWindow('s1', 'claude-a')).toBeUndefined();
+    db.setContextWindow('s1', 'claude-a', 200_000);
+    expect(db.contextWindow('s1', 'claude-a')).toBe(200_000);
+    // Another chat on the same model borrows its size.
+    expect(db.contextWindow('s2', 'claude-a')).toBe(200_000);
+    expect(db.contextWindow('s2', undefined)).toBeUndefined();
+    db.setContextWindow('s2', 'claude-a', 1_000_000);
+    expect(db.contextWindow('s2', 'claude-a')).toBe(1_000_000);
+    expect(db.contextWindow('s1', 'claude-a')).toBe(200_000);
+    expect(db.contextWindow('s3', 'claude-a')).toBe(1_000_000);
+    // Without the model, only the chat's own size.
+    db.setContextWindow('s4', undefined, 300_000);
+    expect(db.contextWindow('s4', 'claude-b')).toBe(300_000);
+    expect(db.contextWindow('s5', 'claude-b')).toBeUndefined();
+    db.close();
+  });
+});
+
 describe('v1.2 chat titles', () => {
   it('stores provisional and generated titles apart from the custom title', () => {
     const db = openDb(':memory:');

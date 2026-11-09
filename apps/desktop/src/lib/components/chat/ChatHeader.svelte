@@ -25,13 +25,14 @@
   import { useApp, useScope } from '#lib/state/context.js';
   import { machineNameOf } from '#lib/state/machines.svelte.js';
   import { endSessionWarning } from './end-session';
-  import { tokens, usd } from './format';
+  import { tokens } from './format';
   import RunningTaskList from './RunningTaskList.svelte';
 
   /**
    * Title row plus the chat's controls (spec §6.4): model, effort and permission
-   * mode pickers (chats Threadgarden runs only), context usage, cost, auth, Claude
-   * Code version, End session and Copy resume command. A chat running outside
+   * mode pickers (chats Threadgarden runs only), context usage (a running chat's,
+   * else the history's: a bar when the window's size is known, the tokens alone
+   * when not), auth, Claude Code version, End session and Copy resume command. A chat running outside
    * Threadgarden gets Stop when Claude Code's background service runs it, and a
    * "stop it there" note when it is open in a terminal. The Activity button
    * shows or hides the Activity panel (Ctrl/Cmd+., handled by ChatView). The
@@ -401,8 +402,11 @@
           {usage.pct}%
         </span>
       {/if}
-      {#if header.costUsd !== undefined}
-        <span title="Session cost">{usd(header.costUsd)}</span>
+      {#if !usage && header.contextTokens !== undefined}
+        <!-- From the history, when no run of this chat (or its model) has said the window's size. -->
+        <span title="Context: {tokens(header.contextTokens)} tokens"
+          >{tokens(header.contextTokens)} tokens</span
+        >
       {/if}
       {#if header.auth}
         <span

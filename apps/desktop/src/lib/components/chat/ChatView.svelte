@@ -23,6 +23,7 @@
   import { chatKey, type ChatRef } from '#lib/state/refs.js';
   import type { SendWhen } from '#lib/state/scheduled.svelte.js';
   import ActivityPanel from './ActivityPanel.svelte';
+  import { cacheExpiresAt, cacheWarning } from './cache-warning';
   import ChatHeader from './ChatHeader.svelte';
   import type { RequestActions } from './context';
   import MessageList from './MessageList.svelte';
@@ -418,6 +419,25 @@
   // ── interrupt ───────────────────────────────────────────────────────────
 
   const working = $derived(!readOnly && chat?.ownedLive === true && chat.status === 'working');
+
+  // ── cache notice ────────────────────────────────────────────────────────
+
+  /** The time the notice was last judged at: now, and again when the last reply's cache runs out. */
+  let cacheClock = $state(Date.now());
+  $effect(() => {
+    const expires = chat ? cacheExpiresAt(chat.header) : undefined;
+    if (expires === undefined) return;
+    const wait = expires - Date.now();
+    cacheClock = Date.now();
+    if (wait <= 0) return;
+    // setTimeout holds at most ~24.8 days; a cache lives an hour at most.
+    const timer = setTimeout(() => (cacheClock = Date.now()), Math.min(wait + 1_000, 2 ** 31 - 1));
+    return () => clearTimeout(timer);
+  });
+  /** "Cache expired · re-reads 180k tokens" beside Send (not while Claude works: it re-warms the cache). */
+  const cacheNotice = $derived(
+    chat && !working && !readOnly ? cacheWarning(chat.header, cacheClock) : null,
+  );
 
   const interrupt = (): void => {
     chats.interrupt(sessionId).catch((err: unknown) => {
@@ -884,6 +904,7 @@
               {editing}
               autofocus={focusComposer}
               disabled={machineAway && queueRefusal !== null}
+              {cacheNotice}
             />
           </div>
         {/if}

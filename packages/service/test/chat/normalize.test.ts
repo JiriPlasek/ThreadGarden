@@ -209,6 +209,46 @@ describe('Normalizer', () => {
     ]);
   });
 
+  it('marks a tool call waiting on its permission check, and clears it on done or its result', () => {
+    const n = new Normalizer();
+    const check = (status: string, toolUseId = 'toolu_1'): SDKMessage =>
+      sdk({
+        type: 'system',
+        subtype: 'permission_check_status',
+        tool_use_id: toolUseId,
+        status,
+        uuid: `pc_${status}`,
+        session_id: 's',
+      });
+    n.push(
+      assistant('a1', [
+        { type: 'tool_use', id: 'toolu_1', name: 'Bash', input: { command: 'ls' } },
+      ]),
+    );
+
+    const checking = n.push(check('checking'));
+    expect(checking.replace).toBe(true);
+    expect(checking.items).toEqual([
+      expect.objectContaining({ id: 'a1', status: 'running', checkingPermission: true }),
+    ]);
+
+    const done = n.push(check('done'));
+    expect(done.replace).toBe(true);
+    expect(done.items).toHaveLength(1);
+    expect(done.items[0]).not.toHaveProperty('checkingPermission');
+
+    n.push(check('checking'));
+    const result = n.push(
+      user('u1', [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'ok' }]),
+    );
+    expect(result.items[0]).toMatchObject({ id: 'a1', status: 'ok' });
+    expect(result.items[0]).not.toHaveProperty('checkingPermission');
+
+    // A frame for a call that is not (or no longer) running is display-only: nothing to show.
+    expect(n.push(check('checking', 'toolu_unknown'))).toEqual({ items: [], replace: false });
+    expect(n.push(check('checking'))).toEqual({ items: [], replace: false });
+  });
+
   it('renders TodoWrite as todo', () => {
     const n = new Normalizer();
     const r = n.push(
@@ -346,7 +386,16 @@ describe('Normalizer', () => {
         }),
       ).items,
     ).toEqual([
-      { kind: 'result', id: 'r1', isError: false, durationMs: 1234, costUsd: 0.05, usage },
+      {
+        kind: 'result',
+        // No reply this turn: the result's own uuid.
+        id: 'r1',
+        ts: expect.any(Number),
+        isError: false,
+        durationMs: 1234,
+        costUsd: 0.05,
+        usage,
+      },
     ]);
     expect(
       n.push(
@@ -664,7 +713,7 @@ describe('Normalizer', () => {
     expect(n.push(result)).toEqual({
       items: [
         { kind: 'assistantText', id: 'e2', markdown: 'cut', streaming: false },
-        { kind: 'result', id: 'r1', isError: true },
+        { kind: 'result', id: 'r1', ts: expect.any(Number), isError: true },
       ],
       replace: true,
     });
@@ -978,5 +1027,223 @@ describe('Normalizer: user messages the CLI writes itself', () => {
       texts.map((t, i) => special(`u${i}`, t)),
     );
     expect(items.map((i) => (i.kind === 'user' ? i.text : i.kind))).toEqual(texts);
+  });
+});
+
+describe('Normalizer: turn ends', () => {
+  const T0 = Date.parse('2026-11-09T04:00:00.000Z');
+  const at = (ms: number): string => new Date(T0 + ms).toISOString();
+  const usage = (
+    input: number,
+    write: number,
+    read: number,
+    output: number,
+    ttl: '1h' | '5m' = '5m',
+  ) => ({
+    input_tokens: input,
+    cache_creation_input_tokens: write,
+    cache_read_input_tokens: read,
+    output_tokens: output,
+    cache_creation: {
+      ephemeral_1h_input_tokens: ttl === '1h' ? write : 0,
+      ephemeral_5m_input_tokens: ttl === '5m' ? write : 0,
+    },
+  });
+  /** A history entry (`getSessionMessages`): a timestamp, no `result`. */
+  const entry = (m: Record<string, unknown>, ms: number): SessionMessage =>
+    ({
+      session_id: 's',
+      parent_tool_use_id: null,
+      ...m,
+      timestamp: at(ms),
+    }) as unknown as SessionMessage;
+  const prompt = (uuid: string, text: string, ms: number, extra: Record<string, unknown> = {}) =>
+    entry({ type: 'user', uuid, message: { role: 'user', content: text }, ...extra }, ms);
+  const reply = (
+    uuid: string,
+    msgId: string,
+    content: unknown[],
+    u: Record<string, unknown>,
+    ms: number,
+    parent: string | null = null,
+  ) =>
+    entry(
+      {
+        type: 'assistant',
+        uuid,
+        parent_tool_use_id: parent,
+        message: { id: msgId, role: 'assistant', model: 'claude-test', content, usage: u },
+      },
+      ms,
+    );
+  const toolResult = (uuid: string, toolUseId: string, ms: number) =>
+    entry(
+      {
+        type: 'user',
+        uuid,
+        message: {
+          role: 'user',
+          content: [{ type: 'tool_result', tool_use_id: toolUseId, content: 'ok' }],
+        },
+      },
+      ms,
+    );
+
+  it("in history, ends each turn with a footer: finish time, duration and the turn's summed usage", () => {
+    const n = new Normalizer({ turnEnds: true });
+    const items = run(n, [
+      prompt('u1', 'hi', 0),
+      reply(
+        'a1',
+        'm1',
+        [{ type: 'tool_use', id: 't1', name: 'Bash', input: {} }],
+        usage(10, 1000, 5000, 50, '1h'),
+        5_000,
+      ),
+      toolResult('r1', 't1', 6_000),
+      reply('a2', 'm2', [{ type: 'thinking', thinking: 'hm' }], usage(5, 200, 6000, 30), 11_000),
+      // The same API message's next block repeats its usage: counted once.
+      reply('a3', 'm2', [{ type: 'text', text: 'done' }], usage(5, 200, 6000, 30), 12_000),
+      // A subagent's reply is not the main loop's.
+      reply('s1', 'm9', [{ type: 'text', text: 'sub' }], usage(1, 1, 1, 1), 12_500, 't1'),
+      prompt('u2', 'again', 60_000),
+    ]);
+    expect(items.find((i) => i.kind === 'result')).toEqual({
+      kind: 'result',
+      id: 'turn-end:a3',
+      isError: false,
+      durationMs: 12_000,
+      ts: T0 + 12_000,
+      usage: {
+        input_tokens: 15,
+        cache_creation_input_tokens: 1200,
+        cache_read_input_tokens: 11_000,
+        output_tokens: 80,
+      },
+    });
+    // The footer comes right before the next prompt.
+    expect(items.map((i) => i.id).slice(-2)).toEqual(['turn-end:a3', 'u2']);
+    // The last turn has had no reply yet: finish() ends nothing.
+    expect(n.finish()).toEqual({ items: [], replace: false });
+  });
+
+  it('a compaction after the last reply marks it: the next message sends the summary, not that context', () => {
+    const n = new Normalizer({ turnEnds: true });
+    run(n, [
+      prompt('u1', 'hi', 0),
+      reply('a1', 'm1', [{ type: 'text', text: 'x' }], usage(10, 1000, 250_000, 50, '1h'), 5_000),
+      // Idle compaction (or /compact) in history: the summary entry, no boundary message.
+      entry(
+        {
+          type: 'user',
+          uuid: 'c1',
+          isCompactSummary: true,
+          message: { role: 'user', content: 'This session is being continued…' },
+        },
+        3_300_000,
+      ),
+    ]);
+    expect(n.lastReply()).toMatchObject({ at: T0 + 5_000, compacted: true });
+    // A reply after it is the context again.
+    run(n, [prompt('u2', 'go on', 4_000_000)]);
+    run(n, [reply('a2', 'm2', [{ type: 'text', text: 'y' }], usage(5, 9000, 0, 40), 4_010_000)]);
+    expect(n.lastReply()).not.toHaveProperty('compacted');
+
+    // Live: the boundary message.
+    const live = new Normalizer({ now: () => 7 });
+    live.push(
+      sdk({
+        type: 'assistant',
+        uuid: 'a1',
+        session_id: 's',
+        parent_tool_use_id: null,
+        message: { id: 'm1', role: 'assistant', content: [], usage: usage(1, 2, 3, 4) },
+      }),
+    );
+    live.push(
+      sdk({
+        type: 'system',
+        subtype: 'compact_boundary',
+        uuid: 'b1',
+        session_id: 's',
+        compact_metadata: { trigger: 'auto', pre_tokens: 250_000 },
+      }),
+    );
+    expect(live.lastReply()).toMatchObject({ compacted: true });
+  });
+
+  it('history without timestamps has no times: never the time it was read', () => {
+    const n = new Normalizer({ turnEnds: true, now: () => 5 });
+    const bare = (m: Record<string, unknown>) =>
+      ({ session_id: 's', parent_tool_use_id: null, ...m }) as unknown as SessionMessage;
+    run(n, [
+      bare({ type: 'user', uuid: 'u1', message: { role: 'user', content: 'hi' } }),
+      bare({
+        type: 'assistant',
+        uuid: 'a1',
+        message: { id: 'm1', role: 'assistant', content: [], usage: usage(1, 2, 3, 4) },
+      }),
+    ]);
+    const [footer] = n.finish().items;
+    expect(footer).toMatchObject({ id: 'turn-end:a1' });
+    expect(footer).not.toHaveProperty('ts');
+    expect(footer).not.toHaveProperty('durationMs');
+    expect(n.lastReply()).toEqual({ contextTokens: 10, cacheTtlMs: 5 * 60_000 });
+  });
+
+  it('finish() ends the last turn; a queued message does not split a turn', () => {
+    const n = new Normalizer({ turnEnds: true });
+    const items = run(n, [
+      prompt('u1', 'hi', 0),
+      reply('a1', 'm1', [{ type: 'text', text: 'one' }], usage(1, 10, 0, 5), 2_000),
+      prompt('q1', 'also this', 3_000, { isQueuedCommand: true }),
+      reply('a2', 'm2', [{ type: 'text', text: 'two' }], usage(1, 10, 10, 5), 4_000),
+    ]);
+    expect(items.filter((i) => i.kind === 'result')).toEqual([]);
+    expect(n.finish().items).toEqual([
+      expect.objectContaining({ id: 'turn-end:a2', durationMs: 4_000, ts: T0 + 4_000 }),
+    ]);
+  });
+
+  it('live, a result is the footer of its turn, with the id history gives it, and when it came', () => {
+    const n = new Normalizer({ now: () => 999 });
+    run(n, [
+      assistant('a1', [{ type: 'text', text: 'hi' }]),
+      assistant('s1', [{ type: 'text', text: 'sub' }], { parent: 'toolu_x' }),
+    ]);
+    const r = n.push(
+      sdk({
+        type: 'result',
+        subtype: 'success',
+        uuid: 'res1',
+        session_id: 's',
+        duration_ms: 1234,
+        is_error: false,
+        usage: { input_tokens: 1, output_tokens: 2 },
+      }),
+    );
+    expect(r.items).toEqual([
+      expect.objectContaining({ kind: 'result', id: 'turn-end:a1', durationMs: 1234, ts: 999 }),
+    ]);
+    // A prompt never ends a turn live: the result does.
+    expect(n.push(user('u2', 'next')).items.map((i) => i.kind)).toEqual(['user']);
+  });
+
+  it('knows the last main-thread reply: when, how big the context is, its model and cache lifetime', () => {
+    const n = new Normalizer({ turnEnds: true });
+    expect(n.lastReply()).toBeUndefined();
+    run(n, [
+      prompt('u1', 'hi', 0),
+      reply('a1', 'm1', [{ type: 'text', text: 'x' }], usage(10, 1000, 5000, 50, '1h'), 5_000),
+      // Only cache reads: the cache keeps the lifetime it was written with.
+      reply('a2', 'm2', [{ type: 'text', text: 'y' }], usage(2, 0, 6060, 40), 9_000),
+      reply('s1', 'm9', [{ type: 'text', text: 'sub' }], usage(1, 1, 1, 1), 9_500, 'toolu_x'),
+    ]);
+    expect(n.lastReply()).toEqual({
+      at: T0 + 9_000,
+      contextTokens: 2 + 6060 + 40,
+      model: 'claude-test',
+      cacheTtlMs: 3_600_000,
+    });
   });
 });

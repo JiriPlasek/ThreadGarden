@@ -85,6 +85,7 @@
     resetAt,
     limited = false,
     disabled = false,
+    cacheNotice = null,
     editing,
     textarea = $bindable(null),
   }: {
@@ -113,6 +114,8 @@
     limited?: boolean;
     /** Nothing can be sent now (the chat view says why). */
     disabled?: boolean;
+    /** The next message re-reads the whole context uncached ("Cache expired · re-reads 180k tokens"). */
+    cacheNotice?: string | null;
     /** Editing a scheduled message: what it is, how to save it and how to stop. */
     editing?: {
       label: string;
@@ -691,6 +694,14 @@
       >
         <ClockIcon class="size-3.5" aria-hidden="true" /> Send when the limit resets
       </button>
+    {/if}
+    {#if cacheNotice && !editing}
+      <span
+        class="text-destructive shrink-0 text-[0.6875rem] font-medium"
+        role="status"
+        title="The prompt cache has expired: the next message sends the whole conversation again, uncached"
+        >{cacheNotice}</span
+      >
     {/if}
     <div class="flex items-center">
       <button
