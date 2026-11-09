@@ -136,7 +136,7 @@ There's no Threadgarden account; it uses whatever Claude Code uses, except that 
 ## Known limitations
 
 - Tabs only: no split view or embedded terminal.
-- No `bypassPermissions`, and terminal-only commands like `/config` or `/login` don't work.
+- Terminal-only commands like `/config` or `/login` don't work.
 - Chats running in another terminal are shown, not driven.
 - After Claude Code compacts a chat, history starts at the compaction.
 - Clicking a notification brings the window forward, but doesn't open the chat.

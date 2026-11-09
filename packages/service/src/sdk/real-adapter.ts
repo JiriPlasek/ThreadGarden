@@ -98,6 +98,11 @@ export const buildSessionEnv = (
  * (Stop / Esc) only aborts the current turn and spares running background
  * agents and processes; without it the CLI fails closed and an interrupt
  * kills them all. Ending the session still ends them.
+ *
+ * `allowDangerouslySkipPermissions` only makes `bypassPermissions` available,
+ * like the CLI's `--allow-dangerously-skip-permissions`. Claude Code also
+ * rejects that opt-in as root, even in Default mode, so root sessions omit it.
+ * Other sessions opt in so their header can switch to bypass without restarting.
  */
 export const buildQueryOptions = (o: StartOptions): Options => {
   const opts: Options = {
@@ -110,6 +115,7 @@ export const buildQueryOptions = (o: StartOptions): Options => {
     canUseTool: o.canUseTool,
     env: { ...o.env, CLAUDE_CODE_STARTUP_FAILURE_RESULTS: '1' },
   };
+  if (process.getuid?.() !== 0) opts.allowDangerouslySkipPermissions = true;
   if (o.resume !== undefined) {
     opts.resume = o.resume;
     if (o.sessionStore !== undefined) opts.sessionStore = o.sessionStore;

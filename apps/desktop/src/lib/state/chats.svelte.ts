@@ -483,9 +483,6 @@ export class ChatsState {
   /** Starts a chat in `cwd` with its first message; resolves to the new chat's id. */
   create = async (p: Params<'chat.create'>): Promise<string> => {
     if (!this.api) throw new Error('Not connected to the Threadgarden service');
-    if (p.permissionMode === 'bypassPermissions') {
-      throw new Error('Threadgarden does not offer the bypassPermissions mode'); // Ruling R11
-    }
     const params = { ...p };
     if (!params.images?.length) delete params.images;
     // Its machine is away: the message waits on this device (the copy API's

@@ -726,39 +726,25 @@ describe('LiveSession', () => {
     expect(headers().at(-1)).toMatchObject({ auth: { kind: 'subscription', label: 'Claude Max' } });
   });
 
-  it('rejects bypassPermissions when creating or resuming, before starting a process', () => {
-    const { adapter, registry, opts } = setup();
+  it('creates and resumes a chat in bypassPermissions', () => {
+    const { adapter, opts } = setup();
     const bypass = { ...opts, permissionMode: 'bypassPermissions' as const };
-    for (const start of [
-      () => LiveSession.create('/p', { text: 'go' }, bypass),
-      () => LiveSession.resume('sess-1', '/p', bypass),
-    ]) {
-      let caught: unknown;
-      try {
-        start();
-      } catch (err) {
-        caught = err;
-      }
-      expect(caught).toBeInstanceOf(ServiceError);
-      expect(caught).toMatchObject({
-        code: 'INVALID_PARAMS',
-        message: expect.stringMatching(/bypassPermissions/),
-      });
-    }
-    expect(adapter.started).toEqual([]);
-    expect(registry.live.size).toBe(0);
+    LiveSession.create('/p', { text: 'go' }, bypass);
+    LiveSession.resume('sess-1', '/p', bypass);
+    expect(adapter.started.map((o) => o.permissionMode)).toEqual([
+      'bypassPermissions',
+      'bypassPermissions',
+    ]);
   });
 
-  it('rejects setPermissionMode(bypassPermissions) and keeps the current mode', async () => {
+  it('switches a running chat to bypassPermissions', async () => {
     const { adapter, opts } = setup();
     const s = LiveSession.create('/p', { text: 'go' }, { ...opts, permissionMode: 'default' });
     const fake = adapter.lastSession();
-    await expect(s.setPermissionMode('bypassPermissions')).rejects.toMatchObject({
-      name: 'ServiceError',
-      code: 'INVALID_PARAMS',
-    });
-    expect(fake.permissionMode).toBe('default');
-    expect(s.choices.permissionMode).toBe('default');
+    await s.setPermissionMode('bypassPermissions');
+    expect(fake.permissionMode).toBe('bypassPermissions');
+    expect(s.choices.permissionMode).toBe('bypassPermissions');
+    expect(s.header.permissionMode).toBe('bypassPermissions');
   });
 
   it('setModel, setPermissionMode and setEffort apply live and update the header', async () => {
@@ -877,7 +863,7 @@ describe('LiveSession', () => {
     expect(authLabel({})).toEqual({ kind: 'other', label: 'Unknown' });
   });
 
-  it('never offers or applies a setMode → bypassPermissions suggestion (R11)', async () => {
+  it('never offers or applies a setMode → bypassPermissions suggestion as an Always allow rule', async () => {
     const { adapter, opts } = setup();
     const s = LiveSession.create('/p', { text: 'go' }, opts);
     const fake = adapter.lastSession();

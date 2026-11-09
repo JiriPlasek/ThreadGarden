@@ -10,6 +10,7 @@
   import PowerIcon from '@lucide/svelte/icons/power';
   import TerminalIcon from '@lucide/svelte/icons/terminal';
   import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
+  import BypassPermissionsDialog from '#lib/components/BypassPermissionsDialog.svelte';
   import { Button } from '#lib/components/ui/button/index.js';
   import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
   import { formatHoldUntil } from '#lib/format/hold.js';
@@ -63,12 +64,12 @@
   /** With more than one machine, the header names the chat's machine. */
   const machineName = $derived(machines.several ? machineNameOf(machines, machineId) : null);
 
-  /** Ruling R11: Threadgarden never offers bypassPermissions. */
   const PERMISSION_MODES = [
     { value: 'default', label: 'Default' },
     { value: 'acceptEdits', label: 'Accept edits' },
     { value: 'plan', label: 'Plan' },
     { value: 'auto', label: 'Auto' },
+    { value: 'bypassPermissions', label: 'Bypass permissions' },
   ];
 
   const sessionId = $derived(chat.sessionId);
@@ -122,6 +123,18 @@
   const modeOptions = $derived(withCurrent(PERMISSION_MODES, header.permissionMode));
 
   let error = $state<string | null>(null);
+  let confirmBypass = $state(false);
+  let bypassSession: string | null = null;
+  const changePermissionMode = (event: Event & { currentTarget: HTMLSelectElement }): void => {
+    const current = header.permissionMode ?? 'default';
+    if (event.currentTarget.value === 'bypassPermissions' && current !== 'bypassPermissions') {
+      event.currentTarget.value = current;
+      bypassSession = sessionId;
+      confirmBypass = true;
+      return;
+    }
+    void change(chats.setPermissionMode, () => header.permissionMode ?? 'default')(event);
+  };
 
   const change =
     (apply: (sessionId: string, value: string) => Promise<void>, current: () => string) =>
@@ -366,7 +379,7 @@
       class={selectClass}
       disabled={!live}
       value={header.permissionMode ?? 'default'}
-      onchange={change(chats.setPermissionMode, () => header.permissionMode ?? 'default')}
+      onchange={changePermissionMode}
     >
       {#each modeOptions as o (o.value)}
         <option value={o.value} disabled={!PERMISSION_MODES.some((m) => m.value === o.value)}
@@ -430,6 +443,13 @@
 >
   <RunningTaskList tasks={runningTasks} />
 </ConfirmDialog>
+
+<BypassPermissionsDialog
+  bind:open={confirmBypass}
+  onConfirm={async () => {
+    if (bypassSession) await chats.setPermissionMode(bypassSession, 'bypassPermissions');
+  }}
+/>
 
 <ConfirmDialog
   bind:open={confirmStop}

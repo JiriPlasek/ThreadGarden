@@ -186,19 +186,9 @@ type Pending = {
 type Rec = Record<string, unknown>;
 
 /**
- * Ruling R11: Threadgarden v1 never runs a session in `bypassPermissions` (and never
- * sets the SDK's `allowDangerouslySkipPermissions`).
+ * A suggested rule that would switch the session to bypassPermissions. Never offered:
+ * bypass is chosen only in the permission mode picker, not by answering a request.
  */
-const rejectBypass = (mode: string | undefined): void => {
-  if (mode === 'bypassPermissions') {
-    throw new ServiceError(
-      'INVALID_PARAMS',
-      'Threadgarden does not support the bypassPermissions permission mode',
-    );
-  }
-};
-
-/** A suggested rule that would switch the session to bypassPermissions (never offered, R11). */
 const isBypassSuggestion = (u: unknown): boolean =>
   isRec(u) && u.type === 'setMode' && u.mode === 'bypassPermissions';
 
@@ -290,7 +280,6 @@ export class LiveSession {
   private publishedRunning = 0;
 
   constructor(private readonly deps: LiveSessionOptions) {
-    rejectBypass(deps.permissionMode);
     this.log = deps.log ?? new EventLog();
     this.timers = deps.timers ?? realTimers;
     this.normalizer = new Normalizer({ now: deps.now });
@@ -577,7 +566,6 @@ export class LiveSession {
   }
 
   async setPermissionMode(value: string): Promise<void> {
-    rejectBypass(value);
     const mode = value as PermissionMode;
     await this.requireLive().setPermissionMode(mode);
     this.chosen.permissionMode = mode;
@@ -858,7 +846,7 @@ export class LiveSession {
 
     const variant =
       toolName === 'AskUserQuestion' ? 'question' : toolName === 'ExitPlanMode' ? 'plan' : 'tool';
-    // R11: a "switch to bypassPermissions" rule is never offered.
+    // A "switch to bypassPermissions" rule is never offered (isBypassSuggestion).
     const suggestions = (options.suggestions ?? []).filter((u) => !isBypassSuggestion(u));
     const item: PermissionItem = {
       kind: 'permissionRequest',

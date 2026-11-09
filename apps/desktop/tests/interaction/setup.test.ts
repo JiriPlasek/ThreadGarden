@@ -61,7 +61,7 @@ describe('setup screen (spec §6.4)', () => {
 });
 
 describe('new chat dialog (spec §5.4)', () => {
-  it('starts a chat in a project with the chosen model and mode, never bypass', async () => {
+  it('starts a chat in a project with the chosen model and mode', async () => {
     const { server, app, context } = await setup((server) => {
       Object.assign(server.handlers, {
         'projects.list': () => [project('p1', 'alpha'), project('p2', 'beta')],
@@ -85,8 +85,25 @@ describe('new chat dialog (spec §5.4)', () => {
     const modes = within(mode)
       .getAllByRole('option')
       .map((o) => (o as HTMLOptionElement).value);
-    expect(modes).toEqual(['default', 'acceptEdits', 'plan', 'auto']);
+    expect(modes).toEqual(['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions']);
     await userEvent.selectOptions(mode, 'plan');
+    await userEvent.selectOptions(mode, 'bypassPermissions');
+    const cancelled = await screen.findByRole('alertdialog', {
+      name: 'Enable bypass permissions?',
+    });
+    expect((mode as HTMLSelectElement).value).toBe('plan');
+    expect(server.calls('chat.create')).toHaveLength(0);
+    await userEvent.click(within(cancelled).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect((mode as HTMLSelectElement).value).toBe('plan');
+    await userEvent.selectOptions(mode, 'bypassPermissions');
+    const confirmation = await screen.findByRole('alertdialog', {
+      name: 'Enable bypass permissions?',
+    });
+    await userEvent.click(
+      within(confirmation).getByRole('button', { name: 'Enable bypass permissions' }),
+    );
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
     await waitFor(() =>
       expect(within(dialog).getAllByRole('option', { name: 'Opus' })).toHaveLength(1),
     );
@@ -99,7 +116,7 @@ describe('new chat dialog (spec §5.4)', () => {
       cwd: '/work/beta',
       text: 'add a health check',
       model: 'opus',
-      permissionMode: 'plan',
+      permissionMode: 'bypassPermissions',
     });
     await waitFor(() => expect(app.tabs.active).toBe(here('new-1')));
     expect(app.interaction.newChat.open).toBe(false);
