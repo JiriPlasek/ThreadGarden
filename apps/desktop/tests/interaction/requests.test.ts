@@ -95,6 +95,23 @@ describe('permission card', () => {
     });
   });
 
+  // The chat reads needsYou, not working, while a request waits; its turn still runs.
+  it("while a request waits in the composer's place, Stop and Esc end the turn", async () => {
+    const { server } = await renderChat({ status: 'needsYou', items: [bashRequest()] });
+    const card = await screen.findByRole('group', { name: /permission request/i });
+    const docked = document.querySelector<HTMLElement>('[data-docked-request]')!;
+    await userEvent.click(within(docked).getByRole('button', { name: /^stop$/i }));
+    await waitFor(() => expect(server.calls('chat.interrupt')).toHaveLength(1));
+    expect(server.calls('chat.interrupt')[0]!.params).toEqual({ sessionId: SID });
+
+    within(card)
+      .getByRole('button', { name: /^allow$/i })
+      .focus();
+    await userEvent.keyboard('{Escape}');
+    await waitFor(() => expect(server.calls('chat.interrupt')).toHaveLength(2));
+    expect(server.calls('chat.respond')).toHaveLength(0);
+  });
+
   it('labels suggestions by rule and destination, never offering bypass', () => {
     expect(
       suggestionLabel({

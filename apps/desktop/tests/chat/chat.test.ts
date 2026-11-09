@@ -374,6 +374,23 @@ describe('chat view', () => {
     expect(container.textContent).not.toContain('$');
   });
 
+  it('a chat on an API key shows its session cost in the header', async () => {
+    const { app, context } = await setup((server) => {
+      server.handlers['chat.open'] = (p) => ({
+        summary: summary((p as { sessionId: string }).sessionId, { status: 'idle', live: true }),
+        header: { model: 'opus', costUsd: 0.42, auth: { kind: 'apiKey', label: 'API key' } },
+        items: [user('u1', 'hi'), text('a1', 'hello')],
+        hasMore: false,
+        seq: 1,
+      });
+      server.handlers['chat.models'] = () => [];
+    });
+    await app.chats.open('keyed');
+    render(ChatView, { context, props: { ref: { machineId: LOCAL, sessionId: 'keyed' } } });
+    const cost = await screen.findByText('$0.4200');
+    expect(cost.getAttribute('title')).toBe('Session cost (API billing)');
+  });
+
   it('copy resume command copies claude --resume <id>', async () => {
     const writeText = vi.fn(async (text: string) => void text);
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });

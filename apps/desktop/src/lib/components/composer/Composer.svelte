@@ -697,7 +697,7 @@
     {/if}
     {#if cacheNotice && !editing}
       <span
-        class="text-destructive shrink-0 text-[0.6875rem] font-medium"
+        class="shrink-0 text-[0.6875rem] font-medium text-amber-900 dark:text-amber-200"
         role="status"
         title="The prompt cache has expired: the next message sends the whole conversation again, uncached"
         >{cacheNotice}</span

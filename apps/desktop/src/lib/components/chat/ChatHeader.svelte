@@ -27,7 +27,7 @@
   import { machineNameOf } from '#lib/state/machines.svelte.js';
   import { END_OTHER_DESCRIPTION, END_OTHER_TITLE } from './end-other';
   import { endSessionWarning } from './end-session';
-  import { tokens } from './format';
+  import { tokens, usd } from './format';
   import RunningTaskList from './RunningTaskList.svelte';
 
   /**
@@ -446,6 +446,10 @@
         <span title="Context: {tokens(header.contextTokens)} tokens"
           >{tokens(header.contextTokens)} tokens</span
         >
+      {/if}
+      {#if header.auth?.kind === 'apiKey' && header.costUsd !== undefined}
+        <!-- On an API key the SDK's running total is what the chat has cost; on a subscription it means little. -->
+        <span title="Session cost (API billing)">{usd(header.costUsd)}</span>
       {/if}
       {#if header.auth}
         <span

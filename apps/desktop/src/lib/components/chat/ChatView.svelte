@@ -471,7 +471,7 @@
   };
 
   const onkeydown = (e: KeyboardEvent): void => {
-    if (e.key === 'Escape' && !e.defaultPrevented && working) {
+    if (e.key === 'Escape' && !e.defaultPrevented && stoppable) {
       e.preventDefault();
       interrupt();
     }
@@ -532,6 +532,12 @@
     const first = pending[0];
     return !readOnly && first?.kind === 'permissionRequest' ? first : undefined;
   });
+  /**
+   * Stop (and Esc) can end the turn: while Claude works, and while a request
+   * waits in the composer's place. The chat then reads `needsYou`, not
+   * `working`, but its turn is still running; stopping cancels the request.
+   */
+  const stoppable = $derived(working || (docked !== undefined && chat?.ownedLive === true));
 
   // The next waiting request takes focus once the previous one is answered; when
   // the last is answered the composer comes back with focus, as in the terminal.
@@ -941,8 +947,8 @@
                 {#key docked.requestId}
                   <RequestCard item={docked} docked />
                 {/key}
-                {#if working}
-                  <!-- Other work can run while one request waits: Stop stays in reach (Esc too). -->
+                {#if stoppable}
+                  <!-- The turn runs on while a request waits: Stop stays in reach (Esc too). -->
                   <div class="mt-1.5 flex justify-end">
                     <button
                       type="button"
