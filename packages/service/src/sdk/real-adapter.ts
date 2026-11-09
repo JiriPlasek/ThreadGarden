@@ -60,21 +60,28 @@ const realSdk: SdkApi = {
  * The environment for a session's `claude` process. The SDK's `env` option
  * replaces the inherited environment, so `base` is copied whole (PATH, HOME,
  * proxies, a gateway's auth token, a cloud provider…) except
- * `ANTHROPIC_API_KEY`: the only API key a session gets is Threadgarden's own
- * (§5.5), added only when set.
+ * `ANTHROPIC_API_KEY`: on a desktop the only API key a session gets is
+ * Threadgarden's own (§5.5), added only when set.
  *
  * An inherited key is dropped because SDK sessions use it without asking.
  * Interactive Claude Code asks once before an `ANTHROPIC_API_KEY` from the
  * environment replaces the subscription login and remembers a refusal; in
  * SDK mode the key is always used when present, so a key left in the shell
  * would quietly bill the API instead of the plan.
+ *
+ * `keepInheritedKey` (a headless service) keeps it: there the environment
+ * comes only from its systemd unit (in a WSL worker's distro too), written on
+ * purpose, and Threadgarden's own key never reaches a remote machine
+ * (`auth.setApiKey` is local only), so it is the only way to run such a
+ * machine on an API key.
  */
 export const buildSessionEnv = (
   base: NodeJS.ProcessEnv,
   apiKey: string | null,
+  opts: { keepInheritedKey?: boolean } = {},
 ): Record<string, string | undefined> => {
   const env: Record<string, string | undefined> = { ...base };
-  delete env.ANTHROPIC_API_KEY;
+  if (opts.keepInheritedKey !== true) delete env.ANTHROPIC_API_KEY;
   if (apiKey !== null) env.ANTHROPIC_API_KEY = apiKey;
   return env;
 };

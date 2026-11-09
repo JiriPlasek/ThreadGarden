@@ -131,7 +131,7 @@ The app only talks to localhost, your paired machines, GitHub (for updates) and 
 
 ## Login and terms
 
-There's no Threadgarden account; it uses whatever Claude Code uses. Anthropic's Agent SDK docs say third-party products shouldn't offer claude.ai login unless approved, and point to API keys instead. Whether your setup is fine is between you and Anthropic's terms, so give them a read (this isn't legal advice). For an API-key-only build, set `THREADGARDEN_API_KEY_ONLY=1`. More in [docs/architecture.md](docs/architecture.md#authentication).
+There's no Threadgarden account; it uses whatever Claude Code uses, except that the desktop ignores an `ANTHROPIC_API_KEY` left in your environment (set a key in Settings instead), so chats don't quietly bill the API. Anthropic's Agent SDK docs say third-party products shouldn't offer claude.ai login unless approved, and point to API keys instead. Whether your setup is fine is between you and Anthropic's terms, so give them a read (this isn't legal advice). For an API-key-only build, set `THREADGARDEN_API_KEY_ONLY=1`. More in [docs/architecture.md](docs/architecture.md#authentication).
 
 ## Known limitations
 

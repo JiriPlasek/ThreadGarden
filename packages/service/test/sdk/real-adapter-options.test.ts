@@ -138,6 +138,18 @@ describe('buildSessionEnv', () => {
     });
   });
 
+  // A headless machine's environment is its systemd unit, set on purpose, and
+  // Threadgarden's own key never reaches it: the key is kept there.
+  it('keeps an inherited ANTHROPIC_API_KEY for a headless service', () => {
+    const unit = { PATH: '/usr/bin', ANTHROPIC_API_KEY: 'from-unit' };
+    expect(buildSessionEnv(unit, null, { keepInheritedKey: true })).toEqual(unit);
+    expect(buildSessionEnv(unit, 'threadgarden', { keepInheritedKey: true })).toEqual({
+      PATH: '/usr/bin',
+      ANTHROPIC_API_KEY: 'threadgarden',
+    });
+    expect(buildSessionEnv(unit, null, { keepInheritedKey: false })).toEqual({ PATH: '/usr/bin' });
+  });
+
   it('keeps the other credentials Claude Code reads, which are chosen on purpose', () => {
     const base = {
       ANTHROPIC_AUTH_TOKEN: 'gateway',

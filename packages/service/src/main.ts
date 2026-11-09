@@ -152,8 +152,8 @@ export type StartOptions = {
   projectTools?: Tools;
   /**
    * Base environment of session processes (default `process.env`). An
-   * inherited `ANTHROPIC_API_KEY` is dropped and Threadgarden's API key, when
-   * set, is added on top (`buildSessionEnv`).
+   * inherited `ANTHROPIC_API_KEY` is dropped (kept by a headless service) and
+   * Threadgarden's API key, when set, is added on top (`buildSessionEnv`).
    */
   sessionEnv?: NodeJS.ProcessEnv;
   /**
@@ -375,6 +375,9 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   const claude: { current: ClaudeStatus | undefined } = { current: opts.claude };
   /** Threadgarden's optional API key (§5.5): in memory only, never logged or stored. */
   let apiKey: string | null = null;
+  /** A session's environment (`buildSessionEnv`); a headless service keeps an inherited API key. */
+  const sessionEnvOf = (): Record<string, string | undefined> =>
+    buildSessionEnv(opts.sessionEnv ?? process.env, apiKey, { keepInheritedKey: headless });
   let db: Db | undefined;
   let power: PowerHub | undefined;
   /** Messages waiting for paired machines that are away (protocol 11; with a database). */
@@ -769,7 +772,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
           const c = claude.current;
           return c && 'path' in c ? c.path : '';
         },
-        env: () => buildSessionEnv(opts.sessionEnv ?? process.env, apiKey),
+        env: sessionEnvOf,
         emit: (e) => emitChat(e),
         now: clock,
         ...(opts.sessionTimers ? { timers: opts.sessionTimers } : {}),
@@ -882,7 +885,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
           }
           return {
             claudePath: c.path,
-            env: buildSessionEnv(opts.sessionEnv ?? process.env, apiKey),
+            env: sessionEnvOf(),
           };
         },
         firstReply: (id) => sessionHost.get(id)?.firstReplyText() ?? '',
