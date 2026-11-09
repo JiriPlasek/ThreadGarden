@@ -22,7 +22,7 @@ use futures_util::{SinkExt, StreamExt};
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::crypto::CryptoProvider;
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
-use rustls::{ClientConfig, DigitallySignedStruct, SignatureScheme};
+use rustls::{CertificateError, ClientConfig, DigitallySignedStruct, SignatureScheme};
 use serde_json::{Value, json};
 use subtle::ConstantTimeEq;
 use tokio::net::TcpStream;
@@ -104,6 +104,72 @@ pub fn pairing_proof(code: &str, fingerprint: &str, nonce: &str) -> String {
     hex(tag.as_ref())
 }
 
+/// A certificate's validity (`notBefore`, `notAfter`) in Unix seconds, read
+/// from its DER: Certificate → TBSCertificate → (version, serial, signature,
+/// issuer) → Validity. None when it can't be read; the pin (the exact
+/// certificate) is checked either way.
+pub fn validity(der: &[u8]) -> Option<(u64, u64)> {
+    /// One DER element: its tag, its contents and what follows it.
+    fn element(buf: &[u8]) -> Option<(u8, &[u8], &[u8])> {
+        let (&tag, rest) = buf.split_first()?;
+        let (&first, rest) = rest.split_first()?;
+        let (len, rest) = if first < 0x80 {
+            (first as usize, rest)
+        } else {
+            let n = (first & 0x7f) as usize;
+            if n == 0 || n > 4 || rest.len() < n {
+                return None;
+            }
+            let len = rest[..n].iter().fold(0usize, |l, b| (l << 8) | *b as usize);
+            (len, &rest[n..])
+        };
+        (rest.len() >= len).then(|| (tag, &rest[..len], &rest[len..]))
+    }
+    let (_, cert, _) = element(der)?;
+    let (_, tbs, _) = element(cert)?;
+    let mut rest = tbs;
+    let (tag, _, after) = element(rest)?;
+    // `[0] version` is there in every v3 certificate.
+    if tag == 0xa0 {
+        rest = after;
+    }
+    for _ in 0..3 {
+        rest = element(rest)?.2; // serial, signature, issuer
+    }
+    let (_, validity, _) = element(rest)?;
+    let (t1, before, after) = element(validity)?;
+    let (t2, not_after, _) = element(after)?;
+    Some((time(t1, before)?, time(t2, not_after)?))
+}
+
+/// UTCTime (`YYMMDDHHMMSSZ`, tag 0x17) or GeneralizedTime (`YYYYMMDDHHMMSSZ`, 0x18), in Unix seconds.
+fn time(tag: u8, text: &[u8]) -> Option<u64> {
+    let text = std::str::from_utf8(text).ok()?.strip_suffix('Z')?;
+    let (year, rest) = match tag {
+        0x17 => {
+            let yy: i64 = text.get(..2)?.parse().ok()?;
+            (if yy < 50 { 2000 + yy } else { 1900 + yy }, text.get(2..)?)
+        }
+        0x18 => (text.get(..4)?.parse().ok()?, text.get(4..)?),
+        _ => return None,
+    };
+    if rest.len() != 10 || !rest.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let field = |i: usize| rest[i..i + 2].parse::<i64>().ok();
+    let (month, day, hour, minute, second) =
+        (field(0)?, field(2)?, field(4)?, field(6)?, field(8)?);
+    // Days from 1970-01-01 to the date (Howard Hinnant's `days_from_civil`).
+    let y = if month <= 2 { year - 1 } else { year };
+    let era = y.div_euclid(400);
+    let yoe = y - era * 400;
+    let mp = (month + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + day - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era * 146_097 + doe - 719_468;
+    u64::try_from(days * 86_400 + hour * 3600 + minute * 60 + second).ok()
+}
+
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
@@ -117,6 +183,8 @@ fn provider() -> Arc<CryptoProvider> {
 struct Verifier {
     pin: Option<String>,
     seen: Arc<Mutex<Option<Peer>>>,
+    /// Why the pinned certificate's dates failed, in OpenSSL's words (as `link.ts` reads them).
+    date_error: Arc<Mutex<Option<&'static str>>>,
     provider: Arc<CryptoProvider>,
 }
 
@@ -127,7 +195,7 @@ impl ServerCertVerifier for Verifier {
         _intermediates: &[CertificateDer<'_>],
         _server_name: &ServerName<'_>,
         _ocsp: &[u8],
-        _now: UnixTime,
+        now: UnixTime,
     ) -> Result<ServerCertVerified, rustls::Error> {
         let seen = Peer {
             fingerprint: fingerprint(end_entity.as_ref()),
@@ -137,14 +205,31 @@ impl ServerCertVerifier for Verifier {
             .pin
             .as_ref()
             .is_none_or(|want| bool::from(want.as_bytes().ct_eq(seen.fingerprint.as_bytes())));
+        let dates = validity(end_entity.as_ref());
         *self.seen.lock().unwrap_or_else(|e| e.into_inner()) = Some(seen);
-        if matches {
-            Ok(ServerCertVerified::assertion())
-        } else {
-            Err(rustls::Error::General(
+        if !matches {
+            return Err(rustls::Error::General(
                 "the machine presented another certificate".into(),
-            ))
+            ));
         }
+        // The pinned certificate itself, out of date: a clock is off (one or
+        // the other), not another machine. Pairing takes any certificate, as
+        // the service's does.
+        if self.pin.is_some()
+            && let Some((not_before, not_after)) = dates
+        {
+            let now = now.as_secs();
+            let (error, why) = if now < not_before {
+                (CertificateError::NotValidYet, "CERT_NOT_YET_VALID")
+            } else if now > not_after {
+                (CertificateError::Expired, "CERT_HAS_EXPIRED")
+            } else {
+                return Ok(ServerCertVerified::assertion());
+            };
+            *self.date_error.lock().unwrap_or_else(|e| e.into_inner()) = Some(why);
+            return Err(rustls::Error::InvalidCertificate(error));
+        }
+        Ok(ServerCertVerified::assertion())
     }
 
     // The handshake is still signed by the key of the certificate seen: checked as usual.
@@ -215,9 +300,11 @@ pub async fn open_link(
             .insert("Sec-WebSocket-Protocol", offered);
 
         let seen = Arc::new(Mutex::new(None));
+        let date_error = Arc::new(Mutex::new(None));
         let verifier = Verifier {
             pin: pin.map(str::to_string),
             seen: seen.clone(),
+            date_error: date_error.clone(),
             provider: provider(),
         };
         let config = ClientConfig::builder_with_provider(provider())
@@ -234,8 +321,12 @@ pub async fn open_link(
             .await
             .map_err(|e| {
                 let peer = seen.lock().unwrap_or_else(|p| p.into_inner()).clone();
-                match (pin, peer) {
-                    (Some(want), Some(p)) if p.fingerprint != want => LinkError::Pin,
+                let dates = *date_error.lock().unwrap_or_else(|p| p.into_inner());
+                match (pin, peer, dates) {
+                    (Some(want), Some(p), _) if p.fingerprint != want => LinkError::Pin,
+                    (_, _, Some(why)) => {
+                        LinkError::Unreachable(format!("certificate date check failed ({why})"))
+                    }
                     _ => unreachable(&e),
                 }
             })?;
@@ -519,6 +610,15 @@ mod tests {
             pairing_proof("ABCDEFGHJKMN", "AA:BB", "nonce"),
             "2e2be48b1ee66f6ffc2b645850bfc72629e6f3192268f43d7edf3ea053e7a20d"
         );
+    }
+
+    #[test]
+    fn certificate_times_read_as_unix_seconds() {
+        assert_eq!(time(0x17, b"700101000000Z"), Some(0));
+        assert_eq!(time(0x17, b"000301000000Z"), Some(951_868_800));
+        assert_eq!(time(0x18, b"20991231235959Z"), Some(4_102_444_799));
+        assert_eq!(time(0x18, b"2099123123595Z"), None);
+        assert_eq!(validity(b"\x30\x00"), None);
     }
 
     #[test]

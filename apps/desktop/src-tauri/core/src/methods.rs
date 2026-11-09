@@ -486,7 +486,19 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(Store::open(dir.path()).unwrap());
         let secrets = Arc::new(crate::secrets::MemorySecrets::default());
-        let router = crate::router(store, secrets, "Phone".into(), LocalEvents::default());
+        let relays = Arc::new(crate::relay::Relays::new(
+            store.clone(),
+            secrets.clone(),
+            crate::Timing::default(),
+            tokio::sync::broadcast::channel(1).0,
+        ));
+        let router = crate::router(
+            store,
+            secrets,
+            "Phone".into(),
+            LocalEvents::default(),
+            relays,
+        );
         for m in router.methods() {
             assert!(!REFUSED.contains(&m), "{m}");
         }

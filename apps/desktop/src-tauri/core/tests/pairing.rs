@@ -475,3 +475,78 @@ fn a_machine_is_renamed_and_moved_its_pin_kept() {
     });
     core.stop();
 }
+
+#[test]
+fn a_revoke_answered_by_a_4403_close_counts_as_revoked() {
+    let dir = tempfile::tempdir().unwrap();
+    let (core, _) = core_with_secrets(dir.path());
+    let desk = FakeMachine::start(Behaviour {
+        revoke_closes: true,
+        ..Behaviour::default()
+    });
+    block_on(async {
+        let mut ws = open(&core).await;
+        assert!(
+            call(&mut ws, 1, "machines.pair", pair_params(desk.port, CODE))
+                .await
+                .get("result")
+                .is_some()
+        );
+        let answer = call(
+            &mut ws,
+            2,
+            "machines.remove",
+            json!({ "machineId": "machine-desk", "revoke": true }),
+        )
+        .await;
+        assert_eq!(answer["result"], json!({ "revoked": true }));
+    });
+    core.stop();
+}
+
+/// Secrets that can't be written (a Keystore key that's gone).
+struct Unwritable;
+
+impl Secrets for Unwritable {
+    fn get(&self, _: &str) -> Result<Option<String>, threadgarden_core::secrets::SecretsError> {
+        Ok(None)
+    }
+    fn set(&self, _: &str, _: &str) -> Result<(), threadgarden_core::secrets::SecretsError> {
+        Err(threadgarden_core::secrets::SecretsError(
+            "no keystore".into(),
+        ))
+    }
+    fn delete(&self, _: &str) -> Result<(), threadgarden_core::secrets::SecretsError> {
+        Ok(())
+    }
+}
+
+#[test]
+fn a_pairing_that_cant_be_kept_is_undone_on_the_machine() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = threadgarden_core::CoreConfig {
+        secrets: Arc::new(Unwritable),
+        ..support::config(dir.path())
+    };
+    let core = threadgarden_core::Core::spawn(config).unwrap();
+    let desk = FakeMachine::start(Behaviour::default());
+    block_on(async {
+        let mut ws = open(&core).await;
+        let answer = call(&mut ws, 1, "machines.pair", pair_params(desk.port, CODE)).await;
+        assert_eq!(answer["error"]["code"], "INTERNAL", "{answer}");
+        assert_eq!(
+            call(&mut ws, 2, "machines.list", json!({})).await["result"],
+            json!([])
+        );
+        // The machine is asked to forget the device it just made.
+        let asked = async {
+            while !desk.methods().contains(&"devices.revoke".to_string()) {
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(5), asked)
+            .await
+            .expect("devices.revoke");
+    });
+    core.stop();
+}

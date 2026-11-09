@@ -2,7 +2,9 @@
 //! headless service's remote listener answers a device (`remote-server.ts`):
 //! `threadgarden-pair` for pairing (503 while no code is live) with
 //! `pair.proof` and `pair.claim`, and `threadgarden-device.<token>` for the
-//! paired device, with `devices.revoke`. It writes down every frame it gets.
+//! paired device, with `devices.revoke`; anything else a device sends is
+//! echoed back as it came (text as text, binary as binary), so a relay can
+//! be checked both ways. It writes down every frame it gets.
 #![allow(dead_code)]
 
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -29,6 +31,14 @@ pub struct Behaviour {
     /// `pair.claim` answers this error code instead.
     pub claim_error: Option<&'static str>,
     pub machine_id: String,
+    /// The certificate's validity, as years (default: valid now).
+    pub valid_years: Option<(i32, i32)>,
+    /// A device socket is closed with this code at once (a revoked or unknown token).
+    pub device_close: Option<u16>,
+    /// A device socket is never read once open: no pongs, as a link that died silently.
+    pub stall: bool,
+    /// `devices.revoke` closes the socket 4403 instead of answering.
+    pub revoke_closes: bool,
 }
 
 impl Default for Behaviour {
@@ -38,6 +48,10 @@ impl Default for Behaviour {
             proof_fingerprint: None,
             claim_error: None,
             machine_id: "machine-desk".into(),
+            valid_years: None,
+            device_close: None,
+            stall: false,
+            revoke_closes: false,
         }
     }
 }
@@ -47,6 +61,7 @@ type Hook = Box<dyn Fn() + Send + Sync>;
 #[derive(Default)]
 struct Seen {
     frames: Mutex<Vec<String>>,
+    binaries: Mutex<Vec<Vec<u8>>>,
     protocols: Mutex<Vec<String>>,
     connections: AtomicUsize,
     on_revoke: Mutex<Option<Hook>>,
@@ -82,10 +97,15 @@ pub fn proof(code: &str, fingerprint: &str, nonce: &str) -> String {
 
 impl FakeMachine {
     pub fn start(behaviour: Behaviour) -> FakeMachine {
-        let cert =
-            rcgen::generate_simple_self_signed(vec!["threadgarden-test".to_string()]).unwrap();
-        let der = cert.cert.der().to_vec();
-        let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(cert.key_pair.serialize_der()));
+        let mut params =
+            rcgen::CertificateParams::new(vec!["threadgarden-test".to_string()]).unwrap();
+        if let Some((from, to)) = behaviour.valid_years {
+            params.not_before = rcgen::date_time_ymd(from, 1, 1);
+            params.not_after = rcgen::date_time_ymd(to, 1, 1);
+        }
+        let key_pair = rcgen::KeyPair::generate().unwrap();
+        let der = params.self_signed(&key_pair).unwrap().der().to_vec();
+        let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(key_pair.serialize_der()));
         let config =
             ServerConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
                 .with_safe_default_protocol_versions()
@@ -145,6 +165,11 @@ impl FakeMachine {
         self.seen.frames.lock().unwrap().clone()
     }
 
+    /// Every binary frame it received.
+    pub fn binaries(&self) -> Vec<Vec<u8>> {
+        self.seen.binaries.lock().unwrap().clone()
+    }
+
     /// The methods it was asked, in order.
     pub fn methods(&self) -> Vec<String> {
         self.frames()
@@ -184,6 +209,13 @@ impl FakeMachine {
 impl Drop for FakeMachine {
     fn drop(&mut self) {
         self.stop();
+    }
+}
+
+fn close_frame(code: u16) -> tokio_tungstenite::tungstenite::protocol::CloseFrame {
+    tokio_tungstenite::tungstenite::protocol::CloseFrame {
+        code: code.into(),
+        reason: "".into(),
     }
 }
 
@@ -240,14 +272,51 @@ impl Machine {
             return;
         };
         if matches!(kind, Socket::Refused) {
-            let _ = ws.close(None).await;
+            // As the remote listener: a credential it doesn't know is closed 4401 at once.
+            let _ = ws.close(Some(close_frame(4401))).await;
             return;
         }
+        if matches!(kind, Socket::Device) {
+            if let Some(code) = self.behaviour.device_close {
+                let _ = ws.close(Some(close_frame(code))).await;
+                while ws.next().await.is_some() {}
+                return;
+            }
+            if self.behaviour.stall {
+                std::future::pending::<()>().await;
+            }
+        }
         while let Some(Ok(msg)) = ws.next().await {
-            let Message::Text(text) = msg else { continue };
+            let text = match msg {
+                Message::Text(text) => text,
+                Message::Binary(b) => {
+                    self.seen.binaries.lock().unwrap().push(b.to_vec());
+                    if ws.send(Message::Binary(b)).await.is_err() {
+                        return;
+                    }
+                    continue;
+                }
+                _ => continue,
+            };
             self.seen.frames.lock().unwrap().push(text.to_string());
             let req: Value = serde_json::from_str(text.as_str()).unwrap_or_default();
-            let answer = self.answer(&kind, req["method"].as_str().unwrap_or(""), &req["params"]);
+            let method = req["method"].as_str().unwrap_or("");
+            if matches!(kind, Socket::Device) && method != "devices.revoke" {
+                // Not ours to answer: back as it came.
+                if ws.send(Message::Text(text)).await.is_err() {
+                    return;
+                }
+                continue;
+            }
+            if method == "devices.revoke" && self.behaviour.revoke_closes {
+                if let Some(hook) = self.seen.on_revoke.lock().unwrap().as_ref() {
+                    hook();
+                }
+                let _ = ws.close(Some(close_frame(4403))).await;
+                while ws.next().await.is_some() {}
+                return;
+            }
+            let answer = self.answer(&kind, method, &req["params"]);
             let frame = match answer {
                 Ok(result) => json!({ "id": req["id"], "result": result }),
                 Err(code) => json!({ "id": req["id"], "error": { "code": code, "message": code } }),

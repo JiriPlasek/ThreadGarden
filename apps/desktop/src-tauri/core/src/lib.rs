@@ -20,6 +20,7 @@ use tokio::sync::{broadcast, watch};
 mod machines;
 mod methods;
 mod pairing;
+mod relay;
 pub mod secrets;
 mod server;
 mod settings;
@@ -45,10 +46,32 @@ pub struct CoreConfig {
 }
 
 /// What the core tells the app around it (the Android service), with or
-/// without screens. None yet: alerts come with Task 9.
+/// without screens. Alerts come with Task 9.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
-pub enum CoreEvent {}
+pub enum CoreEvent {
+    /// A link to a machine never opened or stopped answering: for a debug
+    /// log. The machine and why, never a frame or a token.
+    LinkFailed { machine_id: String, reason: String },
+}
+
+/// How long a relay waits for its machine, and how often an open link is
+/// pinged (a pong not back by the next ping means the link is dead): the
+/// service's 10 s and 15 s.
+#[derive(Debug, Clone, Copy)]
+pub struct Timing {
+    pub link_timeout: Duration,
+    pub ping: Duration,
+}
+
+impl Default for Timing {
+    fn default() -> Self {
+        Timing {
+            link_timeout: Duration::from_secs(10),
+            ping: Duration::from_secs(15),
+        }
+    }
+}
 
 #[derive(Debug)]
 pub enum CoreError {
@@ -79,6 +102,7 @@ pub(crate) fn router(
     secrets: Arc<dyn Secrets>,
     machine_name: String,
     events: LocalEvents,
+    relays: Arc<relay::Relays>,
 ) -> Router {
     let mut router = Router::default();
     methods::register(
@@ -88,7 +112,7 @@ pub(crate) fn router(
             machine_name,
         },
     );
-    machines::Machines::new(store, secrets, events).register(&mut router);
+    machines::Machines::new(store, secrets, events, relays).register(&mut router);
     router
 }
 
@@ -196,17 +220,31 @@ impl Core {
     /// A new core of its own, whatever else runs: for tests, and for
     /// [`Core::start`]. Two on one data dir would overwrite each other's store.
     pub fn spawn(config: CoreConfig) -> Result<CoreHandle, CoreError> {
+        Core::spawn_with_timing(config, Timing::default())
+    }
+
+    /// [`Core::spawn`] with other relay timings (tests: a link timeout of
+    /// 10 s and pings every 15 s are too slow to wait for).
+    pub fn spawn_with_timing(config: CoreConfig, timing: Timing) -> Result<CoreHandle, CoreError> {
         let store = Arc::new(Store::open(&config.data_dir)?);
         let token: String = store::random_bytes::<32>()?
             .iter()
             .map(|b| format!("{b:02x}"))
             .collect();
         let local_events = LocalEvents::default();
+        let (events, _) = broadcast::channel(64);
+        let relays = Arc::new(relay::Relays::new(
+            store.clone(),
+            config.secrets.clone(),
+            timing,
+            events.clone(),
+        ));
         let router = router(
             store,
             config.secrets,
             config.machine_name,
             local_events.clone(),
+            relays.clone(),
         );
         let methods = router.methods();
         // 127.0.0.1 only, never 0.0.0.0 or ::1: nothing off this phone can reach it.
@@ -236,9 +274,9 @@ impl Core {
             token: token.clone(),
             router,
             events: local_events,
+            relays,
         });
         runtime.spawn(server::serve(listener, server, stopped));
-        let (events, _) = broadcast::channel(64);
         Ok(CoreHandle(Arc::new(Inner {
             port,
             token,

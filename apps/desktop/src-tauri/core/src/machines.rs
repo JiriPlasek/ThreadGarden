@@ -11,6 +11,7 @@ use serde_json::{Value, json};
 
 use crate::methods::{LocalEvents, MethodError, Router, blocking, string_param};
 use crate::pairing;
+use crate::relay::{self, Relays};
 use crate::secrets::Secrets;
 use crate::store::{Store, StoredMachine};
 
@@ -99,14 +100,21 @@ pub struct Machines {
     store: Arc<Store>,
     secrets: Arc<dyn Secrets>,
     events: LocalEvents,
+    relays: Arc<Relays>,
 }
 
 impl Machines {
-    pub fn new(store: Arc<Store>, secrets: Arc<dyn Secrets>, events: LocalEvents) -> Self {
+    pub fn new(
+        store: Arc<Store>,
+        secrets: Arc<dyn Secrets>,
+        events: LocalEvents,
+        relays: Arc<Relays>,
+    ) -> Self {
         Machines {
             store,
             secrets,
             events,
+            relays,
         }
     }
 
@@ -232,11 +240,16 @@ impl Machines {
     fn update(&self, p: &Value) -> Result<Value, MethodError> {
         let mut m = self.known(string_param(p, "machineId")?)?;
         let (name, address, port) = (trimmed(p, "name", 40)?, address(p)?, port(p)?);
+        let was = (m.address.clone(), m.port);
         m.name = name.unwrap_or(m.name);
         m.address = address.unwrap_or(m.address);
         m.port = port.unwrap_or(m.port);
-        // Its pin stays. A move closes its relays (Task 7), and the screens reconnect.
+        // Its pin stays.
         self.store.put_machine(m.clone()).map_err(internal)?;
+        // Relays to the old address end; the screens reconnect to the new one (same pin).
+        if (m.address.clone(), m.port) != was {
+            self.relays.drop_machine(&m.id, relay::UNREACHABLE);
+        }
         self.changed();
         Ok(self.listed(&m))
     }
@@ -261,6 +274,8 @@ impl Machines {
             Ok(token)
         })
         .await?;
+        // Forgotten, token included, before its relays close: one opened now finds nothing (4404).
+        self.relays.drop_machine(&machine.id, relay::LOCKED);
         self.changed();
         let revoked = match (revoke, token) {
             (true, Some(token)) => {
@@ -322,7 +337,17 @@ mod tests {
         let secrets = Arc::new(MemorySecrets::default());
         (
             dir,
-            Machines::new(store, secrets.clone(), LocalEvents::default()),
+            Machines::new(
+                store.clone(),
+                secrets.clone(),
+                LocalEvents::default(),
+                Arc::new(Relays::new(
+                    store,
+                    secrets.clone(),
+                    crate::Timing::default(),
+                    tokio::sync::broadcast::channel(1).0,
+                )),
+            ),
             secrets,
         )
     }
