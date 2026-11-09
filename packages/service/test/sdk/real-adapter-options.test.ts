@@ -122,13 +122,41 @@ describe('buildSessionEnv', () => {
     expect(base).not.toHaveProperty('ANTHROPIC_API_KEY');
   });
 
-  it('keeps an inherited ANTHROPIC_API_KEY when Threadgarden has no key of its own', () => {
-    expect(buildSessionEnv({ ANTHROPIC_API_KEY: 'from-shell' }, null)).toEqual({
-      ANTHROPIC_API_KEY: 'from-shell',
-    });
-    expect(buildSessionEnv({ ANTHROPIC_API_KEY: 'from-shell' }, 'threadgarden')).toEqual({
+  // An ANTHROPIC_API_KEY left in the shell would bill the API: SDK sessions use
+  // it without the approval prompt interactive Claude Code shows. Only the key
+  // set in Threadgarden's settings reaches a session.
+  it('drops an inherited ANTHROPIC_API_KEY, so only the key set in Threadgarden is used', () => {
+    const shell = { PATH: '/usr/bin', ANTHROPIC_API_KEY: 'from-shell' };
+    const inherit = buildSessionEnv(shell, null);
+    expect(inherit).toEqual({ PATH: '/usr/bin' });
+    expect(inherit).not.toHaveProperty('ANTHROPIC_API_KEY');
+    expect(shell.ANTHROPIC_API_KEY).toBe('from-shell');
+
+    expect(buildSessionEnv(shell, 'threadgarden')).toEqual({
+      PATH: '/usr/bin',
       ANTHROPIC_API_KEY: 'threadgarden',
     });
+  });
+
+  // A headless machine's environment is its systemd unit, set on purpose, and
+  // Threadgarden's own key never reaches it: the key is kept there.
+  it('keeps an inherited ANTHROPIC_API_KEY for a headless service', () => {
+    const unit = { PATH: '/usr/bin', ANTHROPIC_API_KEY: 'from-unit' };
+    expect(buildSessionEnv(unit, null, { keepInheritedKey: true })).toEqual(unit);
+    expect(buildSessionEnv(unit, 'threadgarden', { keepInheritedKey: true })).toEqual({
+      PATH: '/usr/bin',
+      ANTHROPIC_API_KEY: 'threadgarden',
+    });
+    expect(buildSessionEnv(unit, null, { keepInheritedKey: false })).toEqual({ PATH: '/usr/bin' });
+  });
+
+  it('keeps the other credentials Claude Code reads, which are chosen on purpose', () => {
+    const base = {
+      ANTHROPIC_AUTH_TOKEN: 'gateway',
+      ANTHROPIC_BASE_URL: 'https://gateway.example',
+      CLAUDE_CODE_USE_BEDROCK: '1',
+    };
+    expect(buildSessionEnv(base, null)).toEqual(base);
   });
 });
 
