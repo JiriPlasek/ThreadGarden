@@ -41,6 +41,8 @@ pub struct Behaviour {
     pub stall_pairing: bool,
     /// `devices.revoke` closes the socket 4403 instead of answering.
     pub revoke_closes: bool,
+    /// The protocol version its `hello` says.
+    pub protocol: u64,
 }
 
 impl Default for Behaviour {
@@ -55,6 +57,7 @@ impl Default for Behaviour {
             stall: false,
             stall_pairing: false,
             revoke_closes: false,
+            protocol: 11,
         }
     }
 }
@@ -76,6 +79,10 @@ struct Seen {
     sessions: Mutex<Vec<Value>>,
     /// The close codes device sockets were closed with (None: no code).
     closes: Mutex<Vec<Option<u16>>>,
+    /// When each device socket was let in.
+    device_times: Mutex<Vec<std::time::Instant>>,
+    /// Bumped to close every open device socket, as a service restart does.
+    kick: Mutex<Option<tokio::sync::watch::Sender<u64>>>,
 }
 
 pub struct FakeMachine {
@@ -142,6 +149,7 @@ impl FakeMachine {
         let device_id = "device-phone".to_string();
         let seen = Arc::new(Seen::default());
         *seen.events.lock().unwrap() = Some(tokio::sync::broadcast::channel(256).0);
+        *seen.kick.lock().unwrap() = Some(tokio::sync::watch::channel(0).0);
         let me = Machine {
             behaviour: behaviour.clone(),
             fingerprint: fingerprint(&der),
@@ -188,6 +196,18 @@ impl FakeMachine {
     /// The chats `sessions.list` answers with (Needs you, on a device socket).
     pub fn set_sessions(&self, items: Vec<Value>) {
         *self.seen.sessions.lock().unwrap() = items;
+    }
+
+    /// Closes every open device socket (1012, a service restart).
+    pub fn kick(&self) {
+        if let Some(k) = self.seen.kick.lock().unwrap().as_ref() {
+            k.send_modify(|n| *n += 1);
+        }
+    }
+
+    /// When each device socket was let in.
+    pub fn device_times(&self) -> Vec<std::time::Instant> {
+        self.seen.device_times.lock().unwrap().clone()
     }
 
     /// The codes device sockets were closed with by the other side.
@@ -305,6 +325,11 @@ impl Machine {
                 kind = Socket::Pairing;
             } else if offered == format!("threadgarden-device.{}", self.token) {
                 kind = Socket::Device;
+                self.seen
+                    .device_times
+                    .lock()
+                    .unwrap()
+                    .push(std::time::Instant::now());
             }
             if !offered.is_empty() {
                 res.headers_mut().insert(
@@ -344,8 +369,25 @@ impl Machine {
             self.seen.devices_open.fetch_add(1, Ordering::SeqCst);
         }
         let _open = OpenDevice(is_device.then(|| self.seen.clone()));
+        let mut kicked = self
+            .seen
+            .kick
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|k| k.subscribe());
         loop {
             let msg = tokio::select! {
+                _ = async {
+                    match kicked.as_mut() {
+                        Some(k) if is_device => { let _ = k.changed().await; }
+                        _ => std::future::pending::<()>().await,
+                    }
+                } => {
+                    let _ = ws.close(Some(close_frame(1012))).await;
+                    while ws.next().await.is_some() {}
+                    return;
+                }
                 msg = ws.next() => match msg {
                     Some(Ok(Message::Close(frame))) => {
                         if is_device {
@@ -443,7 +485,7 @@ impl Machine {
             }
             (Socket::Device, "hello") => Ok(json!({
                 "serviceVersion": "0.9.0",
-                "protocolVersion": 11,
+                "protocolVersion": b.protocol,
                 "machine": info(&b.machine_id),
             })),
             (Socket::Device, "sessions.list") => {

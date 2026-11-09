@@ -241,7 +241,7 @@ impl Relays {
         let link_sink = tokio::sync::Mutex::new(link_sink);
         let answered = AtomicBool::new(true);
         let ping = self.timing.ping;
-        let code = {
+        {
             let (mut ui_sink, mut ui_stream) = (&mut *ui).split();
             let code = {
                 // Screen to machine (what waited first).
@@ -339,7 +339,6 @@ impl Relays {
                 .await
         })
         .await;
-        let _ = code;
         // The screen's own close, briefly.
         let _ = tokio::time::timeout(Duration::from_secs(2), async {
             while ui.next().await.is_some() {}

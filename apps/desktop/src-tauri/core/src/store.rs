@@ -251,6 +251,19 @@ fn set_aside_path(dir: &Path) -> PathBuf {
     }
 }
 
+/// Whether the store in `dir` says connected (no Disconnect) with at least
+/// one machine paired, read from the file alone: nothing is created or
+/// written, so it can be asked at boot before anything else runs.
+pub fn peek_connected(dir: &Path) -> bool {
+    let Ok(bytes) = fs::read(dir.join(FILE)) else {
+        return false;
+    };
+    let Ok(data) = serde_json::from_slice::<Data>(&bytes) else {
+        return false;
+    };
+    !data.links_off && !data.machines.is_empty()
+}
+
 /// Replaces `path` with `bytes` all at once: a temporary file next to it,
 /// synced, then renamed over it.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {

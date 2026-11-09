@@ -35,7 +35,7 @@ fn core(dir: &std::path::Path) -> (CoreHandle, Arc<MemorySecrets>) {
     };
     let core = Core::spawn_with_timing(config, timing).unwrap();
     // Only the screens' relays here: the alert links (`alerts.rs`) would be machines' sockets too.
-    core.disconnect();
+    core.disconnect().unwrap();
     (core, secrets)
 }
 
@@ -542,7 +542,7 @@ fn a_machine_removed_while_its_relay_starts_gets_no_link() {
         ..Timing::default()
     };
     let core = Core::spawn_with_timing(config, timing).unwrap();
-    core.disconnect();
+    core.disconnect().unwrap();
     let desk = FakeMachine::start(Behaviour::default());
     block_on(async {
         pair(&core, &desk).await;

@@ -37,6 +37,18 @@ use store::Store;
 pub const PROTOCOL_VERSION: u32 = 11;
 /// Largest request frame accepted, in bytes (`MAX_REQUEST_BYTES` in `packages/protocol`).
 pub const MAX_REQUEST_BYTES: usize = 32 * 1024 * 1024;
+/// The protocol versions a machine may speak to this phone (`REMOTE_PROTOCOL_RANGE`):
+/// its own, one older and one newer.
+pub const REMOTE_PROTOCOL_RANGE: (u64, u64) = (10, 12);
+
+/// `acceptsRemoteProtocol` of `packages/protocol`: a whole number in
+/// `REMOTE_PROTOCOL_RANGE` (pinned by `test/fixtures/protocol-range.json`).
+pub fn accepts_remote_protocol(version: &serde_json::Value) -> bool {
+    let Some(v) = version.as_f64() else {
+        return false;
+    };
+    v.fract() == 0.0 && v >= REMOTE_PROTOCOL_RANGE.0 as f64 && v <= REMOTE_PROTOCOL_RANGE.1 as f64
+}
 
 pub struct CoreConfig {
     /// Where the store lives (the app's private files on Android).
@@ -95,6 +107,9 @@ pub struct Timing {
     /// An alert link's first wait after a failure, doubling up to `backoff_max`.
     pub backoff_start: Duration,
     pub backoff_max: Duration,
+    /// After a network change, how long an open link has to answer a ping
+    /// before it's dropped and made again.
+    pub network_check: Duration,
 }
 
 impl Default for Timing {
@@ -105,6 +120,7 @@ impl Default for Timing {
             pairing: Duration::from_secs(10),
             backoff_start: Duration::from_secs(2),
             backoff_max: Duration::from_secs(60),
+            network_check: Duration::from_secs(4),
         }
     }
 }
@@ -246,12 +262,14 @@ impl CoreHandle {
 
     /// Disconnect (the notification's action): every alert link closes, and
     /// none starts again until [`CoreHandle::connect`], after a restart too.
-    pub fn disconnect(&self) {
-        self.0.alerts.disconnect();
+    /// The links close either way; the error says the choice couldn't be
+    /// kept for the next start (the store couldn't be written).
+    pub fn disconnect(&self) -> Result<(), CoreError> {
+        Ok(self.0.alerts.disconnect()?)
     }
 
-    pub fn connect(&self) {
-        self.0.alerts.connect();
+    pub fn connect(&self) -> Result<(), CoreError> {
+        Ok(self.0.alerts.connect()?)
     }
 
     /// The phone's network changed (Wi-Fi to mobile data, Tailscale up):
@@ -383,7 +401,9 @@ impl Core {
 
     /// Whether the core was connected when it last ran (the owner didn't
     /// choose Disconnect): after a reboot, the app starts it only then.
+    /// A read of the store file only: nothing is created or changed. False
+    /// with no machine paired, or no store at all.
     pub fn was_connected(data_dir: &std::path::Path) -> bool {
-        Store::open(data_dir).is_ok_and(|s| !s.links_off())
+        store::peek_connected(data_dir)
     }
 }
