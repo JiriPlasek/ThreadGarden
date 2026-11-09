@@ -1145,9 +1145,14 @@ folder in step 3. Tests and the mock service inject the git reads (`moveGit` in
   the machine they moved to. On the way a transcript passes through the
   desktop: over loopback for This PC's service, over the pinned TLS link for
   a paired machine.
-- **Permissions.** Threadgarden offers the default, acceptEdits, plan and auto
-  permission modes, never `bypassPermissions`, and it filters out "always
-  allow" suggestions that would switch a session to bypass.
+- **Permissions.** Threadgarden offers the default, acceptEdits, plan, auto
+  and bypassPermissions permission modes. Selecting bypass in either mode picker
+  requires confirmation; cancelling keeps the previous mode. Non-root sessions
+  start with the SDK's `allowDangerouslySkipPermissions`, so a running chat can
+  switch to bypass. Root sessions omit this flag because the CLI refuses to start
+  with it; explicitly selecting bypass as root remains unsupported by the CLI.
+  Bypass is only ever chosen in the mode picker, and "always allow"
+  suggestions that would switch a session to bypass are filtered out.
 - **Capabilities.** The window gets only the Tauri permissions it uses: core
   defaults, notifications, the open-folder dialog, clipboard write, autostart
   and URL opening.
@@ -1379,10 +1384,10 @@ startup failures, which credential a session picks).
 Decisions made during the build that change behaviour described in the design:
 
 - **Stopping background sessions.** The design kept sessions run by other processes hand-off only. Threadgarden now also stops a background session that Claude Code's background service runs, via the documented `claude stop <id>` (`external.stop`), after a confirmation; only ids shaped like `claude agents` short ids are passed. A chat another Claude Code process holds (a terminal, an editor's agent) can be ended too, with End the process, shown beside the chat header's "Running in another Claude Code process" and in the blocked banner: `external.stop` ends the pid `claude agents` lists for that chat (Claude Code checks it against the process's start time), with its child processes on Windows (`taskkill /T`) and SIGTERM elsewhere, and waits until the chat leaves the list. Both the header and blocked banner always ask for confirmation, regardless of the last reported status. The warning covers any running turn, unsent input and background tasks or dev servers. The banner only offers stopping when a fresh resume check finds a usable pid or background short id. If exit is not confirmed within five seconds, the message says the signal was sent and more time may be needed. The chat header's End session and pickers still apply only to chats Threadgarden itself runs.
-- **No bypass mode** (§6.4 listed it). The SDK requires an explicit
-  dangerous opt-in for `bypassPermissions`; Threadgarden offers default,
-  acceptEdits, plan and auto only, and drops "always allow" suggestions that
-  would switch to bypass.
+- **Bypass mode** (?6.4). Left out at first; now offered as "Bypass
+  permissions" in the mode pickers after confirmation. Non-root sessions set
+  the SDK's dangerous opt-in; root sessions omit it so the CLI can start.
+  "Always allow" suggestions that would switch to bypass are still dropped.
 - **Notification clicks** (§6.2 "clicking it opens the chat"). Tauri's
   notification plugin reports no clicks on desktop. Clicking a notification
   focuses Threadgarden; if the window gains focus within 30 s of a needs-you
