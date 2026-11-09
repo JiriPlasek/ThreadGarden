@@ -19,3 +19,6 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+# The core's JNI seam: Rust calls these static methods by name, and the
+# natives are found by their names.
+-keep class dev.threadgarden.phone.CoreBridge { *; }

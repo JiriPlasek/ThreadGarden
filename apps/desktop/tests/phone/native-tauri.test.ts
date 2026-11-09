@@ -9,7 +9,15 @@ const tauri = vi.hoisted(() => ({
   sendNotification: vi.fn(),
 }));
 vi.mock('@tauri-apps/api/core', () => ({ isTauri: () => true, invoke: tauri.invoke }));
-vi.mock('@tauri-apps/api/event', () => ({ listen: vi.fn(async () => () => {}) }));
+const events = vi.hoisted(() => ({
+  handlers: new Map<string, (e: { payload: unknown }) => void>(),
+}));
+vi.mock('@tauri-apps/api/event', () => ({
+  listen: vi.fn(async (name: string, h: (e: { payload: unknown }) => void) => {
+    events.handlers.set(name, h);
+    return () => events.handlers.delete(name);
+  }),
+}));
 vi.mock('@tauri-apps/plugin-notification', () => ({
   isPermissionGranted: async () => true,
   requestPermission: async () => 'granted',
@@ -81,5 +89,55 @@ describe('native in Tauri, phone or desktop', () => {
     expect(tauri.invoke.mock.calls).toEqual([
       ['alerts_set_active', { machineId: 'm1', sessionId: 's1' }],
     ]);
+  });
+
+  it('an alert that started the app opens its chat once the screens listen, and later ones as they come', async () => {
+    vi.stubEnv('TAURI_ENV_PLATFORM', 'android');
+    let waiting: unknown = { machineId: 'm1', sessionId: 's1' };
+    tauri.invoke.mockImplementation(async (cmd: string) => {
+      if (cmd !== 'alerts_take_open') return null;
+      const w = waiting;
+      waiting = null;
+      return w;
+    });
+    const native = await load();
+    const opened: unknown[] = [];
+    const off = await native.onOpenChat((c) => opened.push(c));
+    expect(opened).toEqual([{ machineId: 'm1', sessionId: 's1' }]);
+    events.handlers.get('alerts://open')?.({ payload: { machineId: 'm1', sessionId: 's2' } });
+    expect(opened).toEqual([
+      { machineId: 'm1', sessionId: 's1' },
+      { machineId: 'm1', sessionId: 's2' },
+    ]);
+    off();
+    expect(events.handlers.has('alerts://open')).toBe(false);
+    tauri.invoke.mockImplementation(async () => null);
+  });
+
+  it("the phone's keep-alive commands reach the shell; the desktop has none", async () => {
+    vi.stubEnv('TAURI_ENV_PLATFORM', 'android');
+    let native = await load();
+    await native.keepAlive.status();
+    await native.keepAlive.requestBatteryExemption();
+    await native.keepAlive.disconnect();
+    await native.keepAlive.connect();
+    expect(tauri.invoke.mock.calls.map(([cmd]) => cmd)).toEqual([
+      'keep_alive_status',
+      'request_battery_exemption',
+      'disconnect',
+      'connect',
+    ]);
+    tauri.invoke.mockClear();
+    vi.stubEnv('TAURI_ENV_PLATFORM', 'linux');
+    native = await load();
+    await expect(native.keepAlive.status()).resolves.toEqual({
+      notificationsAllowed: true,
+      batteryExempt: true,
+      connected: true,
+    });
+    await native.keepAlive.disconnect();
+    const off = await native.onOpenChat(() => {});
+    off();
+    expect(tauri.invoke).not.toHaveBeenCalled();
   });
 });

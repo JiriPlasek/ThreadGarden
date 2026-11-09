@@ -4766,6 +4766,7 @@ dependencies = [
  "base64 0.22.1",
  "dunce",
  "futures-util",
+ "jni 0.21.1",
  "keyring",
  "libc",
  "serde",
@@ -4781,9 +4782,28 @@ dependencies = [
  "tauri-plugin-single-instance",
  "tauri-plugin-updater",
  "tempfile",
+ "threadgarden-core",
  "tokio",
  "tokio-tungstenite",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "threadgarden-core"
+version = "0.9.0"
+dependencies = [
+ "base64 0.22.1",
+ "futures-util",
+ "getrandom 0.3.4",
+ "regex",
+ "ring",
+ "rustls",
+ "serde",
+ "serde_json",
+ "subtle",
+ "tokio",
+ "tokio-rustls",
+ "tokio-tungstenite",
 ]
 
 [[package]]

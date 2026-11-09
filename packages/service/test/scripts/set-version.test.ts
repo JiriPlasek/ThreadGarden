@@ -35,13 +35,16 @@ describe('setVersion', () => {
       expect(after).toContain('9.8.7');
       // Only the version string moved: putting the old one back restores the file exactly.
       const restored = f.endsWith('Cargo.lock')
-        ? after.replace(/(name = "threadgarden"\r?\nversion = ")9\.8\.7"/, `$1${current}"`)
+        ? after.replace(
+            /(name = "threadgarden(?:-core)?"\r?\nversion = ")9\.8\.7"/g,
+            `$1${current}"`,
+          )
         : after.replace('9.8.7', current);
       expect(restored).toBe(before.get(f));
     }
   });
 
-  it('lists exactly the eight files the versions test checks', () => {
+  it('lists exactly the ten files the versions test checks', () => {
     expect(VERSION_FILES).toEqual([
       'package.json',
       'apps/desktop/package.json',
@@ -51,6 +54,8 @@ describe('setVersion', () => {
       'apps/desktop/src-tauri/tauri.android.conf.json',
       'apps/desktop/src-tauri/Cargo.toml',
       'apps/desktop/src-tauri/Cargo.lock',
+      'apps/desktop/src-tauri/core/Cargo.toml',
+      'apps/desktop/src-tauri/core/Cargo.lock',
     ]);
   });
 

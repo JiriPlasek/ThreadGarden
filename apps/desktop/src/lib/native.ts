@@ -276,17 +276,57 @@ export const setActiveChat = async (
   if (phoneTauri) await invoke('alerts_set_active', { machineId, sessionId });
 };
 
+type OpenedChat = { machineId: string; sessionId: string };
+
 /**
  * The phone: the owner opened an alert, and the chat it names is to be shown.
- * The core's alert says so with the `alerts://open` event (Task 10's service
- * sends it); elsewhere nothing does. Resolves to an unsubscribe function.
+ * The app says so with the `alerts://open` event. An alert that started the
+ * app came before anything listened: it waits in the shell, and is taken once
+ * the listener is up (and taken again after each event, so it isn't shown a
+ * second time by later screens). Elsewhere nothing opens a chat. Resolves to
+ * an unsubscribe function.
  */
-export const onOpenChat = async (
-  cb: (chat: { machineId: string; sessionId: string }) => void,
-): Promise<() => void> =>
-  phoneTauri
-    ? listen<{ machineId: string; sessionId: string }>('alerts://open', (e) => cb(e.payload))
-    : () => {};
+export const onOpenChat = async (cb: (chat: OpenedChat) => void): Promise<() => void> => {
+  if (!phoneTauri) return () => {};
+  const take = (): Promise<OpenedChat | null> => invoke<OpenedChat | null>('alerts_take_open');
+  const off = await listen<OpenedChat>('alerts://open', (e) => {
+    cb(e.payload);
+    void take().catch(() => {});
+  });
+  const waiting = await take().catch(() => null);
+  if (waiting) cb(waiting);
+  return off;
+};
+
+/** Whether the phone can stay connected: what Android allows, and Disconnect. */
+export type KeepAliveStatus = {
+  notificationsAllowed: boolean;
+  batteryExempt: boolean;
+  /** The alert links are on (the owner didn't choose Disconnect). */
+  connected: boolean;
+};
+
+/**
+ * The phone's foreground service and its links to the machines. Elsewhere
+ * there's none: always "connected", nothing to ask.
+ */
+export const keepAlive = {
+  status: async (): Promise<KeepAliveStatus> =>
+    phoneTauri
+      ? invoke<KeepAliveStatus>('keep_alive_status')
+      : { notificationsAllowed: true, batteryExempt: true, connected: true },
+  /** Android's own dialog for the battery exemption. */
+  requestBatteryExemption: async (): Promise<void> => {
+    if (phoneTauri) await invoke('request_battery_exemption');
+  },
+  /** As the notification's Disconnect: the links close and the notification goes. */
+  disconnect: async (): Promise<void> => {
+    if (phoneTauri) await invoke('disconnect');
+  },
+  connect: async (): Promise<void> => {
+    if (phoneTauri) await invoke('connect');
+  },
+};
 
 /** Number of chats waiting on the user, shown on the tray icon (the phone has none). */
 export const setTrayNeedsYou = async (n: number): Promise<void> => {

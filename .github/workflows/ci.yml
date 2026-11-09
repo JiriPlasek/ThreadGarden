@@ -191,8 +191,12 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # Tauri reads CI=true from the runner: no prompts.
+      # Tauri reads CI=true from the runner: no prompts. The core's TLS (ring)
+      # has C and assembly, built with the NDK's clang for the phone.
       - run: pnpm --filter desktop android:build
+        env:
+          CC_aarch64_linux_android: ${{ env.NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang
+          AR_aarch64_linux_android: ${{ env.NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
       - uses: actions/upload-artifact@v4
         with:
           name: threadgarden-android-debug

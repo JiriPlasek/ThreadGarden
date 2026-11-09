@@ -3,8 +3,12 @@
 //!
 //! The same crate builds the Android app. The desktop-only parts (tray, autostart,
 //! one instance, self-update, keychain, the Node service, file drops) are
-//! `cfg(desktop)`; the phone has no service yet.
+//! `cfg(desktop)`. On Android the phone's own core takes the service's place,
+//! kept running by a foreground service (`android`).
 
+// The host-testable part is compiled for tests everywhere.
+#[cfg(any(target_os = "android", test))]
+pub mod android;
 #[cfg(desktop)]
 pub mod discovery;
 #[cfg(desktop)]
@@ -96,8 +100,8 @@ async fn service_connection(app: AppHandle) -> Result<service::Connection, Strin
     connect_service(&app).await
 }
 
-/// The phone runs no Node service; its own core takes the service's place later.
-#[cfg(mobile)]
+/// iOS isn't built: no core there.
+#[cfg(target_os = "ios")]
 #[tauri::command]
 async fn service_connection() -> Result<(), String> {
     Err("no service on the phone yet".into())
@@ -273,7 +277,23 @@ pub fn run() {
                 _ => {}
             }
         });
-    #[cfg(mobile)]
+    #[cfg(target_os = "android")]
+    let builder = builder
+        .invoke_handler(tauri::generate_handler![
+            android::shell::service_connection,
+            android::shell::alerts_set_active,
+            android::shell::alerts_take_open,
+            android::shell::keep_alive_status,
+            android::shell::request_battery_exemption,
+            android::shell::disconnect,
+            android::shell::connect,
+            app_quit,
+        ])
+        .setup(|app| {
+            android::shell::set_app(app.handle().clone());
+            Ok(())
+        });
+    #[cfg(target_os = "ios")]
     let builder = builder.invoke_handler(tauri::generate_handler![service_connection, app_quit]);
     builder
         .build(tauri::generate_context!())

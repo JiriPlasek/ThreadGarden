@@ -40,6 +40,14 @@ tokio = { version = "1", features = ["net", "sync", "time"] }
 tokio-tungstenite = "0.30"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 
+# The phone: its own core in the service's place, and JNI to the Kotlin
+# foreground service that keeps it running (jni as Tauri's own).
+[target.'cfg(target_os = "android")'.dependencies]
+threadgarden-core = { path = "core" }
+jni = "0.21"
+# The core's events channel.
+tokio = { version = "1", features = ["sync"] }
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
   "Win32_Foundation",
@@ -53,3 +61,5 @@ libc = "0.2"
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tempfile = "3"
+# The Android shell's host-testable part (`android.rs`) runs against the real core.
+threadgarden-core = { path = "core" }
