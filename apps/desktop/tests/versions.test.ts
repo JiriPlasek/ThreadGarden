@@ -11,7 +11,7 @@ const read = (path: string): string => readFileSync(new URL(path, import.meta.ur
 const json = (path: string): { version: string } => JSON.parse(read(path)) as { version: string };
 
 describe('release versions', () => {
-  it('the app, the service, the protocol and the Tauri shell carry one version', () => {
+  it('the app, the service, the protocol and the Tauri shell (desktop and Android) carry one version', () => {
     const cargo = /^\[package\][^[]*?^version\s*=\s*"([^"]+)"/m.exec(
       read('../src-tauri/Cargo.toml'),
     );
@@ -22,6 +22,7 @@ describe('release versions', () => {
       root: json('../../../package.json').version,
       desktop: json('../package.json').version,
       tauri: json('../src-tauri/tauri.conf.json').version,
+      android: json('../src-tauri/tauri.android.conf.json').version,
       cargo: cargo?.[1],
       cargoLock: lock?.[1],
       service: json('../../../packages/service/package.json').version,
@@ -32,6 +33,7 @@ describe('release versions', () => {
       root,
       desktop: root,
       tauri: root,
+      android: root,
       cargo: root,
       cargoLock: root,
       service: root,

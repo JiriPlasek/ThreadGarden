@@ -1,25 +1,41 @@
 //! Threadgarden's native shell: window, tray, notifications, keychain, and finding
 //! or starting the detached service. The UI talks to the service directly.
+//!
+//! The same crate builds the Android app. The desktop-only parts (tray, autostart,
+//! one instance, self-update, keychain, the Node service, file drops) are
+//! `cfg(desktop)`; the phone has no service yet.
 
+#[cfg(desktop)]
 pub mod discovery;
+#[cfg(desktop)]
 pub mod dropped;
 pub mod navigation;
+#[cfg(desktop)]
 pub mod secrets;
+#[cfg(desktop)]
 pub mod service;
+#[cfg(desktop)]
 pub mod tray;
 pub mod update;
 
+#[cfg(desktop)]
 use std::sync::Once;
 
-use tauri::{AppHandle, DragDropEvent, Manager, RunEvent, WindowEvent};
+use tauri::{AppHandle, RunEvent};
+#[cfg(desktop)]
+use tauri::{DragDropEvent, Manager, WindowEvent};
+#[cfg(desktop)]
 use tokio::sync::Mutex;
 
 /// Serialises `service_connection` so concurrent calls never start two services.
+#[cfg(desktop)]
 static CONNECT: Mutex<()> = Mutex::const_new(());
 
 /// Said once per run when the data dir comes from the deprecated `PAHUB_DATA_DIR`.
+#[cfg(desktop)]
 static DEPRECATED_ENV_NOTE: Once = Once::new();
 
+#[cfg(desktop)]
 fn data_dirs(app: &AppHandle) -> Result<discovery::DataDirs, String> {
     let home = app
         .path()
@@ -43,6 +59,7 @@ fn data_dirs(app: &AppHandle) -> Result<discovery::DataDirs, String> {
 
 /// Debug builds run the repo's service with the system `node`; release builds
 /// the bundled sidecar and resource (see `tauri.bundle.conf.json`).
+#[cfg(desktop)]
 fn launch_target(app: &AppHandle) -> Result<service::LaunchTarget, String> {
     if cfg!(debug_assertions) {
         // src-tauri → desktop → apps → repo root
@@ -61,6 +78,7 @@ fn launch_target(app: &AppHandle) -> Result<service::LaunchTarget, String> {
 }
 
 /// Finds the running service or starts it (see `service::connect`).
+#[cfg(desktop)]
 async fn connect_service(app: &AppHandle) -> Result<service::Connection, String> {
     let _guard = CONNECT.lock().await;
     let dirs = data_dirs(app)?;
@@ -72,14 +90,23 @@ async fn connect_service(app: &AppHandle) -> Result<service::Connection, String>
     .await
 }
 
+#[cfg(desktop)]
 #[tauri::command]
 async fn service_connection(app: AppHandle) -> Result<service::Connection, String> {
     connect_service(&app).await
 }
 
+/// The phone runs no Node service; its own core takes the service's place later.
+#[cfg(mobile)]
+#[tauri::command]
+async fn service_connection() -> Result<(), String> {
+    Err("no service on the phone yet".into())
+}
+
 /// "Restart service" (spec §4.2): stops the recorded service with all its work
 /// and waits for its process to exit; the UI then calls `service_connection`,
 /// which starts a fresh one. Works for an incompatible service too.
+#[cfg(desktop)]
 #[tauri::command]
 async fn service_stop(app: AppHandle) -> Result<(), String> {
     let _guard = CONNECT.lock().await;
@@ -87,6 +114,7 @@ async fn service_stop(app: AppHandle) -> Result<(), String> {
     service::stop(&dirs, service::STOP_TIMEOUT, discovery::pid_alive).await
 }
 
+#[cfg(desktop)]
 async fn blocking<T: Send + 'static>(
     f: impl FnOnce() -> Result<T, String> + Send + 'static,
 ) -> Result<T, String> {
@@ -95,46 +123,55 @@ async fn blocking<T: Send + 'static>(
         .map_err(|e| e.to_string())?
 }
 
+#[cfg(desktop)]
 #[tauri::command]
 async fn api_key_get() -> Result<Option<String>, String> {
     blocking(secrets::get).await
 }
 
+#[cfg(desktop)]
 #[tauri::command]
 async fn api_key_set(key: String) -> Result<(), String> {
     blocking(move || secrets::set(&key)).await
 }
 
+#[cfg(desktop)]
 #[tauri::command]
 async fn api_key_clear() -> Result<(), String> {
     blocking(secrets::clear).await
 }
 
+#[cfg(desktop)]
 #[tauri::command]
 async fn machine_token_get(machine_id: String) -> Result<Option<String>, String> {
     blocking(move || secrets::machine_token_get(&machine_id)).await
 }
 
+#[cfg(desktop)]
 #[tauri::command]
 async fn machine_token_set(machine_id: String, token: String) -> Result<(), String> {
     blocking(move || secrets::machine_token_set(&machine_id, &token)).await
 }
 
+#[cfg(desktop)]
 #[tauri::command]
 async fn machine_token_clear(machine_id: String) -> Result<(), String> {
     blocking(move || secrets::machine_token_clear(&machine_id)).await
 }
 
+#[cfg(desktop)]
 #[tauri::command]
 async fn power_password_get(machine_id: String) -> Result<Option<String>, String> {
     blocking(move || secrets::power_password_get(&machine_id)).await
 }
 
+#[cfg(desktop)]
 #[tauri::command]
 async fn power_password_set(machine_id: String, password: String) -> Result<(), String> {
     blocking(move || secrets::power_password_set(&machine_id, &password)).await
 }
 
+#[cfg(desktop)]
 #[tauri::command]
 async fn power_password_clear(machine_id: String) -> Result<(), String> {
     blocking(move || secrets::power_password_clear(&machine_id)).await
@@ -147,17 +184,20 @@ fn app_quit(app: AppHandle) {
 }
 
 /// An image from the latest file drop on the window, for the composer (ruling R24).
+#[cfg(desktop)]
 #[tauri::command]
 async fn read_dropped_image(path: String) -> Result<dropped::DroppedImage, String> {
     blocking(move || dropped::read_latest(std::path::Path::new(&path))).await
 }
 
+#[cfg(desktop)]
 #[tauri::command]
 fn set_tray_needs_you(app: AppHandle, count: u32) -> Result<(), String> {
     tray::set_needs_you(&app, count).map_err(|e| e.to_string())
 }
 
 /// How this copy was installed (releases spec §6): whether it can update itself.
+#[cfg(desktop)]
 #[tauri::command]
 fn install_kind() -> &'static str {
     update::install_kind_for(
@@ -168,11 +208,13 @@ fn install_kind() -> &'static str {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
-        // First, so a second launch only focuses the existing window.
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            tray::show_main_window(app);
-        }))
+    let builder = tauri::Builder::default();
+    // First, so a second launch only focuses the existing window.
+    #[cfg(desktop)]
+    let builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        tray::show_main_window(app);
+    }));
+    let builder = builder
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -183,7 +225,9 @@ pub fn run() {
                 .build(),
         )
         // Nothing navigates the window away from the app.
-        .plugin(navigation::guard())
+        .plugin(navigation::guard());
+    #[cfg(desktop)]
+    let builder = builder
         .plugin(tauri_plugin_autostart::Builder::new().build())
         // Self-update from GitHub Releases, verified against the bundled public key.
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -228,7 +272,10 @@ pub fn run() {
                 }
                 _ => {}
             }
-        })
+        });
+    #[cfg(mobile)]
+    let builder = builder.invoke_handler(tauri::generate_handler![service_connection, app_quit]);
+    builder
         .build(tauri::generate_context!())
         .expect("error while building Threadgarden")
         .run(on_run_event);

@@ -16,6 +16,8 @@ export const VERSION_FILES = [
   'packages/service/package.json',
   'packages/protocol/package.json',
   'apps/desktop/src-tauri/tauri.conf.json',
+  // The Android app's version name (its version code follows from it).
+  'apps/desktop/src-tauri/tauri.android.conf.json',
   'apps/desktop/src-tauri/Cargo.toml',
   'apps/desktop/src-tauri/Cargo.lock',
 ];

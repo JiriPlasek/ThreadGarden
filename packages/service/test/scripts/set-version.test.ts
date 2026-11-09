@@ -41,13 +41,14 @@ describe('setVersion', () => {
     }
   });
 
-  it('lists exactly the seven files the versions test checks', () => {
+  it('lists exactly the eight files the versions test checks', () => {
     expect(VERSION_FILES).toEqual([
       'package.json',
       'apps/desktop/package.json',
       'packages/service/package.json',
       'packages/protocol/package.json',
       'apps/desktop/src-tauri/tauri.conf.json',
+      'apps/desktop/src-tauri/tauri.android.conf.json',
       'apps/desktop/src-tauri/Cargo.toml',
       'apps/desktop/src-tauri/Cargo.lock',
     ]);
