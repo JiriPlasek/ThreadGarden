@@ -20,6 +20,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
+use tokio::sync::broadcast;
 
 use crate::PROTOCOL_VERSION;
 use crate::settings;
@@ -207,6 +208,39 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
+/// Events for the screens on the loopback socket (`machines.changed`, …),
+/// as the service's `emitLocal`: never sent to a machine.
+#[derive(Clone)]
+pub struct LocalEvents(broadcast::Sender<Arc<str>>);
+
+impl Default for LocalEvents {
+    fn default() -> Self {
+        LocalEvents(broadcast::channel(64).0)
+    }
+}
+
+impl LocalEvents {
+    pub fn emit(&self, event: &str, data: Value) {
+        // Nobody listening (no screen open) is fine.
+        let _ = self
+            .0
+            .send(json!({ "event": event, "data": data }).to_string().into());
+    }
+
+    pub fn subscribe(&self) -> broadcast::Receiver<Arc<str>> {
+        self.0.subscribe()
+    }
+}
+
+/// Runs `f` on tokio's blocking threads (the store's disk, a keystore).
+pub async fn blocking<T: Send + 'static>(
+    f: impl FnOnce() -> Result<T, MethodError> + Send + 'static,
+) -> Result<T, MethodError> {
+    tokio::task::spawn_blocking(f)
+        .await
+        .unwrap_or_else(|_| Err(MethodError::internal()))
+}
+
 /// What the local answers need.
 pub struct Deps {
     pub store: Arc<Store>,
@@ -385,10 +419,6 @@ pub const REFUSED: &[&str] = &[
     "away.queue",
     "away.cancel",
     "away.retry",
-    // Pairing comes with Task 6; until then Add machine shows the error (and
-    // with no machine, there's none to rename or move).
-    "machines.pair",
-    "machines.update",
     // The plug comes with Task 8: reading, Turn on and the setup dialog show the error.
     "power.probe",
     "power.pairPlug",
@@ -456,7 +486,21 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Arc::new(Store::open(dir.path()).unwrap());
         let secrets = Arc::new(crate::secrets::MemorySecrets::default());
-        let router = crate::router(store, secrets, "Phone".into());
+        let relays = Arc::new(crate::relay::Relays::new(
+            store.clone(),
+            secrets.clone(),
+            crate::Timing::default(),
+            tokio::sync::broadcast::channel(1).0,
+        ));
+        let router = crate::router(
+            store,
+            secrets,
+            "Phone".into(),
+            LocalEvents::default(),
+            relays,
+            crate::alerts::for_tests(dir.path()),
+            crate::Timing::default().pairing,
+        );
         for m in router.methods() {
             assert!(!REFUSED.contains(&m), "{m}");
         }

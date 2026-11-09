@@ -5,6 +5,7 @@
 //! own screens (closed 4404 until Task 7 relays them).
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
@@ -21,25 +22,75 @@ use tokio_tungstenite::tungstenite::{Error as WsError, Message};
 use tokio_tungstenite::{WebSocketStream, accept_hdr_async_with_config};
 
 use crate::MAX_REQUEST_BYTES;
-use crate::methods::Router;
+use crate::methods::{LocalEvents, Router};
+use crate::relay::Relays;
 
 const PROTOCOL_PREFIX: &str = "threadgarden.";
 const UNAUTHORIZED: u16 = 4401;
-/// `RELAY_CLOSE.locked`: no such machine here, or no token for it.
-const RELAY_LOCKED: u16 = 4404;
 /// A socket that doesn't finish its handshake in this time is dropped.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub(crate) struct Server {
     pub token: String,
     pub router: Router,
+    /// Events for every screen (never for a relay).
+    pub events: LocalEvents,
+    pub relays: Arc<Relays>,
+    /// Sockets being served now (screens and relays), so stopping can let them close first.
+    pub live: Arc<AtomicUsize>,
+}
+
+/// Counts a served socket, down again however it ends.
+struct Live(Arc<AtomicUsize>);
+
+impl Live {
+    fn new(count: &Arc<AtomicUsize>) -> Self {
+        count.fetch_add(1, Ordering::SeqCst);
+        Live(count.clone())
+    }
+}
+
+impl Drop for Live {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 /// What a socket asked for, decided during its handshake.
 enum Route {
     Unauthorized,
     Screen,
-    Relay,
+    /// `/relay?machine=<id>`: the machine named, if any.
+    Relay(Option<String>),
+}
+
+/// The `machine` of a `/relay` query, percent-decoded (`encodeURIComponent` in the UI).
+fn machine_of(query: Option<&str>) -> Option<String> {
+    let value = query?
+        .split('&')
+        .find_map(|kv| kv.strip_prefix("machine="))?;
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'%' if i + 2 < bytes.len() => {
+                let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).ok()?;
+                out.push(u8::from_str_radix(hex, 16).ok()?);
+                i += 3;
+            }
+            b'%' => return None,
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            b => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8(out).ok()
 }
 
 /// Sockets still in their handshake, or being closed unauthenticated, at
@@ -83,6 +134,7 @@ async fn connection(
     shutdown: watch::Receiver<bool>,
     slot: OwnedSemaphorePermit,
 ) {
+    let _live = Live::new(&server.live);
     let mut route = Route::Unauthorized;
     // The error type is tungstenite's callback signature (an HTTP response), and it's never returned.
     #[allow(clippy::result_large_err)]
@@ -103,7 +155,7 @@ async fn connection(
             res.headers_mut().insert(SEC_WEBSOCKET_PROTOCOL, value);
             if same(&protocol[PROTOCOL_PREFIX.len()..], &server.token) {
                 route = if req.uri().path() == "/relay" {
-                    Route::Relay
+                    Route::Relay(machine_of(req.uri().query()))
                 } else {
                     Route::Screen
                 };
@@ -121,9 +173,9 @@ async fn connection(
     match route {
         // It keeps its slot until it's gone.
         Route::Unauthorized => refuse(ws).await,
-        Route::Relay => {
+        Route::Relay(machine) => {
             drop(slot);
-            close(ws, RELAY_LOCKED, "no paired machines here").await
+            server.relays.attach(ws, machine, shutdown).await
         }
         Route::Screen => {
             drop(slot);
@@ -173,15 +225,6 @@ fn close_frame(code: u16, reason: &'static str) -> Message {
     }))
 }
 
-async fn close(mut ws: WebSocketStream<TcpStream>, code: u16, reason: &'static str) {
-    let _ = ws.send(close_frame(code, reason)).await;
-    // Wait (briefly) for the peer's close, so it learns the code before the TCP connection goes.
-    let _ = tokio::time::timeout(Duration::from_secs(2), async {
-        while ws.next().await.is_some() {}
-    })
-    .await;
-}
-
 /// Serves one screen: each request answered on its own, so a slow method
 /// (pairing, a plug) never holds up the others.
 async fn screen(
@@ -199,6 +242,22 @@ async fn screen(
             }
         }
         let _ = sink.close().await;
+    });
+    // The screens' events, sent on with the answers.
+    let mut events = server.events.subscribe();
+    let to_screen = tx.clone();
+    let forward = tokio::spawn(async move {
+        loop {
+            match events.recv().await {
+                Ok(event) => {
+                    if to_screen.send(Message::text(event.to_string())).is_err() {
+                        return;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(_) => return,
+            }
+        }
     });
     // The end of this screen's latest write, which the next one waits for.
     let mut last_write: Option<oneshot::Receiver<()>> = None;
@@ -252,6 +311,8 @@ async fn screen(
             let _ = tx.send(Message::text(answer.to_string()));
         });
     }
+    forward.abort();
+    let _ = forward.await;
     drop(tx);
     let _ = writer.await;
     // Read on until the peer closes too (or it's been long enough), as `close` does.
@@ -264,6 +325,19 @@ async fn screen(
 #[cfg(test)]
 mod tests {
     use super::same;
+
+    #[test]
+    fn the_relayed_machine_is_read_from_the_query() {
+        use super::machine_of;
+        assert_eq!(machine_of(Some("machine=m1")), Some("m1".into()));
+        assert_eq!(
+            machine_of(Some("x=1&machine=a%3Ab%20c")),
+            Some("a:b c".into())
+        );
+        assert_eq!(machine_of(Some("machine=bad%2")), None);
+        assert_eq!(machine_of(Some("other=1")), None);
+        assert_eq!(machine_of(None), None);
+    }
 
     #[test]
     fn tokens_compare_whole() {

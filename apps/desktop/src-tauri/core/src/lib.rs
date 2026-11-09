@@ -17,8 +17,11 @@ use std::time::Duration;
 use tokio::runtime::Runtime;
 use tokio::sync::{broadcast, watch};
 
+mod alerts;
 mod machines;
 mod methods;
+mod pairing;
+mod relay;
 pub mod secrets;
 mod server;
 mod settings;
@@ -26,7 +29,7 @@ pub mod store;
 
 pub use methods::{PLATFORM, REFUSED};
 
-use methods::Router;
+use methods::{LocalEvents, Router};
 use secrets::Secrets;
 use store::Store;
 
@@ -44,10 +47,67 @@ pub struct CoreConfig {
 }
 
 /// What the core tells the app around it (the Android service), with or
-/// without screens. None yet: alerts come with Task 9.
+/// without screens. Alerts come with Task 9.
 #[derive(Debug, Clone)]
 #[non_exhaustive]
-pub enum CoreEvent {}
+pub enum CoreEvent {
+    /// A link to a machine never opened or stopped answering: for a debug
+    /// log. The machine and why, never a frame or a token.
+    LinkFailed { machine_id: String, reason: String },
+    /// A chat needs you, or finished, on a machine (the alert to post).
+    Alert {
+        machine_id: String,
+        machine_name: String,
+        session_id: String,
+        chat_title: String,
+        kind: AlertKind,
+    },
+    /// The links changed: for the permanent notification.
+    Status(LinkStatus),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AlertKind {
+    /// `‹machine›: ‹chat› needs you`.
+    NeedsYou,
+    /// `‹machine›: ‹chat› finished`.
+    Finished,
+}
+
+/// The alert links now: `connected` of `machines` are open ("Connected to
+/// your machines"; fewer: reconnecting). `on` is false after Disconnect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LinkStatus {
+    pub on: bool,
+    pub machines: usize,
+    pub connected: usize,
+}
+
+/// How long a relay waits for its machine, and how often an open link is
+/// pinged (a pong not back by the next ping means the link is dead): the
+/// service's 10 s and 15 s.
+#[derive(Debug, Clone, Copy)]
+pub struct Timing {
+    pub link_timeout: Duration,
+    pub ping: Duration,
+    /// All of pairing: connecting, the proof, the claim and closing.
+    pub pairing: Duration,
+    /// An alert link's first wait after a failure, doubling up to `backoff_max`.
+    pub backoff_start: Duration,
+    pub backoff_max: Duration,
+}
+
+impl Default for Timing {
+    fn default() -> Self {
+        Timing {
+            link_timeout: Duration::from_secs(10),
+            ping: Duration::from_secs(15),
+            pairing: Duration::from_secs(10),
+            backoff_start: Duration::from_secs(2),
+            backoff_max: Duration::from_secs(60),
+        }
+    }
+}
 
 #[derive(Debug)]
 pub enum CoreError {
@@ -73,7 +133,15 @@ impl From<io::Error> for CoreError {
 
 /// Every method the core answers: the local answers, then the machines'.
 /// Later parts register theirs here.
-pub(crate) fn router(store: Arc<Store>, secrets: Arc<dyn Secrets>, machine_name: String) -> Router {
+pub(crate) fn router(
+    store: Arc<Store>,
+    secrets: Arc<dyn Secrets>,
+    machine_name: String,
+    events: LocalEvents,
+    relays: Arc<relay::Relays>,
+    alerts: Arc<alerts::Alerts>,
+    pairing_timeout: Duration,
+) -> Router {
     let mut router = Router::default();
     methods::register(
         &mut router,
@@ -82,7 +150,9 @@ pub(crate) fn router(store: Arc<Store>, secrets: Arc<dyn Secrets>, machine_name:
             machine_name,
         },
     );
-    machines::Machines::new(store, secrets).register(&mut router);
+    alerts.register(&mut router);
+    machines::Machines::new(store, secrets, events, relays, alerts, pairing_timeout)
+        .register(&mut router);
     router
 }
 
@@ -91,6 +161,9 @@ struct Inner {
     token: String,
     methods: Vec<&'static str>,
     events: broadcast::Sender<CoreEvent>,
+    alerts: Arc<alerts::Alerts>,
+    /// Sockets the server is serving now.
+    live: Arc<std::sync::atomic::AtomicUsize>,
     shutdown: watch::Sender<bool>,
     runtime: Mutex<Option<Runtime>>,
 }
@@ -98,6 +171,16 @@ struct Inner {
 impl Inner {
     fn stop(&self) {
         let _ = self.shutdown.send(true);
+        // The sockets close themselves (screens and relays 1001) before the
+        // runtime goes: shutting it down cancels whatever is still running.
+        if tokio::runtime::Handle::try_current().is_err() {
+            let deadline = std::time::Instant::now() + Duration::from_secs(1);
+            while self.live.load(std::sync::atomic::Ordering::SeqCst) > 0
+                && std::time::Instant::now() < deadline
+            {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
         let Some(runtime) = self
             .runtime
             .lock()
@@ -161,6 +244,32 @@ impl CoreHandle {
         *self.0.shutdown.borrow()
     }
 
+    /// Disconnect (the notification's action): every alert link closes, and
+    /// none starts again until [`CoreHandle::connect`], after a restart too.
+    pub fn disconnect(&self) {
+        self.0.alerts.disconnect();
+    }
+
+    pub fn connect(&self) {
+        self.0.alerts.connect();
+    }
+
+    /// The phone's network changed (Wi-Fi to mobile data, Tailscale up):
+    /// every link retries now, and the back-off starts over.
+    pub fn network_changed(&self) {
+        self.0.alerts.network_changed();
+    }
+
+    /// The chat on screen (`machine id`, `session id`), or none: it doesn't
+    /// alert. The screens say so with `alerts.setActive` too.
+    pub fn set_active(&self, chat: Option<(String, String)>) {
+        self.0.alerts.set_active(chat);
+    }
+
+    pub fn link_status(&self) -> LinkStatus {
+        self.0.alerts.status()
+    }
+
     /// The methods this core answers (the contract test lists them).
     #[doc(hidden)]
     pub fn answered_methods(&self) -> Vec<&'static str> {
@@ -190,13 +299,17 @@ impl Core {
     /// A new core of its own, whatever else runs: for tests, and for
     /// [`Core::start`]. Two on one data dir would overwrite each other's store.
     pub fn spawn(config: CoreConfig) -> Result<CoreHandle, CoreError> {
+        Core::spawn_with_timing(config, Timing::default())
+    }
+
+    /// [`Core::spawn`] with other relay timings (tests: a link timeout of
+    /// 10 s and pings every 15 s are too slow to wait for).
+    pub fn spawn_with_timing(config: CoreConfig, timing: Timing) -> Result<CoreHandle, CoreError> {
         let store = Arc::new(Store::open(&config.data_dir)?);
         let token: String = store::random_bytes::<32>()?
             .iter()
             .map(|b| format!("{b:02x}"))
             .collect();
-        let router = router(store, config.secrets, config.machine_name);
-        let methods = router.methods();
         // 127.0.0.1 only, never 0.0.0.0 or ::1: nothing off this phone can reach it.
         // Bound without the runtime (no `block_on`), so a caller inside one (Tauri) can start it.
         let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
@@ -219,20 +332,58 @@ impl Core {
                 return Err(e.into());
             }
         };
+        let local_events = LocalEvents::default();
+        let (events, _) = broadcast::channel(256);
+        let relays = Arc::new(relay::Relays::new(
+            store.clone(),
+            config.secrets.clone(),
+            timing,
+            events.clone(),
+        ));
+        let alerts = alerts::Alerts::new(
+            store.clone(),
+            config.secrets.clone(),
+            timing,
+            events.clone(),
+            runtime.handle().clone(),
+        );
+        let router = router(
+            store,
+            config.secrets,
+            config.machine_name,
+            local_events.clone(),
+            relays.clone(),
+            alerts.clone(),
+            timing.pairing,
+        );
+        let methods = router.methods();
         let (shutdown, stopped) = watch::channel(false);
+        let live = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let server = Arc::new(server::Server {
             token: token.clone(),
             router,
+            events: local_events,
+            relays,
+            live: live.clone(),
         });
         runtime.spawn(server::serve(listener, server, stopped));
-        let (events, _) = broadcast::channel(64);
+        // A link to every paired machine, unless the owner chose Disconnect.
+        alerts.start_all();
         Ok(CoreHandle(Arc::new(Inner {
             port,
             token,
             methods,
             events,
+            alerts,
+            live,
             shutdown,
             runtime: Mutex::new(Some(runtime)),
         })))
+    }
+
+    /// Whether the core was connected when it last ran (the owner didn't
+    /// choose Disconnect): after a reboot, the app starts it only then.
+    pub fn was_connected(data_dir: &std::path::Path) -> bool {
+        Store::open(data_dir).is_ok_and(|s| !s.links_off())
     }
 }
