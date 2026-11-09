@@ -375,14 +375,14 @@ fn an_oversized_frame_is_refused() {
     let dir = tempfile::tempdir().unwrap();
     let core = core(dir.path());
     block_on(async {
-        // Large but allowed: answered.
+        // A large frame within the limit is answered (a stored value has its own, smaller cap).
         let mut ws = open(&core).await;
         let big = "x".repeat(2 * 1024 * 1024);
         let answer = call(
             &mut ws,
             1,
-            "uiState.set",
-            json!({ "key": "big", "value": big }),
+            "ui.error",
+            json!({ "where": "test", "message": big }),
         )
         .await;
         assert_eq!(answer["result"], json!({}));
@@ -448,4 +448,79 @@ fn the_core_carries_the_apps_version() {
         .and_then(|v| v.strip_suffix('"'))
         .expect("the app's version");
     assert_eq!(version, env!("CARGO_PKG_VERSION"));
+}
+
+#[test]
+fn a_stored_value_over_1_mib_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = core(dir.path());
+    block_on(async {
+        let mut ws = open(&core).await;
+        let over = "x".repeat(1024 * 1024 + 1);
+        let answer = call(
+            &mut ws,
+            1,
+            "uiState.set",
+            json!({ "key": "k", "value": over }),
+        )
+        .await;
+        assert_eq!(
+            answer["error"]["code"], "INVALID_PARAMS",
+            "{}",
+            answer["error"]
+        );
+        let answer = call(
+            &mut ws,
+            2,
+            "drafts.set",
+            json!({ "key": "k", "text": over }),
+        )
+        .await;
+        assert_eq!(
+            answer["error"]["code"], "INVALID_PARAMS",
+            "{}",
+            answer["error"]
+        );
+        // Nothing was stored; a value under the cap is.
+        let answer = call(&mut ws, 3, "uiState.get", json!({ "key": "k" })).await;
+        assert_eq!(answer["result"], json!({ "value": null }));
+        let under = "x".repeat(512 * 1024);
+        let answer = call(
+            &mut ws,
+            4,
+            "drafts.set",
+            json!({ "key": "k", "text": under }),
+        )
+        .await;
+        assert_eq!(answer["result"], json!({}));
+    });
+    core.stop();
+}
+
+#[test]
+fn sockets_that_never_authenticate_are_capped_at_8() {
+    let dir = tempfile::tempdir().unwrap();
+    let core = core(dir.path());
+    let addr = SocketAddr::from(([127, 0, 0, 1], core.port()));
+    // Eight connections that never start their handshake hold every slot.
+    let idle: Vec<TcpStream> = (0..8).map(|_| TcpStream::connect(addr).unwrap()).collect();
+    std::thread::sleep(Duration::from_millis(200));
+    block_on(async {
+        let protocols = [format!("threadgarden.{}", core.token())];
+        let ninth = tokio::time::timeout(
+            Duration::from_secs(3),
+            open_with(core.port(), "/", &protocols),
+        )
+        .await;
+        assert!(!matches!(ninth, Ok(Ok(_))), "a ninth socket was served");
+    });
+    // Once they go, screens are served again.
+    drop(idle);
+    std::thread::sleep(Duration::from_millis(200));
+    block_on(async {
+        let mut ws = open(&core).await;
+        let answer = call(&mut ws, 1, "hello", hello_params()).await;
+        assert_eq!(answer["result"]["protocolVersion"], 11);
+    });
+    core.stop();
 }

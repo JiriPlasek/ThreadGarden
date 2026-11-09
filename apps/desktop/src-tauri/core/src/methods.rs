@@ -30,6 +30,10 @@ use crate::store::Store;
 /// uses a machine's platform only for a paired machine's path separator.
 pub const PLATFORM: &str = "linux";
 
+/// The most a single stored value (a `uiState` value, a draft) may take, as
+/// JSON or UTF-8 bytes: the whole store is rewritten on each change.
+pub const MAX_STORED_VALUE_BYTES: usize = 1024 * 1024;
+
 /// Why a method failed, as the protocol's `{ code, message }`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MethodError {
@@ -87,6 +91,23 @@ impl Router {
         self.register(method, move |p| {
             let handler = handler.clone();
             async move { handler(p) }
+        });
+    }
+
+    /// Registers a handler that blocks (it writes the store to disk): it
+    /// runs on tokio's blocking threads, never on the core's two workers.
+    pub fn answer_blocking<F>(&mut self, method: &'static str, handler: F)
+    where
+        F: Fn(Value) -> Answer + Send + Sync + 'static,
+    {
+        let handler = Arc::new(handler);
+        self.register(method, move |p| {
+            let handler = handler.clone();
+            async move {
+                tokio::task::spawn_blocking(move || handler(p))
+                    .await
+                    .unwrap_or_else(|_| Err(MethodError::internal()))
+            }
         });
     }
 
@@ -172,7 +193,7 @@ pub fn register(router: &mut Router, deps: Deps) {
     let s = store.clone();
     router.answer("settings.get", move |_| Ok(settings::read(&s.settings())));
     let s = store.clone();
-    router.answer("settings.set", move |p| {
+    router.answer_blocking("settings.set", move |p| {
         let patch = settings::check_patch(&p).map_err(MethodError::invalid)?;
         s.patch_settings(patch)
             .map_err(|_| MethodError::internal())?;
@@ -184,9 +205,13 @@ pub fn register(router: &mut Router, deps: Deps) {
         Ok(json!({ "value": s.ui_state(key).unwrap_or(Value::Null) }))
     });
     let s = store.clone();
-    router.answer("uiState.set", move |p| {
+    router.answer_blocking("uiState.set", move |p| {
         let key = string_param(&p, "key")?;
         let value = p.get("value").cloned().unwrap_or(Value::Null);
+        let size = serde_json::to_vec(&value).map_or(usize::MAX, |b| b.len());
+        if size > MAX_STORED_VALUE_BYTES {
+            return Err(MethodError::invalid("value: at most 1 MiB"));
+        }
         s.set_ui_state(key, value)
             .map_err(|_| MethodError::internal())?;
         Ok(json!({}))
@@ -197,9 +222,12 @@ pub fn register(router: &mut Router, deps: Deps) {
         Ok(json!({ "text": s.draft(key).unwrap_or_default() }))
     });
     let s = store;
-    router.answer("drafts.set", move |p| {
+    router.answer_blocking("drafts.set", move |p| {
         let key = string_param(&p, "key")?;
         let text = string_param(&p, "text")?;
+        if text.len() > MAX_STORED_VALUE_BYTES {
+            return Err(MethodError::invalid("text: at most 1 MiB"));
+        }
         s.set_draft(key, text, now_ms())
             .map_err(|_| MethodError::internal())?;
         Ok(json!({}))

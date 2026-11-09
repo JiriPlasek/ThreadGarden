@@ -23,7 +23,7 @@ use serde_json::{Map, Value};
 
 /// The store's file in the data dir.
 pub const FILE: &str = "core.json";
-/// Where an unreadable store file is moved, so a fresh one can start.
+/// The prefix of where an unreadable store file is moved (`-<unix ms>` follows), so a fresh one can start.
 pub const UNREADABLE: &str = "core.json.unreadable";
 const FORMAT: u32 = 1;
 
@@ -73,11 +73,13 @@ struct Data {
 pub struct Store {
     path: PathBuf,
     data: Mutex<Data>,
+    /// Held for a whole change, the write to disk included.
+    writing: Mutex<()>,
 }
 
 impl Store {
     /// Opens (or creates) the store in `dir`. A file that isn't a store any
-    /// more is set aside as `core.json.unreadable` and a fresh one started:
+    /// more is set aside as `core.json.unreadable-<unix ms>` and a fresh one started:
     /// the phone must come up, and pairing again beats a core that can't
     /// start. A file that can't be read at all is an error.
     pub fn open(dir: &Path) -> io::Result<Store> {
@@ -87,7 +89,7 @@ impl Store {
             Ok(bytes) => match serde_json::from_slice::<Data>(&bytes) {
                 Ok(data) => data,
                 Err(_) => {
-                    fs::rename(&path, dir.join(UNREADABLE))?;
+                    fs::rename(&path, set_aside_path(dir))?;
                     Data::default()
                 }
             },
@@ -97,6 +99,7 @@ impl Store {
         let store = Store {
             path,
             data: Mutex::new(data),
+            writing: Mutex::new(()),
         };
         if store.lock().machine_id.is_none() {
             let id = random_uuid()?;
@@ -111,15 +114,18 @@ impl Store {
     }
 
     /// Applies `f` to a copy, writes it, and only then keeps it: a failed
-    /// write leaves memory as the disk is.
+    /// write leaves memory as the disk is. Writers wait for each other (no
+    /// change is lost), but readers only wait for the copy and the swap,
+    /// never for the disk. It blocks on the disk: call it off the runtime
+    /// (the handlers use `spawn_blocking`).
     fn change<R>(&self, f: impl FnOnce(&mut Data) -> R) -> io::Result<R> {
-        let mut data = self.lock();
-        let mut next = data.clone();
+        let _one_writer = self.writing.lock().unwrap_or_else(|e| e.into_inner());
+        let mut next = self.lock().clone();
         let out = f(&mut next);
         next.format = FORMAT;
         let bytes = serde_json::to_vec_pretty(&next).map_err(io::Error::other)?;
         write_atomic(&self.path, &bytes)?;
-        *data = next;
+        *self.lock() = next;
         Ok(out)
     }
 
@@ -190,6 +196,22 @@ impl Store {
             d.machines.retain(|m| m.id != id);
             d.machines.len() != before
         })
+    }
+}
+
+/// A name no earlier set-aside copy has: `core.json.unreadable-<unix ms>`,
+/// so a second reset never overwrites the first copy.
+fn set_aside_path(dir: &Path) -> PathBuf {
+    let mut ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    loop {
+        let path = dir.join(format!("{UNREADABLE}-{ms}"));
+        if !path.exists() {
+            return path;
+        }
+        ms += 1;
     }
 }
 
@@ -268,9 +290,33 @@ mod tests {
         fs::write(dir.path().join(FILE), b"{ half a store").unwrap();
         let store = Store::open(dir.path()).unwrap();
         assert!(store.settings().is_empty());
+        assert_eq!(set_aside(dir.path()), [b"{ half a store".to_vec()]);
+    }
+
+    /// The set-aside copies, oldest first.
+    fn set_aside(dir: &Path) -> Vec<Vec<u8>> {
+        let mut names: Vec<_> = fs::read_dir(dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with(UNREADABLE))
+            .collect();
+        names.sort();
+        names
+            .iter()
+            .map(|n| fs::read(dir.join(n)).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn a_second_unreadable_file_keeps_the_first_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join(FILE), b"first").unwrap();
+        Store::open(dir.path()).unwrap();
+        fs::write(dir.path().join(FILE), b"second").unwrap();
+        Store::open(dir.path()).unwrap();
         assert_eq!(
-            fs::read(dir.path().join(UNREADABLE)).unwrap(),
-            b"{ half a store"
+            set_aside(dir.path()),
+            [b"first".to_vec(), b"second".to_vec()]
         );
     }
 

@@ -58,7 +58,8 @@ describe('the phone core', () => {
       // The request the core was asked is one the UI could send.
       def.params.parse(c.params);
       if (c.error) expect(c.error.code).toMatch(/^[A-Z_]+$/);
-      else def.result.parse(c.result);
+      // Parsed back unchanged: zod strips keys it doesn't know, so an extra key fails too.
+      else expect(def.result.parse(c.result)).toEqual(c.result);
     }
   });
 

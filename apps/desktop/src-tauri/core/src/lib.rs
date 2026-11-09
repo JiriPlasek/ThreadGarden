@@ -197,14 +197,28 @@ impl Core {
             .collect();
         let router = router(store, config.secrets, config.machine_name);
         let methods = router.methods();
+        // 127.0.0.1 only, never 0.0.0.0 or ::1: nothing off this phone can reach it.
+        // Bound without the runtime (no `block_on`), so a caller inside one (Tauri) can start it.
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
+        listener.set_nonblocking(true)?;
+        let port = listener.local_addr()?.port();
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .thread_name("threadgarden-core")
             .enable_all()
             .build()?;
-        // 127.0.0.1 only, never 0.0.0.0 or ::1: nothing off this phone can reach it.
-        let listener = runtime.block_on(tokio::net::TcpListener::bind(("127.0.0.1", 0)))?;
-        let port = listener.local_addr()?.port();
+        let registered = {
+            let _in_runtime = runtime.enter();
+            tokio::net::TcpListener::from_std(listener)
+        };
+        let listener = match registered {
+            Ok(l) => l,
+            Err(e) => {
+                // Dropping a runtime inside an async context would panic.
+                runtime.shutdown_background();
+                return Err(e.into());
+            }
+        };
         let (shutdown, stopped) = watch::channel(false);
         let server = Arc::new(server::Server {
             token: token.clone(),

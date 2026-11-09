@@ -8,8 +8,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
+use subtle::ConstantTimeEq;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, watch};
 use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::http::header::SEC_WEBSOCKET_PROTOCOL;
@@ -40,13 +41,16 @@ enum Route {
     Relay,
 }
 
-/// Compares in constant time, so the token can't be guessed byte by byte.
+/// Sockets still in their handshake, or being closed unauthenticated, at
+/// once: more are dropped as they come, so nothing local can pile them up.
+const MAX_PENDING: usize = 8;
+/// What a socket closed 4401 may still send before it's dropped: it's read
+/// and thrown away as bytes, never assembled into a message.
+const UNAUTHORIZED_DRAIN_BYTES: usize = 64 * 1024;
+
+/// Compares in constant time (`subtle`), so the token can't be guessed byte by byte.
 fn same(a: &str, b: &str) -> bool {
-    a.len() == b.len()
-        && a.bytes()
-            .zip(b.bytes())
-            .fold(0u8, |acc, (x, y)| acc | (x ^ y))
-            == 0
+    a.as_bytes().ct_eq(b.as_bytes()).into()
 }
 
 /// Accepts sockets until `shutdown` says stop.
@@ -55,11 +59,14 @@ pub(crate) async fn serve(
     server: Arc<Server>,
     mut shutdown: watch::Receiver<bool>,
 ) {
+    let pending = Arc::new(Semaphore::new(MAX_PENDING));
     loop {
         tokio::select! {
             accepted = listener.accept() => match accepted {
                 Ok((stream, _)) => {
-                    tokio::spawn(connection(stream, server.clone(), shutdown.clone()));
+                    // No slot: dropped at once, before a byte of it is read.
+                    let Ok(slot) = pending.clone().try_acquire_owned() else { continue };
+                    tokio::spawn(connection(stream, server.clone(), shutdown.clone(), slot));
                 }
                 // Out of file descriptors, say: wait a moment rather than spin.
                 Err(_) => tokio::time::sleep(Duration::from_millis(100)).await,
@@ -69,7 +76,12 @@ pub(crate) async fn serve(
     }
 }
 
-async fn connection(stream: TcpStream, server: Arc<Server>, shutdown: watch::Receiver<bool>) {
+async fn connection(
+    stream: TcpStream,
+    server: Arc<Server>,
+    shutdown: watch::Receiver<bool>,
+    slot: OwnedSemaphorePermit,
+) {
     let mut route = Route::Unauthorized;
     // The error type is tungstenite's callback signature (an HTTP response), and it's never returned.
     #[allow(clippy::result_large_err)]
@@ -106,10 +118,48 @@ async fn connection(stream: TcpStream, server: Arc<Server>, shutdown: watch::Rec
         return;
     };
     match route {
-        Route::Unauthorized => close(ws, UNAUTHORIZED, "unauthorized").await,
-        Route::Relay => close(ws, RELAY_LOCKED, "no paired machines here").await,
-        Route::Screen => screen(ws, server, shutdown).await,
+        // It keeps its slot until it's gone.
+        Route::Unauthorized => refuse(ws).await,
+        Route::Relay => {
+            drop(slot);
+            close(ws, RELAY_LOCKED, "no paired machines here").await
+        }
+        Route::Screen => {
+            drop(slot);
+            screen(ws, server, shutdown).await
+        }
     }
+}
+
+/// Closes an unauthenticated socket 4401. What it sends after that is read
+/// as plain bytes and dropped (at most 64 KiB, for at most 2 s), so its
+/// frames are never assembled: just enough for the peer to see the close
+/// code rather than a reset.
+async fn refuse(mut ws: WebSocketStream<TcpStream>) {
+    if ws
+        .send(close_frame(UNAUTHORIZED, "unauthorized"))
+        .await
+        .is_err()
+    {
+        return;
+    }
+    let tcp = ws.get_mut();
+    let mut buf = [0u8; 4096];
+    let mut drained = 0;
+    let _ = tokio::time::timeout(Duration::from_secs(2), async {
+        while drained < UNAUTHORIZED_DRAIN_BYTES {
+            if tcp.readable().await.is_err() {
+                return;
+            }
+            match tcp.try_read(&mut buf) {
+                Ok(0) => return,
+                Ok(n) => drained += n,
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => continue,
+                Err(_) => return,
+            }
+        }
+    })
+    .await;
 }
 
 fn close_frame(code: u16, reason: &'static str) -> Message {

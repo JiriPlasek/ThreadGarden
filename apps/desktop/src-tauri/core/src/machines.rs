@@ -85,7 +85,7 @@ impl Machines {
         });
         // `machines.update` comes with pairing: a move closes the machine's relays.
         let m = self.clone();
-        router.answer("machines.remove", move |p| {
+        router.answer_blocking("machines.remove", move |p| {
             m.remove(string_param(&p, "machineId")?)
         });
     }
