@@ -105,6 +105,20 @@ describe('methods a paired device may not call', () => {
     }
   });
 
+  // The phone's core alone answers it, to its own screens: a device never gets it through.
+  it('answers alerts.setActive from a paired device with an error, never a result', async () => {
+    const ws = await open(svc.remote!.port, device.token);
+    try {
+      const res = await call(ws, 'alerts.setActive', { machineId: 'm1', sessionId: 's1' });
+      expect(res).not.toHaveProperty('result');
+      expect(['METHOD_NOT_FOUND', 'FORBIDDEN']).toContain(
+        (res as { error?: { code: string } }).error?.code,
+      );
+    } finally {
+      ws.close();
+    }
+  });
+
   const projectMethods = Object.keys(methods).filter((m) =>
     /^(folders|github)\.|^projects\.(createIn|create|clone|job|cancel|origins)$/.test(m),
   );
