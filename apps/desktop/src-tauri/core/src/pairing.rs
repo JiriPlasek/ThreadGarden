@@ -40,8 +40,6 @@ use crate::methods::MethodError;
 
 pub const PAIR_PROTOCOL: &str = "threadgarden-pair";
 pub const DEVICE_PROTOCOL_PREFIX: &str = "threadgarden-device.";
-/// How long pairing may take in all (connecting, proof and claim).
-pub const PAIRING_TIMEOUT: Duration = Duration::from_secs(10);
 /// How long removing a machine waits for it to revoke this device.
 pub const UNPAIR_TIMEOUT: Duration = Duration::from_secs(5);
 /// Largest frame taken from a machine being paired: its answers are small.
@@ -404,8 +402,10 @@ pub async fn request(
         .unwrap_or(Err(RequestError::Link))
 }
 
-async fn close(link: &mut Link) {
-    let _ = tokio::time::timeout(Duration::from_secs(1), link.close(None)).await;
+/// Closes a link, waiting for the machine's close at most until `deadline` (or 1 s).
+async fn close(link: &mut Link, deadline: Instant) {
+    let by = deadline.min(Instant::now() + Duration::from_secs(1));
+    let _ = tokio::time::timeout_at(by, link.close(None)).await;
 }
 
 /// `MachineInfoSchema`.
@@ -475,6 +475,7 @@ pub async fn pair(
     port: u16,
     code: &str,
     device_name: &str,
+    timeout: Duration,
     accept: impl FnOnce(&Value) -> Result<(), MethodError>,
 ) -> Result<Paired, MethodError> {
     // A code that can't be one is refused here: nothing to prove, nothing to send.
@@ -482,13 +483,15 @@ pub async fn pair(
         return Err(pairing_error("PAIRING_INVALID"));
     }
     let code = normalise_code(code);
-    let deadline = Instant::now() + PAIRING_TIMEOUT;
+    let deadline = Instant::now() + timeout;
     let left = deadline.saturating_duration_since(Instant::now());
     let (mut link, peer) = open_link(address, port, PAIR_PROTOCOL, None, left, PAIRING_MAX_FRAME)
         .await
         .map_err(not_connected)?;
     let outcome = claim(&mut link, &peer, &code, device_name, accept, deadline).await;
-    close(&mut link).await;
+    // The deadline is for all of it, closing included: a machine that went
+    // quiet doesn't get its socket closed politely.
+    close(&mut link, deadline).await;
     let (machine, device_id, token) = outcome?;
     Ok(Paired {
         machine,
@@ -587,7 +590,7 @@ pub async fn unpair(address: &str, port: u16, pin: &str, token: &str, device_id:
         Err(RequestError::Closed(code)) => code == Some(REVOKED),
         Err(_) => false,
     };
-    close(&mut link).await;
+    close(&mut link, deadline).await;
     revoked
 }
 

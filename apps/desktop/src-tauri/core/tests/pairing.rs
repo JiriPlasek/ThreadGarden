@@ -550,3 +550,167 @@ fn a_pairing_that_cant_be_kept_is_undone_on_the_machine() {
     });
     core.stop();
 }
+
+#[test]
+fn removing_a_machine_moved_to_an_impostor_sends_it_no_token() {
+    let dir = tempfile::tempdir().unwrap();
+    let (core, _) = core_with_secrets(dir.path());
+    let desk = FakeMachine::start(Behaviour::default());
+    let impostor = FakeMachine::start(Behaviour::default());
+    block_on(async {
+        let mut ws = open(&core).await;
+        assert!(
+            call(&mut ws, 1, "machines.pair", pair_params(desk.port, CODE))
+                .await
+                .get("result")
+                .is_some()
+        );
+        let moved = call(
+            &mut ws,
+            2,
+            "machines.update",
+            json!({ "machineId": "machine-desk", "port": impostor.port }),
+        )
+        .await;
+        assert!(moved.get("result").is_some(), "{moved}");
+        let answer = call(
+            &mut ws,
+            3,
+            "machines.remove",
+            json!({ "machineId": "machine-desk", "revoke": true }),
+        )
+        .await;
+        assert_eq!(answer["result"], json!({ "revoked": false }));
+    });
+    // The pinned link failed in the TLS handshake: no upgrade, so no token, and no frame.
+    assert!(impostor.connections() >= 1);
+    assert!(
+        impostor.protocols().is_empty(),
+        "{:?}",
+        impostor.protocols()
+    );
+    assert!(impostor.frames().is_empty());
+    core.stop();
+}
+
+#[test]
+fn pairing_with_a_machine_that_stops_answering_ends_by_its_deadline() {
+    let dir = tempfile::tempdir().unwrap();
+    let deadline = std::time::Duration::from_millis(600);
+    let timing = threadgarden_core::Timing {
+        pairing: deadline,
+        ..threadgarden_core::Timing::default()
+    };
+    let core =
+        threadgarden_core::Core::spawn_with_timing(support::config(dir.path()), timing).unwrap();
+    let silent = FakeMachine::start(Behaviour {
+        stall_pairing: true,
+        ..Behaviour::default()
+    });
+    block_on(async {
+        let mut ws = open(&core).await;
+        let started = std::time::Instant::now();
+        let answer = call(&mut ws, 1, "machines.pair", pair_params(silent.port, CODE)).await;
+        let took = started.elapsed();
+        assert_eq!(answer["error"]["code"], "PAIRING_UNREACHABLE", "{answer}");
+        // The deadline covers closing the socket too.
+        assert!(
+            took < deadline + std::time::Duration::from_millis(300),
+            "took {took:?}"
+        );
+    });
+    core.stop();
+}
+
+/// Secrets that count their reads (a Keystore call each, on Android).
+#[derive(Default)]
+struct Counting {
+    inner: threadgarden_core::secrets::MemorySecrets,
+    gets: std::sync::atomic::AtomicUsize,
+}
+
+impl Secrets for Counting {
+    fn get(&self, key: &str) -> Result<Option<String>, threadgarden_core::secrets::SecretsError> {
+        self.gets.fetch_add(1, Ordering::SeqCst);
+        self.inner.get(key)
+    }
+    fn set(&self, key: &str, value: &str) -> Result<(), threadgarden_core::secrets::SecretsError> {
+        self.inner.set(key, value)
+    }
+    fn delete(&self, key: &str) -> Result<(), threadgarden_core::secrets::SecretsError> {
+        self.inner.delete(key)
+    }
+}
+
+#[test]
+fn listing_machines_never_asks_the_keystore() {
+    let dir = tempfile::tempdir().unwrap();
+    let secrets = Arc::new(Counting::default());
+    let config = threadgarden_core::CoreConfig {
+        secrets: secrets.clone(),
+        ..support::config(dir.path())
+    };
+    let core = threadgarden_core::Core::spawn(config).unwrap();
+    let desk = FakeMachine::start(Behaviour::default());
+    block_on(async {
+        let mut ws = open(&core).await;
+        assert!(
+            call(&mut ws, 1, "machines.pair", pair_params(desk.port, CODE))
+                .await
+                .get("result")
+                .is_some()
+        );
+        let before = secrets.gets.load(Ordering::SeqCst);
+        for id in 2..7 {
+            let list = call(&mut ws, id, "machines.list", json!({})).await;
+            assert_eq!(list["result"][0]["unlocked"], true);
+        }
+        assert_eq!(secrets.gets.load(Ordering::SeqCst), before);
+    });
+    core.stop();
+}
+
+#[cfg(unix)]
+#[test]
+fn a_remove_the_store_cant_write_keeps_the_token() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let (core, secrets) = core_with_secrets(dir.path());
+    let desk = FakeMachine::start(Behaviour::default());
+    block_on(async {
+        let mut ws = open(&core).await;
+        assert!(
+            call(&mut ws, 1, "machines.pair", pair_params(desk.port, CODE))
+                .await
+                .get("result")
+                .is_some()
+        );
+        // The store can't be written now (a full disk, say).
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
+        let answer = call(
+            &mut ws,
+            2,
+            "machines.remove",
+            json!({ "machineId": "machine-desk", "revoke": true }),
+        )
+        .await;
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(answer["error"]["code"], "INTERNAL", "{answer}");
+        // Still paired, still with its token (so it can be removed, and revoked, again).
+        assert_eq!(
+            call(&mut ws, 3, "machines.list", json!({})).await["result"][0]["unlocked"],
+            true
+        );
+        assert!(!desk.methods().contains(&"devices.revoke".to_string()));
+        let again = call(
+            &mut ws,
+            4,
+            "machines.remove",
+            json!({ "machineId": "machine-desk", "revoke": true }),
+        )
+        .await;
+        assert_eq!(again["result"], json!({ "revoked": true }));
+    });
+    assert_eq!(secrets.get("machine-token:machine-desk"), Ok(None));
+    core.stop();
+}

@@ -15,7 +15,8 @@ import { TestClient } from './e2e/ws-client.js';
  * The phone's core (Rust) pairs with a real headless service, so the two
  * implementations of pairing can't drift. The core side is the crate's
  * `pair_check` example; CI builds it in the rust job (`cargo test` builds
- * examples) and runs this file there. Where it isn't built, this is skipped.
+ * examples) and runs this file there with `THREADGARDEN_CORE_PAIRING=1`, so
+ * it can't skip there. Elsewhere, without the binary, it's skipped.
  */
 const bin = fileURLToPath(
   new URL(
@@ -26,6 +27,11 @@ const bin = fileURLToPath(
   ),
 );
 const built = existsSync(bin);
+if (process.env.THREADGARDEN_CORE_PAIRING === '1' && !built) {
+  throw new Error(
+    `pair_check not built (${bin}): run \`cargo test\` in apps/desktop/src-tauri/core`,
+  );
+}
 
 type Answer = { result?: Record<string, unknown>; error?: { code: string; message: string } };
 type Steps = { pair: Answer; list: Answer; remove: Answer };
@@ -122,13 +128,15 @@ describe.skipIf(!built)('the phone core and a real service', () => {
     expect(await local('devices.list', {})).toEqual([]);
   }, 90_000);
 
-  it('a wrong code fails the proof, and the code is never spent', async () => {
+  it('a wrong code fails the proof, and the right one still pairs', async () => {
     const { code } = await local<{ code: string }>('pairing.create', {});
     const wrong = code.startsWith('A') ? 'BBBB-BBBB-BBBB' : 'AAAA-AAAA-AAAA';
     const failed = await runCore(wrong);
     expect(failed.pair.error?.code).toBe('PAIRING_PROOF_FAILED');
     expect(await local('devices.list', {})).toEqual([]);
-    // No claim was made, so the live code still pairs.
+    // The live code still pairs. That alone wouldn't show the code was never
+    // sent (one wrong claim doesn't spend it); the crate's pairing tests check
+    // that no `pair.claim` follows a failed proof.
     const steps = await runCore(code);
     expect(steps.pair.error).toBeUndefined();
     expect(steps.remove.result).toEqual({ revoked: true });

@@ -37,6 +37,8 @@ pub struct Behaviour {
     pub device_close: Option<u16>,
     /// A device socket is never read once open: no pongs, as a link that died silently.
     pub stall: bool,
+    /// A pairing socket is never read once open: no answer, no close.
+    pub stall_pairing: bool,
     /// `devices.revoke` closes the socket 4403 instead of answering.
     pub revoke_closes: bool,
 }
@@ -51,6 +53,7 @@ impl Default for Behaviour {
             valid_years: None,
             device_close: None,
             stall: false,
+            stall_pairing: false,
             revoke_closes: false,
         }
     }
@@ -275,6 +278,9 @@ impl Machine {
             // As the remote listener: a credential it doesn't know is closed 4401 at once.
             let _ = ws.close(Some(close_frame(4401))).await;
             return;
+        }
+        if matches!(kind, Socket::Pairing) && self.behaviour.stall_pairing {
+            std::future::pending::<()>().await;
         }
         if matches!(kind, Socket::Device) {
             if let Some(code) = self.behaviour.device_close {

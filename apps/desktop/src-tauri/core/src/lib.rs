@@ -62,6 +62,8 @@ pub enum CoreEvent {
 pub struct Timing {
     pub link_timeout: Duration,
     pub ping: Duration,
+    /// All of pairing: connecting, the proof, the claim and closing.
+    pub pairing: Duration,
 }
 
 impl Default for Timing {
@@ -69,6 +71,7 @@ impl Default for Timing {
         Timing {
             link_timeout: Duration::from_secs(10),
             ping: Duration::from_secs(15),
+            pairing: Duration::from_secs(10),
         }
     }
 }
@@ -103,6 +106,7 @@ pub(crate) fn router(
     machine_name: String,
     events: LocalEvents,
     relays: Arc<relay::Relays>,
+    pairing_timeout: Duration,
 ) -> Router {
     let mut router = Router::default();
     methods::register(
@@ -112,7 +116,7 @@ pub(crate) fn router(
             machine_name,
         },
     );
-    machines::Machines::new(store, secrets, events, relays).register(&mut router);
+    machines::Machines::new(store, secrets, events, relays, pairing_timeout).register(&mut router);
     router
 }
 
@@ -245,6 +249,7 @@ impl Core {
             config.machine_name,
             local_events.clone(),
             relays.clone(),
+            timing.pairing,
         );
         let methods = router.methods();
         // 127.0.0.1 only, never 0.0.0.0 or ::1: nothing off this phone can reach it.

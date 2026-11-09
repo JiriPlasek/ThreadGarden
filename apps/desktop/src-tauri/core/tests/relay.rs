@@ -31,6 +31,7 @@ fn core(dir: &std::path::Path) -> (CoreHandle, Arc<MemorySecrets>) {
     let timing = Timing {
         link_timeout: LINK_TIMEOUT,
         ping: PING,
+        ..Timing::default()
     };
     (Core::spawn_with_timing(config, timing).unwrap(), secrets)
 }

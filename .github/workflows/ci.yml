@@ -90,6 +90,9 @@ jobs:
       # Pairing cross-check: the core (its `pair_check` example, built by
       # `cargo test`) against a real headless service. Skipped where it isn't built.
       - run: pnpm --filter @threadgarden/service exec vitest run test/core-pairing.test.ts
+        env:
+          # Fail, not skip, if the binary is missing.
+          THREADGARDEN_CORE_PAIRING: '1'
 
   # Release bundles with the Node sidecar and the bundled service, then the UI's
   # end-to-end and performance specs (Playwright, Chromium) against the mock service.

@@ -185,14 +185,32 @@ impl Store {
         self.lock().machines.clone()
     }
 
-    /// Adds a machine, or replaces the one with its id in place.
-    pub fn put_machine(&self, machine: StoredMachine) -> io::Result<()> {
-        self.change(
-            |d| match d.machines.iter_mut().find(|m| m.id == machine.id) {
-                Some(slot) => *slot = machine,
-                None => d.machines.push(machine),
-            },
-        )
+    /// Adds a machine after the others; false (and nothing changed) when
+    /// one with its id is there already. Checked and added in one change, so
+    /// two pairings of the same machine can't both add it.
+    pub fn add_machine(&self, machine: StoredMachine) -> io::Result<bool> {
+        self.change(|d| {
+            if d.machines.iter().any(|m| m.id == machine.id) {
+                return false;
+            }
+            d.machines.push(machine);
+            true
+        })
+    }
+
+    /// Changes the machine `id` with `f`, in one change; None (and nothing
+    /// changed) when it isn't there, so an update racing a remove can't bring
+    /// it back.
+    pub fn update_machine(
+        &self,
+        id: &str,
+        f: impl FnOnce(&mut StoredMachine),
+    ) -> io::Result<Option<StoredMachine>> {
+        self.change(|d| {
+            let m = d.machines.iter_mut().find(|m| m.id == id)?;
+            f(m);
+            Some(m.clone())
+        })
     }
 
     /// Forgets a machine; false when there was none with that id.
@@ -345,16 +363,40 @@ mod tests {
     }
 
     #[test]
+    fn a_machine_is_added_once_and_updated_only_while_it_is_there() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::open(dir.path()).unwrap();
+        assert!(store.add_machine(machine("a")).unwrap());
+        // A second pairing of the same machine doesn't replace the first.
+        let other = StoredMachine {
+            name: "Other".into(),
+            ..machine("a")
+        };
+        assert!(!store.add_machine(other).unwrap());
+        assert_eq!(store.machines()[0].name, "Desk");
+        let renamed = store
+            .update_machine("a", |m| m.name = "Study".into())
+            .unwrap();
+        assert_eq!(renamed.map(|m| m.name), Some("Study".into()));
+        // Removed meanwhile: an update doesn't bring it back.
+        assert!(store.remove_machine("a").unwrap());
+        assert_eq!(
+            store
+                .update_machine("a", |m| m.name = "Back".into())
+                .unwrap(),
+            None
+        );
+        assert!(store.machines().is_empty());
+    }
+
+    #[test]
     fn machines_are_added_replaced_and_removed_in_order() {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::open(dir.path()).unwrap();
-        store.put_machine(machine("a")).unwrap();
-        store.put_machine(machine("b")).unwrap();
+        store.add_machine(machine("a")).unwrap();
+        store.add_machine(machine("b")).unwrap();
         store
-            .put_machine(StoredMachine {
-                name: "Renamed".into(),
-                ..machine("a")
-            })
+            .update_machine("a", |m| m.name = "Renamed".into())
             .unwrap();
         let again = Store::open(dir.path()).unwrap();
         let names: Vec<_> = again

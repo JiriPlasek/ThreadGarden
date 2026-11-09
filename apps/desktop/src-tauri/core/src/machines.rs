@@ -3,7 +3,9 @@
 //! token is a secret (`Secrets`, under [`token_key`]); the store keeps where
 //! it is and its pin. The relays (Task 7) close when a machine moves or goes.
 
-use std::sync::Arc;
+use std::collections::HashSet;
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
@@ -95,33 +97,66 @@ fn internal<E>(_: E) -> MethodError {
     MethodError::internal()
 }
 
+fn not_found() -> MethodError {
+    MethodError::new("NOT_FOUND", "No such machine")
+}
+
+fn duplicate(name: &str) -> MethodError {
+    MethodError::new("PAIRING_DUPLICATE", format!("Already paired as {name}"))
+}
+
 #[derive(Clone)]
 pub struct Machines {
     store: Arc<Store>,
     secrets: Arc<dyn Secrets>,
     events: LocalEvents,
     relays: Arc<Relays>,
+    /// All of pairing, closing included (`Timing::pairing`).
+    pairing_timeout: Duration,
+    /// The machines whose token `Secrets` holds, kept here so listing never
+    /// calls the keystore (on Android, a Keystore call) on the runtime.
+    unlocked: Arc<Mutex<HashSet<String>>>,
+    /// Held while a machine's token and record change together (pairing,
+    /// removing), so two of them can't mix one machine's device id with
+    /// another pairing's token. Only on blocking threads.
+    saving: Arc<Mutex<()>>,
+}
+
+fn locked<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 impl Machines {
+    /// Reads which stored machines have a token, once, here (the core starts
+    /// off the runtime's threads, or before any screen waits on it).
     pub fn new(
         store: Arc<Store>,
         secrets: Arc<dyn Secrets>,
         events: LocalEvents,
         relays: Arc<Relays>,
+        pairing_timeout: Duration,
     ) -> Self {
+        let unlocked = store
+            .machines()
+            .into_iter()
+            .filter(|m| matches!(secrets.get(&token_key(&m.id)), Ok(Some(_))))
+            .map(|m| m.id)
+            .collect();
         Machines {
             store,
             secrets,
             events,
             relays,
+            pairing_timeout,
+            unlocked: Arc::new(Mutex::new(unlocked)),
+            saving: Arc::new(Mutex::new(())),
         }
     }
 
     /// A machine as the protocol lists it (`PairedMachineSchema`). `unlocked`:
     /// the core holds its token (it reads tokens itself; nothing hands them over).
     fn listed(&self, m: &StoredMachine) -> Value {
-        let unlocked = matches!(self.secrets.get(&token_key(&m.id)), Ok(Some(_)));
+        let unlocked = locked(&self.unlocked).contains(&m.id);
         json!({
             "id": m.id,
             "name": m.name,
@@ -153,7 +188,7 @@ impl Machines {
             .machines()
             .into_iter()
             .find(|m| m.id == machine_id)
-            .ok_or_else(|| MethodError::new("NOT_FOUND", "No such machine"))
+            .ok_or_else(not_found)
     }
 
     /// Refuses this phone itself and a machine already paired, before the code is sent.
@@ -162,13 +197,10 @@ impl Machines {
         if id == self.store.machine_id() {
             return Err(MethodError::new("PAIRING_SELF", "This is this machine"));
         }
-        if let Some(existing) = self.store.machines().into_iter().find(|m| m.id == id) {
-            return Err(MethodError::new(
-                "PAIRING_DUPLICATE",
-                format!("Already paired as {}", existing.name),
-            ));
+        match self.store.machines().into_iter().find(|m| m.id == id) {
+            Some(existing) => Err(duplicate(&existing.name)),
+            None => Ok(()),
         }
-        Ok(())
     }
 
     async fn pair(&self, p: Value) -> Result<Value, MethodError> {
@@ -181,9 +213,15 @@ impl Machines {
         let device_name = required(trimmed(&p, "deviceName", 60)?, "deviceName")?;
 
         let me = self.clone();
-        let paired =
-            pairing::pair(&address, port, &code, &device_name, move |m| me.refuse(m)).await?;
-        // Checked again: another pairing with the same machine may have finished meanwhile.
+        let paired = pairing::pair(
+            &address,
+            port,
+            &code,
+            &device_name,
+            self.pairing_timeout,
+            move |m| me.refuse(m),
+        )
+        .await?;
         if let Err(e) = self.refuse(&paired.machine) {
             self.give_back(&address, port, &paired);
             return Err(e);
@@ -205,21 +243,34 @@ impl Machines {
             device_id: paired.device_id.clone(),
             added_at: now_ms(),
         };
-        // The token as a secret first, then the machine: a machine is never stored without it.
         let (me, token) = (self.clone(), paired.token.clone());
         let kept = blocking(move || {
-            me.secrets
-                .set(&token_key(&stored.id), &token)
-                .map_err(internal)?;
-            if me.store.put_machine(stored.clone()).is_err() {
-                let _ = me.secrets.delete(&token_key(&stored.id));
-                return Err(MethodError::internal());
+            let _one_at_a_time = locked(&me.saving);
+            // Checked again, now that no other pairing or removal can run:
+            // another pairing with the same machine may have finished
+            // meanwhile, and its token must not be overwritten.
+            if let Some(existing) = me.store.machines().into_iter().find(|m| m.id == stored.id) {
+                return Err(duplicate(&existing.name));
             }
-            Ok(())
+            // The token as a secret first, then the machine: a machine is never stored without it.
+            let key = token_key(&stored.id);
+            me.secrets.set(&key, &token).map_err(internal)?;
+            match me.store.add_machine(stored.clone()) {
+                Ok(true) => {
+                    locked(&me.unlocked).insert(stored.id.clone());
+                    Ok(())
+                }
+                // Not possible while `saving` is held (only pairing adds); refused all the same.
+                Ok(false) => Err(duplicate(&stored.name)),
+                Err(_) => {
+                    let _ = me.secrets.delete(&key);
+                    Err(MethodError::internal())
+                }
+            }
         })
         .await;
         if let Err(e) = kept {
-            // Unusable without its token here: the machine is asked to forget this phone too.
+            // Unusable here: the machine is asked to forget the device it just made.
             self.give_back(&address, port, &paired);
             return Err(e);
         }
@@ -238,16 +289,30 @@ impl Machines {
     }
 
     fn update(&self, p: &Value) -> Result<Value, MethodError> {
-        let mut m = self.known(string_param(p, "machineId")?)?;
+        let id = string_param(p, "machineId")?;
         let (name, address, port) = (trimmed(p, "name", 40)?, address(p)?, port(p)?);
-        let was = (m.address.clone(), m.port);
-        m.name = name.unwrap_or(m.name);
-        m.address = address.unwrap_or(m.address);
-        m.port = port.unwrap_or(m.port);
-        // Its pin stays.
-        self.store.put_machine(m.clone()).map_err(internal)?;
+        let mut moved = false;
+        // Checked and changed in one store change: a machine removed meanwhile stays removed.
+        let m = self
+            .store
+            .update_machine(id, |m| {
+                let was = (m.address.clone(), m.port);
+                if let Some(name) = name {
+                    m.name = name;
+                }
+                if let Some(address) = address {
+                    m.address = address;
+                }
+                if let Some(port) = port {
+                    m.port = port;
+                }
+                // Its pin stays.
+                moved = (m.address.clone(), m.port) != was;
+            })
+            .map_err(internal)?
+            .ok_or_else(not_found)?;
         // Relays to the old address end; the screens reconnect to the new one (same pin).
-        if (m.address.clone(), m.port) != was {
+        if moved {
             self.relays.drop_machine(&m.id, relay::UNREACHABLE);
         }
         self.changed();
@@ -255,25 +320,38 @@ impl Machines {
     }
 
     /// Forgets the machine, its token first, then asks it to revoke this
-    /// phone if `revoke` and it can be reached (a failure is ignored).
+    /// phone if `revoke` and it can be reached (a failure is ignored). If the
+    /// store can't be written, the token is put back and nothing is revoked:
+    /// the machine stays paired as it was, so removing it again still works.
     async fn remove(&self, p: Value) -> Result<Value, MethodError> {
         let machine_id = string_param(&p, "machineId")?.to_string();
         let Some(revoke) = p.get("revoke").and_then(Value::as_bool) else {
             return Err(MethodError::invalid("revoke: expected true or false"));
         };
-        let Ok(machine) = self.known(&machine_id) else {
-            return Ok(json!({ "revoked": false }));
-        };
         let me = self.clone();
-        let token = blocking(move || {
-            let token = me.secrets.get(&token_key(&machine_id)).ok().flatten();
-            me.secrets
-                .delete(&token_key(&machine_id))
-                .map_err(internal)?;
-            me.store.remove_machine(&machine_id).map_err(internal)?;
-            Ok(token)
+        let forgotten = blocking(move || {
+            let _one_at_a_time = locked(&me.saving);
+            let Some(machine) = me.store.machines().into_iter().find(|m| m.id == machine_id) else {
+                return Ok(None);
+            };
+            let key = token_key(&machine_id);
+            let token = me.secrets.get(&key).ok().flatten();
+            me.secrets.delete(&key).map_err(internal)?;
+            locked(&me.unlocked).remove(&machine_id);
+            if me.store.remove_machine(&machine_id).is_err() {
+                if let Some(token) = &token
+                    && me.secrets.set(&key, token).is_ok()
+                {
+                    locked(&me.unlocked).insert(machine_id.clone());
+                }
+                return Err(MethodError::internal());
+            }
+            Ok(Some((machine, token)))
         })
         .await?;
+        let Some((machine, token)) = forgotten else {
+            return Ok(json!({ "revoked": false }));
+        };
         // Forgotten, token included, before its relays close: one opened now finds nothing (4404).
         self.relays.drop_machine(&machine.id, relay::LOCKED);
         self.changed();
@@ -347,6 +425,7 @@ mod tests {
                     crate::Timing::default(),
                     tokio::sync::broadcast::channel(1).0,
                 )),
+                Duration::from_secs(10),
             ),
             secrets,
         )
@@ -369,9 +448,17 @@ mod tests {
     fn a_machine_is_listed_unlocked_once_its_token_is_kept() {
         let (_dir, m, secrets) = machines();
         assert_eq!(m.list(), json!([]));
-        m.store.put_machine(desk()).unwrap();
+        m.store.add_machine(desk()).unwrap();
         assert_eq!(m.list()[0]["unlocked"], false);
+        // Read from `Secrets` when the core starts; kept in memory after that.
         secrets.set(&token_key("m1"), "t").unwrap();
+        let m = Machines::new(
+            m.store.clone(),
+            secrets.clone(),
+            LocalEvents::default(),
+            m.relays.clone(),
+            Duration::from_secs(10),
+        );
         assert_eq!(
             m.list(),
             json!([{ "id": "m1", "name": "Desk", "address": "192.0.2.10", "port": 47380,

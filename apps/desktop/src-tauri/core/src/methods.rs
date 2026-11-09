@@ -498,6 +498,7 @@ mod tests {
             "Phone".into(),
             LocalEvents::default(),
             relays,
+            crate::Timing::default().pairing,
         );
         for m in router.methods() {
             assert!(!REFUSED.contains(&m), "{m}");
