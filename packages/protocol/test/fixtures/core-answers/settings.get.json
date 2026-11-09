@@ -1,0 +1,45 @@
+{
+  "cases": [
+    {
+      "params": {},
+      "result": {
+        "accent": "graphite",
+        "autoTitles": true,
+        "claudePath": null,
+        "codeFont": null,
+        "darkStyle": "default",
+        "enterToSend": true,
+        "externalPolling": true,
+        "idleReclaimMinutes": 15,
+        "idleShutdownMinutes": 60,
+        "lightStyle": "default",
+        "notifications": true,
+        "notifyOnFinish": true,
+        "startOnLogin": false,
+        "theme": "system",
+        "uiFont": "inter"
+      }
+    },
+    {
+      "params": {},
+      "result": {
+        "accent": "teal",
+        "autoTitles": true,
+        "claudePath": null,
+        "codeFont": "Fira Code x",
+        "darkStyle": "default",
+        "enterToSend": true,
+        "externalPolling": true,
+        "idleReclaimMinutes": 15,
+        "idleShutdownMinutes": null,
+        "lightStyle": "default",
+        "notifications": true,
+        "notifyOnFinish": true,
+        "startOnLogin": false,
+        "theme": "dark",
+        "uiFont": "inter"
+      }
+    }
+  ],
+  "method": "settings.get"
+}

@@ -1,0 +1,14 @@
+{
+  "cases": [
+    {
+      "params": {
+        "limit": 20,
+        "query": "plan"
+      },
+      "result": {
+        "items": []
+      }
+    }
+  ],
+  "method": "search.quick"
+}

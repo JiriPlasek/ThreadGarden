@@ -12,3 +12,4 @@ build-e2e
 test-results
 playwright-report
 apps/desktop/src-tauri/binaries
+packages/protocol/test/fixtures/core-answers

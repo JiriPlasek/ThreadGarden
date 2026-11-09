@@ -1,0 +1,15 @@
+{
+  "cases": [
+    {
+      "params": {
+        "sessionIds": [
+          "s1"
+        ]
+      },
+      "result": {
+        "items": []
+      }
+    }
+  ],
+  "method": "sessions.summaries"
+}
