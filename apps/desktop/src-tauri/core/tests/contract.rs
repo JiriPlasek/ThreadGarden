@@ -76,6 +76,15 @@ fn cases() -> Vec<(&'static str, Value)> {
         ),
         ("copies.tails", json!({ "machineId": "m1" })),
         ("machines.list", json!({})),
+        // Nobody listens on port 1: the error the screens show (pairing itself is in `pairing.rs`).
+        (
+            "machines.pair",
+            json!({ "address": "127.0.0.1", "port": 1, "code": "ABCD-EFGH-JKMN", "deviceName": "Phone" }),
+        ),
+        (
+            "machines.update",
+            json!({ "machineId": "m1", "name": "Desk" }),
+        ),
         (
             "machines.unlock",
             json!({ "machineId": "m1", "token": "a".repeat(64) }),

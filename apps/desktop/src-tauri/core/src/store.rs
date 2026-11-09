@@ -27,9 +27,8 @@ pub const FILE: &str = "core.json";
 pub const UNREADABLE: &str = "core.json.unreadable";
 const FORMAT: u32 = 1;
 
-/// A paired machine as stored: where it is and its pinned certificate. The
-/// device token is a secret and never part of it. Pairing (Task 6) adds what
-/// it needs to keep here.
+/// A paired machine as stored: where it is, its pinned certificate and this
+/// phone's device id there. The device token is a secret and never part of it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct StoredMachine {
@@ -37,7 +36,14 @@ pub struct StoredMachine {
     pub name: String,
     pub address: String,
     pub port: u16,
+    /// The pin: the certificate's SHA-256, as Node's `fingerprint256`.
     pub fingerprint: String,
+    /// The certificate itself (DER, base64), for the relay's date check.
+    #[serde(default)]
+    pub cert_der: String,
+    /// This phone's id on the machine, for `devices.revoke`.
+    #[serde(default)]
+    pub device_id: String,
     pub added_at: u64,
 }
 
@@ -271,6 +277,8 @@ mod tests {
             address: "192.0.2.10".into(),
             port: 47380,
             fingerprint: "AB:CD".into(),
+            cert_der: String::new(),
+            device_id: "d".into(),
             added_at: 1,
         }
     }

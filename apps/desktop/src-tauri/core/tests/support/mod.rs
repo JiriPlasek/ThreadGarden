@@ -38,6 +38,16 @@ pub fn config(dir: &Path) -> CoreConfig {
     }
 }
 
+/// A fresh core and the secrets it keeps.
+pub fn core_with_secrets(dir: &Path) -> (CoreHandle, Arc<MemorySecrets>) {
+    let secrets = Arc::new(MemorySecrets::default());
+    let config = CoreConfig {
+        secrets: secrets.clone(),
+        ..config(dir)
+    };
+    (Core::spawn(config).expect("the core starts"), secrets)
+}
+
 /// A fresh core on its own data dir (not the process's shared one).
 pub fn core(dir: &Path) -> CoreHandle {
     Core::spawn(config(dir)).expect("the core starts")

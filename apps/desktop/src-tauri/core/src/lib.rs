@@ -19,6 +19,7 @@ use tokio::sync::{broadcast, watch};
 
 mod machines;
 mod methods;
+mod pairing;
 pub mod secrets;
 mod server;
 mod settings;
@@ -26,7 +27,7 @@ pub mod store;
 
 pub use methods::{PLATFORM, REFUSED};
 
-use methods::Router;
+use methods::{LocalEvents, Router};
 use secrets::Secrets;
 use store::Store;
 
@@ -73,7 +74,12 @@ impl From<io::Error> for CoreError {
 
 /// Every method the core answers: the local answers, then the machines'.
 /// Later parts register theirs here.
-pub(crate) fn router(store: Arc<Store>, secrets: Arc<dyn Secrets>, machine_name: String) -> Router {
+pub(crate) fn router(
+    store: Arc<Store>,
+    secrets: Arc<dyn Secrets>,
+    machine_name: String,
+    events: LocalEvents,
+) -> Router {
     let mut router = Router::default();
     methods::register(
         &mut router,
@@ -82,7 +88,7 @@ pub(crate) fn router(store: Arc<Store>, secrets: Arc<dyn Secrets>, machine_name:
             machine_name,
         },
     );
-    machines::Machines::new(store, secrets).register(&mut router);
+    machines::Machines::new(store, secrets, events).register(&mut router);
     router
 }
 
@@ -195,7 +201,13 @@ impl Core {
             .iter()
             .map(|b| format!("{b:02x}"))
             .collect();
-        let router = router(store, config.secrets, config.machine_name);
+        let local_events = LocalEvents::default();
+        let router = router(
+            store,
+            config.secrets,
+            config.machine_name,
+            local_events.clone(),
+        );
         let methods = router.methods();
         // 127.0.0.1 only, never 0.0.0.0 or ::1: nothing off this phone can reach it.
         // Bound without the runtime (no `block_on`), so a caller inside one (Tauri) can start it.
@@ -223,6 +235,7 @@ impl Core {
         let server = Arc::new(server::Server {
             token: token.clone(),
             router,
+            events: local_events,
         });
         runtime.spawn(server::serve(listener, server, stopped));
         let (events, _) = broadcast::channel(64);

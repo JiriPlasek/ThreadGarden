@@ -21,7 +21,7 @@ use tokio_tungstenite::tungstenite::{Error as WsError, Message};
 use tokio_tungstenite::{WebSocketStream, accept_hdr_async_with_config};
 
 use crate::MAX_REQUEST_BYTES;
-use crate::methods::Router;
+use crate::methods::{LocalEvents, Router};
 
 const PROTOCOL_PREFIX: &str = "threadgarden.";
 const UNAUTHORIZED: u16 = 4401;
@@ -33,6 +33,8 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 pub(crate) struct Server {
     pub token: String,
     pub router: Router,
+    /// Events for every screen (never for a relay).
+    pub events: LocalEvents,
 }
 
 /// What a socket asked for, decided during its handshake.
@@ -200,6 +202,22 @@ async fn screen(
         }
         let _ = sink.close().await;
     });
+    // The screens' events, sent on with the answers.
+    let mut events = server.events.subscribe();
+    let to_screen = tx.clone();
+    let forward = tokio::spawn(async move {
+        loop {
+            match events.recv().await {
+                Ok(event) => {
+                    if to_screen.send(Message::text(event.to_string())).is_err() {
+                        return;
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(_) => return,
+            }
+        }
+    });
     // The end of this screen's latest write, which the next one waits for.
     let mut last_write: Option<oneshot::Receiver<()>> = None;
     loop {
@@ -252,6 +270,8 @@ async fn screen(
             let _ = tx.send(Message::text(answer.to_string()));
         });
     }
+    forward.abort();
+    let _ = forward.await;
     drop(tx);
     let _ = writer.await;
     // Read on until the peer closes too (or it's been long enough), as `close` does.
