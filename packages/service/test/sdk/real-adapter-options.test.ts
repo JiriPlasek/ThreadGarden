@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CanUseTool, OneShotOptions, StartOptions } from '../../src/sdk/adapter.js';
 import {
   buildOneShotOptions,
@@ -17,6 +17,8 @@ const start = (over: Partial<StartOptions> = {}): StartOptions => ({
 });
 
 describe('buildQueryOptions', () => {
+  beforeEach(() => vi.stubGlobal('process', { ...process, getuid: () => 1000 }));
+  afterEach(() => vi.unstubAllGlobals());
   it('buildQueryOptions sets preset system prompt, settingSources user/project/local, includePartialMessages, pathToClaudeCodeExecutable', () => {
     const o = buildQueryOptions(start());
     expect(o.systemPrompt).toEqual({ type: 'preset', preset: 'claude_code' });
@@ -61,7 +63,7 @@ describe('buildQueryOptions', () => {
     expect(buildQueryOptions(start({ resume: 'abc' })).perTaskStopAffordance).toBe(true);
   });
 
-  it('allows bypassPermissions on every session, so a running chat can switch to it', () => {
+  it('allows bypassPermissions on non-root sessions, so a running chat can switch to it', () => {
     // SDK 0.3.314: bypassPermissions needs this opt-in at start, also for a later setPermissionMode.
     expect(buildQueryOptions(start()).allowDangerouslySkipPermissions).toBe(true);
     expect(buildQueryOptions(start({ resume: 'abc' })).allowDangerouslySkipPermissions).toBe(true);
@@ -70,6 +72,27 @@ describe('buildQueryOptions', () => {
       permissionMode: 'bypassPermissions',
       allowDangerouslySkipPermissions: true,
     });
+  });
+
+  it('omits the bypass opt-in for root on both new and resumed sessions', () => {
+    process.getuid = () => 0;
+    expect(buildQueryOptions(start())).not.toHaveProperty('allowDangerouslySkipPermissions');
+    expect(buildQueryOptions(start({ resume: 'abc', permissionMode: 'plan' }))).toMatchObject({
+      resume: 'abc',
+      permissionMode: 'plan',
+    });
+    expect(buildQueryOptions(start({ resume: 'abc' }))).not.toHaveProperty(
+      'allowDangerouslySkipPermissions',
+    );
+    // An explicit mode is never silently downgraded, even if the CLI will reject it.
+    expect(buildQueryOptions(start({ permissionMode: 'bypassPermissions' })).permissionMode).toBe(
+      'bypassPermissions',
+    );
+  });
+
+  it('keeps the opt-in on platforms without a Unix uid API', () => {
+    Reflect.deleteProperty(process, 'getuid');
+    expect(buildQueryOptions(start()).allowDangerouslySkipPermissions).toBe(true);
   });
 
   it('passes model, effort and permission mode only when chosen', () => {

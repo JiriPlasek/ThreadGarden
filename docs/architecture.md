@@ -1145,9 +1145,12 @@ folder in step 3. Tests and the mock service inject the git reads (`moveGit` in
   desktop: over loopback for This PC's service, over the pinned TLS link for
   a paired machine.
 - **Permissions.** Threadgarden offers the default, acceptEdits, plan, auto
-  and bypassPermissions permission modes. Every session starts with the SDK's
-  `allowDangerouslySkipPermissions`, so a running chat can switch to bypass;
-  bypass is only ever chosen in the mode picker, and "always allow"
+  and bypassPermissions permission modes. Selecting bypass in either mode picker
+  requires confirmation; cancelling keeps the previous mode. Non-root sessions
+  start with the SDK's `allowDangerouslySkipPermissions`, so a running chat can
+  switch to bypass. Root sessions omit this flag because the CLI refuses to start
+  with it; explicitly selecting bypass as root remains unsupported by the CLI.
+  Bypass is only ever chosen in the mode picker, and "always allow"
   suggestions that would switch a session to bypass are filtered out.
 - **Capabilities.** The window gets only the Tauri permissions it uses: core
   defaults, notifications, the open-folder dialog, clipboard write, autostart

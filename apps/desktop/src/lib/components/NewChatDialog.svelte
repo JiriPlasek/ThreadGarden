@@ -3,6 +3,7 @@
   import { untrack } from 'svelte';
   import { buildFlags } from '#lib/build-flags.js';
   import Composer from '#lib/components/composer/Composer.svelte';
+  import BypassPermissionsDialog from '#lib/components/BypassPermissionsDialog.svelte';
   import InScope from '#lib/components/InScope.svelte';
   import { machineState } from '#lib/components/layout/MachineHeading.svelte';
   import CloneTab from '#lib/components/new-chat/CloneTab.svelte';
@@ -179,6 +180,16 @@
   let made = $state<NotStarted | null>(null);
   let model = $state('');
   let mode = $state('default');
+  let confirmBypass = $state(false);
+  $effect(() => {
+    if (!interaction.newChat.open) confirmBypass = false;
+  });
+  const chooseMode = (event: Event & { currentTarget: HTMLSelectElement }): void => {
+    const value = event.currentTarget.value;
+    event.currentTarget.value = mode;
+    if (value === 'bypassPermissions' && mode !== value) confirmBypass = true;
+    else mode = value;
+  };
   let models = $state.raw<ModelChoice[]>([]);
   let error = $state<string | null>(null);
   /** Set once a chat was created: focus goes to its composer, not back to the trigger. */
@@ -523,7 +534,7 @@
       </select>
 
       <label for="new-chat-mode" class="text-muted-foreground">Permission mode</label>
-      <select id="new-chat-mode" class={selectClass} bind:value={mode}>
+      <select id="new-chat-mode" class={selectClass} value={mode} onchange={chooseMode}>
         {#each PERMISSION_MODES as m (m.value)}
           <option value={m.value}>{m.label}</option>
         {/each}
@@ -568,3 +579,10 @@
     {/key}
   </Dialog.Content>
 </Dialog.Root>
+
+<BypassPermissionsDialog
+  bind:open={confirmBypass}
+  onConfirm={() => {
+    mode = 'bypassPermissions';
+  }}
+/>

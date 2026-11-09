@@ -86,7 +86,24 @@ describe('new chat dialog (spec §5.4)', () => {
       .getAllByRole('option')
       .map((o) => (o as HTMLOptionElement).value);
     expect(modes).toEqual(['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions']);
+    await userEvent.selectOptions(mode, 'plan');
     await userEvent.selectOptions(mode, 'bypassPermissions');
+    const cancelled = await screen.findByRole('alertdialog', {
+      name: 'Enable bypass permissions?',
+    });
+    expect((mode as HTMLSelectElement).value).toBe('plan');
+    expect(server.calls('chat.create')).toHaveLength(0);
+    await userEvent.click(within(cancelled).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect((mode as HTMLSelectElement).value).toBe('plan');
+    await userEvent.selectOptions(mode, 'bypassPermissions');
+    const confirmation = await screen.findByRole('alertdialog', {
+      name: 'Enable bypass permissions?',
+    });
+    await userEvent.click(
+      within(confirmation).getByRole('button', { name: 'Enable bypass permissions' }),
+    );
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
     await waitFor(() =>
       expect(within(dialog).getAllByRole('option', { name: 'Opus' })).toHaveLength(1),
     );

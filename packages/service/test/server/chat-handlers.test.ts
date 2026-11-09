@@ -248,7 +248,7 @@ describe('chat handlers', () => {
     expect(adapter.lastSession().permissionMode).toBe('bypassPermissions');
   });
 
-  it('chat.respond never applies a bypassPermissions suggestion (R11)', async () => {
+  it('chat.respond never applies a bypassPermissions suggestion as an Always allow rule', async () => {
     const adapter = new FakeAdapter();
     await start(adapter);
     const { sessionId } = await ok<{ sessionId: string }>('chat.create', { cwd: dir, text: 'x' });

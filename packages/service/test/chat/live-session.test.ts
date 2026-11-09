@@ -863,7 +863,7 @@ describe('LiveSession', () => {
     expect(authLabel({})).toEqual({ kind: 'other', label: 'Unknown' });
   });
 
-  it('never offers or applies a setMode → bypassPermissions suggestion (R11)', async () => {
+  it('never offers or applies a setMode → bypassPermissions suggestion as an Always allow rule', async () => {
     const { adapter, opts } = setup();
     const s = LiveSession.create('/p', { text: 'go' }, opts);
     const fake = adapter.lastSession();
