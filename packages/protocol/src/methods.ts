@@ -13,6 +13,7 @@ import {
   HOLD_NOTE_MAX,
   ChatSummarySchema,
   PlaceSchema,
+  PromptSuggestionSchema,
   ProjectSchema,
   SettingsPatchSchema,
   SettingsSchema,
@@ -225,6 +226,7 @@ export const methods = {
       seq: z.number(),
       /** Tasks of the chat's running process (empty unless Threadgarden runs it). */
       tasks: z.array(ChatTaskSchema),
+      promptSuggestion: PromptSuggestionSchema.nullable().optional(),
       /** Protocol 9: where the chat went when it was moved away; absent or null otherwise. */
       movedTo: MovePeerSchema.nullable().optional(),
     }),

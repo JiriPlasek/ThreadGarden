@@ -2,6 +2,8 @@
 
 Long-lived Node service that owns Claude Code sessions and serves the UI over a token-authenticated WebSocket bound to `127.0.0.1` (random port).
 
+Live sessions enable the SDK's `promptSuggestions` option. A valid `prompt_suggestion` after a successful, uninterrupted turn becomes a transient `{id, text}` prediction on `chat.status` and `chat.open`, replayed through `chat.since`. Predictions clear on new input, activity or session end and never become transcript items. Claude Code decides when to generate one and respects its own suggestion settings and usage limits; no separate model query is started by Threadgarden.
+
 - Data dir: `%APPDATA%\threadgarden`, `~/Library/Application Support/threadgarden` or `${XDG_DATA_HOME:-~/.local/share}/threadgarden` (override with `THREADGARDEN_DATA_DIR`; the old `PAHUB_DATA_DIR` still works for one release, with a deprecation note). `src/migrate-data-dir.ts` copies pahub's `pahub.db` from the old `pahub` dir (or inside the override dir) to `threadgarden.db` once, before the service takes its lock, with `VACUUM INTO` a temporary file that is renamed when complete; the start fails while a pahub service still holds the old dir's lock (v1.3 §9).
 - `service.json` (mode 0600) advertises pid, port, token and versions; `service.lock` enforces a single instance.
 - The service exits after 30 minutes with no live sessions, no clients and no pending scheduled sends.

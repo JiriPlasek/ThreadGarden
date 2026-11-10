@@ -111,6 +111,7 @@ export const buildQueryOptions = (o: StartOptions): Options => {
     settingSources: ['user', 'project', 'local'],
     systemPrompt: { type: 'preset', preset: 'claude_code' },
     includePartialMessages: true,
+    promptSuggestions: true,
     perTaskStopAffordance: true,
     canUseTool: o.canUseTool,
     env: { ...o.env, CLAUDE_CODE_STARTUP_FAILURE_RESULTS: '1' },

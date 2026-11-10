@@ -22,6 +22,7 @@ import type {
   EventMsg,
   ImageRef,
   MovePeer,
+  PromptSuggestion,
 } from '@threadgarden/protocol';
 import { MOVE_ERRORS } from '@threadgarden/protocol';
 import {
@@ -381,7 +382,13 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
    */
   const view = async (
     sessionId: string,
-  ): Promise<{ items: ChatItem[]; seq: number; header: ChatHeaderInfo; tasks: ChatTask[] }> => {
+  ): Promise<{
+    items: ChatItem[];
+    seq: number;
+    header: ChatHeaderInfo;
+    tasks: ChatTask[];
+    promptSuggestion?: PromptSuggestion | null;
+  }> => {
     let history: ChatItem[];
     let lastReply: LastReply | undefined;
     try {
@@ -407,6 +414,7 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
       seq: snap.seq,
       header: { ...fallback, ...snap.header },
       tasks: snap.tasks,
+      promptSuggestion: snap.promptSuggestion,
     };
   };
 
@@ -426,6 +434,7 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
       hasMore: v.items.length > items.length,
       seq: v.seq,
       tasks: v.tasks,
+      promptSuggestion: v.promptSuggestion ?? null,
       movedTo: deps.awayTo?.(p.sessionId) ?? null,
     };
   });

@@ -351,6 +351,16 @@ class ScriptedSession extends FakeSession {
         result: '',
       }),
     );
+    if (!interrupted && lower.includes('suggest')) {
+      this.out(
+        msg({
+          type: 'prompt_suggestion',
+          uuid: randomUUID(),
+          session_id: this.id,
+          suggestion: 'Run the tests and fix any failures',
+        }),
+      );
+    }
   }
 
   /** A turn the usage limit refuses, as the CLI reports one. */

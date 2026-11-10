@@ -11,6 +11,10 @@ export const ChatStatusSchema = z.enum([
 ]);
 export type ChatStatus = z.infer<typeof ChatStatusSchema>;
 
+/** A transient prediction of the next user prompt, never part of the transcript. */
+export const PromptSuggestionSchema = z.object({ id: z.string(), text: z.string() });
+export type PromptSuggestion = z.infer<typeof PromptSuggestionSchema>;
+
 export const ExternalInfoSchema = z.object({
   shortId: z.string().optional(),
   kind: z.string(),

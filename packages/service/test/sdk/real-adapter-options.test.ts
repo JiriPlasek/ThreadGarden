@@ -24,6 +24,7 @@ describe('buildQueryOptions', () => {
     expect(o.systemPrompt).toEqual({ type: 'preset', preset: 'claude_code' });
     expect(o.settingSources).toEqual(['user', 'project', 'local']);
     expect(o.includePartialMessages).toBe(true);
+    expect(o.promptSuggestions).toBe(true);
     expect(o.pathToClaudeCodeExecutable).toBe('/home/u/.local/bin/claude');
     expect(o.cwd).toBe('/work/proj');
     expect(o.canUseTool).toBe(canUseTool);
@@ -50,6 +51,7 @@ describe('buildQueryOptions', () => {
         'includePartialMessages',
         'pathToClaudeCodeExecutable',
         'perTaskStopAffordance',
+        'promptSuggestions',
         'settingSources',
         'systemPrompt',
       ].sort(),
