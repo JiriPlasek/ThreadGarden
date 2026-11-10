@@ -23,7 +23,7 @@ import type {
   ImageRef,
   MovePeer,
 } from '@threadgarden/protocol';
-import { MOVE_ERRORS } from '@threadgarden/protocol';
+import { MOVE_ERRORS, PERMISSION_MODES } from '@threadgarden/protocol';
 import {
   realTimers,
   type LiveSession,
@@ -48,13 +48,7 @@ import type { ClaudeFound, ClaudeProblem } from '../../sdk/claude-path.js';
 import { ServiceError, type Router } from '../router.js';
 
 /** Permission modes Threadgarden offers. */
-export const PERMISSION_MODES: readonly PermissionMode[] = [
-  'default',
-  'acceptEdits',
-  'plan',
-  'auto',
-  'bypassPermissions',
-];
+export { PERMISSION_MODES } from '@threadgarden/protocol';
 export const EFFORT_LEVELS: readonly Effort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 
 /**
@@ -351,10 +345,13 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
    * there is one that fits.
    */
   const historyHeader = (sessionId: string, last: LastReply | undefined): ChatHeaderInfo => {
-    if (!last) return {};
+    const mode = db.getPermissionMode(sessionId);
+    const permissions = mode === undefined ? {} : { permissionMode: mode };
+    if (!last) return permissions;
     const max = db.contextWindow(sessionId, last.model);
     const used = last.contextTokens;
     return {
+      ...permissions,
       ...(last.at === undefined
         ? {}
         : {
@@ -667,6 +664,8 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
     await deps.indexNow([forked.sessionId]).catch((err: unknown) => {
       deps.onError(err, `index fork ${forked.sessionId}`);
     });
+    const mode = db.getPermissionMode(p.sessionId);
+    if (mode !== undefined) db.setPermissionMode(forked.sessionId, mode);
     return { sessionId: forked.sessionId };
   });
 

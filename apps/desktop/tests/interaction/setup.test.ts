@@ -61,6 +61,41 @@ describe('setup screen (spec §6.4)', () => {
 });
 
 describe('new chat dialog (spec §5.4)', () => {
+  it('starts each new chat with the configured default, including bypass without asking again', async () => {
+    const { app, context, server } = await setup((server) => {
+      Object.assign(server.handlers, {
+        'projects.list': () => [project('p1', 'alpha')],
+        'chat.models': () => [],
+        'chat.commands': () => [],
+        'files.suggest': () => [],
+        'chat.create': () => ({ sessionId: 'with-default' }),
+      });
+    });
+    await app.places.refresh();
+    app.settings.value.defaultPermissionMode = 'bypassPermissions';
+    app.interaction.openNewChat('/work/alpha');
+    render(NewChatDialog, { context });
+    const dialog = await screen.findByRole('dialog', { name: /new chat/i });
+    const picker = within(dialog).getByRole('combobox', {
+      name: /permission mode/i,
+    }) as HTMLSelectElement;
+    expect(picker.value).toBe('bypassPermissions');
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+    await userEvent.selectOptions(picker, 'default');
+    await userEvent.type(
+      within(dialog).getByRole('textbox', { name: /message/i }),
+      'ask this time{Enter}',
+    );
+    await waitFor(() => expect(server.calls('chat.create')).toHaveLength(1));
+    expect(server.calls('chat.create')[0]!.params).toMatchObject({ permissionMode: 'default' });
+    await waitFor(() => expect(app.interaction.newChat.open).toBe(false));
+    app.interaction.openNewChat('/work/alpha');
+    const next = await screen.findByRole('dialog', { name: /new chat/i });
+    expect(
+      (within(next).getByRole('combobox', { name: /permission mode/i }) as HTMLSelectElement).value,
+    ).toBe('bypassPermissions');
+  });
+
   it('starts a chat in a project with the chosen model and mode', async () => {
     const { server, app, context } = await setup((server) => {
       Object.assign(server.handlers, {

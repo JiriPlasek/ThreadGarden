@@ -245,6 +245,16 @@ describe('SessionHost', () => {
     expect(host.liveCount()).toBe(1);
   });
 
+  it('restores the remembered permission mode after an interrupted service, before any SDK init', () => {
+    const ctx = setup({ getPermissionMode: () => 'auto' });
+    ctx.registry.markLive('interrupted', '/proj');
+    expect(ctx.host.recoverAfterRestart()).toBe(1);
+    expect(ctx.host.get('interrupted')?.header.permissionMode).toBe('auto');
+    ctx.settings.defaultPermissionMode = 'plan';
+    ctx.host.ensureLive('interrupted', '/proj');
+    expect(ctx.adapter.lastSession().options.permissionMode).toBe('auto');
+  });
+
   it('end closes the session, reports history and forgets it', async () => {
     const ctx = setup();
     const { s, fake } = await idleChat(ctx);
@@ -391,7 +401,7 @@ describe('SessionHost', () => {
       onError: (_err, context) => errors.push(context),
     });
     ctx.host.start();
-    const s = ctx.host.create('/a', { text: 'one' });
+    const s = ctx.host.create('/a', { text: 'one' }, { permissionMode: 'default' });
     expect(() => ctx.timers.advance(3 * MIN)).not.toThrow();
     expect(errors).toEqual(['idle reclaim', 'idle reclaim', 'idle reclaim']);
     expect(s.live).toBe(true);

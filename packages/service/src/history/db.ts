@@ -9,6 +9,8 @@ import './sqlite-warning.js';
 import { DatabaseSync } from 'node:sqlite';
 import {
   SettingsSchema,
+  PermissionModeSchema,
+  type ChatPermissionMode,
   type Bucket,
   type Settings,
   type SettingsPatch,
@@ -1028,6 +1030,24 @@ export class Db implements LiveRegistry {
         'INSERT INTO ui_state (key, json) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET json = excluded.json',
       )
       .run(key, JSON.stringify(value));
+  }
+
+  // --- Chat permissions ---------------------------------------------------------------
+
+  getPermissionMode(sessionId: string): ChatPermissionMode | undefined {
+    const row = this.raw
+      .prepare('SELECT mode FROM chat_permissions WHERE session_id = ?')
+      .get(sessionId);
+    const parsed = PermissionModeSchema.safeParse(row?.mode);
+    return parsed.success ? parsed.data : undefined;
+  }
+
+  setPermissionMode(sessionId: string, mode: ChatPermissionMode): void {
+    this.raw
+      .prepare(
+        'INSERT INTO chat_permissions (session_id, mode) VALUES (?, ?) ON CONFLICT(session_id) DO UPDATE SET mode = excluded.mode',
+      )
+      .run(sessionId, mode);
   }
 
   // --- Context windows ----------------------------------------------------------------

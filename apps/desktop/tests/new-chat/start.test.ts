@@ -20,8 +20,13 @@ const send = sendOf({
 const made = { name: 'plant', path: '/p/plant', problem: null };
 
 describe('sendOf', () => {
-  it('takes the model and a mode other than default, as they are when sent', () => {
-    expect(send.chat).toEqual({ text: 'scaffold it', images: [], model: 'opus' });
+  it('sends the chosen mode explicitly, including ask-before-acting, as it is when sent', () => {
+    expect(send.chat).toEqual({
+      text: 'scaffold it',
+      images: [],
+      model: 'opus',
+      permissionMode: 'default',
+    });
     const plan = sendOf({ target, draftKey: 'k', text: 't', images: [], model: '', mode: 'plan' });
     expect(plan.chat).toEqual({ text: 't', images: [], permissionMode: 'plan' });
   });

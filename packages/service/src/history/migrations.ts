@@ -332,6 +332,13 @@ const steps: string[] = [
     tokens INTEGER NOT NULL
   );
   `,
+  // The last permission mode of each chat survives ending it and service restarts.
+  `
+  CREATE TABLE IF NOT EXISTS chat_permissions (
+    session_id TEXT PRIMARY KEY,
+    mode TEXT NOT NULL
+  );
+  `,
 ];
 
 /** Runs the steps not run yet; `upTo` stops early (tests build older schemas with it). */
