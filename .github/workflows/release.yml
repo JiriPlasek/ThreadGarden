@@ -178,8 +178,37 @@ jobs:
             threadgarden-setup-worker.ps1 \
             threadgarden-setup-worker.ps1.sha256
 
+  headless-windows:
+    needs: [version, draft]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build:headless --platform windows
+      - name: Upload the native Windows worker and its fixed latest-release name
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.version.outputs.tag }}
+          VERSION: ${{ needs.version.outputs.version }}
+        working-directory: dist-headless
+        run: |
+          $asset = "threadgarden-headless-$env:VERSION-windows-x64.zip"
+          $fixed = 'threadgarden-headless-windows-x64.zip'
+          $sum = (Get-FileHash -LiteralPath $asset -Algorithm SHA256).Hash.ToLower()
+          if ($sum -ne (Get-Content "$asset.sha256").Split(' ')[0]) { throw 'Checksum mismatch' }
+          Copy-Item -LiteralPath $asset -Destination $fixed
+          "$sum  $fixed" | Set-Content -LiteralPath "$fixed.sha256" -Encoding ascii
+          gh release upload $env:TAG --clobber $asset "$asset.sha256" $fixed "$fixed.sha256"
+          if ($LASTEXITCODE -ne 0) { throw 'Upload failed' }
+
   publish:
-    needs: [version, bundle, headless]
+    needs: [version, bundle, headless, headless-windows]
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4

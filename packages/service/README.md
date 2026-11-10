@@ -1,5 +1,12 @@
 # @threadgarden/service
 
+Native Windows workers use the same service and Windows Claude Code history as
+the desktop. `threadgarden start` runs `serve --headless` detached as the signed-in
+user; `stop` shuts it down. The per-user Windows zip is built with
+`pnpm build:headless --platform windows`; setup, pairing, shared-service behavior
+and updates are covered in [the Windows guide](../../docs/windows-machines.md).
+Native workers advertise no power capability and register no idle shutdown.
+
 Long-lived Node service that owns Claude Code sessions and serves the UI over a token-authenticated WebSocket bound to `127.0.0.1` (random port).
 
 - Data dir: `%APPDATA%\threadgarden`, `~/Library/Application Support/threadgarden` or `${XDG_DATA_HOME:-~/.local/share}/threadgarden` (override with `THREADGARDEN_DATA_DIR`; the old `PAHUB_DATA_DIR` still works for one release, with a deprecation note). `src/migrate-data-dir.ts` copies pahub's `pahub.db` from the old `pahub` dir (or inside the override dir) to `threadgarden.db` once, before the service takes its lock, with `VACUUM INTO` a temporary file that is renamed when complete; the start fails while a pahub service still holds the old dir's lock (v1.3 §9).

@@ -47,6 +47,8 @@ the workflow stops before building anything. Then watch **Actions → Release**:
    headless package (`threadgarden-headless-<version>-linux-x64.tar.gz`, and the
    same as `threadgarden-headless-linux-x64.tar.gz`) and the Windows setup script
    (`threadgarden-setup-worker.ps1`), each with a `.sha256`, uploaded to it;
+   also the native Windows worker (`threadgarden-headless-<version>-windows-x64.zip`
+   and the fixed `threadgarden-headless-windows-x64.zip`), each with a `.sha256`;
 3. the update manifest (`latest.json`) and `SHA256SUMS`, checked;
 4. **publish**, only if everything above succeeded.
 

@@ -121,6 +121,12 @@ powershell -ExecutionPolicy Bypass -File .\threadgarden-setup-worker.ps1
 
 Then open the distro with `wsl -d threadgarden`, run `cd ~`, and do steps 3 to 6 above inside it. The [guide](docs/remote-machines.md#a-windows-pc-as-the-worker-wsl) explains what the script changes, power control and removal.
 
+## Connect a native Windows machine
+
+To use a PC's existing Windows repos, tools, Claude Code login and history, install the [native Windows worker](docs/windows-machines.md). Download and verify the `threadgarden-headless-windows-x64.zip` release, extract it and run its `install.ps1` as your normal Windows user. Then open a new terminal and run `threadgarden pair`; add the address and code in Settings → Machines.
+
+After a reboot, run `threadgarden start`. It runs in the background while you stay signed in, without WSL or a system account. Stop it with `threadgarden stop`. This option has no power control or idle shutdown.
+
 ## Your data
 
 Threadgarden never writes to `~/.claude`; the only things there are Claude Code's own transcripts of your chats. A chat moved to another machine is kept in Threadgarden's data on that machine.

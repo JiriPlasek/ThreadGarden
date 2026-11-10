@@ -15,8 +15,12 @@
 
   const { machineUpdates, machines, updates } = useApp();
 
-  const GUIDE =
-    'https://github.com/JiriPlasek/ThreadGarden/blob/main/docs/remote-machines.md#upgrading';
+  const windows = $derived(machine.info?.platform === 'win32');
+  const guide = $derived(
+    windows
+      ? 'https://github.com/JiriPlasek/ThreadGarden/blob/main/docs/windows-machines.md#updating'
+      : 'https://github.com/JiriPlasek/ThreadGarden/blob/main/docs/remote-machines.md#upgrading',
+  );
   const SCRIPT = '~/.local/share/threadgarden-headless/current/install.sh';
 
   const latest = $derived(machineUpdates.latest);
@@ -108,12 +112,12 @@
       </div>
     {:else if machineUpdates.tooOld(machine)}
       <a
-        href={GUIDE}
+        href={guide}
         class="underline underline-offset-2"
         onclick={(e) => {
           e.preventDefault();
-          openExternal(GUIDE).catch(() => {});
-        }}>Update it over SSH this once</a
+          openExternal(guide).catch(() => {});
+        }}>Update it {windows ? 'on the Windows PC' : 'over SSH'} this once</a
       >
     {/if}
   {/if}

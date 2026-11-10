@@ -394,7 +394,12 @@ describe('power on a service', () => {
         { clientId: 't', origin: 'local' },
       )) as { result: { machine: { platform: string; capabilities: string[] } } };
       expect(hello.result.machine.platform).toBe('win32');
-      expect(hello.result.machine.capabilities).toEqual(['remote', 'projects', 'move']);
+      expect(hello.result.machine.capabilities).toEqual(['remote', 'projects', 'move', 'away']);
+      const power = await svc.router.dispatch(
+        { id: 2, method: 'power.status', params: {} },
+        { clientId: 't', origin: 'local' },
+      );
+      expect(power).toHaveProperty('error');
     } finally {
       await svc.close();
     }

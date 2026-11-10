@@ -70,8 +70,8 @@ const realSdk: SdkApi = {
  * would quietly bill the API instead of the plan.
  *
  * `keepInheritedKey` (a headless service) keeps it: there the environment
- * comes only from its systemd unit (in a WSL worker's distro too), written on
- * purpose, and Threadgarden's own key never reaches a remote machine
+ * comes from its systemd unit (in a WSL worker's distro too), or the Windows
+ * shell used to start the native worker. Threadgarden's own key never reaches a remote machine
  * (`auth.setApiKey` is local only), so it is the only way to run such a
  * machine on an API key.
  */
