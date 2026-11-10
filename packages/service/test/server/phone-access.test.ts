@@ -233,9 +233,21 @@ describe('Let my phone connect', () => {
     const svc = await desktop(opts);
     await local(svc, 'phoneAccess.set', { enabled: true });
     await local(svc, 'phoneAccess.set', { enabled: false });
-    const done = new Promise<void>((r) => svc.onClosed(r));
-    state.now = 31 * 60_000;
-    state.timers[0]!();
+    let exited = false;
+    const done = new Promise<void>((r) =>
+      svc.onClosed(() => {
+        exited = true;
+        r();
+      }),
+    );
+    // Ticks 31 minutes apart, as the real timer keeps ticking: the service may
+    // hear of the test client's closed socket after a tick (on Windows it often
+    // does), and counts that as activity, so one tick alone can come too early.
+    for (let tick = 1; tick <= 4 && !exited; tick++) {
+      state.now = tick * 31 * 60_000;
+      state.timers[0]!();
+      await new Promise((r) => setTimeout(r, 100));
+    }
     await done;
   });
 
