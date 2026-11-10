@@ -37,6 +37,7 @@ It uses your own `claude` install and login, through the official Agent SDK. Not
 - **Remote machines:** run chats on another computer from the same window. Start a project, clone a repo, or move a chat there with its whole conversation, and update it from Settings.
 - **Power:** turn a remote machine on and off through a Tasmota smart plug.
 - **Away machines:** read an off machine's chats from a local copy; a reply waits and goes out once it's on.
+- **Android app:** every machine's chats on the phone, with an alert as soon as a chat needs you, and Turn on through the plug. See [Threadgarden on the phone](docs/phone.md).
 - Analytics, a quick switcher (Ctrl+K), keyboard shortcuts (Ctrl+/ lists them) and themes.
 
 ## Install
@@ -143,6 +144,7 @@ There's no Threadgarden account; it uses whatever Claude Code uses. Anthropic's 
 - A moved chat isn't listed by `claude --resume` on its new machine, and can't be forked yet.
 - A machine that's off shows only the last few messages of each chat.
 - macOS and Linux pass CI but haven't seen much real use.
+- The phone app receives every chat's output in the background, about 180 MB in a busy hour: mind mobile data. It keeps no copy of a machine that's off.
 
 ## License
 

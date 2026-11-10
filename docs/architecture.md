@@ -650,8 +650,8 @@ certificate valid from a day ago, so a device whose clock is behind still
 accepts it, for 20 years) lives in `<data dir>/tls/` with mode 0600; an
 unusable one (unparsable, a key that does not match, a file missing) is
 replaced and the log says so; paired devices then see another certificate
-and must pair again. A desktop service never listens beyond loopback ("Allow
-other devices" is for a later release).
+and must pair again. A desktop service opens the same listener only while
+the owner has **Let my phone connect** on ([The phone](#the-phone)).
 
 **Packaging.** `pnpm build:headless` (`scripts/build-headless.mjs`) writes
 `dist-headless/threadgarden-headless-<version>-linux-<x64|arm64>.tar.gz` and
@@ -1064,14 +1064,62 @@ chat. Its only filesystem write besides its data dir is the chat's empty
 folder in step 3. Tests and the mock service inject the git reads (`moveGit` in
 `startService`) and the folder check (`folderStat`).
 
+## The phone
+
+The Android app ([phone.md](phone.md)) is the same SvelteKit UI in Tauri's
+Android webview, with a one-column layout (`components/phone/`) picked by
+platform (`native.isPhone`), never by width. It has no local machine and runs
+no Claude Code, and the app contains no Node.
+
+- **The core** (`apps/desktop/src-tauri/core`, a plain Rust crate) takes the
+  local service's place. It listens on `127.0.0.1` on a random port with a
+  random bearer token per process, so the UI's loopback contract is unchanged.
+  It answers the local methods the screens call: `hello` (an empty, non-headless
+  `linux` machine), settings, `uiState`, drafts, empty chat lists for the local
+  scope, and `machines.*` with pairing (proof before code, as
+  `machine/pairing-client.ts`). Everything else is a deliberate
+  `METHOD_NOT_FOUND`. `core-contract.test.ts` parses every answer with the
+  protocol's schemas, from fixtures the core writes (`core-answers/`), so the
+  two can't drift. It also serves `/relay?machine=<id>` as the service does,
+  over a pinned TLS link that checks the certificate before the token is
+  sent.
+- **Alert links:** one more link per machine, apart from the screens', that
+  alerts on `needsYou` and `chatFinished` ("‹machine›: ‹chat› needs you", or
+  "finished") unless that chat is on screen (`alerts.setActive`). It never sends
+  `ui.visibility` or `power.adopt`, which would change state for the machine's
+  other clients. It pings every 15 s, and a dropped link retries from 2 s,
+  doubling to 60 s, sooner on a network change. These links receive every
+  chat's streamed output and drop what isn't an alert: about 180 MB in a busy
+  hour.
+- **The plug:** the core talks to the Tasmota switch itself, with the hub's
+  rules: a fresh reading, the minimum off time, one operation at a time, a
+  standby cycle only through the desktop's own rule for that plug. It never
+  writes anything else to the bridge.
+- **The Android service** (`CoreService`, a `specialUse` foreground service)
+  hosts the core with the permanent notification, so it outlives the screens.
+  It restarts at boot only if it was connected, and Disconnect stops it.
+- **Secrets:** device tokens and plug passwords live in one file encrypted with
+  an AES-GCM key from Android's Keystore (`KeystoreSecrets`), excluded from
+  backup. A Keystore key that's gone (a restored phone) means pairing again.
+- **The main PC's listener:** Let my phone connect turns on the headless
+  service's remote listener on a desktop: the same private addresses,
+  port and pairing, its TLS identity made the first time and kept, the choice in
+  its own table (not in `settings`, which paired devices can change). While it's
+  on the desktop never exits when idle; off, every device socket closes at once.
+- **Updates:** the core asks GitHub's API for the latest release (the webview's
+  CSP allows loopback only) and the screens offer its
+  `threadgarden-<version>.apk` through the browser. The release workflow signs
+  the APK with the owner's Android key.
+
 ## Security model
 
 - **Loopback and token.** The service binds `127.0.0.1` only, on a random port.
   The token is 32 random bytes (hex), regenerated at every service start, and
   stored only in `service.json`, written atomically with mode `0600` in the
   user's data dir. Every connection must present it.
-- **Remote listener** (v1.4, [Machines](#machines)). Off by default: only a
-  headless service opens it, and a desktop install never does. It binds the
+- **Remote listener** (v1.4, [Machines](#machines)). A headless service
+  always opens it; a desktop only while Let my phone connect is on
+  (`phoneAccess.set`, local only: a paired device gets `FORBIDDEN`). It binds the
   machine's private IPv4 addresses only (10/8, 172.16/12, 192.168/16,
   100.64/10), never a wildcard or public address, and speaks TLS with a
   self-signed certificate. Nothing goes through a cloud service: the desktop
