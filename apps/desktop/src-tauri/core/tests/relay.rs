@@ -291,13 +291,24 @@ fn moving_a_machine_closes_its_relays_4502() {
         .await;
         assert_eq!(closes(&mut relayed).await.0, Some(4502));
 
+        // Back at the address the machine listens on. A relay to `localhost` may try ::1
+        // first (Windows does), where nothing listens, and a refused connection there takes
+        // longer than this test's link timeout: the relay below would never reach the machine.
+        call(
+            &mut ws,
+            4,
+            "machines.update",
+            json!({ "machineId": "machine-desk", "address": "127.0.0.1" }),
+        )
+        .await;
+
         // Removing it closes the next one 4404.
         let mut relayed = relay(&core, "machine-desk").await;
         relayed.send(Message::text("{\"n\":3}")).await.unwrap();
         assert!(matches!(next(&mut relayed).await, Next::Frame(v) if v == json!({ "n": 3 })));
         call(
             &mut ws,
-            4,
+            5,
             "machines.remove",
             json!({ "machineId": "machine-desk", "revoke": false }),
         )
