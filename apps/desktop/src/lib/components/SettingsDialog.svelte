@@ -383,7 +383,7 @@
       />
     </section>
 
-    <MachinesSettings />
+    <MachinesSettings onStartAtSignIn={() => (form.startOnLogin = true)} />
 
     {#if !isPhone}
       <section class="grid gap-1 border-t pt-3" aria-label="Authentication">

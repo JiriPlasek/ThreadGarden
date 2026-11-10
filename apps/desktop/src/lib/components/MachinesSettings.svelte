@@ -5,6 +5,7 @@
   import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
   import MachineUpdate from '#lib/components/MachineUpdate.svelte';
   import { machineState } from '#lib/components/layout/MachineHeading.svelte';
+  import PhoneAccess from '#lib/components/PhoneAccess.svelte';
   import PowerSettings from '#lib/components/PowerSettings.svelte';
   import { Button } from '#lib/components/ui/button/index.js';
   import { appVersion, isPhone } from '#lib/native.js';
@@ -22,6 +23,9 @@
    * details come later: the desktop's power card, which hands the plug's
    * settings to the machine, isn't on the phone.
    */
+  /** Start at sign-in was turned on from Let my phone connect (the dialog's form follows). */
+  let { onStartAtSignIn }: { onStartAtSignIn?: () => void } = $props();
+
   const { machines, interaction, machineUpdates } = useApp();
 
   const paired = $derived(machines.list.filter((m) => !m.local));
@@ -127,6 +131,8 @@
 
   {#if !isPhone}
     <p class="text-sm">{THIS_PC} · Threadgarden {appVersion}</p>
+    <!-- The desktop listens for the phone: the phone itself has nothing to offer here. -->
+    <PhoneAccess {onStartAtSignIn} />
   {/if}
 
   {#each paired as m (m.id)}
