@@ -428,6 +428,9 @@ pub const REFUSED: &[&str] = &[
     "power.turnOn",
     "power.rename",
     "power.noteMeasurement",
+    // Let my phone connect is the desktop's: the phone is what connects.
+    "phoneAccess.get",
+    "phoneAccess.set",
     // A machine's side, asked over a machine's link, never of the local client.
     "machine.get",
     "machine.rename",

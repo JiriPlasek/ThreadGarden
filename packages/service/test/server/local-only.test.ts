@@ -73,6 +73,9 @@ describe('methods a paired device may not call', () => {
     'devices.list',
     'machine.rename',
     'update.latest',
+    // Let my phone connect: the owner's switch, never a device's.
+    'phoneAccess.get',
+    'phoneAccess.set',
     ...powerClient,
     ...machinesMethods,
     ...awayMethods,

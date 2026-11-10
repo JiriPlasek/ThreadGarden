@@ -83,6 +83,8 @@
     "pair.claim",
     "pair.proof",
     "pairing.create",
+    "phoneAccess.get",
+    "phoneAccess.set",
     "power.adopt",
     "power.configure",
     "power.keepAwake",

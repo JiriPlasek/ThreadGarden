@@ -651,6 +651,8 @@ fn listing_machines_never_asks_the_keystore() {
         ..support::config(dir.path())
     };
     let core = threadgarden_core::Core::spawn(config).unwrap();
+    // The alert link reads the token too (off the runtime): only the list is counted here.
+    core.disconnect().unwrap();
     let desk = FakeMachine::start(Behaviour::default());
     block_on(async {
         let mut ws = open(&core).await;
