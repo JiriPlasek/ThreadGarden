@@ -310,6 +310,31 @@ test("the chat header fits the phone's width, before and after a turn", async ({
   await page.keyboard.press('Escape');
 });
 
+test('bypass permissions asks first on the phone, as on the desktop', async ({ page }) => {
+  await openPhone(page);
+  await openChat(page, 'session-13');
+  await send(page, 'Hello from the bypass test');
+  await expect(page.getByText('This is the Threadgarden mock service answering.')).toBeVisible();
+  const mode = page.getByRole('combobox', { name: 'Permission mode' });
+  await expect(mode).toBeEnabled();
+  await mode.selectOption('plan');
+  await expect(mode).toHaveValue('plan');
+  await mode.selectOption('bypassPermissions');
+  const confirmation = page.getByRole('alertdialog', { name: 'Enable bypass permissions?' });
+  await expect(confirmation).toBeVisible();
+  await expect(mode).toHaveValue('plan');
+  await confirmation.getByRole('button', { name: 'Cancel', exact: true }).tap();
+  await expect(mode).toHaveValue('plan');
+  await mode.selectOption('bypassPermissions');
+  await confirmation.getByRole('button', { name: 'Enable bypass permissions', exact: true }).tap();
+  await expect(confirmation).toBeHidden();
+  // The machine's answer: the picker shows what the chat runs with.
+  await expect(mode).toHaveValue('bypassPermissions');
+  await expect(mode.locator('option:checked')).toHaveText('Mode: Bypass permissions');
+  await mode.selectOption('default');
+  await expect(mode).toHaveValue('default');
+});
+
 test('Settings shows nothing that needs a keyboard, and no tooltip stays after a tap', async ({
   page,
 }) => {
