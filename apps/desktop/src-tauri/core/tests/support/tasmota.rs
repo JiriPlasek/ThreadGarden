@@ -204,7 +204,14 @@ impl FakeTasmota {
         if lower == "event" && arg.eq_ignore_ascii_case("tgw") {
             // Threadgarden's rule: off, Mem11 the time, on after its off time. Nothing without the rule.
             let mut s = state.lock().unwrap();
-            let ours = s.rules.values().any(|r| r.contains("Event#tga do"));
+            // The rule cuts the plug its Mem12 names: this one only if it's its own.
+            let mine = if zigbee {
+                format!(r#"ZbSend {{"Device":"{DEVICE}","Send":{{"Power":0}}}}"#)
+            } else {
+                "Power 0".to_string()
+            };
+            let ours = s.rules.values().any(|r| r.contains("Event#tga do"))
+                && s.mems.get(&12).is_some_and(|m| *m == mine);
             if ours && let Some(p) = s.plug.as_mut() {
                 p.on = false;
                 let now = std::time::SystemTime::now()
@@ -303,10 +310,26 @@ impl FakeTasmota {
 
     /// Puts the desktop's Threadgarden rule in a slot, and when it last cut (Unix seconds) in Mem11.
     pub fn with_desktop_rule(&self, last_cut_secs: u64) {
+        let plug = if self.zigbee { Some(DEVICE) } else { None };
+        self.with_desktop_rule_for(plug, last_cut_secs);
+    }
+
+    /// As `with_desktop_rule`, the rule set up for the plug named `device`
+    /// (its Mem12/Mem13 off and on, as `memsFor` writes them; None: a Wi-Fi plug's).
+    pub fn with_desktop_rule_for(&self, device: Option<&str>, last_cut_secs: u64) {
+        let (off, on) = match device {
+            Some(d) => (
+                format!(r#"ZbSend {{"Device":"{d}","Send":{{"Power":0}}}}"#),
+                format!(r#"ZbSend {{"Device":"{d}","Send":{{"Power":1}}}}"#),
+            ),
+            None => ("Power 0".to_string(), "Power 1".to_string()),
+        };
         let mut s = self.state.lock().unwrap();
         s.rules
             .insert(2, "on Event#tga do Backlog Var14 0 endon".into());
         s.mems.insert(11, last_cut_secs.to_string());
+        s.mems.insert(12, off);
+        s.mems.insert(13, on);
     }
 
     /// Rule and Mem reads answer something that isn't them.
@@ -321,7 +344,13 @@ impl FakeTasmota {
     /// Stops answering: the bridge is gone.
     pub fn stop(&mut self) {
         if let Some(rt) = self.runtime.take() {
-            rt.shutdown_background();
+            // Waited for when it can be, so the port is closed once this returns
+            // (a listener still accepting would answer with a reset, not silence).
+            if tokio::runtime::Handle::try_current().is_ok() {
+                rt.shutdown_background();
+            } else {
+                rt.shutdown_timeout(Duration::from_secs(2));
+            }
         }
     }
 }

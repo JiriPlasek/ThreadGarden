@@ -44,6 +44,20 @@ const FRESH_READING_S: u64 = 5;
 const ZIGBEE_NAME_MAX: usize = 32;
 /// What a standby cycle needs, and the bridge lacks without the desktop's setup.
 const NEEDS_DESKTOP: &str = "Set up power control on the desktop first";
+/// The bridge's rule cuts another plug than these details name.
+const OTHER_PLUG: &str =
+    "This bridge's power rule is set up for another plug. Set it up on the desktop.";
+
+/// What Threadgarden's rule on a bridge is to these details.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RuleState {
+    /// No Threadgarden rule on the bridge.
+    Missing,
+    /// It's there, and its Mem12/Mem13 are this plug's off and on.
+    Ours,
+    /// It's there for another plug (the grow light, another machine).
+    Other,
+}
 
 /// The `Secrets` key of a machine's plug password.
 pub fn password_key(machine_id: &str) -> String {
@@ -190,6 +204,18 @@ impl PlugConfig {
     }
 
     /// `commandsFor` of `power/rules.ts`.
+    /// `commandsFor(config).off`, as `memsFor` puts it in Mem12 (compared, never sent).
+    fn off(&self) -> String {
+        if self.zigbee {
+            format!(
+                r#"ZbSend {{"Device":"{}","Send":{{"Power":0}}}}"#,
+                self.device()
+            )
+        } else {
+            "Power 0".into()
+        }
+    }
+
     fn on(&self) -> String {
         if self.zigbee {
             format!(
@@ -456,11 +482,23 @@ impl Power {
     }
 
     async fn do_turn_on(&self, machine_id: &str) -> Answer {
-        let (config, password) = self.ready(machine_id).await?;
+        // Power control may change or go while this waits on the switch: then it gives up (`check`).
         let generation = self.generation(machine_id);
+        let check = || {
+            if self.generation(machine_id) == generation {
+                Ok(())
+            } else {
+                Err(MethodError::new(
+                    NOT_CONFIGURED,
+                    "Power control for this machine changed meanwhile.",
+                ))
+            }
+        };
+        let (config, password) = self.ready(machine_id).await?;
         let min_off_ms = config.min_off_seconds * 1000;
         locked(&self.cache).remove(machine_id);
         let reading = self.read_plug(&config, &password).await?;
+        check()?;
         let Some(on) = reading["on"].as_bool() else {
             return Err(MethodError::new(
                 UNREACHABLE,
@@ -485,25 +523,31 @@ impl Power {
                     "Couldn't get a fresh reading from the plug; try again.",
                 ));
             }
-            // Standby: Threadgarden's rule cuts and restores (and writes Mem11), never anything of ours.
-            if !self.has_our_rule(&config, &password).await? {
-                return Err(MethodError::new(NOT_CONFIGURED, NEEDS_DESKTOP));
+            // Standby: Threadgarden's rule cuts and restores (and writes Mem11), and only
+            // when it's this plug's: otherwise `tgw` would cut whatever plug it names.
+            match Self::rule_state(&config, &password).await? {
+                RuleState::Missing => return Err(MethodError::new(NOT_CONFIGURED, NEEDS_DESKTOP)),
+                RuleState::Other => return Err(MethodError::new(NOT_CONFIGURED, OTHER_PLUG)),
+                RuleState::Ours => {}
             }
+            check()?;
             self.note_cut(machine_id).await;
             tasmota::command(&config.address, &password, "Event tgw").await?;
-            Self::clear_wake(&config, &password).await;
+            Self::clear_wake(&config, &password, RuleState::Ours).await;
             let answer = json!({ "cycled": true, "waitMs": min_off_ms });
+            check()?;
             locked(&self.pending).insert(
                 machine_id.to_string(),
                 (answer.clone(), now_ms() + min_off_ms),
             );
             return Ok(answer);
         }
-        let cut = self.last_cut(machine_id, &config, &password).await?;
+        let (cut, rule) = self.last_cut(machine_id, &config, &password).await?;
         let wait = cut.map_or(0, |c| (c + min_off_ms).saturating_sub(now_ms()));
+        check()?;
         if wait == 0 {
             tasmota::command(&config.address, &password, &config.on()).await?;
-            Self::clear_wake(&config, &password).await;
+            Self::clear_wake(&config, &password, rule).await;
             return Ok(json!({ "cycled": false, "waitMs": 0 }));
         }
         // What's left of the off time is waited out here, as the hub's `hold`; then the plug's on.
@@ -523,41 +567,63 @@ impl Power {
                 .await
                 .is_ok()
             {
-                Self::clear_wake(&config, &password).await;
+                Self::clear_wake(&config, &password, rule).await;
             }
         });
         Ok(answer)
     }
 
     /// Clears a wake left on the bridge, as the hub does after a Turn on (it
-    /// would cut the running machine): Threadgarden's own `Timer16`, only on a
-    /// bridge with Threadgarden's rule. Best effort.
-    async fn clear_wake(config: &PlugConfig, password: &str) {
-        let Ok(true) = Self::rule_on(config, password).await else {
-            return;
-        };
-        let _ = tasmota::command(&config.address, password, r#"Timer16 {"Enable":0}"#).await;
+    /// would cut the running machine): Threadgarden's own `Timer16`, only when
+    /// the bridge's rule is this plug's. Best effort.
+    async fn clear_wake(config: &PlugConfig, password: &str, rule: RuleState) {
+        if rule == RuleState::Ours {
+            let _ = tasmota::command(&config.address, password, r#"Timer16 {"Enable":0}"#).await;
+        }
     }
 
-    async fn has_our_rule(&self, config: &PlugConfig, password: &str) -> Result<bool, MethodError> {
-        Self::rule_on(config, password).await
+    fn not_tasmota(config: &PlugConfig) -> MethodError {
+        MethodError::new(
+            NOT_TASMOTA,
+            format!("{} did not answer like a Tasmota device.", config.address),
+        )
     }
 
-    /// Whether a rule slot holds Threadgarden's rule; a read that fails fails this.
-    async fn rule_on(config: &PlugConfig, password: &str) -> Result<bool, MethodError> {
+    /// `Mem<n>`, as text; a read that fails fails this.
+    async fn read_mem(config: &PlugConfig, password: &str, n: u8) -> Result<String, MethodError> {
+        let mem = tasmota::command(&config.address, password, &format!("Mem{n}")).await?;
+        match field(&mem, &format!("Mem{n}")) {
+            Some(Value::String(s)) => Ok(s.trim().to_string()),
+            Some(v @ Value::Number(_)) => Ok(v.to_string()),
+            _ => Err(Self::not_tasmota(config)),
+        }
+    }
+
+    /// Whether the bridge has Threadgarden's rule, and whether it's this
+    /// plug's: its Mem12 and Mem13 are exactly the off and on `memsFor`
+    /// builds from these details. Reads only; a read that fails fails this.
+    async fn rule_state(config: &PlugConfig, password: &str) -> Result<RuleState, MethodError> {
+        let mut found = false;
         for slot in 1..=3 {
             let rule = tasmota::command(&config.address, password, &format!("Rule{slot}")).await?;
             let Some(r) = field(&rule, &format!("Rule{slot}")).filter(|r| r.is_object()) else {
-                return Err(MethodError::new(
-                    NOT_TASMOTA,
-                    format!("{} did not answer like a Tasmota device.", config.address),
-                ));
+                return Err(Self::not_tasmota(config));
             };
             if is_ours(r["Rules"].as_str().unwrap_or_default()) {
-                return Ok(true);
+                found = true;
+                break;
             }
         }
-        Ok(false)
+        if !found {
+            return Ok(RuleState::Missing);
+        }
+        let off = Self::read_mem(config, password, 12).await?;
+        let on = Self::read_mem(config, password, 13).await?;
+        Ok(if off == config.off() && on == config.on() {
+            RuleState::Ours
+        } else {
+            RuleState::Other
+        })
     }
 
     /// The phone's own cut, kept with the plug (it outlives a restart), noted
@@ -572,35 +638,28 @@ impl Power {
         .await;
     }
 
-    /// The last cut (Unix ms): `Mem11` (written by Threadgarden's rule) when
-    /// the bridge has the rule, or the phone's own, whichever is later. A read
-    /// that fails fails the Turn on, as the hub's `lastCut` throws.
+    /// The last cut (Unix ms), and the bridge's rule: `Mem11` (written by
+    /// Threadgarden's rule, trusted only when the rule is this plug's), or the
+    /// phone's own, whichever is later. A rule for another plug refuses, and a
+    /// read that fails fails the Turn on, as the hub's `lastCut` throws.
     async fn last_cut(
         &self,
         machine_id: &str,
         config: &PlugConfig,
         password: &str,
-    ) -> Result<Option<u64>, MethodError> {
+    ) -> Result<(Option<u64>, RuleState), MethodError> {
         let ours = self.store.plug_cut(machine_id);
-        if !Self::rule_on(config, password).await? {
-            return Ok(ours);
+        let rule = Self::rule_state(config, password).await?;
+        match rule {
+            RuleState::Missing => return Ok((ours, rule)),
+            RuleState::Other => return Err(MethodError::new(NOT_CONFIGURED, OTHER_PLUG)),
+            RuleState::Ours => {}
         }
-        let mem = tasmota::command(&config.address, password, "Mem11").await?;
-        let text = match field(&mem, "Mem11") {
-            Some(Value::String(s)) => s.trim().to_string(),
-            Some(v @ Value::Number(_)) => v.to_string(),
-            _ => {
-                return Err(MethodError::new(
-                    NOT_TASMOTA,
-                    format!("{} did not answer like a Tasmota device.", config.address),
-                ));
-            }
-        };
-        let theirs = match text.as_str() {
+        let theirs = match Self::read_mem(config, password, 11).await?.as_str() {
             "" | "0" => None,
             t => t.parse::<u64>().ok().filter(|s| *s > 0).map(|s| s * 1000),
         };
-        Ok(ours.max(theirs))
+        Ok((ours.max(theirs), rule))
     }
 
     fn note_measurement(&self, p: &Value) -> Answer {

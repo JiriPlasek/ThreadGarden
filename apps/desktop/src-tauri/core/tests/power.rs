@@ -418,7 +418,7 @@ fn a_zigbee_plug_is_known_to_the_bridge_by_that_name() {
 /// Threadgarden's cycle and its wake timer. Nothing else.
 fn allowed(cmnd: &str) -> bool {
     let reads = [
-        "Status 2", "Status 8", "Power", "Rule1", "Rule2", "Rule3", "Mem11",
+        "Status 2", "Status 8", "Power", "Rule1", "Rule2", "Rule3", "Mem11", "Mem12", "Mem13",
     ];
     reads.contains(&cmnd)
         || cmnd == format!("ZbStatus3 {DEVICE}")
@@ -453,6 +453,24 @@ fn nothing_else_on_the_bridge_is_touched() {
             );
         });
         until("the rule restored it", || plug.plug().on);
+        // Off, with some of the minimum off time left: waited out, then the plug's on.
+        let mut ps = plug.plug();
+        ps.on = false;
+        plug.set_plug(ps);
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        plug.with_desktop_rule(now - (MIN_OFF - 2));
+        let core2_dir = tempfile::tempdir().unwrap();
+        let (core2, _, _desk2) = set_up(core2_dir.path(), &plug);
+        let answer = block_on(turn_on(&core2));
+        assert!(
+            answer["result"]["waitMs"].as_u64().is_some_and(|w| w > 0),
+            "{answer}"
+        );
+        until("on after the wait", || plug.plug().on);
+        core2.stop();
         let sent = plug.commands();
         for cmnd in &sent {
             assert!(allowed(cmnd), "sent {cmnd:?} ({sent:?})");
@@ -464,6 +482,75 @@ fn nothing_else_on_the_bridge_is_touched() {
         }
         core.stop();
     }
+}
+
+#[test]
+fn a_rule_set_up_for_another_plug_is_never_used() {
+    for standby in [true, false] {
+        let dir = tempfile::tempdir().unwrap();
+        let plug = FakeTasmota::start(
+            true,
+            Plug {
+                on: standby,
+                watts: 2.0,
+                last_seen: 1,
+            },
+        );
+        // The bridge's Threadgarden rule cuts the grow light, not this plug.
+        plug.with_desktop_rule_for(Some("GrowLight"), 0);
+        let (core, _, _desk) = set_up(dir.path(), &plug);
+        let answer = block_on(turn_on(&core));
+        assert_eq!(
+            answer["error"],
+            json!({ "code": "POWER_NOT_CONFIGURED",
+                    "message": "This bridge's power rule is set up for another plug. Set it up on the desktop." }),
+            "standby {standby}"
+        );
+        std::thread::sleep(Duration::from_millis(200));
+        let sent = plug.commands();
+        assert!(
+            !sent
+                .iter()
+                .any(|c| c == "Event tgw" || c.starts_with("Timer")),
+            "{sent:?}"
+        );
+        assert!(!sent.contains(&on_command(true)), "{sent:?}");
+        for cmnd in &sent {
+            assert!(allowed(cmnd), "sent {cmnd:?}");
+        }
+        core.stop();
+    }
+}
+
+#[test]
+fn details_changed_during_a_turn_on_stop_it() {
+    let dir = tempfile::tempdir().unwrap();
+    // Slow answers: there's time to change the details while it reads.
+    let plug = FakeTasmota::start_with(true, off(), Duration::from_millis(300));
+    let (core, _, _desk) = set_up(dir.path(), &plug);
+    let (answer, _) = block_on(async {
+        let clearing = async {
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            let mut ws = open(&core).await;
+            call(
+                &mut ws,
+                1,
+                "power.configure",
+                json!({ "machineId": DESK, "config": null }),
+            )
+            .await
+        };
+        tokio::join!(turn_on(&core), clearing)
+    });
+    assert_eq!(
+        answer["error"],
+        json!({ "code": "POWER_NOT_CONFIGURED", "message": "Power control for this machine changed meanwhile." }),
+        "{answer}"
+    );
+    std::thread::sleep(Duration::from_millis(700));
+    assert!(!plug.commands().contains(&on_command(true)));
+    assert!(!plug.plug().on);
+    core.stop();
 }
 
 #[test]
