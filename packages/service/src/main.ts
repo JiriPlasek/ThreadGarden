@@ -207,6 +207,11 @@ export type StartOptions = {
     addresses?: string[];
     addressSource?: () => string[];
     reachable?: () => boolean;
+    /**
+     * Tests only: awaited in every move of the listener, once the old one is
+     * taken off and before anything is closed or started (a race's window).
+     */
+    moving?: () => Promise<void>;
   };
   /**
    * Random bytes for pairing codes (default `crypto.randomBytes`). Tests and
@@ -507,7 +512,8 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
    * registry and router. A failed start is logged; the next tick tries again.
    */
   const moveRemote = async (addresses: string[]): Promise<void> => {
-    if (!listen) return;
+    // Without `listen` it only closes (Let my phone connect turned off clears it first).
+    if (!listen && addresses.length > 0) return;
     const current = remote ? [...remote.addresses].sort() : [];
     if (current.length === addresses.length && current.every((a, i) => a === addresses[i])) {
       return;
@@ -516,11 +522,12 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     remote = undefined;
     const generation = ++remoteGeneration;
     remoteClients = 0;
+    await opts.remote?.moving?.();
     if (old) {
       await step('remote server', () => old.close());
       log.info(`stopped listening for devices on ${old.addresses.join(', ')}`);
     }
-    if (addresses.length === 0 || closing) return;
+    if (addresses.length === 0 || closing || !listen) return;
     const { tls, devices } = listen;
     try {
       const started = await startRemoteServer({
@@ -592,9 +599,16 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         });
       if (!headless && opened.getPhoneAccess()) {
         // The owner left it on: listening again from the start, with the same certificate.
-        phoneTls = await loadTls();
-        phoneAccessOn = true;
-        listen = { tls: phoneTls, devices };
+        // A certificate that can't be had doesn't stop the service: it starts not listening.
+        try {
+          phoneTls = await loadTls();
+          phoneAccessOn = true;
+          listen = { tls: phoneTls, devices };
+        } catch (err) {
+          log.error(
+            `Let my phone connect: the certificate could not be loaded, so not listening for the phone: ${errorText(err)}`,
+          );
+        }
       }
       if (headless) {
         // Loaded up front, whether or not there is an address yet: the handlers
@@ -660,24 +674,45 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         addresses: remote ? [...remote.addresses] : [],
         port: remote ? remote.port : (opts.remote?.port ?? REMOTE_PORT),
       });
-      /** Turns it on or off; one at a time, after any move of the listener under way. */
+      /**
+       * Turns it on or off; one at a time. A switch holds the listener's slot
+       * (`following`) while it runs, so the address-follow tick can't start or
+       * move a listener under it, and `close()` waits for it.
+       */
       let switching: Promise<void> = Promise.resolve();
       const switchPhoneAccess = (enabled: boolean): Promise<void> => {
         const next = switching.then(async () => {
-          await following;
-          opened.setPhoneAccess(enabled);
-          phoneAccessOn = enabled;
-          if (enabled) {
-            phoneTls ??= await loadTls();
-            listen = { tls: phoneTls, devices };
-            await moveRemote(wantedAddresses());
-          } else {
-            // Closing the listener closes every device socket at once; the pairings stay.
-            await moveRemote([]);
-            listen = undefined;
+          while (following) await following;
+          if (closing) throw new ServiceError('CLOSING', 'The service is stopping');
+          const work = (async () => {
+            if (enabled) {
+              // The certificate first: if it can't be had, nothing is saved and nothing listens.
+              phoneTls ??= await loadTls();
+              opened.setPhoneAccess(true);
+              phoneAccessOn = true;
+              listen = { tls: phoneTls, devices };
+              await moveRemote(wantedAddresses());
+            } else {
+              opened.setPhoneAccess(false);
+              phoneAccessOn = false;
+              // Cleared before the close: nothing can bring a listener back meanwhile.
+              listen = undefined;
+              // Closing the listener closes every device socket at once; the pairings stay.
+              await moveRemote([]);
+            }
+            if (server && !closing) await writeOwnDiscovery(server.port);
+            server?.broadcast({ event: 'phoneAccess.changed', data: phoneState() });
+          })();
+          const slot = work.then(
+            () => {},
+            () => {},
+          );
+          following = slot;
+          try {
+            await work;
+          } finally {
+            if (following === slot) following = undefined;
           }
-          if (server && !closing) await writeOwnDiscovery(server.port);
-          server?.broadcast({ event: 'phoneAccess.changed', data: phoneState() });
         });
         switching = next.catch(() => {});
         return next;

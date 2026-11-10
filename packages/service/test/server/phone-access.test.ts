@@ -1,10 +1,14 @@
 import { existsSync } from 'node:fs';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { createServer, connect as netConnect, type AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
+import { DatabaseSync } from 'node:sqlite';
 import { join } from 'node:path';
 import { connect } from 'node:tls';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WebSocket } from 'ws';
+import { Db } from '../../src/history/db.js';
+import { migrate } from '../../src/history/migrations.js';
 import { REMOTE_PORT } from '../../src/server/remote-server.js';
 import { startService, type ServiceHandle } from '../../src/main.js';
 import { generateCorpus } from '../../src/testing/corpus.js';
@@ -296,5 +300,170 @@ describe('Let my phone connect', () => {
       await client.close();
     }
     expect(svc.remote).toBeDefined();
+  });
+});
+
+describe('Let my phone connect, when things go wrong', () => {
+  /** A port free just now (closed again), so two listeners on it would clash. */
+  const freePort = (): Promise<number> =>
+    new Promise((resolve, reject) => {
+      const s = createServer();
+      s.once('error', reject);
+      s.listen(0, '127.0.0.1', () => {
+        const { port } = s.address() as AddressInfo;
+        s.close(() => resolve(port));
+      });
+    });
+
+  /** A service whose idle tick (which also follows the addresses) the test fires. */
+  const ticking = async (port: number) => {
+    const ticks: (() => void)[] = [];
+    const errors: string[] = [];
+    /** Holds the next listener move once the old listener is off, until let go. */
+    let hold: { reached: () => void; release: Promise<void> } | undefined;
+    const svc = await desktop({
+      remote: {
+        addressSource: () => ['127.0.0.1'],
+        port,
+        moving: async () => {
+          const h = hold;
+          hold = undefined;
+          if (h) {
+            h.reached();
+            await h.release;
+          }
+        },
+      },
+      liveCount: () => 0,
+      clock: () => 0,
+      setInterval: (fn: () => void) => {
+        ticks.push(fn);
+        return 1 as unknown as NodeJS.Timeout;
+      },
+      clearInterval: () => {},
+      logger: { ...quietLogger(), error: (m: string) => void errors.push(m) },
+    });
+    /** Starts a switch, fires the address-follow tick while its move is held, then lets it go. */
+    const during = async <T>(start: () => Promise<T>): Promise<T> => {
+      let reached!: () => void;
+      let release!: () => void;
+      const atMove = new Promise<void>((r) => (reached = r));
+      hold = { reached, release: new Promise<void>((r) => (release = r)) };
+      const switching = start();
+      await atMove;
+      for (let i = 0; i < 5; i++) {
+        ticks[0]!();
+        await new Promise((r) => setImmediate(r));
+      }
+      release();
+      return switching;
+    };
+    return { svc, errors, during };
+  };
+
+  const listening = (port: number): Promise<boolean> =>
+    new Promise((resolve) => {
+      const socket = netConnect({ host: '127.0.0.1', port });
+      socket.once('connect', () => {
+        socket.destroy();
+        resolve(true);
+      });
+      socket.once('error', () => resolve(false));
+    });
+
+  it('the address-follow tick during a switch gives one listener on, and none off', async () => {
+    const port = await freePort();
+    const { svc, errors, during } = await ticking(port);
+    const client = await TestClient.connect(svc.port, svc.token);
+    try {
+      for (let round = 0; round < 2; round++) {
+        await during(() => client.call('phoneAccess.set', { enabled: true }));
+        expect(svc.remote?.port).toBe(port);
+        expect(await listening(port)).toBe(true);
+        await during(() => client.call('phoneAccess.set', { enabled: false }));
+        // Off stays off: no listener came back behind the switch.
+        await new Promise((r) => setTimeout(r, 50));
+        expect(svc.remote).toBeUndefined();
+        expect(await listening(port)).toBe(false);
+      }
+    } finally {
+      await client.close();
+    }
+    // On, there was one listener: none clashed for the port.
+    expect(errors.filter((e) => e.includes('listening for devices'))).toEqual([]);
+  });
+
+  it('closing waits for a switch under way, and leaves nothing listening', async () => {
+    const port = await freePort();
+    const { svc } = await ticking(port);
+    const client = await TestClient.connect(svc.port, svc.token);
+    const switching = client.raw('phoneAccess.set', { enabled: true });
+    await svc.close();
+    running.splice(running.indexOf(svc), 1);
+    // Its answer may never come (the service went): not waited for long.
+    await Promise.race([switching, new Promise((r) => setTimeout(r, 200))]);
+    expect(await listening(port)).toBe(false);
+  });
+
+  it('a certificate that cannot be read starts the service with listening off', async () => {
+    const errors: string[] = [];
+    const first = await desktop();
+    await local(first, 'phoneAccess.set', { enabled: true });
+    await first.close();
+    running.splice(running.indexOf(first), 1);
+    // Where the certificate lives is now a file: the identity can't be loaded or made.
+    await rm(join(dir, 'data', 'tls'), { recursive: true, force: true });
+    await writeFile(join(dir, 'data', 'tls'), 'not a directory');
+    const svc = await desktop({
+      logger: { ...quietLogger(), error: (m: string) => void errors.push(m) },
+    });
+    expect(svc.remote).toBeUndefined();
+    expect((await local<PhoneAccess>(svc, 'phoneAccess.get', {})).enabled).toBe(false);
+    expect(errors.some((e) => e.includes('phone'))).toBe(true);
+  });
+
+  it('turning it on without a certificate keeps it off, then and after a restart', async () => {
+    await mkdir(join(dir, 'data'), { recursive: true });
+    await writeFile(join(dir, 'data', 'tls'), 'not a directory');
+    const svc = await desktop();
+    const client = await TestClient.connect(svc.port, svc.token);
+    try {
+      const res = await client.raw('phoneAccess.set', { enabled: true });
+      expect(res.error).toBeDefined();
+    } finally {
+      await client.close();
+    }
+    expect((await local<PhoneAccess>(svc, 'phoneAccess.get', {})).enabled).toBe(false);
+    await svc.close();
+    running.splice(running.indexOf(svc), 1);
+    await rm(join(dir, 'data', 'tls'), { force: true });
+    const again = await desktop();
+    expect(again.remote).toBeUndefined();
+    expect((await local<PhoneAccess>(again, 'phoneAccess.get', {})).enabled).toBe(false);
+  });
+
+  it('a database from before it reads as off once upgraded', () => {
+    const fresh = new DatabaseSync(':memory:');
+    migrate(fresh);
+    const latest = (fresh.prepare('PRAGMA user_version').get() as { user_version: number })
+      .user_version;
+    fresh.close();
+    // Every step but the last, the one that added it.
+    const raw = new DatabaseSync(':memory:');
+    migrate(raw, latest - 1);
+    const tables = () =>
+      (
+        raw.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as {
+          name: string;
+        }[]
+      ).map((t) => t.name);
+    expect(tables()).not.toContain('phone_access');
+    migrate(raw);
+    expect(tables()).toContain('phone_access');
+    const db = new Db(raw);
+    expect(db.getPhoneAccess()).toBe(false);
+    db.setPhoneAccess(true);
+    expect(db.getPhoneAccess()).toBe(true);
+    raw.close();
   });
 });
