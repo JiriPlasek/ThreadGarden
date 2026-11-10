@@ -23,8 +23,15 @@
    * details come later: the desktop's power card, which hands the plug's
    * settings to the machine, isn't on the phone.
    */
-  /** Start at sign-in was turned on from Let my phone connect (the dialog's form follows). */
-  let { onStartAtSignIn }: { onStartAtSignIn?: () => void } = $props();
+  let {
+    onStartAtSignIn,
+    startOnLogin = false,
+  }: {
+    /** Start at sign-in was turned on from Let my phone connect (the dialog's form follows). */
+    onStartAtSignIn?: () => void;
+    /** The dialog's form has Start on login ticked, saved or not (Let my phone connect's offer). */
+    startOnLogin?: boolean;
+  } = $props();
 
   const { machines, interaction, machineUpdates } = useApp();
 
@@ -132,7 +139,7 @@
   {#if !isPhone}
     <p class="text-sm">{THIS_PC} · Threadgarden {appVersion}</p>
     <!-- The desktop listens for the phone: the phone itself has nothing to offer here. -->
-    <PhoneAccess {onStartAtSignIn} />
+    <PhoneAccess {onStartAtSignIn} {startOnLogin} />
   {/if}
 
   {#each paired as m (m.id)}

@@ -9,6 +9,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import SettingsDialog from '../../src/lib/components/SettingsDialog.svelte';
 import { setup } from '../layout/harness';
+import { RpcFail } from '../service/fake-ws';
 
 const { setAutostart } = vi.hoisted(() => ({
   setAutostart: vi.fn(async (on: boolean) => void on),
@@ -37,8 +38,12 @@ const start = async (
     devices?: Device[];
     codeTtlMs?: number;
     settings?: Partial<Settings>;
+    /** `devices.list` fails from this call on (1: the first). */
+    listFailsFrom?: number;
   } = {},
 ) => {
+  const order: string[] = [];
+  let lists = 0;
   let access: PhoneAccess = {
     enabled: o.enabled ?? false,
     addresses: ['192.168.1.20', '100.64.0.7'],
@@ -50,7 +55,10 @@ const start = async (
   const env = await setup((s) => {
     Object.assign(s.handlers, {
       'settings.get': () => current,
-      'settings.set': (p: unknown) => (current = { ...current, ...(p as Partial<Settings>) }),
+      'settings.set': (p: unknown) => {
+        order.push(`settings.set ${JSON.stringify(p)}`);
+        return (current = { ...current, ...(p as Partial<Settings>) });
+      },
       'phoneAccess.get': () => access,
       'phoneAccess.set': (p: unknown) => {
         access = { ...access, enabled: (p as { enabled: boolean }).enabled };
@@ -64,7 +72,12 @@ const start = async (
           expiresAt: Date.now() + (o.codeTtlMs ?? 300_000),
         };
       },
-      'devices.list': () => devices,
+      'devices.list': () => {
+        lists++;
+        if (o.listFailsFrom !== undefined && lists >= o.listFailsFrom)
+          throw new RpcFail('INTERNAL', 'no list');
+        return devices;
+      },
       'devices.revoke': (p: unknown) => {
         devices = devices.filter((d) => d.id !== (p as { deviceId: string }).deviceId);
         return { revoked: true };
@@ -77,11 +90,24 @@ const start = async (
   const dialog = await screen.findByRole('dialog', { name: /^settings$/i });
   const section = await within(dialog).findByRole('group', { name: SETTING });
   const toggle = within(section).getByRole('checkbox', { name: SETTING }) as HTMLInputElement;
-  return { ...env, dialog, section, toggle, current: () => current, access: () => access };
+  return {
+    ...env,
+    dialog,
+    section,
+    toggle,
+    order,
+    current: () => current,
+    access: () => access,
+    /** A phone pairs (as `threadgarden` would, with no event to say so). */
+    pair: (d: Device) => void (devices = [...devices, d]),
+  };
 };
 
 describe('Settings → Let my phone connect', () => {
-  afterEach(() => setAutostart.mockClear());
+  afterEach(() => {
+    setAutostart.mockReset();
+    setAutostart.mockImplementation(async (on: boolean) => void on);
+  });
 
   it('off by default, with the help text', async () => {
     const { section, toggle } = await start();
@@ -204,5 +230,86 @@ describe('Settings → Let my phone connect', () => {
     env.server.push('phoneAccess.changed', { enabled: true, addresses: ['10.0.0.4'], port: 47380 });
     await waitFor(() => expect(env.toggle.checked).toBe(true));
     expect(await within(env.section).findByText('10.0.0.4:47380')).toBeTruthy();
+  });
+
+  it('a phone paired while a code is shown appears in the list', async () => {
+    const env = await start({ enabled: true });
+    await userEvent.click(
+      await within(env.section).findByRole('button', { name: 'Show a pairing code' }),
+    );
+    await within(env.section).findByText('ABCD-EFGH-JKLM');
+    env.pair(device('d9', 'Pixel'));
+    // Listed while the code is live, with no event to say so.
+    expect(await within(env.section).findByText('Pixel', {}, { timeout: 6_000 })).toBeTruthy();
+  }, 10_000);
+
+  it('turning off asks about a phone paired since the list was read', async () => {
+    const env = await start({ enabled: true });
+    await within(env.section).findByRole('button', { name: 'Show a pairing code' });
+    env.pair(device('d9', 'Pixel'));
+    await userEvent.click(env.toggle);
+    expect(
+      await screen.findByRole('alertdialog', { name: 'Turn off Let my phone connect?' }),
+    ).toBeTruthy();
+    expect(env.server.calls('phoneAccess.set')).toHaveLength(0);
+  });
+
+  it('the code and when it expires are announced, without the countdown', async () => {
+    const env = await start({ enabled: true });
+    await userEvent.click(
+      await within(env.section).findByRole('button', { name: 'Show a pairing code' }),
+    );
+    const status = await within(env.section).findByRole('status');
+    await waitFor(() => expect(status.textContent).toContain('ABCD-EFGH-JKLM'));
+    expect(status.getAttribute('aria-live')).toBe('polite');
+    expect(status.textContent).toMatch(/Expires at \d{1,2}:\d{2}/);
+    const said = status.textContent;
+    await new Promise((r) => setTimeout(r, 1_300));
+    expect(status.textContent).toBe(said);
+  });
+
+  it('a list that fails keeps the phones it had', async () => {
+    const env = await start({ enabled: true, devices: [device('d1', 'Pixel')], listFailsFrom: 2 });
+    await within(env.section).findByText('Pixel');
+    await userEvent.click(within(env.section).getByRole('button', { name: 'Show a pairing code' }));
+    await waitFor(() => expect(env.server.calls('devices.list').length).toBeGreaterThan(1));
+    expect(within(env.section).getByText('Pixel')).toBeTruthy();
+  });
+
+  it('with the paired phones unknown, turning off asks', async () => {
+    const env = await start({ enabled: true, listFailsFrom: 1 });
+    await within(env.section).findByRole('button', { name: 'Show a pairing code' });
+    await userEvent.click(env.toggle);
+    expect(
+      await screen.findByRole('alertdialog', { name: 'Turn off Let my phone connect?' }),
+    ).toBeTruthy();
+  });
+
+  it('Start at sign-in saves the setting first, and undoes it when autostart fails', async () => {
+    const env = await start({ enabled: true });
+    setAutostart.mockImplementation(async () => {
+      env.order.push('setAutostart');
+      throw new Error('autostart refused');
+    });
+    await userEvent.click(
+      await within(env.section).findByRole('button', { name: 'Start at sign-in' }),
+    );
+    await within(env.section).findByText('autostart refused');
+    expect(env.order).toEqual([
+      'settings.set {"startOnLogin":true}',
+      'setAutostart',
+      'settings.set {"startOnLogin":false}',
+    ]);
+    expect(env.current().startOnLogin).toBe(false);
+    expect(within(env.section).getByRole('button', { name: 'Start at sign-in' })).toBeTruthy();
+  });
+
+  it('Start on login ticked in the form (not saved yet) hides the offer', async () => {
+    const env = await start({ enabled: true });
+    await within(env.section).findByRole('button', { name: 'Start at sign-in' });
+    await userEvent.click(within(env.dialog).getByLabelText('Start on login'));
+    await waitFor(() =>
+      expect(within(env.section).queryByRole('button', { name: 'Start at sign-in' })).toBeNull(),
+    );
   });
 });

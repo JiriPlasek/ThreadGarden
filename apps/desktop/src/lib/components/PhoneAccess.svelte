@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Device, PhoneAccess } from '@threadgarden/protocol';
+  import { untrack } from 'svelte';
   import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
   import { Button } from '#lib/components/ui/button/index.js';
   import { setAutostart } from '#lib/native.js';
@@ -16,8 +17,23 @@
    * Threadgarden must run for the phone to connect: on offers Start at
    * sign-in (the desktop's autostart), and never turns it on by itself.
    * A service without the setting (older) shows nothing.
+   *
+   * No event says a phone paired, so the list is read again when a code is
+   * shown, every few seconds while it's live, at its end, and before turning
+   * off. A list that can't be read keeps what it had, and turning off then
+   * asks, as it would with a phone paired.
    */
-  let { onStartAtSignIn }: { onStartAtSignIn?: () => void } = $props();
+  let {
+    onStartAtSignIn,
+    startOnLogin = false,
+  }: {
+    onStartAtSignIn?: () => void;
+    /** The dialog's form has Start on login ticked (saved or not). */
+    startOnLogin?: boolean;
+  } = $props();
+
+  /** How often the paired devices are read while a code is live. */
+  const DEVICES_POLL_MS = 3_000;
 
   const { scopes, settings } = useApp();
   const api = scopes.local().api;
@@ -28,6 +44,8 @@
 
   let access = $state<PhoneAccess | null>(null);
   let devices = $state.raw<Device[]>([]);
+  /** The last read of the devices failed: who is paired isn't known. */
+  let devicesUnknown = $state(false);
   let busy = $state(false);
   let error = $state<string | null>(null);
   let code = $state<{ code: string; expiresAt: number } | null>(null);
@@ -43,8 +61,10 @@
   const loadDevices = async (): Promise<void> => {
     try {
       devices = await api.request('devices.list', {});
+      devicesUnknown = false;
     } catch {
-      devices = [];
+      // The phones it had stay listed.
+      devicesUnknown = true;
     }
   };
 
@@ -84,11 +104,19 @@
       if (code && now >= code.expiresAt) {
         code = null;
         expired = true;
+        // A phone may have paired at the last moment.
+        quietly(loadDevices());
       }
     };
-    tick();
+    // Untracked: the clock it sets must not start this again (the poll would never fire).
+    untrack(tick);
     const t = setInterval(tick, 250);
-    return () => clearInterval(t);
+    // A phone pairing with it: no event says so.
+    const poll = setInterval(() => quietly(loadDevices()), DEVICES_POLL_MS);
+    return () => {
+      clearInterval(t);
+      clearInterval(poll);
+    };
   });
 
   const set = async (enabled: boolean): Promise<void> => {
@@ -103,15 +131,19 @@
     }
   };
 
-  const toggle = (e: Event & { currentTarget: HTMLInputElement }): void => {
+  const toggle = async (e: Event & { currentTarget: HTMLInputElement }): Promise<void> => {
     const want = e.currentTarget.checked;
     // The box shows the service's state, not the click, until it answers.
     e.currentTarget.checked = access?.enabled ?? false;
-    if (!want && devices.length > 0) {
-      askOff = true;
-      return;
+    if (!want) {
+      // Who is paired now, not when the list was last read.
+      await loadDevices();
+      if (devices.length > 0 || devicesUnknown) {
+        askOff = true;
+        return;
+      }
     }
-    void set(want);
+    await set(want);
   };
 
   const showCode = async (): Promise<void> => {
@@ -122,6 +154,7 @@
     } catch (err) {
       error = text(err);
     }
+    await loadDevices();
   };
 
   const remove = async (d: Device): Promise<void> => {
@@ -133,8 +166,14 @@
     starting = true;
     error = null;
     try {
-      await setAutostart(true);
+      // The setting first: should autostart fail, it is put back.
       await settings.update({ startOnLogin: true });
+      try {
+        await setAutostart(true);
+      } catch (err) {
+        await settings.update({ startOnLogin: false }).catch(() => {});
+        throw err;
+      }
       onStartAtSignIn?.();
     } catch (err) {
       error = text(err);
@@ -142,6 +181,13 @@
       starting = false;
     }
   };
+
+  /** When the code ends, said once (the countdown beside it is not announced). */
+  const until = $derived(
+    code
+      ? new Date(code.expiresAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+      : '',
+  );
 
   const left = $derived.by(() => {
     if (!code) return '';
@@ -163,7 +209,7 @@
         checked={access.enabled}
         disabled={busy}
         aria-describedby="phone-access-help"
-        onchange={toggle}
+        onchange={(e) => void toggle(e)}
       />
       {SETTING}
     </label>
@@ -189,15 +235,21 @@
         <Button variant="outline" size="sm" onclick={() => void showCode()}
           >Show a pairing code</Button
         >
+        <!-- Said once: the code and when it ends; the countdown beside it is for the eye. -->
+        <span role="status" aria-live="polite" class="flex flex-wrap items-center gap-2">
+          {#if code}
+            <span class="font-mono text-base font-semibold tracking-wider">{code.code}</span>
+            <span class="sr-only">Expires at {until}</span>
+          {:else if expired}
+            <span class="text-muted-foreground text-xs">The code has expired.</span>
+          {/if}
+        </span>
         {#if code}
-          <span class="font-mono text-base font-semibold tracking-wider">{code.code}</span>
-          <span class="text-muted-foreground text-xs">Expires in {left}</span>
-        {:else if expired}
-          <span class="text-muted-foreground text-xs">The code has expired.</span>
+          <span class="text-muted-foreground text-xs" aria-hidden="true">Expires in {left}</span>
         {/if}
       </div>
 
-      {#if !settings.value.startOnLogin}
+      {#if !settings.value.startOnLogin && !startOnLogin}
         <div class="flex flex-wrap items-center gap-2 text-xs">
           <span class="text-muted-foreground"
             >Your phone connects only while Threadgarden runs.</span
