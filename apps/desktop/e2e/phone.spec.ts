@@ -339,6 +339,32 @@ test("the keyboard doesn't cover the composer", async ({ page }) => {
   await expect(composer(page)).toBeFocused();
 });
 
+test("the shell keeps clear of Android's system bars", async ({ page }) => {
+  await openPhone(page);
+  await expect(page.locator('meta[name="viewport"]')).toHaveAttribute(
+    'content',
+    /viewport-fit=cover/,
+  );
+  const shell = page.locator('[data-phone-shell]');
+  // Nothing to keep clear of in a browser.
+  await expect(shell).toHaveCSS('padding-top', '0px');
+  // A webview under the bars says how tall they are (here as the variables a native side sets).
+  await page.evaluate(() => {
+    const root = document.documentElement.style;
+    root.setProperty('--sat', '32px');
+    root.setProperty('--sab', '24px');
+  });
+  await expect(shell).toHaveCSS('padding-top', '32px');
+  await expect(shell).toHaveCSS('padding-bottom', '24px');
+  // The places start below the status bar, and the composer sits above the gesture bar.
+  const top = await places(page).boundingBox();
+  expect(top!.y).toBeGreaterThanOrEqual(32);
+  await openChat(page, 'session-13');
+  const box = await composer(page).boundingBox();
+  const height = page.viewportSize()!.height;
+  expect(box!.y + box!.height).toBeLessThanOrEqual(height - 24);
+});
+
 /** Every visible control under the phone's rule that is smaller than 44 px either way. */
 const smallTargets = (page: Page) =>
   page.evaluate(() => {

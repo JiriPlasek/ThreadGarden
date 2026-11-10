@@ -24,6 +24,17 @@
    * stays above it. Interactive elements are at least 44 px (`data-phone`,
    * layout.css).
    */
+  /**
+   * Clear of Android's status bar, gesture bar and a cutout (the app draws
+   * edge to edge). MainActivity pads the webview by the system's insets, so
+   * these read 0 there; a webview drawn under the bars says their size in
+   * `safe-area-inset-*`, and `--sat`, `--sar`, `--sab` and `--sal` can be
+   * set from outside for one that doesn't.
+   */
+  const SAFE_PADDING = (['top', 'right', 'bottom', 'left'] as const)
+    .map((side) => `max(env(safe-area-inset-${side}, 0px), var(--sa${side[0]}, 0px))`)
+    .join(' ');
+
   let {
     nav = phoneNav,
     onOpenChat = nativeOnOpenChat,
@@ -125,8 +136,11 @@
     root.dataset.phone = '';
     const meta = document.querySelector<HTMLMetaElement>('meta[name="viewport"]');
     const before = meta?.content;
-    if (meta)
-      meta.content = 'width=device-width, initial-scale=1, interactive-widget=resizes-content';
+    // `viewport-fit=cover`: a webview drawn under the system bars reports their size.
+    if (meta) {
+      meta.content =
+        'width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content';
+    }
     const vv = window.visualViewport;
     const fit = (): void => {
       if (vv) root.style.setProperty('--phone-vh', `${vv.height}px`);
@@ -144,7 +158,8 @@
 
 <div
   class="bg-background text-foreground flex flex-col overflow-hidden"
-  style="height: var(--phone-vh, 100dvh)"
+  style:height="var(--phone-vh, 100dvh)"
+  style:padding={SAFE_PADDING}
   data-phone-shell
   data-level={nav.level}
 >
