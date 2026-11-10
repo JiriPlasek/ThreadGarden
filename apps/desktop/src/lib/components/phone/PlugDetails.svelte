@@ -51,7 +51,9 @@
 
   const zigbee = $derived(kind === 'tasmota-zigbee');
 
+  /** However it closes (Cancel, a swipe, after a failed save): no password stays behind. */
   const close = (): void => {
+    password = '';
     interaction.plugFor = null;
   };
 

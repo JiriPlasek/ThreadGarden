@@ -175,6 +175,28 @@ describe('plug details on the phone', () => {
     );
   });
 
+  it('a password typed before a failed save is gone after Cancel', async () => {
+    const env = await start({
+      configure: () => {
+        throw new RpcFail('POWER_AUTH', 'The switch refused the password.');
+      },
+    });
+    render(PlugDetails, { context: env.context });
+    env.app.interaction.plugFor = M1;
+    let dialog = await screen.findByRole('dialog', { name: 'Plug for Ubuntu PC' });
+    await userEvent.type(within(dialog).getByLabelText('Bridge address'), '192.168.1.9');
+    await userEvent.type(within(dialog).getByLabelText('Plug name'), 'Desk plug');
+    await userEvent.type(within(dialog).getByLabelText('Password'), 'typed-pw');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Save' }));
+    await within(dialog).findByRole('alert');
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+    expect(env.app.interaction.plugFor).toBeNull();
+    env.app.interaction.plugFor = M1;
+    dialog = await screen.findByRole('dialog', { name: 'Plug for Ubuntu PC' });
+    expect((within(dialog).getByLabelText('Password') as HTMLInputElement).value).toBe('');
+  });
+
   it('a machine without plug details shows the hint', async () => {
     const env = await start({ capabilities: ['remote', POWER_CAPABILITY] });
     const menu = await powerMenu(env);

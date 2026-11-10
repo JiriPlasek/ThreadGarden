@@ -50,6 +50,14 @@ describe('the update notice on the phone', () => {
     expect(native.openExternal).toHaveBeenCalledWith(APK);
   });
 
+  it('0.10.0 is newer than this app at 0.9.0 (numbers, not text)', async () => {
+    expect(appVersion).toBe('0.9.0');
+    const env = await withLatest(() => ({ version: '0.10.0', url: APK }));
+    render(PhoneUpdateNotice, { context: env.context });
+    const notice = await screen.findByRole('status');
+    await waitFor(() => expect(notice.textContent).toContain('Threadgarden 0.10.0 is available'));
+  });
+
   it('the same version shows nothing, and a failed check says nothing', async () => {
     const same = await withLatest(() => ({ version: appVersion, url: APK }));
     const { unmount } = render(PhoneUpdateNotice, { context: same.context });

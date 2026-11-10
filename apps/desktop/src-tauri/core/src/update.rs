@@ -19,7 +19,11 @@ use crate::methods::{MethodError, Router};
 
 /// The latest release of the app, as GitHub's API has it.
 const LATEST: &str = "https://api.github.com/repos/JiriPlasek/ThreadGarden/releases/latest";
-/// Tests point the check elsewhere (somewhere that never answers): never GitHub from a test.
+/// Where this repository's release files are served: the only APK the notice offers.
+const DOWNLOADS: &str = "https://github.com/JiriPlasek/ThreadGarden/releases/download/";
+/// Tests point the check elsewhere (somewhere that never answers): never GitHub
+/// from a test. Read in debug builds only: a release build always asks GitHub.
+#[cfg(debug_assertions)]
 const LATEST_ENV: &str = "THREADGARDEN_RELEASES_URL";
 /// A successful answer is kept this long.
 const TTL: Duration = Duration::from_secs(10 * 60);
@@ -44,7 +48,10 @@ pub fn register(router: &mut Router) {
             {
                 return Ok(answer);
             }
+            #[cfg(debug_assertions)]
             let url = std::env::var(LATEST_ENV).unwrap_or_else(|_| LATEST.to_string());
+            #[cfg(not(debug_assertions))]
+            let url = LATEST.to_string();
             let body = tokio::time::timeout(TIMEOUT, get(&url))
                 .await
                 .map_err(|_| unreachable("GitHub did not answer in time"))??;
@@ -57,7 +64,7 @@ pub fn register(router: &mut Router) {
 }
 
 /// `{ version, url? }` from a release's JSON: the tag without its `v`, and the
-/// first `.apk` asset served by github.com.
+/// first `.apk` asset among this repository's release downloads.
 pub fn latest(body: &[u8]) -> Result<Value, MethodError> {
     let release: Value =
         serde_json::from_slice(body).map_err(|_| unreachable("The release could not be read"))?;
@@ -80,7 +87,7 @@ pub fn latest(body: &[u8]) -> Result<Value, MethodError> {
         .find_map(|a| {
             let name = a["name"].as_str()?;
             let url = a["browser_download_url"].as_str()?;
-            (name.to_ascii_lowercase().ends_with(".apk") && url.starts_with("https://github.com/"))
+            (name.to_ascii_lowercase().ends_with(".apk") && url.starts_with(DOWNLOADS))
                 .then(|| url.to_string())
         });
     Ok(match apk {
@@ -179,7 +186,8 @@ pub fn body(response: &[u8]) -> Result<Vec<u8>, MethodError> {
         }
         let start = line_end + 2;
         let stop = start + size;
-        if stop > raw.len() {
+        // The chunk and the CRLF that ends it, or the answer was cut short.
+        if raw.get(stop..stop + 2) != Some(&b"\r\n"[..]) {
             return Err(unreachable("An incomplete answer"));
         }
         out.extend_from_slice(&raw[start..stop]);
@@ -245,6 +253,23 @@ mod tests {
             "UNREACHABLE"
         );
         assert_eq!(body(b"HTTP/1.1 200").unwrap_err().code, "UNREACHABLE");
+    }
+
+    #[test]
+    fn a_truncated_chunked_answer_is_incomplete_not_a_panic() {
+        for cut in [
+            &b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc"[..],
+            &b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabc\r"[..],
+            &b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabcXY0\r\n\r\n"[..],
+        ] {
+            assert_eq!(body(cut).unwrap_err().code, "UNREACHABLE");
+        }
+    }
+
+    #[test]
+    fn an_apk_from_another_repository_is_not_offered() {
+        let body = br#"{"tag_name":"v1.0.0","assets":[{"name":"threadgarden-1.0.0.apk","browser_download_url":"https://github.com/someone/else/releases/download/v1.0.0/threadgarden-1.0.0.apk"}]}"#;
+        assert_eq!(latest(body).unwrap(), json!({ "version": "1.0.0" }));
     }
 
     #[test]
