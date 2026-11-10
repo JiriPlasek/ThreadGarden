@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
+import { FAKE_PLUG, FAKE_SWITCH_PASSWORD, FAKE_SWITCH_PORT } from './env';
 import { markAllSeen, phoneCall, remoteCall } from './helpers';
 
 /**
@@ -286,6 +287,10 @@ test("the chat header fits the phone's width, before and after a turn", async ({
         .map((el) => `${el.tagName.toLowerCase()} ${el.getAttribute('aria-label') ?? ''}`);
     });
   expect(await overflow()).toEqual([]);
+  // Each picker says what it is ("Model: …", "Mode: …").
+  await expect(
+    page.getByRole('combobox', { name: 'Permission mode' }).locator('option:checked'),
+  ).toHaveText(/^Mode: /);
   // The pickers read as words, not a letter.
   for (const name of ['Model', 'Permission mode']) {
     const box = await page.getByRole('combobox', { name }).boundingBox();
@@ -337,6 +342,32 @@ test("the keyboard doesn't cover the composer", async ({ page }) => {
   const box = await composer(page).boundingBox();
   expect(box!.y + box!.height).toBeLessThanOrEqual(450);
   await expect(composer(page)).toBeFocused();
+});
+
+test("the shell keeps clear of Android's system bars", async ({ page }) => {
+  await openPhone(page);
+  await expect(page.locator('meta[name="viewport"]')).toHaveAttribute(
+    'content',
+    /viewport-fit=cover/,
+  );
+  const shell = page.locator('[data-phone-shell]');
+  // Nothing to keep clear of in a browser.
+  await expect(shell).toHaveCSS('padding-top', '0px');
+  // A webview under the bars says how tall they are (here as the variables a native side sets).
+  await page.evaluate(() => {
+    const root = document.documentElement.style;
+    root.setProperty('--sat', '32px');
+    root.setProperty('--sab', '24px');
+  });
+  await expect(shell).toHaveCSS('padding-top', '32px');
+  await expect(shell).toHaveCSS('padding-bottom', '24px');
+  // The places start below the status bar, and the composer sits above the gesture bar.
+  const top = await places(page).boundingBox();
+  expect(top!.y).toBeGreaterThanOrEqual(32);
+  await openChat(page, 'session-13');
+  const box = await composer(page).boundingBox();
+  const height = page.viewportSize()!.height;
+  expect(box!.y + box!.height).toBeLessThanOrEqual(height - 24);
 });
 
 /** Every visible control under the phone's rule that is smaller than 44 px either way. */
@@ -395,6 +426,48 @@ test('an image can be attached through the picker', async ({ page }) => {
   await expect(page.getByRole('img', { name: 'Attached image 1' })).toBeVisible();
 });
 
-// The plug comes with Task 8 (the core's plug) and Task 13 (plug details on
-// the phone): until then the phone has no plug to turn a machine on with.
-test.fixme("Turn on works from the machine's menu", async () => {});
+test("Turn on works from the machine's menu", async ({ page }) => {
+  // The phone's core turns machines on since Task 8; the phone mock refuses
+  // what the core refuses (its contract table), so before that this skips.
+  const refused = await phoneCall('power.turnOn', { machineId: 'none' }).then(
+    () => false,
+    (e: unknown) => String(e).includes('METHOD_NOT_FOUND'),
+  );
+  test.skip(refused, "The phone's core can't turn machines on yet (Task 8 not merged)");
+  const ubuntu = await remoteCall<{ id: string }>('machine.get', {});
+  try {
+    await openPhone(page);
+    // Its plug details, entered on the phone.
+    const group = places(page).getByRole('group', { name: MACHINE });
+    await group.getByRole('button', { name: `Power for ${MACHINE}` }).tap();
+    await page.getByRole('menuitem', { name: 'Plug details…' }).tap();
+    const plug = page.getByRole('dialog', { name: `Plug for ${MACHINE}` });
+    await plug.getByLabel('Bridge address').fill(`127.0.0.1:${FAKE_SWITCH_PORT}`);
+    await plug.getByLabel('Plug name').fill(FAKE_PLUG);
+    await plug.getByLabel('Password').fill(FAKE_SWITCH_PASSWORD);
+    await plug.getByRole('button', { name: 'Save' }).tap();
+    await expect(plug).toHaveCount(0);
+
+    // Ubuntu goes off; Turn on brings it back through its plug.
+    await remoteCall('mock.goAway', {});
+    await expect(group.getByText('Off')).toBeVisible({ timeout: 30_000 });
+    await group.getByRole('button', { name: `Power for ${MACHINE}` }).tap();
+    await page.getByRole('menuitem', { name: 'Turn on' }).tap();
+    await expect(group.getByText('On', { exact: true })).toBeVisible({ timeout: 30_000 });
+  } finally {
+    await remoteCall('mock.comeBack', {}).catch(() => {});
+    await phoneCall('power.configure', { machineId: ubuntu.id, config: null }).catch(() => {});
+  }
+});
+
+test("the update notice opens the release's APK", async ({ page }) => {
+  await openPhone(page);
+  const notice = page.getByRole('status').filter({ hasText: /is available/ });
+  await expect(notice).toContainText(/Threadgarden \d+\.\d+\.\d+ is available/);
+  // The browser stands in for Android's: the APK's address opens there.
+  const opened = page.waitForEvent('popup');
+  await notice.getByRole('button', { name: 'Download' }).tap();
+  expect((await opened).url()).toMatch(
+    /^https:\/\/github\.com\/JiriPlasek\/ThreadGarden\/releases\/download\/v.+\/threadgarden-.+\.apk$/,
+  );
+});

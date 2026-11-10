@@ -18,6 +18,7 @@
   import { IDLE_MINUTES_MAX } from '#lib/state/settings.svelte.js';
   import AppearancePreview from './AppearancePreview.svelte';
   import MachinesSettings from './MachinesSettings.svelte';
+  import PhoneSettings from './phone/PhoneSettings.svelte';
   import UpdatesSettings from './UpdatesSettings.svelte';
 
   type Accent = Settings['accent'];
@@ -383,7 +384,14 @@
       />
     </section>
 
-    <MachinesSettings />
+    <MachinesSettings
+      onStartAtSignIn={() => (form.startOnLogin = true)}
+      startOnLogin={form.startOnLogin}
+    />
+
+    {#if isPhone}
+      <PhoneSettings />
+    {/if}
 
     {#if !isPhone}
       <section class="grid gap-1 border-t pt-3" aria-label="Authentication">

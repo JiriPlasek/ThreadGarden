@@ -646,8 +646,11 @@ export const methods = {
   ),
   // ── update (protocol 10) ── frozen: only optional additions ───────────────
   // Errors: `UPDATE_ERRORS`. All that is frozen with these: the comment in `update.ts`.
-  /** Local only: the latest release version, asked of GitHub by this machine's service. */
-  'update.latest': def(empty, z.object({ version: z.string() })),
+  /**
+   * Local only: the latest release version, asked of GitHub by this machine's
+   * service. The phone's core adds `url`: the release's APK, when it has one.
+   */
+  'update.latest': def(empty, z.object({ version: z.string(), url: z.string().optional() })),
   /** Updates this machine to `version`; `force` goes on although chats run (`busy` says how many). */
   'update.start': def(
     z.object({ version: z.string(), force: z.boolean() }),

@@ -5,8 +5,11 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.view.View
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AlertDialog
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 
 class MainActivity : TauriActivity() {
   /** onCreate has just sent CONNECT itself. */
@@ -21,6 +24,7 @@ class MainActivity : TauriActivity() {
     if (savedInstanceState == null) CoreService.start(this, CoreService.ACTION_CONNECT)
     justCreated = true
     super.onCreate(savedInstanceState)
+    keepClearOfSystemBars()
     if (savedInstanceState == null) openChat(intent)
     firstRun()
   }
@@ -56,6 +60,27 @@ class MainActivity : TauriActivity() {
   override fun onStop() {
     CoreBridge.front(false)
     super.onStop()
+  }
+
+  /**
+   * Edge to edge, the window spans the status bar, the gesture bar and a
+   * cutout, and the keyboard no longer resizes it: the screens are padded
+   * clear of all four here, so the webview never draws under them and shrinks
+   * as the keyboard opens. The insets are used up, so the webview's own
+   * `safe-area-inset-*` reads 0 and the page's padding (env() or `--sat`…)
+   * adds nothing on top.
+   */
+  private fun keepClearOfSystemBars() {
+    val content = findViewById<View>(android.R.id.content)
+    ViewCompat.setOnApplyWindowInsetsListener(content) { view, insets ->
+      val clear = insets.getInsets(
+        WindowInsetsCompat.Type.systemBars() or
+          WindowInsetsCompat.Type.displayCutout() or
+          WindowInsetsCompat.Type.ime(),
+      )
+      view.setPadding(clear.left, clear.top, clear.right, clear.bottom)
+      WindowInsetsCompat.CONSUMED
+    }
   }
 
   private fun openChat(intent: Intent?) {

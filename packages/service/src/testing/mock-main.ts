@@ -89,8 +89,8 @@
  * capabilities), it has no chats, projects, external sessions or usage of its
  * own, and `system.status` finds no Claude Code. It refuses (`METHOD_NOT_FOUND`)
  * what the core refuses, read from the core's contract table
- * (`packages/protocol/test/fixtures/core-answers/methods.json`), Add machine's
- * `machines.pair` included until the core pairs. With `--pair-port <port>
+ * (`packages/protocol/test/fixtures/core-answers/methods.json`), so it follows
+ * the core as it learns more. With `--pair-port <port>
  * --pairing-code <code>` it pairs as "Phone" with the remote mock whose device
  * listener is on 127.0.0.1:`<port>`, once that one answers, and holds its
  * token, as the core does: the UI never unlocks it. The port has no default,
@@ -1227,7 +1227,7 @@ export const refusedByThePhone = (): string[] => {
  * The phone's core answers `hello` with an empty machine, has no Claude Code
  * and refuses what it doesn't answer (as `methods.rs` in the core does): the
  * main mock answers the same. Resolves to the service's own dispatch, which
- * the mock pairs through as the core would (its pairing isn't the core's yet).
+ * the mock pairs through itself, never through the table's refusals.
  */
 const answerLikeThePhone = (svc: ServiceHandle): ServiceHandle['router']['dispatch'] => {
   const dispatch = svc.router.dispatch.bind(svc.router);
@@ -1259,6 +1259,17 @@ const answerLikeThePhone = (svc: ServiceHandle): ServiceHandle['router']['dispat
         },
       };
     }
+    if (req.method === 'update.latest') {
+      // As the core answers: the release's APK too (the screens' Download opens it).
+      const { version } = res.result as { version: string };
+      return {
+        ...res,
+        result: {
+          version,
+          url: `https://github.com/JiriPlasek/ThreadGarden/releases/download/v${version}/threadgarden-${version}.apk`,
+        },
+      };
+    }
     if (req.method === 'system.status') {
       return {
         ...res,
@@ -1276,8 +1287,8 @@ const answerLikeThePhone = (svc: ServiceHandle): ServiceHandle['router']['dispat
 
 /**
  * Pairs the phone mock with the remote mock through the service's own
- * `dispatch` (the screens' `machines.pair` is refused, as by the core),
- * waiting for it to answer; throws when it never does.
+ * `dispatch` (whatever the core's table says of `machines.pair`), waiting for
+ * it to answer; throws when it never does.
  */
 const pairPhone = async (
   svc: ServiceHandle,

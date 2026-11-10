@@ -35,6 +35,7 @@
     "ui.visibility",
     "uiState.get",
     "uiState.set",
+    "update.latest",
     "usage.get",
     "work.stopAll"
   ],
@@ -111,7 +112,6 @@
     "scheduled.sendNow",
     "scheduled.update",
     "service.shutdown",
-    "update.latest",
     "update.start",
     "update.status"
   ]

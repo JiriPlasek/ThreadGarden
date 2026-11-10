@@ -28,6 +28,7 @@ mod server;
 mod settings;
 pub mod store;
 mod tasmota;
+mod update;
 
 pub use methods::{PLATFORM, REFUSED};
 

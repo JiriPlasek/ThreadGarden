@@ -310,8 +310,9 @@ export class PowerState {
     const api = this.api;
     if (!api) throw new Error('Power control is not ready.');
     // The keychain first: a configuration whose password could not be kept would not survive a restart.
+    // The phone's core keeps the password itself (encrypted, with the details).
     let restore: (() => Promise<void>) | null = null;
-    if (config && password !== undefined) {
+    if (config && password !== undefined && !isPhone) {
       const previous = await this.passwords.get(id);
       await this.passwords.set(id, password);
       restore = () =>
