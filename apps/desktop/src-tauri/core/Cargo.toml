@@ -1,7 +1,7 @@
 [package]
 name = "threadgarden-core"
 # The app's version: `hello` reports it as the service version (a test checks they agree).
-version = "0.9.0"
+version = "0.10.0"
 description = "The phone's stand-in for the local Threadgarden service"
 edition = "2024"
 rust-version = "1.90"
