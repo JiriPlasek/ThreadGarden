@@ -10,6 +10,8 @@
   import { phoneNav, type PhoneNavState } from '#lib/state/phone-nav.svelte.js';
   import { chatTitle } from './chat-title';
   import PhoneNav from './PhoneNav.svelte';
+  import PhoneUpdateNotice from './PhoneUpdateNotice.svelte';
+  import PlugDetails from './PlugDetails.svelte';
   import RecentChats from './RecentChats.svelte';
 
   /**
@@ -171,6 +173,7 @@
       Reconnecting to the Threadgarden service…
     </div>
   {/if}
+  <PhoneUpdateNotice />
 
   {#if nav.level === 'places'}
     <div class="bg-sidebar text-sidebar-foreground min-h-0 flex-1">
@@ -203,3 +206,5 @@
     </main>
   {/if}
 </div>
+
+<PlugDetails />

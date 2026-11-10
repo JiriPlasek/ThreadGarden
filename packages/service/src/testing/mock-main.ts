@@ -1259,6 +1259,17 @@ const answerLikeThePhone = (svc: ServiceHandle): ServiceHandle['router']['dispat
         },
       };
     }
+    if (req.method === 'update.latest') {
+      // As the core answers: the release's APK too (the screens' Download opens it).
+      const { version } = res.result as { version: string };
+      return {
+        ...res,
+        result: {
+          version,
+          url: `https://github.com/JiriPlasek/ThreadGarden/releases/download/v${version}/threadgarden-${version}.apk`,
+        },
+      };
+    }
     if (req.method === 'system.status') {
       return {
         ...res,

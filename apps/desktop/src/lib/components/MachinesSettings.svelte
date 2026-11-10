@@ -7,6 +7,7 @@
   import { machineState } from '#lib/components/layout/MachineHeading.svelte';
   import PhoneAccess from '#lib/components/PhoneAccess.svelte';
   import PowerSettings from '#lib/components/PowerSettings.svelte';
+  import PlugCard from '#lib/components/phone/PlugCard.svelte';
   import { Button } from '#lib/components/ui/button/index.js';
   import { appVersion, isPhone } from '#lib/native.js';
   import { useApp } from '#lib/state/context.js';
@@ -19,9 +20,9 @@
    * immediate (they are not part of the dialog's Save): a machine's name, its
    * address and port (the pin stays, so a different machine at the new address
    * is still refused), and Remove, which also asks the machine to forget this
-   * PC when it can be reached. The phone has no This PC to list, and its plug
-   * details come later: the desktop's power card, which hands the plug's
-   * settings to the machine, isn't on the phone.
+   * PC when it can be reached. The phone has no This PC to list, and keeps
+   * its own plug details (`PlugCard`): the desktop's power card, which hands
+   * the plug's settings to the machine, isn't on the phone.
    */
   let {
     onStartAtSignIn,
@@ -220,7 +221,9 @@
         >
       </div>
       <MachineUpdate machine={m} />
-      {#if !isPhone}
+      {#if isPhone}
+        <PlugCard machine={m} />
+      {:else}
         <PowerSettings machine={m} />
       {/if}
     </div>

@@ -197,6 +197,12 @@
     else void buckets.activate([summary]);
   };
 
+  /**
+   * The phone's pickers say what each is ("Model: Default", "Mode: Default"):
+   * they sit side by side with no label beside them.
+   */
+  const labelled = (what: string, label: string): string => (isPhone ? `${what}: ${label}` : label);
+
   const selectClass = isPhone
     ? // Readable on the phone: a share of the row each, never squeezed to a letter.
       'bg-background hover:bg-muted min-w-[5.5rem] max-w-[9rem] flex-1 truncate rounded border px-1 text-xs disabled:cursor-not-allowed disabled:opacity-60'
@@ -282,7 +288,7 @@
       <option value="">Model</option>
     {/if}
     {#each modelOptions as o (o.value)}
-      <option value={o.value}>{o.label}</option>
+      <option value={o.value}>{labelled('Model', o.label)}</option>
     {/each}
   </select>
   {#if effortOptions.length > 0}
@@ -297,7 +303,7 @@
         <option value="">Effort</option>
       {/if}
       {#each effortOptions as o (o.value)}
-        <option value={o.value}>{o.label}</option>
+        <option value={o.value}>{labelled('Effort', o.label)}</option>
       {/each}
     </select>
   {/if}
@@ -310,7 +316,7 @@
   >
     {#each modeOptions as o (o.value)}
       <option value={o.value} disabled={!PERMISSION_MODES.some((m) => m.value === o.value)}
-        >{o.label}</option
+        >{labelled('Mode', o.label)}</option
       >
     {/each}
   </select>

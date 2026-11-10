@@ -250,6 +250,8 @@ pub struct Deps {
 /// Registers the phone's local answers.
 pub fn register(router: &mut Router, deps: Deps) {
     let store = deps.store;
+    // The update notice's check (GitHub's latest release).
+    crate::update::register(router);
 
     let hello = json!({
         "serviceVersion": env!("CARGO_PKG_VERSION"),
@@ -410,7 +412,6 @@ pub const REFUSED: &[&str] = &[
     "analytics.get",
     "auth.setApiKey",
     "service.shutdown",
-    "update.latest",
     "update.start",
     "update.status",
     // Stage two (copies and waiting messages): not wired on the phone in stage one.

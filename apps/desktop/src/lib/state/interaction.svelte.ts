@@ -72,6 +72,8 @@ export class InteractionState {
   settingsOpen = $state(false);
   /** The Add machine dialog (Settings → Machines). */
   addMachineOpen = $state(false);
+  /** The phone: the machine whose plug details are being entered (null: none). */
+  plugFor = $state<string | null>(null);
   /** A section of the settings dialog to scroll to and focus when it opens (cleared once shown). */
   settingsSection = $state<'machines' | null>(null);
   /** The keyboard shortcuts dialog (Ctrl/Cmd+/ or ?). */

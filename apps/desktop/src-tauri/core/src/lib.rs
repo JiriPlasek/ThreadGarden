@@ -26,6 +26,7 @@ pub mod secrets;
 mod server;
 mod settings;
 pub mod store;
+mod update;
 
 pub use methods::{PLATFORM, REFUSED};
 

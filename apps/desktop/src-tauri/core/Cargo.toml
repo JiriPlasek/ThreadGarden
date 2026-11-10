@@ -25,6 +25,8 @@ regex = { version = "1", default-features = false, features = ["std", "unicode-g
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 ring = "0.17"
+# The update check's one HTTPS request to GitHub: Mozilla's roots, compiled in.
+webpki-roots = "1"
 base64 = "0.22"
 
 [dev-dependencies]

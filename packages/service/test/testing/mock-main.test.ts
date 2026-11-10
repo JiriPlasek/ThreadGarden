@@ -778,6 +778,11 @@ describe('mock service MOCK_PHONE (phone plan, Task 11)', () => {
       expect(await c.call('places.counts', {})).toMatchObject({ needsYou: 0, running: 0, all: 0 });
       expect(await c.call<{ windows: unknown[] }>('usage.get', {})).toMatchObject({ windows: [] });
       expect(await c.call('system.status', {})).toMatchObject({ claude: { found: false } });
+      // The update check, with the release's APK as the core gives it.
+      const latest = await c.call<{ version: string; url: string }>('update.latest', {});
+      expect(latest.url).toBe(
+        `https://github.com/JiriPlasek/ThreadGarden/releases/download/v${latest.version}/threadgarden-${latest.version}.apk`,
+      );
 
       // What the core refuses, the mock refuses: every method of the core's contract table
       // (it changes as the core learns more, so the test reads it too, never a copy).

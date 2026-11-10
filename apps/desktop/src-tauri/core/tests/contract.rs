@@ -94,6 +94,8 @@ fn cases() -> Vec<(&'static str, Value)> {
             json!({ "machineId": "m1", "revoke": true }),
         ),
         ("power.list", json!({})),
+        // Somewhere that refuses at once (never GitHub from a test): the error the screens ignore.
+        ("update.latest", json!({})),
         (
             "alerts.setActive",
             json!({ "machineId": "m1", "sessionId": "s1" }),
@@ -119,6 +121,8 @@ fn steady(method: &str, mut result: Value) -> Value {
 
 /// The fixture files, by name, as the core answers now.
 fn answers() -> BTreeMap<String, Value> {
+    // SAFETY: this binary's only test, before the core (and its threads) start.
+    unsafe { std::env::set_var("THREADGARDEN_RELEASES_URL", "https://127.0.0.1:1/latest") };
     let dir = tempfile::tempdir().unwrap();
     let core = core(dir.path());
     let answered: BTreeSet<&str> = core.answered_methods().into_iter().collect();
