@@ -14,6 +14,7 @@ use serde_json::{Value, json};
 use crate::alerts::Alerts;
 use crate::methods::{LocalEvents, MethodError, Router, blocking, string_param};
 use crate::pairing;
+use crate::power::Power;
 use crate::relay::{self, Relays};
 use crate::secrets::Secrets;
 use crate::store::{Store, StoredMachine};
@@ -114,6 +115,8 @@ pub struct Machines {
     relays: Arc<Relays>,
     /// The machines' alert links: started on pairing, moved and stopped with them.
     alerts: Arc<Alerts>,
+    /// The machines' plugs: forgotten with them.
+    power: Power,
     /// All of pairing, closing included (`Timing::pairing`).
     pairing_timeout: Duration,
     /// The machines whose token `Secrets` holds, kept here so listing never
@@ -138,6 +141,7 @@ impl Machines {
         events: LocalEvents,
         relays: Arc<Relays>,
         alerts: Arc<Alerts>,
+        power: Power,
         pairing_timeout: Duration,
     ) -> Self {
         let unlocked = store
@@ -152,6 +156,7 @@ impl Machines {
             events,
             relays,
             alerts,
+            power,
             pairing_timeout,
             unlocked: Arc::new(Mutex::new(unlocked)),
             saving: Arc::new(Mutex::new(())),
@@ -353,6 +358,8 @@ impl Machines {
                 }
                 return Err(MethodError::internal());
             }
+            // Its plug goes with it, the password too.
+            me.power.forget(&machine_id);
             Ok(Some((machine, token)))
         })
         .await?;
@@ -422,6 +429,7 @@ mod tests {
         let store = Arc::new(Store::open(dir.path()).unwrap());
         let secrets = Arc::new(MemorySecrets::default());
         let alerts = crate::alerts::for_tests(dir.path());
+        let store_for_power = store.clone();
         (
             dir,
             Machines::new(
@@ -435,6 +443,7 @@ mod tests {
                     tokio::sync::broadcast::channel(1).0,
                 )),
                 alerts,
+                Power::new(store_for_power, secrets.clone(), Duration::ZERO),
                 Duration::from_secs(10),
             ),
             secrets,
@@ -468,6 +477,7 @@ mod tests {
             LocalEvents::default(),
             m.relays.clone(),
             m.alerts.clone(),
+            m.power.clone(),
             Duration::from_secs(10),
         );
         assert_eq!(

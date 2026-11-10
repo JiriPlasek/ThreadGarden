@@ -94,6 +94,21 @@ fn cases() -> Vec<(&'static str, Value)> {
             json!({ "machineId": "m1", "revoke": true }),
         ),
         ("power.list", json!({})),
+        // No machine here, so no plug: the errors the screens show (Turn on itself is in `power.rs`).
+        (
+            "power.configure",
+            json!({ "machineId": "m1", "config": { "kind": "tasmota-zigbee", "address": "192.0.2.20", "device": "DeskPlug" }, "password": "p" }),
+        ),
+        ("power.reading", json!({ "machineId": "m1" })),
+        ("power.turnOn", json!({ "machineId": "m1" })),
+        (
+            "power.unlock",
+            json!({ "machineId": "m1", "password": "p" }),
+        ),
+        (
+            "power.noteMeasurement",
+            json!({ "machineId": "m1", "kind": "running", "watts": 48.5 }),
+        ),
         (
             "alerts.setActive",
             json!({ "machineId": "m1", "sessionId": "s1" }),
