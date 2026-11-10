@@ -138,8 +138,10 @@ fi
 "$tools/apksigner" verify "$signed"
 
 # The owner's own certificate, when its fingerprint is known (docs/releasing.md).
+# The first signer's line: "Signer #1 certificate SHA-256 digest: …" up to
+# build-tools 36, "V3.0 Signer: certificate SHA-256 digest: …" from 37.
 signer=$("$tools/apksigner" verify --print-certs "$signed" |
-  awk -F': ' '/^Signer #1 certificate SHA-256 digest/ { print $2 }' | tr -d ': ' | tr 'A-F' 'a-f')
+  awk '/certificate SHA-256 digest: / { print $NF; exit }' | tr -d ':' | tr 'A-F' 'a-f')
 if [ -n "${ANDROID_CERT_SHA256:-}" ]; then
   want=$(printf '%s' "$ANDROID_CERT_SHA256" | tr -d ': ' | tr 'A-F' 'a-f')
   if [ "$signer" != "$want" ]; then

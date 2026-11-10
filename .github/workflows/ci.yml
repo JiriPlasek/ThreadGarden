@@ -172,6 +172,9 @@ jobs:
           java-version: 17
           cache: gradle
       - uses: android-actions/setup-android@v3
+        with:
+          # Named: the default list asks for `tools`, which the runner's sdkmanager no longer has.
+          packages: platform-tools
       # NDK r27d (27.3.13750724), the one the app is built with locally.
       - uses: nttld/setup-ndk@v1
         id: ndk
