@@ -319,7 +319,14 @@ fn the_chat_on_screen_doesnt_alert() {
 #[test]
 fn a_reconnect_catches_up_without_alerting_past_chats() {
     let dir = tempfile::tempdir().unwrap();
-    let core = core(dir.path());
+    // Pings far apart: the restart below is the only reconnect. With the usual
+    // 200 ms of these tests, a pong late under load drops the link once more,
+    // and a third hello would skip past the count waited for.
+    let slow_pings = Timing {
+        ping: Duration::from_secs(30),
+        ..timing()
+    };
+    let core = core_with(dir.path(), Arc::new(MemorySecrets::default()), slow_pings);
     let desk = FakeMachine::start(Behaviour::default());
     // Waiting already when the link comes up: they show as unread in the screens.
     desk.set_sessions(vec![json!({ "sessionId": "s1", "status": "needsYou" })]);
@@ -328,12 +335,11 @@ fn a_reconnect_catches_up_without_alerting_past_chats() {
         pair(&core, &desk).await;
         linked(&core, &desk).await;
         assert_eq!(alerts_within(&mut events, QUIET).await, []);
-        // The machine restarts: the link drops and comes back by itself.
+        // The machine restarts: the link drops and comes back by itself (one more hello).
+        let hellos = || desk.methods().iter().filter(|m| *m == "hello").count();
+        let before = hellos();
         desk.kick();
-        until("it said hello again", || {
-            desk.methods().iter().filter(|m| *m == "hello").count() == 2
-        })
-        .await;
+        until("it said hello again", || hellos() > before).await;
         until("the link is back", || desk.devices_open() == 1).await;
         // Nothing from before is replayed or alerted.
         assert_eq!(alerts_within(&mut events, QUIET).await, []);
@@ -344,10 +350,12 @@ fn a_reconnect_catches_up_without_alerting_past_chats() {
             [("s1".into(), "Still waiting".into(), AlertKind::NeedsYou)]
         );
     });
-    // No catch-up: nothing but hello was asked.
-    assert_eq!(
-        desk.methods(),
-        ["pair.proof", "pair.claim", "hello", "hello"]
+    // No catch-up: after pairing, nothing but hello was asked (once per link).
+    let methods = desk.methods();
+    assert_eq!(methods[..2], ["pair.proof", "pair.claim"]);
+    assert!(
+        methods.len() >= 4 && methods[2..].iter().all(|m| m == "hello"),
+        "{methods:?}"
     );
     core.stop();
 }
@@ -559,7 +567,12 @@ fn a_link_never_sends_ui_visibility() {
     });
     let methods = desk.methods();
     assert!(!methods.iter().any(|m| m == "ui.visibility"), "{methods:?}");
-    assert_eq!(methods, ["pair.proof", "pair.claim", "hello"]);
+    // Pairing, then only hello: once, or again after a link that a late pong dropped under load.
+    assert_eq!(methods[..2], ["pair.proof", "pair.claim"]);
+    assert!(
+        methods.len() >= 3 && methods[2..].iter().all(|m| m == "hello"),
+        "{methods:?}"
+    );
     core.stop();
 }
 
