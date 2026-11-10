@@ -95,6 +95,9 @@ export type PollerOptions = {
   onError?: (err: unknown) => void;
   setTimeout?: (fn: () => void, ms: number) => NodeJS.Timeout;
   clearTimeout?: (t: NodeJS.Timeout) => void;
+  /** Independent read-only Codex runtime source. Failure never hides Claude sessions. */
+  codex?: () => Promise<ExternalSession[]>;
+  codexEnabled?: () => boolean;
 };
 
 export class ExternalPoller {
@@ -105,6 +108,7 @@ export class ExternalPoller {
   private started = false;
   private timer: NodeJS.Timeout | undefined;
   private inflight: Promise<void> | undefined;
+  private sourceAvailable = { claude: false, codex: false };
   private readonly setTimer: NonNullable<PollerOptions['setTimeout']>;
   private readonly clearTimer: NonNullable<PollerOptions['clearTimeout']>;
 
@@ -143,6 +147,9 @@ export class ExternalPoller {
   snapshot(): ExternalSession[] {
     return this.list.slice();
   }
+  providerAvailable(runtime: 'claude' | 'codex'): boolean {
+    return this.sourceAvailable[runtime];
+  }
 
   /**
    * The external sessions right now, or null when `claude agents` is unusable.
@@ -150,13 +157,24 @@ export class ExternalPoller {
    * (the `externalPolling` setting only governs polling and display), without
    * touching the polled snapshot in that case. Never rejects.
    */
-  async current(): Promise<ExternalSession[] | null> {
+  async current(provider?: 'claude' | 'codex'): Promise<ExternalSession[] | null> {
     try {
-      if (this.opts.enabled?.() ?? true) {
+      if ((this.opts.enabled?.() ?? true) || (this.opts.codexEnabled?.() ?? false)) {
         await this.refresh();
-        return this.available ? this.snapshot() : null;
+        return (provider ? this.sourceAvailable[provider] : this.available)
+          ? this.snapshot().filter(
+              (e) => !provider || (e.kind === 'codex' ? 'codex' : 'claude') === provider,
+            )
+          : null;
       }
-      return await this.fetch();
+      const result = await this.fetchSources(true, true);
+      return (
+        provider ? result.available[provider] : result.available.claude || result.available.codex
+      )
+        ? result.list.filter(
+            (e) => !provider || (e.kind === 'codex' ? 'codex' : 'claude') === provider,
+          )
+        : null;
     } catch (err) {
       this.report(err);
       return null;
@@ -211,18 +229,39 @@ export class ExternalPoller {
     return parseAgents(output).filter((e) => e.sessionId === undefined || !own.has(e.sessionId));
   }
 
+  private async fetchSources(
+    claude: boolean,
+    codex: boolean,
+  ): Promise<{ list: ExternalSession[]; available: { claude: boolean; codex: boolean } }> {
+    const results = await Promise.allSettled([
+      claude ? this.fetch() : Promise.reject(new Error('Claude polling disabled')),
+      codex && this.opts.codex
+        ? this.opts.codex()
+        : Promise.reject(new Error('Codex polling disabled')),
+    ]);
+    const own = this.ownIds();
+    return {
+      list: results
+        .flatMap((result) => (result.status === 'fulfilled' ? result.value : []))
+        .filter((e) => !e.sessionId || !own.has(e.sessionId)),
+      available: {
+        claude: results[0]!.status === 'fulfilled',
+        codex: results[1]!.status === 'fulfilled',
+      },
+    };
+  }
+
   private async poll(): Promise<void> {
     try {
       let list: ExternalSession[] = [];
       let ok = false;
-      if (this.opts.enabled?.() ?? true) {
-        try {
-          list = await this.fetch();
-          ok = true;
-        } catch {
-          // Missing, failing or disabled agent view: hide the feature, keep polling.
-        }
-      }
+      const result = await this.fetchSources(
+        this.opts.enabled?.() ?? true,
+        this.opts.codexEnabled?.() ?? false,
+      );
+      list = result.list;
+      this.sourceAvailable = result.available;
+      ok = result.available.claude || result.available.codex;
       this.available = ok;
       this.list = list;
       const key = JSON.stringify([ok, list]);

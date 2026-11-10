@@ -293,6 +293,33 @@ describe('tool rows', () => {
 });
 
 describe('chat view', () => {
+  it('implements a Codex plan through native permission controls before sending the instruction', async () => {
+    const sessionId = 'codex-00000000-0000-4000-8000-000000000001';
+    const { server, app, context } = await setup((server) => {
+      server.handlers['chat.open'] = () => ({
+        summary: summary(sessionId, { live: true, status: 'idle' }),
+        header: { runtime: 'codex', model: 'codex:test-model', permissionMode: 'plan' },
+        items: [text('plan', 'Review this plan')],
+        hasMore: false,
+        seq: 1,
+      });
+      server.handlers['chat.setPermissionMode'] = () => ({});
+      server.handlers['chat.send'] = () => ({ queued: false });
+    });
+    await app.chats.open(sessionId);
+    render(ChatView, { context, props: { ref: { machineId: LOCAL, sessionId } } });
+    expect(await screen.findByText('Context not reported')).toBeTruthy();
+    await userEvent.click(await screen.findByRole('button', { name: 'Implement plan' }));
+    await waitFor(() => expect(server.calls('chat.send')).toHaveLength(1));
+    expect(server.calls('chat.setPermissionMode')[0]?.params).toEqual({
+      sessionId,
+      value: 'acceptEdits',
+    });
+    expect(server.calls('chat.send')[0]?.params).toMatchObject({
+      sessionId,
+      text: 'Implement the plan.',
+    });
+  });
   const streamingSetup = () =>
     setup((server) => {
       server.handlers['chat.open'] = (p) => ({

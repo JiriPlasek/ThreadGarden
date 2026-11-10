@@ -1,3 +1,4 @@
+import { newChatSessionId } from './refs';
 /**
  * What a paired machine's scope asks while the machine is away (away machine
  * spec): its lists and its chats' last messages come from this device's copy,
@@ -219,7 +220,7 @@ export const copyApi = (
 
   const create = async (p: Params<'chat.create'>): Promise<Result<'chat.create'>> => {
     // The chat's id is chosen here, so the machine makes it under the same one.
-    const sessionId = p.sessionId ?? crypto.randomUUID();
+    const sessionId = p.sessionId ?? newChatSessionId(p.model);
     await mayQueue();
     await local.request(
       'away.queue',

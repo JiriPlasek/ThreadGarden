@@ -77,6 +77,7 @@
   const scope = useScope();
   const { chats, interaction, scheduled } = scope;
   const sessionId = $derived(ref.sessionId);
+  const agentName = $derived(sessionId.startsWith('codex-') ? 'Codex' : 'Claude');
   /** A chat just created from the new-chat dialog starts with its composer focused. */
   const focusComposer = untrack(() => interaction.takeComposerFocus(sessionId));
   const chat = $derived(chats.get(sessionId));
@@ -253,6 +254,9 @@
   };
   // For the request card docked in the composer's place (the list sets its own).
   setChatActions({
+    get agentName() {
+      return agentName;
+    },
     get requests() {
       return readOnly ? undefined : requests;
     },
@@ -272,6 +276,20 @@
         sendError = err instanceof Error ? err.message : String(err);
       }
       return false;
+    }
+  };
+  let implementingPlan = $state(false);
+  const implementPlan = async (): Promise<void> => {
+    if (implementingPlan) return;
+    implementingPlan = true;
+    sendError = null;
+    try {
+      await chats.setPermissionMode(sessionId, 'acceptEdits');
+      await deliver('Implement the plan.', []);
+    } catch (error) {
+      sendError = error instanceof Error ? error.message : String(error);
+    } finally {
+      implementingPlan = false;
     }
   };
 
@@ -377,7 +395,7 @@
    */
   const refusal = $derived(scope.usage.refusal(sessionId));
   /** The reset the "When the limit resets" preset uses. */
-  const resetAt = $derived(scope.usage.limitResetAt ?? refusal?.resetsAt);
+  const resetAt = $derived(scope.usage.limitResetAtFor(sessionId) ?? refusal?.resetsAt);
 
   const schedule = async (text: string, images: ImageRef[], when: SendWhen): Promise<boolean> => {
     sendError = null;
@@ -721,10 +739,11 @@
           <MessageList
             bind:this={list}
             items={chat.items}
+            {agentName}
             hasMore={chat.hasMore}
             loadingOlder={chat.loadingOlder}
             onLoadOlder={() => void chats.loadOlder(sessionId)}
-            onFork={readOnly ? undefined : fork}
+            onFork={readOnly || sessionId.startsWith('codex-') ? undefined : fork}
             requests={readOnly ? undefined : requests}
             requestsDocked={!readOnly}
             memory={chat.view}
@@ -757,10 +776,10 @@
               <div
                 class="border-destructive/40 bg-destructive/5 flex items-center gap-2 rounded-md border px-3 py-1.5 text-xs"
                 role="alert"
-                aria-label="Claude's first note didn't send"
+                aria-label="{agentName}'s first note didn't send"
               >
                 <p class="text-destructive min-w-0 flex-1">
-                  Claude's first note on {machineName} didn't send: {pendingNote.problem}
+                  {agentName}'s first note on {machineName} didn't send: {pendingNote.problem}
                 </p>
                 <button
                   type="button"
@@ -811,6 +830,20 @@
                 onDismiss={() => (dismissedSetup = setupItem.id)}
               />
             {/if}
+            {#if agentName === 'Codex' && chat.ownedLive && chat.status === 'idle' && chat.header.permissionMode === 'plan'}
+              <div
+                class="bg-muted flex items-center justify-between gap-2 rounded-md px-3 py-2 text-xs"
+                role="note"
+              >
+                <span>Plan mode. Review the plan before allowing edits.</span>
+                <button
+                  type="button"
+                  class="font-medium underline"
+                  disabled={implementingPlan}
+                  onclick={() => void implementPlan()}>Implement plan</button
+                >
+              </div>
+            {/if}
             {#if pending.length > 0 && readOnly}
               <!-- Its process ended with the machine: the answer goes out as a message. -->
               <div
@@ -819,8 +852,8 @@
               >
                 <HandIcon class="size-4 shrink-0" aria-hidden="true" />
                 <span class="flex-1"
-                  >Claude asked this before {machineName} went off. Type your answer below; it's sent
-                  as your next message.</span
+                  >{agentName} asked this before {machineName} went off. Type your answer below; it's
+                  sent as your next message.</span
                 >
               </div>
             {/if}
@@ -953,9 +986,9 @@
                     <button
                       type="button"
                       class="hover:bg-muted flex h-7 items-center gap-1 rounded-md border px-2 text-xs"
-                      title="Stop Claude · {formatCombos(shortcut('composer-stop').combos).join(
-                        ' or ',
-                      )}"
+                      title="Stop {agentName} · {formatCombos(
+                        shortcut('composer-stop').combos,
+                      ).join(' or ')}"
                       aria-keyshortcuts={ariaKeyShortcuts(shortcut('composer-stop').combos)}
                       onclick={interrupt}
                     >
@@ -973,6 +1006,8 @@
                 draftKey={sessionId}
                 cwd={chat.summary?.cwd ?? ''}
                 commandScope={{ sessionId }}
+                {agentName}
+                placeholder={`Message ${agentName}...`}
                 {working}
                 queued={chat.queuedMessages}
                 onSubmit={submit}

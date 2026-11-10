@@ -115,6 +115,8 @@ export const PlaceSchema = z.discriminatedUnion('kind', [
 export type Place = z.infer<typeof PlaceSchema>;
 
 export const ChatHeaderInfoSchema = z.object({
+  runtime: z.enum(['claude', 'codex']).optional(),
+  runtimeVersion: z.string().optional(),
   model: z.string().optional(),
   effort: z.string().optional(),
   permissionMode: z.string().optional(),
@@ -176,6 +178,8 @@ export const sanitizeFontFamily = (raw: string): string | null => {
 
 const settingsFields = {
   claudePath: z.string().nullable(),
+  codexPath: z.string().nullable(),
+  codexHome: z.string().nullable(),
   idleReclaimMinutes: z.number(),
   /** v1.4 power: a headless machine shuts down after this many idle minutes; null is never. */
   idleShutdownMinutes: z.number().int().min(5).max(1440).nullable(),
@@ -212,6 +216,8 @@ const settingsFields = {
 
 export const SettingsSchema = z.object({
   claudePath: settingsFields.claudePath.default(null),
+  codexPath: settingsFields.codexPath.optional(),
+  codexHome: settingsFields.codexHome.optional(),
   idleReclaimMinutes: settingsFields.idleReclaimMinutes.default(15),
   idleShutdownMinutes: settingsFields.idleShutdownMinutes.default(60),
   notifications: settingsFields.notifications.default(true),

@@ -36,6 +36,7 @@
     const busy = status === 'working' || status === 'needsYou';
     const warning = endSessionWarning({
       busy,
+      agentName: t.sessionId.startsWith('codex-') ? 'Codex' : 'Claude',
       tasks: loaded ? tasks.length : (t.runningTasks ?? 0),
       listed: loaded,
       after: ARCHIVE_AFTER,
@@ -44,7 +45,7 @@
       tasks,
       description:
         warning ??
-        `Threadgarden is running “${t.title}”. Ending stops its Claude Code process; ${ARCHIVE_AFTER}`,
+        `Threadgarden is running “${t.title}”. Ending stops its ${t.sessionId.startsWith('codex-') ? 'Codex' : 'Claude Code'} process; ${ARCHIVE_AFTER}`,
     };
   });
 

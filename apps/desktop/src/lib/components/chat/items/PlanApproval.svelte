@@ -15,7 +15,9 @@
    */
   let { item }: { item: RequestItem } = $props();
 
-  const requests = chatActions().requests;
+  const actions = chatActions();
+  const agentName = $derived(actions.agentName ?? 'Claude');
+  const requests = actions.requests;
   const plan = $derived(planText(item.input));
 
   let feedback = $state('');
@@ -60,7 +62,7 @@
   >
     <div class="flex items-center gap-2 text-amber-900 dark:text-amber-200">
       <ClipboardListIcon class="size-4 shrink-0" aria-hidden="true" />
-      <span class="font-medium">Claude has a plan</span>
+      <span class="font-medium">{agentName} has a plan</span>
     </div>
     <div class="bg-background mt-2 max-h-[28rem] overflow-auto rounded-md border px-3 py-2">
       {#if plan}

@@ -6,8 +6,8 @@
  * names of the chats Threadgarden starts (v1.2 C1, `chat/titles.ts`).
  *
  * Validation that the protocol schema leaves open happens here: permission
- * modes are limited to what Threadgarden offers (never `dontAsk`), effort to
- * the SDK's levels, models to non-empty names.
+ * modes are limited to what Threadgarden offers (full access requires an explicit
+ * user choice), effort to the SDK's levels, models to non-empty names.
  *
  * Errors the UI acts on carry a code: `NOT_FOUND`, `NOT_LIVE`, `GAP` (the
  * client's seq is not replayable → `chat.open` again), `CLAUDE_MISSING`,
@@ -46,8 +46,10 @@ import type {
 } from '../../sdk/adapter.js';
 import type { ClaudeFound, ClaudeProblem } from '../../sdk/claude-path.js';
 import { ServiceError, type Router } from '../router.js';
+import { isCodexModel, isCodexSession } from '../../sdk/providers.js';
+import { CLAUDE_EFFORT_LEVELS } from '../../sdk/adapter.js';
 
-/** Permission modes Threadgarden offers. */
+/** Permission modes Threadgarden offers; each runtime validates its own subset. */
 export const PERMISSION_MODES: readonly PermissionMode[] = [
   'default',
   'acceptEdits',
@@ -55,7 +57,7 @@ export const PERMISSION_MODES: readonly PermissionMode[] = [
   'auto',
   'bypassPermissions',
 ];
-export const EFFORT_LEVELS: readonly Effort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
+export const EFFORT_LEVELS: readonly Effort[] = CLAUDE_EFFORT_LEVELS;
 
 /**
  * Approximate budget (characters of item text) of the normalized-history
@@ -164,9 +166,9 @@ const permissionMode = (v: string | undefined): PermissionMode | undefined => {
   return v as PermissionMode;
 };
 
-const effort = (v: string | undefined): Effort | undefined => {
+const effort = (v: string | undefined, codex = false): Effort | undefined => {
   if (v === undefined) return undefined;
-  if (!(EFFORT_LEVELS as readonly string[]).includes(v)) {
+  if (!v.trim() || (!codex && !EFFORT_LEVELS.includes(v))) {
     throw new ServiceError(
       'INVALID_PARAMS',
       `Unsupported effort "${v}" (one of ${EFFORT_LEVELS.join(', ')})`,
@@ -208,8 +210,8 @@ export type ChatHandlers = {
     text: string;
     images?: ImageRef[] | undefined;
   }) => Promise<{ queued: boolean }>;
-  /** Throws `CLAUDE_MISSING` and the like when a Claude Code process may not be started. */
-  requireRunnable: () => Promise<void>;
+  /** Checks the selected model/session's runtime before starting it. */
+  requireRunnable: (selection?: string) => Promise<void>;
   /**
    * Ends the host's session of the chat, if any (its process closes), and
    * drops its cached view, so the next read starts afresh (a move).
@@ -274,8 +276,21 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
     }
   };
 
-  /** A Claude Code process may be started: `claude` is found and the auth policy is met. */
-  const requireRunnable = async (): Promise<void> => {
+  /** The selected runtime is installed and its authentication policy is met. */
+  const requireRunnable = async (selection?: string): Promise<void> => {
+    if (isCodexModel(selection) || (selection !== undefined && isCodexSession(selection))) {
+      if (!adapter.requireCodex)
+        throw new ServiceError(
+          'CODEX_MISSING',
+          'This service does not support Codex. Update Threadgarden.',
+        );
+      try {
+        await adapter.requireCodex();
+      } catch (error) {
+        throw new ServiceError('CODEX_MISSING', errorText(error));
+      }
+      return;
+    }
     if (deps.apiKeyMissing?.()) {
       throw new ServiceError(
         'API_KEY_REQUIRED',
@@ -397,7 +412,10 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
     if (status !== undefined && BUSY.has(status) && history.at(-1)?.kind === 'result') {
       history = history.slice(0, -1);
     }
-    const fallback = historyHeader(sessionId, lastReply);
+    const fallback = {
+      ...historyHeader(sessionId, lastReply),
+      ...(await adapter.getSessionHeader?.(sessionId)),
+    };
     if (!s) return { items: history, seq: host.seqOf(sessionId), header: fallback, tasks: [] };
     const snap = s.snapshot(Number.MAX_SAFE_INTEGER);
     const own = new Set(snap.items.map((i) => i.id));
@@ -459,14 +477,20 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
   };
 
   router.register('chat.create', async (p) => {
+    if (
+      p.sessionId &&
+      p.model !== undefined &&
+      isCodexModel(p.model) !== isCodexSession(p.sessionId)
+    )
+      throw new ServiceError('INVALID_PARAMS', 'The chat id must match its model runtime');
     const choices = {
       ...(p.model === undefined ? {} : { model: model(p.model) }),
       ...(p.permissionMode === undefined
         ? {}
         : { permissionMode: permissionMode(p.permissionMode) }),
-      ...(p.effort === undefined ? {} : { effort: effort(p.effort) }),
+      ...(p.effort === undefined ? {} : { effort: effort(p.effort, isCodexModel(p.model)) }),
     };
-    await requireRunnable();
+    await requireRunnable(p.model ?? p.sessionId);
     // A client that picked the id and retries (its answer was lost) must not start a second
     // chat: a chat this machine knows by any route (live, indexed, moved here) is just returned.
     const known = p.sessionId === undefined ? undefined : knownCwd(p.sessionId);
@@ -538,7 +562,7 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
     const p = { sessionId };
     let s = host.get(p.sessionId);
     if (!s?.live) {
-      await requireRunnable();
+      await requireRunnable(p.sessionId);
       const history = historyOf(p.sessionId);
       // A chat moved here runs in its store row's folder, wherever an earlier process ran.
       const cwd =
@@ -622,7 +646,7 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
   });
 
   router.register('chat.setEffort', async (p) => {
-    const value = effort(p.value)!;
+    const value = effort(p.value, isCodexSession(p.sessionId))!;
     await requireLive(p.sessionId).setEffort(value);
     return {};
   });
@@ -684,12 +708,14 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
    * (and overall) is remembered for chats without one (new or history chats).
    */
   router.register('chat.commands', async (p) => {
+    if (p.sessionId && isCodexSession(p.sessionId)) return [];
     const cwd =
       p.cwd ??
       (p.sessionId === undefined
         ? undefined
         : (host.get(p.sessionId)?.cwd ?? db.getSession(p.sessionId)?.cwd ?? undefined));
     const s = liveFor(p.sessionId, cwd);
+    if (s && isCodexSession(s.sessionId)) return [];
     if (s) {
       try {
         const list = (await s.supportedCommands()).map(toCommand);
@@ -706,14 +732,25 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
   router.register('chat.models', async (p) => {
     const s =
       liveFor(p.sessionId, p.cwd) ?? liveFor(undefined, host.list().find((c) => c.live)?.cwd);
-    if (s) {
+    if (p.sessionId && isCodexSession(p.sessionId) && s?.sessionId === p.sessionId) {
+      try {
+        return (await s.supportedModels()).map(toModel);
+      } catch (error) {
+        deps.onError(error, 'Codex models');
+      }
+    }
+    if (s && !isCodexSession(s.sessionId)) {
       try {
         lastModels = (await s.supportedModels()).map(toModel);
       } catch (err) {
         deps.onError(err, `supportedModels (session ${s.sessionId})`);
       }
     }
-    return lastModels ?? [];
+    // A conversation keeps its runtime. A new-chat picker includes both providers.
+    if (p.sessionId && !isCodexSession(p.sessionId)) return lastModels ?? [];
+    const codex = adapter.models ? (await adapter.models()).map(toModel) : [];
+    if (p.sessionId) return codex;
+    return [...(lastModels ?? []), ...codex];
   });
 
   return { send, requireRunnable, release };

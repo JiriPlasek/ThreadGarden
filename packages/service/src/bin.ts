@@ -11,6 +11,7 @@
  * CLI commands (`cli.ts`).
  */
 import os from 'node:os';
+import path from 'node:path';
 import { parseArgs, runCli, type Command } from './cli.js';
 import { resolveClaudeConfigDir, resolveDataDirs } from './config.js';
 import { installCrashGuards } from './crash-guard.js';
@@ -18,6 +19,8 @@ import { createLogger } from './logger.js';
 import { startService } from './main.js';
 import { findInstalledClaude } from './sdk/claude-path.js';
 import { RealAdapter } from './sdk/real-adapter.js';
+import { CodexAdapter } from './sdk/codex-adapter.js';
+import { MultiAdapter } from './sdk/multi-adapter.js';
 
 const serve = (command: Extract<Command, { kind: 'serve' }>): void => {
   const home = os.homedir();
@@ -39,7 +42,7 @@ const serve = (command: Extract<Command, { kind: 'serve' }>): void => {
     // Spec v1.3 §9: pahub's database is copied over once.
     legacyDataDir: legacyDir,
     claudeConfigDir: resolveClaudeConfigDir(process.env, home),
-    adapter: new RealAdapter(),
+    adapter: new MultiAdapter(new RealAdapter(), new CodexAdapter(path.join(dataDir, 'codex'))),
     locateClaude: findInstalledClaude,
     logger,
     // Spec §5.5. `scripts/build.mjs` bakes the build-time value into the bundle,

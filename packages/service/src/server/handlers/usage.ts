@@ -12,14 +12,23 @@ export type UsageHandlerDeps = {
   scheduled: ScheduledSends;
   /** The usage reading of a running chat, when one runs (never starts a process). */
   reader: () => (() => Promise<unknown>) | undefined;
+  codexUsage?: UsageTracker;
+  codexReader?: () => (() => Promise<unknown>) | undefined;
 };
 
 export const registerUsageHandlers = (router: Router, deps: UsageHandlerDeps): void => {
   const { usage, scheduled } = deps;
 
   router.register('usage.get', async (p) => {
-    if (p.refresh === true) await usage.refresh(deps.reader());
-    return usage.state();
+    if (p.refresh === true)
+      await Promise.all([
+        usage.refresh(deps.reader()),
+        deps.codexUsage?.refresh(deps.codexReader?.()),
+      ]);
+    return {
+      ...usage.state(),
+      ...(deps.codexUsage ? { providers: { codex: deps.codexUsage.state() } } : {}),
+    };
   });
 
   router.register('scheduled.create', async (p) => scheduled.create(p));

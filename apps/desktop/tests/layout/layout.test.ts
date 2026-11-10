@@ -53,6 +53,25 @@ describe('places column', () => {
 });
 
 describe('chat list', () => {
+  it.each([[['claude']], [['codex']], [['claude', 'codex']]])(
+    'shows provider marks only for a mixed list: %j',
+    async (providers) => {
+      const items = providers.map((provider, i) =>
+        summary(
+          provider === 'codex' ? `codex-00000000-0000-4000-8000-00000000000${i}` : `claude-${i}`,
+          { title: `chat ${i}` },
+        ),
+      );
+      const { context } = await setup((server) => {
+        server.handlers['sessions.list'] = () => ({ items });
+      });
+      render(ChatList, { context });
+      await waitFor(() => expect(screen.getAllByRole('option')).toHaveLength(items.length));
+      const marks = screen.queryAllByRole('img', { name: /^(Claude|Codex \(ChatGPT\))$/ });
+      expect(marks).toHaveLength(providers.length === 2 ? 2 : 0);
+    },
+  );
+
   it('chat list renders 1,000 rows with fewer than 60 DOM rows', async () => {
     const many = Array.from({ length: 1000 }, (_, i) =>
       summary(`s${i}`, { title: `chat ${i}`, lastActivity: 1_000_000 - i }),

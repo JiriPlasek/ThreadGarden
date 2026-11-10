@@ -35,6 +35,20 @@ const openDialog = async (env: Awaited<ReturnType<typeof withSettings>>) => {
 };
 
 describe('settings dialog', () => {
+  it('saves the Codex executable and history home independently from Claude settings', async () => {
+    const env = await withSettings();
+    const dialog = await openDialog(env);
+    await userEvent.type(within(dialog).getByLabelText('Codex executable'), 'C:/tools/codex.exe');
+    await userEvent.type(within(dialog).getByLabelText('Codex data folder'), 'C:/profiles/codex');
+    await userEvent.click(within(dialog).getByRole('button', { name: /^save$/i }));
+    await waitFor(() =>
+      expect(env.server.calls('settings.set')[0]?.params).toEqual({
+        codexPath: 'C:/tools/codex.exe',
+        codexHome: 'C:/profiles/codex',
+      }),
+    );
+    expect(env.current().claudePath).toBeNull();
+  });
   afterEach(async () => {
     await apiKey.clear();
     setAutostart.mockClear();
@@ -136,7 +150,7 @@ describe('settings dialog', () => {
     const env = await withSettings();
     const dialog = await openDialog(env);
     const toggle = within(dialog).getByLabelText(
-      /name new chats automatically \(uses a small model\)/i,
+      /name new chats automatically \(Claude only; uses a small model\)/i,
     ) as HTMLInputElement;
     expect(toggle.checked).toBe(true);
     // Ruling R33: the toggle says when titles are skipped.

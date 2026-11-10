@@ -57,6 +57,17 @@ const userMessage = (text: string): SDKUserMessage => ({
 });
 
 describe('RealAdapter.start', () => {
+  it('makes full access available to the picker but enters it only when explicitly selected', () => {
+    const { adapter, calls } = setup();
+    adapter.start(startOptions);
+    adapter.start({ ...startOptions, permissionMode: 'bypassPermissions' });
+    expect(calls[0]!.options.allowDangerouslySkipPermissions).toBe(true);
+    expect(calls[0]!.options.permissionMode).toBeUndefined();
+    expect(calls[1]!.options).toMatchObject({
+      permissionMode: 'bypassPermissions',
+      allowDangerouslySkipPermissions: true,
+    });
+  });
   it('calls query with buildQueryOptions and a streaming input queue', async () => {
     const { calls, adapter } = setup();
     const s = adapter.start(startOptions);

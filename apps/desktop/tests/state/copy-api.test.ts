@@ -200,6 +200,21 @@ describe('the copy API of a machine that is away', () => {
     });
   });
 
+  it('keeps a Codex runtime id when creating a chat on an offline machine', async () => {
+    const { api, local } = setup();
+    const result = await api.request('chat.create', {
+      cwd: '/work/alpha',
+      text: 'Use Codex',
+      model: 'codex:test-model',
+    });
+    expect(result.sessionId).toMatch(/^codex-[0-9a-f-]{36}$/);
+    expect(local.calls.find((call) => call.method === 'away.queue')?.params).toMatchObject({
+      sessionId: result.sessionId,
+      model: 'codex:test-model',
+      kind: 'create',
+    });
+  });
+
   it('queues a message for a chat, and a new chat under the id it was given', async () => {
     const { api, local } = setup();
     expect(await api.request('chat.send', { sessionId: 'old', text: 'Postgres' })).toEqual({

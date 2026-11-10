@@ -16,6 +16,7 @@
  */
 import type { ChatStatus, EventMsg, Settings } from '@threadgarden/protocol';
 import type { AgentAdapter, SessionStore } from '../sdk/adapter.js';
+import { isCodexSession } from '../sdk/providers.js';
 import { EventLog, type ChatEvent } from './event-log.js';
 import {
   LiveSession,
@@ -296,8 +297,9 @@ export class SessionHost {
    * v1.3 B: the usage reading of some live chat that offers one (the account
    * is the same for all); undefined when none runs. Never starts a process.
    */
-  usageReader(): (() => Promise<unknown>) | undefined {
+  usageReader(runtime: 'claude' | 'codex' = 'claude'): (() => Promise<unknown>) | undefined {
     for (const s of this.sessions.values()) {
+      if (isCodexSession(s.sessionId) !== (runtime === 'codex')) continue;
       const read = s.live ? s.readUsage() : undefined;
       if (read) return read;
     }

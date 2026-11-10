@@ -249,7 +249,15 @@ export const methods = {
       permissionMode: z.string().optional(),
       effort: z.string().optional(),
       /** Protocol 11: the chat's id (uuid), made by the desktop that wrote it while the machine was away. */
-      sessionId: z.string().uuid().optional(),
+      sessionId: z
+        .union([
+          z.string().uuid(),
+          z
+            .string()
+            .startsWith('codex-')
+            .refine((value) => z.string().uuid().safeParse(value.slice(6)).success),
+        ])
+        .optional(),
     }),
     z.object({ sessionId: z.string() }),
   ),
@@ -356,6 +364,16 @@ export const methods = {
   'system.status': def(
     empty,
     z.object({
+      codex: z
+        .object({
+          found: z.boolean(),
+          problem: z.string().optional(),
+          path: z.string().optional(),
+          home: z.string().optional(),
+          historyProblem: z.string().optional(),
+          externalAvailable: z.boolean().optional(),
+        })
+        .optional(),
       claude: z.object({
         found: z.boolean(),
         path: z.string().optional(),
@@ -537,6 +555,7 @@ export const methods = {
       createIn: z.string().min(1).max(4096),
       name: ProjectNameSchema,
       github: z.boolean(),
+      model: z.string().optional(),
     }),
     z.object({ path: z.string(), repo: z.string().nullable(), problem: z.string().nullable() }),
   ),
@@ -549,6 +568,7 @@ export const methods = {
     z.object({
       createIn: z.string().min(1).max(4096),
       repo: z.string().regex(/^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/),
+      model: z.string().optional(),
     }),
     z.discriminatedUnion('status', [
       z.object({ status: z.literal('started'), job: CloneJobSchema }),

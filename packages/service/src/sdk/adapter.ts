@@ -1,13 +1,14 @@
 /**
- * The boundary between Threadgarden and the Claude Agent SDK. Everything else in the
- * service talks to an `AgentAdapter`, so tests can drive sessions with
- * `FakeAdapter` and only `real-adapter.ts` imports SDK runtime code.
+ * Runtime boundary for chats and history. The existing normalized-message contract
+ * is Claude-shaped; Codex translates its thread/turn events at this boundary.
+ * MultiAdapter dispatches by provider, tests use FakeAdapter, and only
+ * real-adapter.ts imports Claude SDK runtime code.
  */
 import type {
   AccountInfo,
   CanUseTool,
   EffortLevel,
-  ModelInfo,
+  ModelInfo as ClaudeModelInfo,
   PermissionMode,
   SDKMessage,
   SDKSessionInfo,
@@ -16,11 +17,12 @@ import type {
   SessionStore,
   SlashCommand,
 } from '@anthropic-ai/claude-agent-sdk';
+import type { Settings, ChatHeaderInfo } from '@threadgarden/protocol';
+import type { ExternalSession } from '../external/poller.js';
 
 export type {
   AccountInfo,
   CanUseTool,
-  ModelInfo,
   Options,
   PermissionMode,
   PermissionResult,
@@ -38,7 +40,18 @@ export type {
   SlashCommand,
 } from '@anthropic-ai/claude-agent-sdk';
 
-export type Effort = EffortLevel;
+/** Reasoning labels are provider-owned (Codex also offers none/minimal and future levels). */
+export type Effort = string;
+export type ModelInfo = Omit<ClaudeModelInfo, 'supportedEffortLevels'> & {
+  supportedEffortLevels?: string[];
+};
+export const CLAUDE_EFFORT_LEVELS: readonly EffortLevel[] = [
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+];
 
 export type StartOptions = {
   cwd: string;
@@ -105,6 +118,8 @@ export interface AgentSession {
   interrupt(): Promise<void>;
   setModel(m?: string): Promise<void>;
   setPermissionMode(m: PermissionMode): Promise<void>;
+  /** Runtimes with a native reasoning control use it instead of a Claude slash command. */
+  setEffort?(effort: Effort): Promise<void>;
   /** Stops one task (SDK `Query.stopTask`); its `stopped` task_notification follows in `messages`. */
   stopTask(taskId: string): Promise<void>;
   supportedCommands(): Promise<SlashCommand[]>;
@@ -120,8 +135,20 @@ export interface AgentSession {
 }
 
 export interface AgentAdapter {
+  configure?(settings: Settings): void;
+  externalSessions?(): Promise<ExternalSession[]>;
+  dispose?(): void;
+  getSessionHeader?(sessionId: string): Promise<ChatHeaderInfo>;
+  codexInfo?(): { path: string; home: string; historyProblem?: string };
+  /** Optional provider catalog, also available before any session is running. */
+  models?(): Promise<ModelInfo[]>;
+  /** Checks an alternative runtime without requiring Claude installation or authentication. */
+  requireCodex?(): Promise<void>;
+  resumeCommand?(sessionId: string): Promise<string | undefined>;
   start(o: StartOptions): AgentSession;
   listSessions(o?: PageOptions & HistoryOptions): Promise<SDKSessionInfo[]>;
+  /** Histories without a filesystem watcher, refreshed separately from watched history. */
+  listPolledSessions?(): Promise<SDKSessionInfo[]>;
   getSessionInfo(id: string, o?: HistoryOptions): Promise<SDKSessionInfo | undefined>;
   getSessionMessages(id: string, o?: PageOptions & HistoryOptions): Promise<SessionMessage[]>;
   forkSession(id: string, o: { upToMessageId?: string }): Promise<{ sessionId: string }>;

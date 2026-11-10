@@ -124,6 +124,76 @@ const streamedReply = (adapter: FakeAdapter, text: string) => {
 };
 
 describe('chat handlers', () => {
+  it('discovers Codex models cold and starts without Claude or an Anthropic key', async () => {
+    const codexModels = [
+      {
+        value: 'codex:test-model',
+        displayName: 'Codex Test',
+        description: '',
+        supportedEffortLevels: ['minimal', 'high'],
+      },
+    ];
+    const adapter = Object.assign(new FakeAdapter(), {
+      models: async () => codexModels,
+      requireCodex: vi.fn(async () => {}),
+      resumeCommand: async () => 'codex resume saved-thread',
+    });
+    await start(adapter, {
+      apiKeyOnly: true,
+      claude: { problem: 'missing', detail: 'Claude is not installed' },
+    });
+    expect(await ok('chat.models', { cwd: dir })).toEqual(codexModels);
+    expect(await code('chat.create', { cwd: dir, text: 'Claude' })).toBe('API_KEY_REQUIRED');
+    const { sessionId } = await ok<{ sessionId: string }>('chat.create', {
+      cwd: dir,
+      text: 'Codex',
+      model: 'codex:test-model',
+      effort: 'minimal',
+      permissionMode: 'bypassPermissions',
+    });
+    expect(sessionId).toMatch(/^codex-/);
+    expect(adapter.requireCodex).toHaveBeenCalledOnce();
+    expect(adapter.started.at(-1)?.options).toMatchObject({
+      model: 'codex:test-model',
+      effort: 'minimal',
+      permissionMode: 'bypassPermissions',
+    });
+    adapter.lastSession().models = codexModels;
+    expect(await ok('chat.models', { sessionId })).toEqual(codexModels);
+    expect(await ok('chat.resumeCommand', { sessionId })).toEqual({
+      command: 'codex resume saved-thread',
+    });
+    expect(await ok('system.status', {})).toMatchObject({
+      claude: { found: false },
+      codex: { found: true },
+    });
+  });
+
+  it('preserves a client Codex id across retries and rejects runtime mismatches', async () => {
+    const adapter = Object.assign(new FakeAdapter(), { requireCodex: async () => {} });
+    await start(adapter);
+    const sessionId = 'codex-00000000-0000-4000-8000-000000000001';
+    const params = { cwd: dir, text: 'Codex', model: 'codex:test-model', sessionId };
+    expect(await ok('chat.create', params)).toEqual({ sessionId });
+    expect(await ok('chat.create', params)).toEqual({ sessionId });
+    expect(adapter.started).toHaveLength(1);
+    expect(
+      await code('chat.create', { ...params, sessionId: '00000000-0000-4000-8000-000000000002' }),
+    ).toBe('INVALID_PARAMS');
+    expect(await code('chat.create', { ...params, model: 'sonnet' })).toBe('INVALID_PARAMS');
+  });
+
+  it('explains a missing Codex executable at create time', async () => {
+    const adapter = Object.assign(new FakeAdapter(), {
+      requireCodex: async () => {
+        throw new Error('Install Codex CLI');
+      },
+    });
+    await start(adapter);
+    const response = await call('chat.create', { cwd: dir, text: 'hello', model: 'codex:default' });
+    expect(response.error).toEqual({ code: 'CODEX_MISSING', message: 'Install Codex CLI' });
+    expect(adapter.started).toHaveLength(0);
+  });
   it('chat.open pages a history chat from the SDK and chat.older pages backwards', async () => {
     const adapter = new FakeAdapter();
     addHistory(adapter, 'h1', 3);

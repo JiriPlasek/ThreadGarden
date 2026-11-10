@@ -188,6 +188,10 @@
       keyOf,
     }),
   );
+  const showProviders = $derived(
+    items.some((chat) => chat.sessionId.startsWith('codex-')) &&
+      items.some((chat) => !chat.sessionId.startsWith('codex-')),
+  );
 
   /** The keyboard cursor (a row key) follows the active tab until the user moves it. */
   let cursor = $derived<string | null>(tabs.active);
@@ -651,11 +655,14 @@
             ? 0
             : (scope.chats.get(chat.sessionId)?.running ?? chat.runningTasks ?? 0)}
           scheduled={scope.scheduled.forChat(chat.sessionId)}
+          showProvider={showProviders}
           onOpen={(_, e) => onRowClick(chat, e)}
           onRename={() => (renaming = chat)}
           onTogglePin={() => togglePin(chat)}
           onMove={(_, bucket) => moveFromMenu(chat, bucket)}
-          onMoveMachine={machines.several && supportsMove(machines.get(chat.machineId))
+          onMoveMachine={machines.several &&
+          !chat.sessionId.startsWith('codex-') &&
+          supportsMove(machines.get(chat.machineId))
             ? () =>
                 interaction.openMoveChat(
                   { machineId: chat.machineId, sessionId: chat.sessionId },

@@ -36,6 +36,7 @@ import type {
   SlashCommand,
   StartOptions,
 } from './adapter.js';
+import { CLAUDE_EFFORT_LEVELS } from './adapter.js';
 
 /** The SDK functions the adapter uses; injectable so tests need no `claude` process. */
 export type SdkApi = {
@@ -121,7 +122,11 @@ export const buildQueryOptions = (o: StartOptions): Options => {
     if (o.sessionStore !== undefined) opts.sessionStore = o.sessionStore;
   } else if (o.sessionId !== undefined) opts.sessionId = o.sessionId;
   if (o.model !== undefined) opts.model = o.model;
-  if (o.effort !== undefined) opts.effort = o.effort;
+  if (o.effort !== undefined) {
+    if (!(CLAUDE_EFFORT_LEVELS as readonly string[]).includes(o.effort))
+      throw new Error(`Unsupported Claude effort "${o.effort}"`);
+    opts.effort = o.effort as NonNullable<Options['effort']>;
+  }
   if (o.permissionMode !== undefined) opts.permissionMode = o.permissionMode;
   return opts;
 };
