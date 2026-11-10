@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import PhoneUpdateNotice from '../../src/lib/components/phone/PhoneUpdateNotice.svelte';
 import SettingsDialog from '../../src/lib/components/SettingsDialog.svelte';
 import { appVersion } from '../../src/lib/native';
+import { compareVersions } from '../../src/lib/state/connection.svelte.js';
 import { setupTwoMachines } from '../layout/harness';
 import { RpcFail } from '../service/fake-ws';
 
@@ -50,12 +51,12 @@ describe('the update notice on the phone', () => {
     expect(native.openExternal).toHaveBeenCalledWith(APK);
   });
 
-  it('0.10.0 is newer than this app at 0.9.0 (numbers, not text)', async () => {
-    expect(appVersion).toBe('0.9.0');
-    const env = await withLatest(() => ({ version: '0.10.0', url: APK }));
-    render(PhoneUpdateNotice, { context: env.context });
-    const notice = await screen.findByRole('status');
-    await waitFor(() => expect(notice.textContent).toContain('Threadgarden 0.10.0 is available'));
+  it('versions compare as numbers, not text: 0.10.0 is newer than 0.9.0', () => {
+    // The notice's own comparison, apart from this app's version (which every release changes).
+    expect(compareVersions('0.10.0', '0.9.0')).toBeGreaterThan(0);
+    expect(compareVersions('0.9.0', '0.10.0')).toBeLessThan(0);
+    expect(compareVersions('1.2.10', '1.2.9')).toBeGreaterThan(0);
+    expect(compareVersions('0.10.0', '0.10.0')).toBe(0);
   });
 
   it('the same version shows nothing, and a failed check says nothing', async () => {
