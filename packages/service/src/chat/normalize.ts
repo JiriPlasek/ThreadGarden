@@ -59,7 +59,56 @@ const num = (v: unknown): number | undefined =>
 
 const NONE: PushResult = { items: [], replace: false };
 
-export type NormalizerOptions = { now?: () => number };
+/** A copy of `call` no longer marked as waiting on its permission check. */
+const unchecked = (call: Item<'toolCall'>): Item<'toolCall'> => {
+  const next = { ...call };
+  delete next.checkingPermission;
+  return next;
+};
+
+export type NormalizerOptions = {
+  now?: () => number;
+  /**
+   * For history, which has no `result` messages: end every turn with a footer
+   * item built from its replies, before the next prompt and on `finish()`.
+   * Live, the `result` is the footer.
+   */
+  turnEnds?: boolean;
+};
+
+/** The last main-thread reply, for the chat header when no process reports one. */
+export type LastReply = {
+  /** When it arrived: its timestamp, live the time it was pushed; unknown for history without one. */
+  at?: number;
+  /** Prompt tokens the next request re-sends: its input, cache reads and writes, and output. */
+  contextTokens: number;
+  /** The API model id that answered. */
+  model?: string;
+  /** How long the prompt cache it used lives: the lifetime it was last written with. */
+  cacheTtlMs: number;
+  /**
+   * A compaction came after it (Claude Code's idle compaction, `/compact`):
+   * the next message sends the summary, not this context.
+   */
+  compacted?: true;
+};
+
+export const CACHE_TTL_5M_MS = 5 * 60_000;
+export const CACHE_TTL_1H_MS = 60 * 60_000;
+const USAGE_KEYS = [
+  'input_tokens',
+  'cache_creation_input_tokens',
+  'cache_read_input_tokens',
+  'output_tokens',
+] as const;
+
+/** The turn being read: its prompt's time and its main-thread replies' usage, by API message. */
+type Turn = {
+  startedAt?: number;
+  lastUuid?: string;
+  lastAt?: number;
+  usage: Map<string, Rec>;
+};
 
 export class Normalizer {
   private readonly now: () => number;
@@ -80,9 +129,15 @@ export class Normalizer {
   private readonly known = new Set<string>();
   /** A `compact_boundary` was shown and its summary message has not arrived yet. */
   private compactPending = false;
+  private readonly turnEnds: boolean;
+  private turn: Turn = { usage: new Map() };
+  private last: LastReply | undefined;
+  /** The prompt cache's lifetime as last written (a read keeps it). */
+  private cacheTtlMs = CACHE_TTL_5M_MS;
 
   constructor(opts: NormalizerOptions = {}) {
     this.now = opts.now ?? Date.now;
+    this.turnEnds = opts.turnEnds ?? false;
   }
 
   push(m: SDKMessage | SessionMessage): PushResult {
@@ -94,7 +149,20 @@ export class Normalizer {
       r = this.unknown(m, isRec(m) ? (str(m.type) ?? 'unknown') : 'invalid');
     }
     this.remember(m, r.items);
-    return r;
+    return this.trackTurn(m as unknown, r);
+  }
+
+  /** History's last turn has no next prompt: its footer, if it had a reply. */
+  finish(): PushResult {
+    const footer = this.endTurn();
+    if (!footer) return NONE;
+    this.known.add(footer.id);
+    return this.one(footer);
+  }
+
+  /** The last main-thread reply seen; undefined before the first. */
+  lastReply(): LastReply | undefined {
+    return this.last ? { ...this.last } : undefined;
   }
 
   /**
@@ -410,7 +478,7 @@ export class Normalizer {
     if (!call) return { item: this.unknownBlock(undefined, block, id), replaced: false };
     const truncated = text.length > RESULT_TEXT_LIMIT;
     const next: Item<'toolCall'> = {
-      ...call,
+      ...unchecked(call),
       status: isError ? 'error' : 'ok',
       resultText: truncated ? text.slice(0, RESULT_TEXT_LIMIT) : text,
       resultTruncated: truncated,
@@ -429,22 +497,128 @@ export class Normalizer {
       this.compactPending = true; // the summary that follows is not shown again
       return this.one({ kind: 'compactBoundary', id: str(m.uuid) ?? this.localId() });
     }
+    if (subtype === 'permission_check_status') return this.permissionCheck(m);
     const line = systemLine(subtype, m);
     if (line === undefined) return this.unknown(m, `system:${subtype}`);
     if (line === null) return NONE;
     return this.one({ kind: 'system', id: str(m.uuid) ?? this.localId(), ...line });
   }
 
+  /**
+   * `system/permission_check_status` (outside the SDK 0.3.314 union; CLI 2.1.319
+   * sends it): a running tool call has waited about 4 s on its automatic
+   * permission check (`checking`), or that wait is over (`done`). Display-only:
+   * it marks the call's row, never renders by itself, and a frame for a call
+   * that is not running is dropped.
+   */
+  private permissionCheck(m: Rec): PushResult {
+    const toolUseId = str(m.tool_use_id);
+    const call = toolUseId ? this.toolCalls.get(toolUseId) : undefined;
+    if (!call || call.status !== 'running') return NONE;
+    const checking = m.status === 'checking';
+    if (checking === (call.checkingPermission === true)) return NONE;
+    const next: Item<'toolCall'> = checking
+      ? { ...call, checkingPermission: true }
+      : unchecked(call);
+    this.toolCalls.set(next.toolUseId, next);
+    return { items: [next], replace: true };
+  }
+
   private result(m: Rec): Item<'result'> {
     const durationMs = num(m.duration_ms);
     const costUsd = num(m.total_cost_usd);
+    // The id history's footer for this turn gets (`endTurn`), so a chat's view shows one.
+    const lastUuid = this.turn.lastUuid;
+    this.turn = { usage: new Map() };
     return {
       kind: 'result',
-      id: str(m.uuid) ?? this.localId(),
+      id: lastUuid ? `turn-end:${lastUuid}` : (str(m.uuid) ?? this.localId()),
+      ts: this.now(),
       isError: m.is_error === true || (str(m.subtype)?.startsWith('error') ?? false),
       ...(durationMs === undefined ? {} : { durationMs }),
       ...(costUsd === undefined ? {} : { costUsd }),
       ...(m.usage === undefined ? {} : { usage: m.usage }),
+    };
+  }
+
+  // ── turns ───────────────────────────────────────────────────────────────
+
+  /**
+   * Follows the turn `m` belongs to: a main-thread reply adds its usage (once
+   * per API message: each block of one repeats it) and becomes the last reply.
+   * With `turnEnds`, a prompt (not a message queued during the turn) ends the
+   * turn before it: the footer goes first.
+   */
+  private trackTurn(m: unknown, r: PushResult): PushResult {
+    if (!isRec(m)) return r;
+    if (m.type === 'assistant' && !m.parent_tool_use_id && isRec(m.message)) {
+      this.onReply(m, m.message);
+      return r;
+    }
+    if (this.last && r.items.some((i) => i.kind === 'compactBoundary')) {
+      this.last = { ...this.last, compacted: true };
+    }
+    if (!this.turnEnds || m.isQueuedCommand === true) return r;
+    const prompt = r.items.find((i): i is Item<'user'> => i.kind === 'user');
+    if (!prompt) return r;
+    const footer = this.endTurn();
+    const startedAt = this.timeOf(m);
+    this.turn = { ...(startedAt === undefined ? {} : { startedAt }), usage: new Map() };
+    if (!footer) return r;
+    this.known.add(footer.id);
+    return { items: [footer, ...r.items], replace: r.replace };
+  }
+
+  /**
+   * When `m` happened: its timestamp; live (no timestamps) the time it arrived.
+   * History without one has no time: a footer or header shows none rather
+   * than the time it was read.
+   */
+  private timeOf(m: Rec): number | undefined {
+    const parsed = Date.parse(str(m.timestamp) ?? '');
+    if (!Number.isNaN(parsed)) return parsed;
+    return this.turnEnds ? undefined : this.now();
+  }
+
+  private onReply(m: Rec, msg: Rec): void {
+    const uuid = str(m.uuid);
+    const at = this.timeOf(m);
+    if (uuid) this.turn.lastUuid = uuid;
+    if (at === undefined) delete this.turn.lastAt;
+    else this.turn.lastAt = at;
+    const usage = msg.usage;
+    if (!isRec(usage)) return;
+    this.turn.usage.set(str(msg.id) ?? uuid ?? this.localId(), usage);
+    const written = isRec(usage.cache_creation) ? usage.cache_creation : {};
+    if ((num(written.ephemeral_1h_input_tokens) ?? 0) > 0) this.cacheTtlMs = CACHE_TTL_1H_MS;
+    else if ((num(usage.cache_creation_input_tokens) ?? 0) > 0) this.cacheTtlMs = CACHE_TTL_5M_MS;
+    const model = str(msg.model);
+    this.last = {
+      ...(at === undefined ? {} : { at }),
+      contextTokens: USAGE_KEYS.reduce((n, k) => n + (num(usage[k]) ?? 0), 0),
+      ...(model === undefined ? {} : { model }),
+      cacheTtlMs: this.cacheTtlMs,
+    };
+  }
+
+  /** The footer of the turn read so far (history), or undefined when it had no reply. */
+  private endTurn(): Item<'result'> | undefined {
+    const { startedAt, lastUuid, lastAt, usage } = this.turn;
+    if (!lastUuid) return undefined;
+    const sum = Object.fromEntries(USAGE_KEYS.map((k) => [k, 0])) as Record<
+      (typeof USAGE_KEYS)[number],
+      number
+    >;
+    for (const u of usage.values()) for (const k of USAGE_KEYS) sum[k] += num(u[k]) ?? 0;
+    return {
+      kind: 'result',
+      id: `turn-end:${lastUuid}`,
+      isError: false,
+      ...(startedAt !== undefined && lastAt !== undefined && lastAt >= startedAt
+        ? { durationMs: lastAt - startedAt }
+        : {}),
+      ...(lastAt === undefined ? {} : { ts: lastAt }),
+      ...(usage.size > 0 ? { usage: sum } : {}),
     };
   }
 

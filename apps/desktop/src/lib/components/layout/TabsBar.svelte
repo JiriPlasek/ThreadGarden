@@ -2,6 +2,7 @@
   import ChartColumnIcon from '@lucide/svelte/icons/chart-column';
   import PlusIcon from '@lucide/svelte/icons/plus';
   import XIcon from '@lucide/svelte/icons/x';
+  import * as ContextMenu from '#lib/components/ui/context-menu/index.js';
   import { useApp } from '#lib/state/context.js';
   import { machineAway } from '#lib/state/machines.svelte.js';
   import { parseChatKey } from '#lib/state/refs.js';
@@ -16,6 +17,7 @@
   /**
    * One tab per open chat (spec §6.1). Middle-click, the × button or Ctrl/Cmd+W
    * close a tab (every key is listed in `shortcuts.ts`); closing only drops the view, the session keeps running.
+   * A right-click on a tab offers Close, Close others, Close to the right and Close all.
    * "+" (Ctrl/Cmd+N) starts a new chat, in the selected project if there is one.
    * Tabs are keyed by chat key (`machineId/sessionId`); each is described by its machine's scope.
    */
@@ -131,6 +133,28 @@
 
 <svelte:window onkeydown={onWindowKey} />
 
+{#snippet tabMenu(m: {
+  close: () => void;
+  closeOthers: () => void;
+  closeToRight: () => void;
+  /** Some other tab is open. */
+  others: boolean;
+  /** Some tab is to the right of this one. */
+  right: boolean;
+})}
+  <ContextMenu.Content class="min-w-40">
+    <ContextMenu.Item class="py-1 text-xs" onSelect={m.close}>Close</ContextMenu.Item>
+    <ContextMenu.Item class="py-1 text-xs" disabled={!m.others} onSelect={m.closeOthers}>
+      Close others
+    </ContextMenu.Item>
+    <ContextMenu.Item class="py-1 text-xs" disabled={!m.right} onSelect={m.closeToRight}>
+      Close to the right
+    </ContextMenu.Item>
+    <ContextMenu.Separator />
+    <ContextMenu.Item class="py-1 text-xs" onSelect={tabs.closeAll}>Close all</ContextMenu.Item>
+  </ContextMenu.Content>
+{/snippet}
+
 <div class="bg-muted/40 flex h-9 shrink-0 border-b">
   <div
     bind:this={tablist}
@@ -142,94 +166,122 @@
   >
     {#if tabs.analyticsOpen}
       <!-- v1.3: the Analytics view's own tab, first; it is not a chat. -->
-      <div
-        role="presentation"
-        class={cn(
-          'group relative flex max-w-56 min-w-28 shrink-0 items-center border-r',
-          tabs.analyticsShown
-            ? 'bg-background text-foreground after:bg-primary after:absolute after:inset-x-0 after:top-0 after:h-0.5'
-            : 'text-muted-foreground hover:bg-background/60 hover:text-foreground',
-        )}
-      >
-        <button
-          type="button"
-          role="tab"
-          id={ANALYTICS_TAB_ID}
-          aria-selected={tabs.analyticsShown}
-          aria-controls="chat-panel"
-          tabindex={tabs.analyticsShown ? 0 : -1}
-          class="focus-visible:ring-ring/50 flex h-full min-w-0 flex-1 items-center gap-1.5 pr-1 pl-3 text-xs outline-none focus-visible:ring-2 focus-visible:ring-inset"
-          onclick={tabs.showAnalytics}
-          onmousedown={(e) => e.button === 1 && e.preventDefault()}
-          onauxclick={(e) => e.button === 1 && tabs.closeAnalytics()}
-        >
-          <ChartColumnIcon class="size-3.5 shrink-0" aria-hidden="true" />
-          <span class="truncate">Analytics</span>
-        </button>
-        <IconButton
-          label="Close Analytics"
-          shortcut={tabs.analyticsShown ? shortcut('tab-close').combos[0] : undefined}
-          tabindex={-1}
-          class={cn(
-            'mr-1 size-5 opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
-            tabs.analyticsShown && 'opacity-60',
-          )}
-          onclick={tabs.closeAnalytics}
-        >
-          <XIcon class="size-3.5" aria-hidden="true" />
-        </IconButton>
-      </div>
+      <ContextMenu.Root>
+        <ContextMenu.Trigger>
+          {#snippet child({ props })}
+            <div
+              {...props}
+              role="presentation"
+              class={cn(
+                'group relative flex max-w-56 min-w-28 shrink-0 items-center border-r',
+                tabs.analyticsShown
+                  ? 'bg-background text-foreground after:bg-primary after:absolute after:inset-x-0 after:top-0 after:h-0.5'
+                  : 'text-muted-foreground hover:bg-background/60 hover:text-foreground',
+              )}
+            >
+              <button
+                type="button"
+                role="tab"
+                id={ANALYTICS_TAB_ID}
+                aria-selected={tabs.analyticsShown}
+                aria-controls="chat-panel"
+                tabindex={tabs.analyticsShown ? 0 : -1}
+                class="focus-visible:ring-ring/50 flex h-full min-w-0 flex-1 items-center gap-1.5 pr-1 pl-3 text-xs outline-none focus-visible:ring-2 focus-visible:ring-inset"
+                onclick={tabs.showAnalytics}
+                onmousedown={(e) => e.button === 1 && e.preventDefault()}
+                onauxclick={(e) => e.button === 1 && tabs.closeAnalytics()}
+              >
+                <ChartColumnIcon class="size-3.5 shrink-0" aria-hidden="true" />
+                <span class="truncate">Analytics</span>
+              </button>
+              <IconButton
+                label="Close Analytics"
+                shortcut={tabs.analyticsShown ? shortcut('tab-close').combos[0] : undefined}
+                tabindex={-1}
+                class={cn(
+                  'mr-1 size-5 opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
+                  tabs.analyticsShown && 'opacity-60',
+                )}
+                onclick={tabs.closeAnalytics}
+              >
+                <XIcon class="size-3.5" aria-hidden="true" />
+              </IconButton>
+            </div>
+          {/snippet}
+        </ContextMenu.Trigger>
+        {@render tabMenu({
+          close: tabs.closeAnalytics,
+          closeOthers: tabs.closeChats,
+          closeToRight: tabs.closeChats,
+          others: tabs.open.length > 0,
+          right: tabs.open.length > 0,
+        })}
+      </ContextMenu.Root>
     {/if}
-    {#each tabs.open as key (key)}
+    {#each tabs.open as key, i (key)}
       {@const t = info(key)}
       {@const active = key === tabs.active}
-      <div
-        role="presentation"
-        class={cn(
-          'group relative flex max-w-56 min-w-28 shrink-0 items-center border-r',
-          active
-            ? 'bg-background text-foreground after:bg-primary after:absolute after:inset-x-0 after:top-0 after:h-0.5'
-            : 'text-muted-foreground hover:bg-background/60 hover:text-foreground',
-        )}
-      >
-        <button
-          type="button"
-          role="tab"
-          id={tabId(key)}
-          data-tab={t.sessionId}
-          data-chat-key={key}
-          aria-selected={active}
-          aria-controls="chat-panel"
-          tabindex={active ? 0 : -1}
-          title={t.title}
-          class="focus-visible:ring-ring/50 flex h-full min-w-0 flex-1 items-center gap-1.5 pr-1 pl-3 text-xs outline-none focus-visible:ring-2 focus-visible:ring-inset"
-          onclick={() => tabs.activate(key)}
-          onmousedown={(e) => e.button === 1 && e.preventDefault()}
-          onauxclick={(e) => onAux(e, key)}
-        >
-          <StatusIcon status={t.status} raw={t.raw} />
-          <span class="truncate">{t.title}</span>
-          {#if t.running > 0}
-            <RunningBadge count={t.running} />
-          {/if}
-          {#if t.scheduled.length > 0}
-            <ScheduledBadge sends={t.scheduled} now={usage.now} />
-          {/if}
-        </button>
-        <IconButton
-          label="Close {t.title}"
-          shortcut={active ? shortcut('tab-close').combos[0] : undefined}
-          tabindex={-1}
-          class={cn(
-            'mr-1 size-5 opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
-            active && 'opacity-60',
-          )}
-          onclick={() => tabs.close(key)}
-          onauxclick={(e) => onAux(e, key)}
-        >
-          <XIcon class="size-3.5" aria-hidden="true" />
-        </IconButton>
-      </div>
+      <ContextMenu.Root>
+        <ContextMenu.Trigger>
+          {#snippet child({ props })}
+            <div
+              {...props}
+              role="presentation"
+              class={cn(
+                'group relative flex max-w-56 min-w-28 shrink-0 items-center border-r',
+                active
+                  ? 'bg-background text-foreground after:bg-primary after:absolute after:inset-x-0 after:top-0 after:h-0.5'
+                  : 'text-muted-foreground hover:bg-background/60 hover:text-foreground',
+              )}
+            >
+              <button
+                type="button"
+                role="tab"
+                id={tabId(key)}
+                data-tab={t.sessionId}
+                data-chat-key={key}
+                aria-selected={active}
+                aria-controls="chat-panel"
+                tabindex={active ? 0 : -1}
+                title={t.title}
+                class="focus-visible:ring-ring/50 flex h-full min-w-0 flex-1 items-center gap-1.5 pr-1 pl-3 text-xs outline-none focus-visible:ring-2 focus-visible:ring-inset"
+                onclick={() => tabs.activate(key)}
+                onmousedown={(e) => e.button === 1 && e.preventDefault()}
+                onauxclick={(e) => onAux(e, key)}
+              >
+                <StatusIcon status={t.status} raw={t.raw} />
+                <span class="truncate">{t.title}</span>
+                {#if t.running > 0}
+                  <RunningBadge count={t.running} />
+                {/if}
+                {#if t.scheduled.length > 0}
+                  <ScheduledBadge sends={t.scheduled} now={usage.now} />
+                {/if}
+              </button>
+              <IconButton
+                label="Close {t.title}"
+                shortcut={active ? shortcut('tab-close').combos[0] : undefined}
+                tabindex={-1}
+                class={cn(
+                  'mr-1 size-5 opacity-0 group-hover:opacity-100 focus-visible:opacity-100',
+                  active && 'opacity-60',
+                )}
+                onclick={() => tabs.close(key)}
+                onauxclick={(e) => onAux(e, key)}
+              >
+                <XIcon class="size-3.5" aria-hidden="true" />
+              </IconButton>
+            </div>
+          {/snippet}
+        </ContextMenu.Trigger>
+        {@render tabMenu({
+          close: () => tabs.close(key),
+          closeOthers: () => tabs.closeOthers(key),
+          closeToRight: () => tabs.closeToRight(key),
+          others: tabs.open.length > 1 || tabs.analyticsOpen,
+          right: i < tabs.open.length - 1,
+        })}
+      </ContextMenu.Root>
     {/each}
   </div>
   <div class="flex w-9 shrink-0 items-center justify-center">

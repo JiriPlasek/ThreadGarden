@@ -15,7 +15,7 @@ Threadgarden must never write, rename, move or delete anything under the Claude 
 
 `packages/service/test/e2e/read-only.test.ts` enforces this against a fixture config dir in every test run, and the opt-in real suite checks it against your real one.
 
-Two related rules: Threadgarden never offers `bypassPermissions`, and it is never presented as Claude Code (it may say it works with Claude Code) or styled to look like it.
+A related rule: Threadgarden is never presented as Claude Code (it may say it works with Claude Code) or styled to look like it.
 
 ## Rules for remote machines
 

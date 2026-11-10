@@ -59,13 +59,29 @@ const realSdk: SdkApi = {
 /**
  * The environment for a session's `claude` process. The SDK's `env` option
  * replaces the inherited environment, so `base` is copied whole (PATH, HOME,
- * proxies, an inherited key…); Threadgarden's own API key (§5.5) is added only when set.
+ * proxies, a gateway's auth token, a cloud provider…) except
+ * `ANTHROPIC_API_KEY`: on a desktop the only API key a session gets is
+ * Threadgarden's own (§5.5), added only when set.
+ *
+ * An inherited key is dropped because SDK sessions use it without asking.
+ * Interactive Claude Code asks once before an `ANTHROPIC_API_KEY` from the
+ * environment replaces the subscription login and remembers a refusal; in
+ * SDK mode the key is always used when present, so a key left in the shell
+ * would quietly bill the API instead of the plan.
+ *
+ * `keepInheritedKey` (a headless service) keeps it: there the environment
+ * comes only from its systemd unit (in a WSL worker's distro too), written on
+ * purpose, and Threadgarden's own key never reaches a remote machine
+ * (`auth.setApiKey` is local only), so it is the only way to run such a
+ * machine on an API key.
  */
 export const buildSessionEnv = (
   base: NodeJS.ProcessEnv,
   apiKey: string | null,
+  opts: { keepInheritedKey?: boolean } = {},
 ): Record<string, string | undefined> => {
   const env: Record<string, string | undefined> = { ...base };
+  if (opts.keepInheritedKey !== true) delete env.ANTHROPIC_API_KEY;
   if (apiKey !== null) env.ANTHROPIC_API_KEY = apiKey;
   return env;
 };
@@ -82,6 +98,11 @@ export const buildSessionEnv = (
  * (Stop / Esc) only aborts the current turn and spares running background
  * agents and processes; without it the CLI fails closed and an interrupt
  * kills them all. Ending the session still ends them.
+ *
+ * `allowDangerouslySkipPermissions` only makes `bypassPermissions` available,
+ * like the CLI's `--allow-dangerously-skip-permissions`. Claude Code also
+ * rejects that opt-in as root, even in Default mode, so root sessions omit it.
+ * Other sessions opt in so their header can switch to bypass without restarting.
  */
 export const buildQueryOptions = (o: StartOptions): Options => {
   const opts: Options = {
@@ -94,6 +115,7 @@ export const buildQueryOptions = (o: StartOptions): Options => {
     canUseTool: o.canUseTool,
     env: { ...o.env, CLAUDE_CODE_STARTUP_FAILURE_RESULTS: '1' },
   };
+  if (process.getuid?.() !== 0) opts.allowDangerouslySkipPermissions = true;
   if (o.resume !== undefined) {
     opts.resume = o.resume;
     if (o.sessionStore !== undefined) opts.sessionStore = o.sessionStore;

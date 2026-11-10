@@ -134,13 +134,23 @@ describe('external handlers', () => {
 });
 
 describe('external.stop', () => {
-  const stopSetup = (agents: unknown[] = AGENTS, stopFails = false) => {
+  const stopSetup = (
+    agents: unknown[] = AGENTS,
+    stopFails = false,
+    end: { fails?: boolean; staysListed?: boolean } = {},
+  ) => {
+    let listed = agents;
     const run = vi.fn(async (args: string[]) => {
       if (args[0] === 'stop') {
         if (stopFails) throw new Error('claude stop exited with code 1');
         return '';
       }
-      return JSON.stringify(agents);
+      return JSON.stringify(listed);
+    });
+    // Ending a process takes it off `claude agents`, as Claude Code's registry does.
+    const endProcess = vi.fn(async (pid: number) => {
+      if (end.fails) throw new Error('Access is denied.');
+      if (!end.staysListed) listed = listed.filter((e) => (e as { pid?: number }).pid !== pid);
     });
     const poller = new ExternalPoller(
       run,
@@ -151,6 +161,8 @@ describe('external.stop', () => {
     registerExternalHandlers(router, {
       poller,
       run,
+      endProcess,
+      stopWaitMs: 50,
       lastModifiedOf: () => undefined,
       claude: () => ({ path: '/bin/claude', version: '2.1.314' }),
       indexing: () => ({ done: 0, total: 0 }),
@@ -163,7 +175,7 @@ describe('external.stop', () => {
       );
       return 'result' in r ? { ok: r.result } : { code: r.error.code, message: r.error.message };
     };
-    return { run, stop };
+    return { run, stop, endProcess };
   };
 
   it('stops a background session with claude stop <short id>', async () => {
@@ -172,10 +184,33 @@ describe('external.stop', () => {
     expect(t.run).toHaveBeenCalledWith(['stop', 'abc12345']);
   });
 
-  it('refuses a session running in a terminal', async () => {
+  it('ends a session another process holds (a terminal, an editor) by its pid', async () => {
     const t = stopSetup();
-    expect(await t.stop('term')).toMatchObject({ code: 'NOT_STOPPABLE' });
+    expect(await t.stop('term')).toEqual({ ok: {} });
+    expect(t.endProcess).toHaveBeenCalledWith(9);
     expect(t.run).not.toHaveBeenCalledWith(expect.arrayContaining(['stop']));
+  });
+
+  it('reports a process that is still listed after ending it', async () => {
+    const t = stopSetup(AGENTS, false, { staysListed: true });
+    expect(await t.stop('term')).toMatchObject({
+      code: 'STOP_PENDING',
+      message: expect.stringMatching(/signal was sent to process 9.*not been confirmed/),
+    });
+  });
+
+  it('reports a process that could not be ended', async () => {
+    const t = stopSetup(AGENTS, false, { fails: true });
+    expect(await t.stop('term')).toMatchObject({
+      code: 'STOP_FAILED',
+      message: expect.stringMatching(/Access is denied/),
+    });
+  });
+
+  it('refuses an interactive session listed without a pid', async () => {
+    const t = stopSetup([{ cwd: '/p', kind: 'interactive', startedAt: 1, sessionId: 'nopid' }]);
+    expect(await t.stop('nopid')).toMatchObject({ code: 'NOT_STOPPABLE' });
+    expect(t.endProcess).not.toHaveBeenCalled();
   });
 
   it('refuses a session that is not running outside Threadgarden', async () => {

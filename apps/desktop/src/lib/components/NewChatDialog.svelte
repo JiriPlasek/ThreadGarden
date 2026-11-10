@@ -3,6 +3,7 @@
   import { untrack } from 'svelte';
   import { buildFlags } from '#lib/build-flags.js';
   import Composer from '#lib/components/composer/Composer.svelte';
+  import BypassPermissionsDialog from '#lib/components/BypassPermissionsDialog.svelte';
   import InScope from '#lib/components/InScope.svelte';
   import { machineState } from '#lib/components/layout/MachineHeading.svelte';
   import CloneTab from '#lib/components/new-chat/CloneTab.svelte';
@@ -30,8 +31,7 @@
 
   /**
    * Starts a chat (spec §5.4): in any listed project or any folder from the
-   * native picker, with a model and permission mode (Ruling R11: never
-   * bypassPermissions). The first message is written here, with the full
+   * native picker, with a model and permission mode. The first message is written here, with the full
    * composer (`@` files of the chosen folder, `/` commands, images); its draft
    * is kept per folder (`new:<cwd>`).
    *
@@ -58,12 +58,12 @@
    */
   const { interaction, places, tabs, settings, scopes, machines, power } = useApp();
 
-  /** Ruling R11: Threadgarden never offers bypassPermissions. */
   const PERMISSION_MODES = [
     { value: 'default', label: 'Default (ask before acting)' },
     { value: 'acceptEdits', label: 'Accept edits' },
     { value: 'plan', label: 'Plan' },
     { value: 'auto', label: 'Auto' },
+    { value: 'bypassPermissions', label: 'Bypass permissions' },
   ];
 
   const byPinnedThenRecent = (a: Project, b: Project): number =>
@@ -210,6 +210,16 @@
   let made = $state<NotStarted | null>(null);
   let model = $state('');
   let mode = $state('default');
+  let confirmBypass = $state(false);
+  $effect(() => {
+    if (!interaction.newChat.open) confirmBypass = false;
+  });
+  const chooseMode = (event: Event & { currentTarget: HTMLSelectElement }): void => {
+    const value = event.currentTarget.value;
+    event.currentTarget.value = mode;
+    if (value === 'bypassPermissions' && mode !== value) confirmBypass = true;
+    else mode = value;
+  };
   let models = $state.raw<ModelChoice[]>([]);
   let error = $state<string | null>(null);
   /** Set once a chat was created: focus goes to its composer, not back to the trigger. */
@@ -566,7 +576,7 @@
         </select>
 
         <label for="new-chat-mode" class="text-muted-foreground">Permission mode</label>
-        <select id="new-chat-mode" class={selectClass} bind:value={mode}>
+        <select id="new-chat-mode" class={selectClass} value={mode} onchange={chooseMode}>
           {#each PERMISSION_MODES as m (m.value)}
             <option value={m.value}>{m.label}</option>
           {/each}
@@ -612,3 +622,10 @@
     {/if}
   </Dialog.Content>
 </Dialog.Root>
+
+<BypassPermissionsDialog
+  bind:open={confirmBypass}
+  onConfirm={() => {
+    mode = 'bypassPermissions';
+  }}
+/>

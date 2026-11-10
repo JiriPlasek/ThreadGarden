@@ -129,8 +129,9 @@ describe('chat handlers', () => {
     addHistory(adapter, 'h1', 3);
     await start(adapter);
 
-    const opened = await ok<Opened>('chat.open', { sessionId: 'h1', tail: 2 });
-    expect(ids(opened.items)).toEqual(['h1-u2', 'h1-a2']);
+    const opened = await ok<Opened>('chat.open', { sessionId: 'h1', tail: 3 });
+    // Each history turn ends with its footer.
+    expect(ids(opened.items)).toEqual(['h1-u2', 'h1-a2', 'turn-end:h1-a2']);
     expect(opened.hasMore).toBe(true);
     expect(opened.summary).toMatchObject({ sessionId: 'h1', status: 'history', live: false });
     expect(Number.isSafeInteger(opened.seq)).toBe(true);
@@ -140,7 +141,7 @@ describe('chat handlers', () => {
       beforeItemId: 'h1-u2',
       limit: 3,
     });
-    expect(ids(older.items)).toEqual(['h1-a0', 'h1-u1', 'h1-a1']);
+    expect(ids(older.items)).toEqual(['h1-u1', 'h1-a1', 'turn-end:h1-a1']);
     expect(older.hasMore).toBe(true);
     const oldest = await ok<{ items: ChatItem[]; hasMore: boolean }>('chat.older', {
       sessionId: 'h1',
@@ -183,7 +184,15 @@ describe('chat handlers', () => {
     );
 
     const opened = await ok<Opened>('chat.open', { sessionId: 'h1', tail: 50 });
-    expect(ids(opened.items)).toEqual(['h1-u0', 'h1-a0', sent, 'sb', 'r2']);
+    // The live turn's footer has the id history gives it: it shows once.
+    expect(ids(opened.items)).toEqual([
+      'h1-u0',
+      'h1-a0',
+      'turn-end:h1-a0',
+      sent,
+      'sb',
+      'turn-end:fin',
+    ]);
     expect(opened.summary.live).toBe(true);
     // The resumed session's events continue right after what the client had.
     const since = await ok<{ events: { seq: number }[] }>('chat.since', {
@@ -193,14 +202,14 @@ describe('chat handlers', () => {
     expect(since.events[0]?.seq).toBe(before.seq + 1);
 
     const tail = await ok<Opened>('chat.open', { sessionId: 'h1', tail: 2 });
-    expect(ids(tail.items)).toEqual(['sb', 'r2']);
+    expect(ids(tail.items)).toEqual(['sb', 'turn-end:fin']);
     expect(tail.hasMore).toBe(true);
     const older = await ok<{ items: ChatItem[]; hasMore: boolean }>('chat.older', {
       sessionId: 'h1',
       beforeItemId: 'sb',
       limit: 10,
     });
-    expect(ids(older.items)).toEqual(['h1-u0', 'h1-a0', sent]);
+    expect(ids(older.items)).toEqual(['h1-u0', 'h1-a0', 'turn-end:h1-a0', sent]);
     expect(older.hasMore).toBe(false);
   });
 
@@ -208,9 +217,6 @@ describe('chat handlers', () => {
     const adapter = new FakeAdapter();
     await start(adapter);
     const base = { cwd: dir, text: 'x' };
-    expect(await code('chat.create', { ...base, permissionMode: 'bypassPermissions' })).toBe(
-      'INVALID_PARAMS',
-    );
     expect(await code('chat.create', { ...base, permissionMode: 'dontAsk' })).toBe(
       'INVALID_PARAMS',
     );
@@ -225,10 +231,10 @@ describe('chat handlers', () => {
       model: 'opus',
     });
     const fake = adapter.lastSession();
-    for (const value of ['bypassPermissions', 'yolo', '']) {
+    for (const value of ['dontAsk', 'yolo', '']) {
       expect(await code('chat.setPermissionMode', { sessionId, value })).toBe('INVALID_PARAMS');
     }
-    for (const value of ['default', 'acceptEdits', 'plan', 'auto']) {
+    for (const value of ['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions']) {
       await ok('chat.setPermissionMode', { sessionId, value });
       expect(fake.permissionMode).toBe(value);
     }
@@ -244,7 +250,14 @@ describe('chat handlers', () => {
     expect(await code('chat.setModel', { sessionId, value: 'opus' })).toBe('NOT_LIVE');
   });
 
-  it('chat.respond never applies a bypassPermissions suggestion (R11)', async () => {
+  it('chat.create starts a chat in bypassPermissions', async () => {
+    const adapter = new FakeAdapter();
+    await start(adapter);
+    await ok('chat.create', { cwd: dir, text: 'x', permissionMode: 'bypassPermissions' });
+    expect(adapter.lastSession().permissionMode).toBe('bypassPermissions');
+  });
+
+  it('chat.respond never applies a bypassPermissions suggestion as an Always allow rule', async () => {
     const adapter = new FakeAdapter();
     await start(adapter);
     const { sessionId } = await ok<{ sessionId: string }>('chat.create', { cwd: dir, text: 'x' });
@@ -347,7 +360,7 @@ describe('chat handlers', () => {
     });
     expect(adapter.forks.at(-1)).toMatchObject({ sessionId: 'h1', upToMessageId: 'h1-u1' });
     const forked = await ok<Opened>('chat.open', { sessionId: fromHistory.sessionId, tail: 50 });
-    expect(forked.items).toHaveLength(3);
+    expect(ids(forked.items)).toEqual(['h1-u0', 'h1-a0', 'turn-end:h1-a0', 'h1-u1']);
 
     await ok('chat.fork', { sessionId: 'h1', upToItemId: 'h1-a0:1' });
     expect(adapter.forks.at(-1)?.upToMessageId).toBe('h1-a0');
@@ -384,6 +397,7 @@ describe('chat handlers', () => {
     expect(ids((await ok<Opened>('chat.open', { sessionId: 'h1', tail: 5 })).items)).toEqual([
       'h1-u0',
       'h1-a0',
+      'turn-end:h1-a0',
     ]);
     expect(await ok('system.status', {})).toMatchObject({
       claude: { found: false, problem: 'Claude Code was not found on PATH.' },
@@ -630,7 +644,7 @@ describe('chat handlers', () => {
     expect(adapter.started).toHaveLength(0);
     // History still works without a key.
     expect(ids((await ok<Opened>('chat.open', { sessionId: 'h1', tail: 5 })).items)).toHaveLength(
-      2,
+      3,
     );
 
     await ok('auth.setApiKey', { key: 'sk-ant-test' });

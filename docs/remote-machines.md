@@ -252,6 +252,10 @@ Environment=PATH=/home/<you>/.local/bin:/opt/mytool/bin:/usr/local/bin:/usr/bin:
 systemctl --user restart threadgarden
 ```
 
+To run the machine on an API key instead of a Claude Code sign-in, add
+`Environment=ANTHROPIC_API_KEY=<your key>` the same way. The key set in a
+desktop's Settings stays on that desktop and never reaches a machine.
+
 Check that it runs and listens:
 
 ```sh

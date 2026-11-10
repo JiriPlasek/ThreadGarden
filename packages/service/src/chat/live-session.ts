@@ -143,6 +143,12 @@ export type LiveSessionDeps = {
   onLimitError?: (sessionId: string) => void;
   /** A `result` arrived (every turn end, before `onTurnEnded`). A throw is reported. */
   onTurnResult?: (sessionId: string) => void;
+  /**
+   * A `result` reported the context window's size, for the API model of the
+   * last reply when known: remembered so the header can show the context bar
+   * of a chat no process runs. A throw is reported.
+   */
+  onContextWindow?: (sessionId: string, model: string | undefined, tokens: number) => void;
 };
 
 export const defaultOnError = (err: unknown, context: string): void => {
@@ -186,19 +192,9 @@ type Pending = {
 type Rec = Record<string, unknown>;
 
 /**
- * Ruling R11: Threadgarden v1 never runs a session in `bypassPermissions` (and never
- * sets the SDK's `allowDangerouslySkipPermissions`).
+ * A suggested rule that would switch the session to bypassPermissions. Never offered:
+ * bypass is chosen only in the permission mode picker, not by answering a request.
  */
-const rejectBypass = (mode: string | undefined): void => {
-  if (mode === 'bypassPermissions') {
-    throw new ServiceError(
-      'INVALID_PARAMS',
-      'Threadgarden does not support the bypassPermissions permission mode',
-    );
-  }
-};
-
-/** A suggested rule that would switch the session to bypassPermissions (never offered, R11). */
 const isBypassSuggestion = (u: unknown): boolean =>
   isRec(u) && u.type === 'setMode' && u.mode === 'bypassPermissions';
 
@@ -290,7 +286,6 @@ export class LiveSession {
   private publishedRunning = 0;
 
   constructor(private readonly deps: LiveSessionOptions) {
-    rejectBypass(deps.permissionMode);
     this.log = deps.log ?? new EventLog();
     this.timers = deps.timers ?? realTimers;
     this.normalizer = new Normalizer({ now: deps.now });
@@ -577,7 +572,6 @@ export class LiveSession {
   }
 
   async setPermissionMode(value: string): Promise<void> {
-    rejectBypass(value);
     const mode = value as PermissionMode;
     await this.requireLive().setPermissionMode(mode);
     this.chosen.permissionMode = mode;
@@ -718,6 +712,7 @@ export class LiveSession {
       this.updateHeader(m);
       this.requestAuth(m);
       const r = this.normalizer.push(m);
+      this.syncLastReply();
       if (r.items.length > 0) this.pushItems(r.items, r.replace);
       if (this.noteStartupFailure(m)) {
         this.setStatus('failed');
@@ -816,7 +811,32 @@ export class LiveSession {
       if (max !== undefined && this.contextUsed !== undefined) {
         h.contextUsage = { used: this.contextUsed, max };
       }
+      if (max !== undefined) {
+        const model = this.normalizer.lastReply()?.model;
+        this.guard('context window', () => this.deps.onContextWindow?.(this.id, model, max));
+      }
     }
+  }
+
+  /** The header's `lastReply` follows the normalizer's (when, and the cache's lifetime). */
+  private syncLastReply(): void {
+    const last = this.normalizer.lastReply();
+    const h = this.headerValue;
+    if (last?.at === undefined) return;
+    const next = {
+      at: last.at,
+      cacheTtlMs: last.cacheTtlMs,
+      ...(last.compacted ? { compacted: true as const } : {}),
+    };
+    const prev = h.lastReply;
+    if (
+      prev?.at === next.at &&
+      prev.cacheTtlMs === next.cacheTtlMs &&
+      prev.compacted === next.compacted
+    ) {
+      return;
+    }
+    h.lastReply = next;
   }
 
   /** After the first `system/init` of a process, asks once for its account info (§5.5). */
@@ -858,7 +878,7 @@ export class LiveSession {
 
     const variant =
       toolName === 'AskUserQuestion' ? 'question' : toolName === 'ExitPlanMode' ? 'plan' : 'tool';
-    // R11: a "switch to bypassPermissions" rule is never offered.
+    // A "switch to bypassPermissions" rule is never offered (isBypassSuggestion).
     const suggestions = (options.suggestions ?? []).filter((u) => !isBypassSuggestion(u));
     const item: PermissionItem = {
       kind: 'permissionRequest',

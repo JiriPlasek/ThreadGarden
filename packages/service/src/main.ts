@@ -151,7 +151,11 @@ export type StartOptions = {
   moveGit?: MoveGit;
   /** Runs `git` and `gh` for New project and Clone (default: the real ones); tests inject a fake. */
   projectTools?: Tools;
-  /** Base environment of session processes (default `process.env`); the API key is added on top. */
+  /**
+   * Base environment of session processes (default `process.env`). An
+   * inherited `ANTHROPIC_API_KEY` is dropped (kept by a headless service) and
+   * Threadgarden's API key, when set, is added on top (`buildSessionEnv`).
+   */
   sessionEnv?: NodeJS.ProcessEnv;
   /**
    * Timers for the session host (coalescing, idle reclaim) and `chat.end`'s
@@ -377,6 +381,9 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   const claude: { current: ClaudeStatus | undefined } = { current: opts.claude };
   /** Threadgarden's optional API key (§5.5): in memory only, never logged or stored. */
   let apiKey: string | null = null;
+  /** A session's environment (`buildSessionEnv`); a headless service keeps an inherited API key. */
+  const sessionEnvOf = (): Record<string, string | undefined> =>
+    buildSessionEnv(opts.sessionEnv ?? process.env, apiKey, { keepInheritedKey: headless });
   let db: Db | undefined;
   let power: PowerHub | undefined;
   /** Messages waiting for paired machines that are away (protocol 11; with a database). */
@@ -863,7 +870,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
           const c = claude.current;
           return c && 'path' in c ? c.path : '';
         },
-        env: () => buildSessionEnv(opts.sessionEnv ?? process.env, apiKey),
+        env: sessionEnvOf,
         emit: (e) => emitChat(e),
         now: clock,
         ...(opts.sessionTimers ? { timers: opts.sessionTimers } : {}),
@@ -892,6 +899,8 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
           // After the session has finished handling this result.
           setImmediate(() => scheduledRef.current?.turnEnded(id, refused));
         },
+        // The header's context bar for a chat no process runs (after a restart, say).
+        onContextWindow: (id, model, tokens) => opened.setContextWindow(id, model, tokens),
       });
       host = sessionHost;
       // v1.3 B: the meter keeps up by itself, from a running chat's usage reading.
@@ -976,7 +985,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
           }
           return {
             claudePath: c.path,
-            env: buildSessionEnv(opts.sessionEnv ?? process.env, apiKey),
+            env: sessionEnvOf(),
           };
         },
         firstReply: (id) => sessionHost.get(id)?.firstReplyText() ?? '',

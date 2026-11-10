@@ -65,7 +65,12 @@ export const suggestionLabel = (s: unknown): string => {
 
 // ── AskUserQuestion ────────────────────────────────────────────────────────
 
-export type QuestionOption = { label: string; description: string };
+export type QuestionOption = {
+  label: string;
+  description: string;
+  /** A mockup, code snippet or diagram the terminal shows beside the options while this one is focused. */
+  preview?: string;
+};
 export type Question = {
   question: string;
   header: string;
@@ -85,7 +90,11 @@ export const parseQuestions = (input: unknown): Question[] | null => {
       multiSelect: q.multiSelect === true,
       options: (Array.isArray(q.options) ? q.options : [])
         .filter(isRec)
-        .map((o) => ({ label: str(o.label), description: str(o.description) }))
+        .map((o) => ({
+          label: str(o.label),
+          description: str(o.description),
+          ...(str(o.preview) ? { preview: str(o.preview) } : {}),
+        }))
         .filter((o) => o.label),
     });
   }
@@ -112,10 +121,56 @@ export const answerText = (a: QuestionAnswer): string =>
 export const questionUpdatedInput = (
   input: unknown,
   answers: Record<string, string>,
+  annotations: Record<string, QuestionAnnotation> = {},
 ): Record<string, unknown> => {
   const base = isRec(input) ? input : {};
-  return { ...base, questions: base.questions, answers };
+  return {
+    ...base,
+    questions: base.questions,
+    answers,
+    ...(Object.keys(annotations).length > 0 ? { annotations } : {}),
+  };
 };
+
+/** What the terminal adds to an answer, keyed by question text: the chosen option's preview. */
+export type QuestionAnnotation = { preview: string };
+
+/**
+ * The `annotations` of an answer, as the terminal sends them: for a
+ * single-choice question answered with an option that has a preview, that
+ * preview (so Claude knows which design was picked).
+ */
+export const questionAnnotations = (
+  questions: Question[],
+  answers: QuestionAnswer[],
+): Record<string, QuestionAnnotation> => {
+  const out: Record<string, QuestionAnnotation> = {};
+  questions.forEach((q, i) => {
+    if (q.multiSelect) return;
+    const chosen = q.options.find((o) => o.label === answers[i]?.selected[0]);
+    if (chosen?.preview) out[q.question] = { preview: chosen.preview };
+  });
+  return out;
+};
+
+/**
+ * "Chat about this": the terminal's note to Claude when the user would
+ * rather talk than pick (the question is declined with it), with the
+ * questions and whatever was answered so far.
+ */
+export const clarifyReason = (questions: Question[], answers: QuestionAnswer[]): string =>
+  [
+    'The user wants to clarify these questions.',
+    'This means they may have additional information, context or questions for you.',
+    'Take their response into account and then reformulate the questions if appropriate.',
+    'Start by asking them what they would like to clarify.',
+    '',
+    'Questions asked:',
+    ...questions.map((q, i) => {
+      const a = answers[i] ? answerText(answers[i]) : '';
+      return `- "${q.question}"${a ? `\n  Answer: ${a}` : ''}`;
+    }),
+  ].join('\n');
 
 // ── ExitPlanMode ───────────────────────────────────────────────────────────
 

@@ -10,7 +10,8 @@
    * A tool permission request (spec §6.4 "Controls"): the tool and its input
    * (command for Bash, diff for edits), then Allow, one "Always allow" per rule
    * Claude Code suggests, and Deny with optional feedback. Bypass-mode
-   * suggestions never reach the UI (filtered by the service, Ruling R11).
+   * suggestions never reach the UI: enabling bypass belongs to the mode picker
+   * and its explicit confirmation, not an "Always allow" rule.
    */
   let { item }: { item: RequestItem } = $props();
 

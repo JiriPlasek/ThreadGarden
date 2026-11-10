@@ -4,8 +4,11 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ChatView from '../../src/lib/components/chat/ChatView.svelte';
 import MessageList from '../../src/lib/components/chat/MessageList.svelte';
+import ResultFooter from '../../src/lib/components/chat/items/ResultFooter.svelte';
 import ToolCallRow from '../../src/lib/components/chat/items/ToolCallRow.svelte';
+import { finishedAt } from '../../src/lib/format/time';
 import { LOCAL, here, setup, summary } from '../layout/harness';
+import { RpcFail } from '../service/fake-ws';
 import { manyItems, text, tool, unknownItem, user } from './fixtures';
 
 const rows = (root: HTMLElement) => root.querySelectorAll('[data-row]');
@@ -188,6 +191,42 @@ describe('scroll anchoring', () => {
   });
 });
 
+describe('turn footer', () => {
+  it("reads duration, this turn's new tokens and when it finished; never the cost", () => {
+    const ts = Date.now() - 60_000;
+    const { container } = render(ResultFooter, {
+      item: {
+        kind: 'result',
+        id: 'turn-end:a1',
+        isError: false,
+        durationMs: 13_100,
+        costUsd: 740.71,
+        ts,
+        usage: {
+          input_tokens: 120,
+          cache_creation_input_tokens: 13_000,
+          cache_read_input_tokens: 648_000,
+          output_tokens: 1_100,
+        },
+      },
+    });
+    // Cache reads are the old context read again: not this turn's tokens.
+    expect(container.textContent?.trim()).toBe(
+      `Turn finished · 13.1 s · 14k tokens · ${finishedAt(ts)}`,
+    );
+    expect(container.textContent).not.toContain('$');
+    const tokens = screen.getByText('14k tokens');
+    expect(tokens.getAttribute('title')).toContain('648k cache reads');
+  });
+
+  it('shows what it knows: a history turn without usage or time is just its end', () => {
+    const { container } = render(ResultFooter, {
+      item: { kind: 'result', id: 'turn-end:a1', isError: true },
+    });
+    expect(container.textContent?.trim()).toBe('Turn ended with an error');
+  });
+});
+
 describe('tool rows', () => {
   it('Edit tool renders a diff', async () => {
     const item = tool('e1', 'Edit', {
@@ -229,6 +268,23 @@ describe('tool rows', () => {
     expect(screen.getByText(/FAIL/)).toBeTruthy();
   });
 
+  it('a call waiting on its permission check says so, until it is no longer running', async () => {
+    const item = tool(
+      'p1',
+      'Bash',
+      { command: 'rm -rf build' },
+      { status: 'running', checkingPermission: true },
+    );
+    const { rerender } = render(ToolCallRow, { item });
+    expect(screen.getByRole('button', { name: /Bash/ }).textContent).toContain(
+      'Checking permission…',
+    );
+    await rerender({ item: { ...item, status: 'ok', resultText: '' } });
+    expect(screen.getByRole('button', { name: /Bash/ }).textContent).not.toContain(
+      'Checking permission',
+    );
+  });
+
   it('unknown tools show the name and compact JSON', () => {
     render(ToolCallRow, { item: tool('m1', 'mcp__db__query', { sql: 'select 1' }) });
     const toggle = screen.getByRole('button', { name: /mcp__db__query/ });
@@ -259,6 +315,7 @@ describe('chat view', () => {
         command: `claude --resume ${(p as { sessionId: string }).sessionId}`,
       });
       server.handlers['chat.setModel'] = () => ({});
+      server.handlers['chat.setPermissionMode'] = () => ({});
       server.handlers['chat.end'] = () => ({});
       server.handlers['chat.fork'] = () => ({ sessionId: 'forked-1' });
     });
@@ -290,6 +347,50 @@ describe('chat view', () => {
     expect(el.querySelector('strong')?.textContent).toBe('streaming');
   });
 
+  it('an idle chat whose cache ran out says the next message re-reads it; no cost in the header', async () => {
+    const { app, context } = await setup((server) => {
+      server.handlers['chat.open'] = (p) => ({
+        summary: summary((p as { sessionId: string }).sessionId, { status: 'idle', live: true }),
+        header: {
+          model: 'opus',
+          costUsd: 740.71,
+          // History only: the window's size is not known.
+          contextTokens: 180_000,
+          lastReply: { at: Date.now() - 2 * 3_600_000, cacheTtlMs: 3_600_000 },
+        },
+        items: [user('u1', 'hi'), text('a1', 'hello')],
+        hasMore: false,
+        seq: 1,
+      });
+      server.handlers['chat.models'] = () => [];
+    });
+    await app.chats.open('cold');
+    const { container } = render(ChatView, {
+      context,
+      props: { ref: { machineId: LOCAL, sessionId: 'cold' } },
+    });
+    expect(await screen.findByText('Cache expired · re-reads 180k tokens')).toBeTruthy();
+    expect(screen.getByText('180k tokens')).toBeTruthy();
+    expect(container.textContent).not.toContain('$');
+  });
+
+  it('a chat on an API key shows its session cost in the header', async () => {
+    const { app, context } = await setup((server) => {
+      server.handlers['chat.open'] = (p) => ({
+        summary: summary((p as { sessionId: string }).sessionId, { status: 'idle', live: true }),
+        header: { model: 'opus', costUsd: 0.42, auth: { kind: 'apiKey', label: 'API key' } },
+        items: [user('u1', 'hi'), text('a1', 'hello')],
+        hasMore: false,
+        seq: 1,
+      });
+      server.handlers['chat.models'] = () => [];
+    });
+    await app.chats.open('keyed');
+    render(ChatView, { context, props: { ref: { machineId: LOCAL, sessionId: 'keyed' } } });
+    const cost = await screen.findByText('$0.4200');
+    expect(cost.getAttribute('title')).toBe('Session cost (API billing)');
+  });
+
   it('copy resume command copies claude --resume <id>', async () => {
     const writeText = vi.fn(async (text: string) => void text);
     Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
@@ -300,7 +401,7 @@ describe('chat view', () => {
     await waitFor(() => expect(writeText).toHaveBeenCalledWith('claude --resume abc-123'));
   });
 
-  it('header pickers change the model of a live chat', async () => {
+  it('header pickers change the model and permission mode of a live chat', async () => {
     const { server, app, context } = await streamingSetup();
     await app.chats.open('s');
     render(ChatView, { context, props: { ref: { machineId: LOCAL, sessionId: 's' } } });
@@ -317,7 +418,58 @@ describe('chat view', () => {
     const modes = within(mode)
       .getAllByRole('option')
       .map((o) => (o as HTMLOptionElement).value);
-    expect(modes).toEqual(['default', 'acceptEdits', 'plan', 'auto']);
+    expect(modes).toEqual(['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions']);
+    await userEvent.selectOptions(mode, 'acceptEdits');
+    await waitFor(() => expect((mode as HTMLSelectElement).value).toBe('acceptEdits'));
+    const beforeBypass = server.calls('chat.setPermissionMode').length;
+    await userEvent.selectOptions(mode, 'bypassPermissions');
+    const cancelled = await screen.findByRole('alertdialog', {
+      name: 'Enable bypass permissions?',
+    });
+    expect((mode as HTMLSelectElement).value).toBe('acceptEdits');
+    expect(server.calls('chat.setPermissionMode')).toHaveLength(beforeBypass);
+    await userEvent.click(within(cancelled).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect((mode as HTMLSelectElement).value).toBe('acceptEdits');
+    expect(server.calls('chat.setPermissionMode')).toHaveLength(beforeBypass);
+    await userEvent.selectOptions(mode, 'bypassPermissions');
+    const confirmation = await screen.findByRole('alertdialog', {
+      name: 'Enable bypass permissions?',
+    });
+    await userEvent.click(
+      within(confirmation).getByRole('button', { name: 'Enable bypass permissions' }),
+    );
+    await waitFor(() =>
+      expect(server.calls('chat.setPermissionMode').at(-1)?.params).toEqual({
+        sessionId: 's',
+        value: 'bypassPermissions',
+      }),
+    );
+    await waitFor(() => expect((mode as HTMLSelectElement).value).toBe('bypassPermissions'));
+  });
+
+  it('keeps the prior mode and confirmation open when enabling bypass fails', async () => {
+    const { server, app, context } = await streamingSetup();
+    server.handlers['chat.setPermissionMode'] = () => {
+      throw new RpcFail('INTERNAL_ERROR', 'Bypass unavailable');
+    };
+    await app.chats.open('s');
+    render(ChatView, { context, props: { ref: { machineId: LOCAL, sessionId: 's' } } });
+    const mode = await screen.findByRole('combobox', { name: /permission mode/i });
+    await userEvent.selectOptions(mode, 'bypassPermissions');
+    const confirmation = await screen.findByRole('alertdialog', {
+      name: 'Enable bypass permissions?',
+    });
+    await userEvent.click(
+      within(confirmation).getByRole('button', { name: 'Enable bypass permissions' }),
+    );
+    expect(await within(confirmation).findByRole('alert')).toHaveProperty(
+      'textContent',
+      'Bypass unavailable',
+    );
+    expect((mode as HTMLSelectElement).value).toBe('default');
+    expect(app.chats.get('s')?.header.permissionMode).toBe('default');
+    await userEvent.click(within(confirmation).getByRole('button', { name: 'Cancel' }));
   });
 
   it('pickers are disabled for a history-only chat', async () => {

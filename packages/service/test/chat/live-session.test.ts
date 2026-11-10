@@ -125,7 +125,12 @@ describe('LiveSession', () => {
     expect(s.idleSince).toBe(timers.now());
     expect(collapse(statuses(events))).toEqual(['working', 'idle']);
     expect(latest(events, 'a1')).toMatchObject({ kind: 'assistantText', markdown: 'Hi there' });
-    expect(latest(events, 'r1')).toMatchObject({ kind: 'result', isError: false });
+    // The footer takes the id of its turn's last reply (history gives it the same one).
+    expect(latest(events, 'turn-end:a1')).toMatchObject({
+      kind: 'result',
+      isError: false,
+      ts: timers.now(),
+    });
   });
 
   it('sends text-only input without an empty image list and images-only without an empty text block', () => {
@@ -657,15 +662,20 @@ describe('LiveSession', () => {
     const itemsAt = events.findIndex(
       (e) =>
         e.event === 'chat.items' &&
-        (e.data as { items: ChatItem[] }).items.some((i) => i.id === 'r1'),
+        (e.data as { items: ChatItem[] }).items.some((i) => i.id === 'turn-end:a2'),
     );
     expect(itemsAt).toBeGreaterThanOrEqual(0);
     expect(itemsAt).toBeLessThan(idleAt);
   });
 
   it('maintains header info from init, status and result and emits it via chat.status', async () => {
-    const { adapter, events, opts } = setup();
-    const s = LiveSession.create('/p', { text: 'go' }, { ...opts, effort: 'medium' });
+    const { adapter, events, opts, timers } = setup();
+    const onContextWindow = vi.fn();
+    const s = LiveSession.create(
+      '/p',
+      { text: 'go' },
+      { ...opts, effort: 'medium', onContextWindow },
+    );
     const fake = adapter.lastSession();
     const headers = () =>
       events
@@ -719,46 +729,49 @@ describe('LiveSession', () => {
     expect(s.header).toMatchObject({
       costUsd: 0.42,
       contextUsage: { used: 21100, max: 200000 },
+      // The cache was written without a lifetime breakdown: the 5-minute default.
+      lastReply: { at: timers.now(), cacheTtlMs: 5 * 60_000 },
     });
-    expect(headers().at(-1)).toMatchObject({ costUsd: 0.42 });
+    expect(headers().at(-1)).toMatchObject({ costUsd: 0.42, lastReply: { at: timers.now() } });
+    // The window size is remembered for when no process reports it.
+    expect(onContextWindow).toHaveBeenCalledWith(s.sessionId, undefined, 200000);
+
+    // Claude Code compacts the idle chat: the header says so (no cache warning then).
+    fake.emit(
+      sdk({
+        type: 'system',
+        subtype: 'compact_boundary',
+        uuid: 'cb1',
+        session_id: 's',
+        compact_metadata: { trigger: 'auto', pre_tokens: 21100 },
+      }),
+    );
+    await settle();
+    expect(headers().at(-1)).toMatchObject({ lastReply: { compacted: true } });
 
     s.setAuth({ kind: 'subscription', label: 'Claude Max' });
     expect(headers().at(-1)).toMatchObject({ auth: { kind: 'subscription', label: 'Claude Max' } });
   });
 
-  it('rejects bypassPermissions when creating or resuming, before starting a process', () => {
-    const { adapter, registry, opts } = setup();
+  it('creates and resumes a chat in bypassPermissions', () => {
+    const { adapter, opts } = setup();
     const bypass = { ...opts, permissionMode: 'bypassPermissions' as const };
-    for (const start of [
-      () => LiveSession.create('/p', { text: 'go' }, bypass),
-      () => LiveSession.resume('sess-1', '/p', bypass),
-    ]) {
-      let caught: unknown;
-      try {
-        start();
-      } catch (err) {
-        caught = err;
-      }
-      expect(caught).toBeInstanceOf(ServiceError);
-      expect(caught).toMatchObject({
-        code: 'INVALID_PARAMS',
-        message: expect.stringMatching(/bypassPermissions/),
-      });
-    }
-    expect(adapter.started).toEqual([]);
-    expect(registry.live.size).toBe(0);
+    LiveSession.create('/p', { text: 'go' }, bypass);
+    LiveSession.resume('sess-1', '/p', bypass);
+    expect(adapter.started.map((o) => o.permissionMode)).toEqual([
+      'bypassPermissions',
+      'bypassPermissions',
+    ]);
   });
 
-  it('rejects setPermissionMode(bypassPermissions) and keeps the current mode', async () => {
+  it('switches a running chat to bypassPermissions', async () => {
     const { adapter, opts } = setup();
     const s = LiveSession.create('/p', { text: 'go' }, { ...opts, permissionMode: 'default' });
     const fake = adapter.lastSession();
-    await expect(s.setPermissionMode('bypassPermissions')).rejects.toMatchObject({
-      name: 'ServiceError',
-      code: 'INVALID_PARAMS',
-    });
-    expect(fake.permissionMode).toBe('default');
-    expect(s.choices.permissionMode).toBe('default');
+    await s.setPermissionMode('bypassPermissions');
+    expect(fake.permissionMode).toBe('bypassPermissions');
+    expect(s.choices.permissionMode).toBe('bypassPermissions');
+    expect(s.header.permissionMode).toBe('bypassPermissions');
   });
 
   it('setModel, setPermissionMode and setEffort apply live and update the header', async () => {
@@ -877,7 +890,7 @@ describe('LiveSession', () => {
     expect(authLabel({})).toEqual({ kind: 'other', label: 'Unknown' });
   });
 
-  it('never offers or applies a setMode → bypassPermissions suggestion (R11)', async () => {
+  it('never offers or applies a setMode → bypassPermissions suggestion as an Always allow rule', async () => {
     const { adapter, opts } = setup();
     const s = LiveSession.create('/p', { text: 'go' }, opts);
     const fake = adapter.lastSession();

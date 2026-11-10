@@ -310,11 +310,26 @@ const steps: string[] = [
   );
   CREATE INDEX IF NOT EXISTS away_queue_machine ON away_queue (machine_id, seq);
   `,
+  // the context window's size as a run of the chat last reported it (`chat:<id>`),
+  // and per API model (`model:<id>`): the header's context bar for a chat no
+  // process runs, whose history gives the tokens but not the window.
+  `
+  CREATE TABLE IF NOT EXISTS context_windows (
+    key TEXT PRIMARY KEY,
+    tokens INTEGER NOT NULL
+  );
+  `,
   // Let my phone connect: one row, apart from the settings a paired device may change.
+  // context_windows again: a development build of the phone branch ran this table
+  // as the step before, so a database from it has phone_access but not that one.
   `
   CREATE TABLE IF NOT EXISTS phone_access (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     enabled INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS context_windows (
+    key TEXT PRIMARY KEY,
+    tokens INTEGER NOT NULL
   );
   `,
 ];

@@ -180,6 +180,70 @@ describe('tabs', () => {
     expect(server.calls('chat.end')).toHaveLength(0);
     expect(server.calls('chat.interrupt')).toHaveLength(0);
   });
+
+  it('a right-click on a tab offers close, close others, close to the right and close all', async () => {
+    document.body.removeAttribute('style');
+    const { server, app, context } = await setup();
+    ['s1', 's2', 's3', 's4'].forEach(app.tabs.openTab);
+    render(TabsBar, { context });
+    const tablist = screen.getByRole('tablist');
+    await waitFor(() => expect(within(tablist).getAllByRole('tab')).toHaveLength(4));
+    const tab = (id: string) =>
+      tablist.querySelector<HTMLElement>(`[data-chat-key="${here(id)}"]`)!;
+    const menuOn = async (id: string) => {
+      await fireEvent.contextMenu(tab(id));
+      return screen.findByRole('menu');
+    };
+
+    let menu = await menuOn('s4');
+    expect(
+      within(menu)
+        .getAllByRole('menuitem')
+        .map((m) => m.textContent?.trim()),
+    ).toEqual(['Close', 'Close others', 'Close to the right', 'Close all']);
+    // Nothing is to the right of the last tab.
+    expect(
+      within(menu).getByRole('menuitem', { name: 'Close to the right' }).dataset.disabled,
+    ).toBeDefined();
+
+    await userEvent.click(within(menu).getByRole('menuitem', { name: 'Close' }));
+    expect(app.tabs.open).toEqual([here('s1'), here('s2'), here('s3')]);
+
+    menu = await menuOn('s2');
+    await userEvent.click(within(menu).getByRole('menuitem', { name: 'Close to the right' }));
+    expect(app.tabs.open).toEqual([here('s1'), here('s2')]);
+
+    menu = await menuOn('s2');
+    await userEvent.click(within(menu).getByRole('menuitem', { name: 'Close others' }));
+    expect(app.tabs.open).toEqual([here('s2')]);
+    expect(app.tabs.active).toBe(here('s2'));
+
+    menu = await menuOn('s2');
+    // A lone tab has no others.
+    expect(
+      within(menu).getByRole('menuitem', { name: 'Close others' }).dataset.disabled,
+    ).toBeDefined();
+    await userEvent.click(within(menu).getByRole('menuitem', { name: 'Close all' }));
+    expect(app.tabs.open).toEqual([]);
+
+    expect(server.calls('chat.end')).toHaveLength(0);
+  });
+
+  it("the Analytics tab's menu closes the chat tabs and keeps it", async () => {
+    document.body.removeAttribute('style');
+    const { app, context } = await setup();
+    ['s1', 's2'].forEach(app.tabs.openTab);
+    app.tabs.showAnalytics();
+    render(TabsBar, { context });
+    const tablist = screen.getByRole('tablist');
+    await waitFor(() => expect(within(tablist).getAllByRole('tab')).toHaveLength(3));
+
+    await fireEvent.contextMenu(within(tablist).getByRole('tab', { name: 'Analytics' }));
+    const menu = await screen.findByRole('menu');
+    await userEvent.click(within(menu).getByRole('menuitem', { name: 'Close others' }));
+    expect(app.tabs.open).toEqual([]);
+    expect(app.tabs.analyticsShown).toBe(true);
+  });
 });
 
 describe('restored tabs', () => {

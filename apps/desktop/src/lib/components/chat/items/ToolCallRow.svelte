@@ -59,6 +59,9 @@
           >· {summary.detail}</span
         >
       {/if}
+      {#if item.checkingPermission && item.status === 'running'}
+        <span class="text-muted-foreground shrink-0">· Checking permission…</span>
+      {/if}
     </button>
 
     {#if open}
