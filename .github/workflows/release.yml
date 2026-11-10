@@ -193,7 +193,7 @@ jobs:
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_ALIAS: ${{ vars.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         # Before an hour of building: the signing step's own check, which names what's missing.
         run: bash scripts/sign-android.sh --check
@@ -204,7 +204,7 @@ jobs:
           cache: gradle
       - uses: android-actions/setup-android@v3
         with:
-          # build-tools for zipalign and apksigner (16 KB page alignment needs 35 or later).
+          # build-tools for zipalign (-P 16 needs 35 or later), apksigner and aapt2.
           packages: platform-tools build-tools;36.0.0
       # NDK r27d (27.3.13750724), as CI's android job and the local builds.
       - uses: nttld/setup-ndk@v1
@@ -237,8 +237,11 @@ jobs:
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
-          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_ALIAS: ${{ vars.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          # Not secret: the certificate's fingerprint, to check the signer (a warning without it).
+          ANDROID_CERT_SHA256: ${{ vars.ANDROID_CERT_SHA256 }}
+          # The APK's versionName must be the release's.
           VERSION: ${{ needs.version.outputs.version }}
         run: >-
           bash scripts/sign-android.sh

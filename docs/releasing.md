@@ -42,23 +42,31 @@ keytool -genkeypair -v -keystore threadgarden-android.jks -keyalg RSA -keysize 4
 
 Choose a password when asked. The keystore keeps the key under that one
 password (a PKCS12 keystore, keytool's default), so the key's password is the
-same.
+same. It also asks for a name, organisation and so on: answer them with
+anything.
 
 1. Save `threadgarden-android.jks` itself, the password and the alias
    (`threadgarden`) in your password manager.
 2. Make the base64 of the file: `base64 -w0 threadgarden-android.jks` (on
    macOS `base64 -i threadgarden-android.jks`; in PowerShell
    `[Convert]::ToBase64String([IO.File]::ReadAllBytes("threadgarden-android.jks"))`).
-3. In GitHub (**Settings → Secrets and variables → Actions → New repository
-   secret**) add:
+3. Print the certificate's fingerprint, the line `SHA256:`:
+   `keytool -list -v -keystore threadgarden-android.jks -alias threadgarden`.
+4. In GitHub (**Settings → Secrets and variables → Actions**), add three
+   **secrets**:
    - `ANDROID_KEYSTORE_BASE64`: that base64 text;
    - `ANDROID_KEYSTORE_PASSWORD`: the password;
-   - `ANDROID_KEY_ALIAS`: `threadgarden`;
-   - `ANDROID_KEY_PASSWORD`: the password again.
-4. Delete the `.jks` from the PC once it's in the password manager.
+   - `ANDROID_KEY_PASSWORD`: the password again;
 
-Until all four are there, every release (and rehearsal) stops at the Android
-job and stays a draft; the job's error names the missing ones.
+   and, on the **Variables** tab, two variables (they aren't secret):
+   - `ANDROID_KEY_ALIAS`: `threadgarden`;
+   - `ANDROID_CERT_SHA256`: the fingerprint from step 3. Every release then
+     checks the APK is signed by this key. Without it the job only warns.
+5. Delete the `.jks` from the PC once it's in the password manager.
+
+Until the three secrets and the alias are there, every release (and
+rehearsal) stops at the Android job and stays a draft; the job's error names
+the missing ones.
 
 **If the key is ever lost,** phones can't update the app any more: a new key
 means a new app as far as Android is concerned. Make a new key as above, release,
