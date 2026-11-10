@@ -47,6 +47,16 @@ pub struct StoredMachine {
     pub added_at: u64,
 }
 
+/// A machine's plug: its details as `PowerConfigSchema` has them, and when
+/// the phone last cut its power (for the minimum off time).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct StoredPlug {
+    config: Value,
+    #[serde(default)]
+    last_cut: Option<u64>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Draft {
@@ -74,6 +84,9 @@ struct Data {
     /// The owner chose Disconnect: no alert links until Connect, after a reboot too.
     #[serde(default)]
     links_off: bool,
+    /// The plug details typed on the phone, by machine (never the password: that's a secret).
+    #[serde(default)]
+    plugs: BTreeMap<String, StoredPlug>,
     /// What a newer build wrote that this one doesn't know: kept as it is.
     #[serde(flatten)]
     rest: Map<String, Value>,
@@ -179,6 +192,47 @@ impl Store {
                         updated_at: now,
                     },
                 );
+            }
+        })
+    }
+
+    /// A machine's plug details, if it has any.
+    pub fn plug(&self, machine_id: &str) -> Option<Value> {
+        self.lock().plugs.get(machine_id).map(|p| p.config.clone())
+    }
+
+    /// Every machine's plug details.
+    pub fn plugs(&self) -> Vec<(String, Value)> {
+        self.lock()
+            .plugs
+            .iter()
+            .map(|(id, p)| (id.clone(), p.config.clone()))
+            .collect()
+    }
+
+    /// Keeps (or with None, forgets) a machine's plug details; its last cut stays with them.
+    pub fn set_plug(&self, machine_id: &str, config: Option<Value>) -> io::Result<()> {
+        self.change(|d| match config {
+            Some(config) => {
+                let last_cut = d.plugs.get(machine_id).and_then(|p| p.last_cut);
+                d.plugs
+                    .insert(machine_id.to_string(), StoredPlug { config, last_cut });
+            }
+            None => {
+                d.plugs.remove(machine_id);
+            }
+        })
+    }
+
+    /// When the phone last cut the machine's power (Unix ms).
+    pub fn plug_cut(&self, machine_id: &str) -> Option<u64> {
+        self.lock().plugs.get(machine_id).and_then(|p| p.last_cut)
+    }
+
+    pub fn set_plug_cut(&self, machine_id: &str, at_ms: u64) -> io::Result<()> {
+        self.change(|d| {
+            if let Some(p) = d.plugs.get_mut(machine_id) {
+                p.last_cut = Some(at_ms);
             }
         })
     }

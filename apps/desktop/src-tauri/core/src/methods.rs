@@ -343,8 +343,6 @@ pub fn register(router: &mut Router, deps: Deps) {
         ("copies.get", Value::Null),
         ("copies.chat", Value::Null),
         ("copies.tails", json!({})),
-        // The plug (Task 8) fills this.
-        ("power.list", json!([])),
         // Whether a window is focused: the core alerts on its own (Task 9), never by this.
         ("ui.visibility", json!({})),
         // A screen's error report: there's no service log on the phone to keep it in.
@@ -420,15 +418,10 @@ pub const REFUSED: &[&str] = &[
     "away.queue",
     "away.cancel",
     "away.retry",
-    // The plug comes with Task 8: reading, Turn on and the setup dialog show the error.
+    // The desktop's plug setup dialog (finding and naming a plug): the phone takes typed details.
     "power.probe",
     "power.pairPlug",
-    "power.configure",
-    "power.unlock",
-    "power.reading",
-    "power.turnOn",
     "power.rename",
-    "power.noteMeasurement",
     // Let my phone connect is the desktop's: the phone is what connects.
     "phoneAccess.get",
     "phoneAccess.set",
@@ -503,7 +496,7 @@ mod tests {
             LocalEvents::default(),
             relays,
             crate::alerts::for_tests(dir.path()),
-            crate::Timing::default().pairing,
+            crate::Timing::default(),
         );
         for m in router.methods() {
             assert!(!REFUSED.contains(&m), "{m}");

@@ -21,11 +21,13 @@ mod alerts;
 mod machines;
 mod methods;
 mod pairing;
+mod power;
 mod relay;
 pub mod secrets;
 mod server;
 mod settings;
 pub mod store;
+mod tasmota;
 mod update;
 
 pub use methods::{PLATFORM, REFUSED};
@@ -111,6 +113,8 @@ pub struct Timing {
     /// After a network change, how long an open link has to answer a ping
     /// before it's dropped and made again.
     pub network_check: Duration,
+    /// Between asking a plug to report and reading what it says (`readWaitMs`).
+    pub plug_read_wait: Duration,
 }
 
 impl Default for Timing {
@@ -122,6 +126,7 @@ impl Default for Timing {
             backoff_start: Duration::from_secs(2),
             backoff_max: Duration::from_secs(60),
             network_check: Duration::from_secs(4),
+            plug_read_wait: Duration::from_millis(1500),
         }
     }
 }
@@ -157,7 +162,7 @@ pub(crate) fn router(
     events: LocalEvents,
     relays: Arc<relay::Relays>,
     alerts: Arc<alerts::Alerts>,
-    pairing_timeout: Duration,
+    timing: Timing,
 ) -> Router {
     let mut router = Router::default();
     methods::register(
@@ -168,8 +173,18 @@ pub(crate) fn router(
         },
     );
     alerts.register(&mut router);
-    machines::Machines::new(store, secrets, events, relays, alerts, pairing_timeout)
-        .register(&mut router);
+    let power = power::Power::new(store.clone(), secrets.clone(), timing.plug_read_wait);
+    power.register(&mut router);
+    machines::Machines::new(
+        store,
+        secrets,
+        events,
+        relays,
+        alerts,
+        power,
+        timing.pairing,
+    )
+    .register(&mut router);
     router
 }
 
@@ -373,7 +388,7 @@ impl Core {
             local_events.clone(),
             relays.clone(),
             alerts.clone(),
-            timing.pairing,
+            timing,
         );
         let methods = router.methods();
         let (shutdown, stopped) = watch::channel(false);

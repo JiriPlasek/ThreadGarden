@@ -1,0 +1,13 @@
+{
+  "cases": [
+    {
+      "error": {
+        "code": "POWER_NOT_CONFIGURED"
+      },
+      "params": {
+        "machineId": "m1"
+      }
+    }
+  ],
+  "method": "power.turnOn"
+}
