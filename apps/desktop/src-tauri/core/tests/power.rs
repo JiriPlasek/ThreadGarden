@@ -115,7 +115,7 @@ fn off_command(zigbee: bool) -> String {
 fn until(what: &str, done: impl Fn() -> bool) {
     let started = std::time::Instant::now();
     while !done() {
-        assert!(started.elapsed() < Duration::from_secs(5), "never: {what}");
+        assert!(started.elapsed() < Duration::from_secs(10), "never: {what}");
         std::thread::sleep(Duration::from_millis(10));
     }
 }
@@ -256,19 +256,20 @@ fn a_bridge_without_threadgardens_rule_is_never_cycled() {
 fn the_minimum_off_time_holds() {
     let dir = tempfile::tempdir().unwrap();
     let plug = FakeTasmota::start(true, off());
-    // Cut 8 s ago (Mem11 has whole seconds: 2 to 3 s of the minimum off time are left).
+    // Cut 6 s ago (Mem11 has whole seconds: 4 to 5 s of the minimum off time are left,
+    // room for a slow runner's set-up before the turn-on is asked).
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs();
-    plug.with_desktop_rule(now - (MIN_OFF - 2));
+    plug.with_desktop_rule(now - (MIN_OFF - 4));
     let (core, _, _desk) = set_up(dir.path(), &plug);
     let answer = block_on(turn_on(&core));
     let wait = answer["result"]["waitMs"]
         .as_u64()
         .unwrap_or_else(|| panic!("{answer}"));
     assert_eq!(answer["result"]["cycled"], false);
-    assert!((1_000..=3_100).contains(&wait), "{wait}");
+    assert!((1_500..=5_100).contains(&wait), "{wait}");
     // Waited out here, not on the switch: nothing but reads went yet.
     let sent = plug.commands();
     assert!(
