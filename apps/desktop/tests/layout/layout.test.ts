@@ -200,7 +200,7 @@ describe('tabs', () => {
       within(menu)
         .getAllByRole('menuitem')
         .map((m) => m.textContent?.trim()),
-    ).toEqual(['Close', 'Close others', 'Close to the right', 'Close all']);
+    ).toEqual(['Close Ctrl+W', 'Close others', 'Close to the right', 'Close all']);
     // Nothing is to the right of the last tab.
     expect(
       within(menu).getByRole('menuitem', { name: 'Close to the right' }).dataset.disabled,
