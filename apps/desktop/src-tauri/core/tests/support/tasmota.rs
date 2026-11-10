@@ -1,7 +1,9 @@
 //! A small Tasmota for the tests: the HTTP command API (`/cm?user=admin&
 //! password=…&cmnd=…`) of a Zigbee bridge with one plug, or of a Wi-Fi plug,
-//! answering the commands the core sends. `Backlog` runs its parts in order,
-//! `Delay` (tenths of a second) included. Every command is written down.
+//! answering the commands the core sends. With the desktop's Threadgarden
+//! rule in a slot (`with_desktop_rule`), `Event tgw` cuts the plug, writes
+//! `Mem11` and restores it, as that rule does. Every command received is
+//! written down (what the fake does by itself isn't).
 #![allow(dead_code)]
 
 use std::collections::HashMap;
@@ -31,6 +33,10 @@ struct State {
     requests: usize,
     rules: HashMap<u8, String>,
     mems: HashMap<u8, String>,
+    /// How long the rule's cycle keeps the plug off (its RuleTimer6).
+    cycle_off: Duration,
+    /// Rule and Mem reads answer garbage (a firmware without them, a broken bridge).
+    broken_reads: bool,
 }
 
 pub struct FakeTasmota {
@@ -98,6 +104,7 @@ impl FakeTasmota {
     pub fn start_with(zigbee: bool, plug: Plug, slow: Duration) -> FakeTasmota {
         let state = Arc::new(Mutex::new(State {
             plug: Some(plug),
+            cycle_off: Duration::from_millis(200),
             ..State::default()
         }));
         let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -170,16 +177,12 @@ impl FakeTasmota {
         {
             let mut s = state.lock().unwrap();
             s.requests += 1;
+            s.commands.push((Instant::now(), cmnd.to_string()));
         }
         Self::one(state, zigbee, cmnd)
     }
 
     fn one(state: &Arc<Mutex<State>>, zigbee: bool, cmnd: &str) -> Value {
-        state
-            .lock()
-            .unwrap()
-            .commands
-            .push((Instant::now(), cmnd.to_string()));
         let (name, arg) = cmnd.split_once(' ').unwrap_or((cmnd, ""));
         let lower = name.to_lowercase();
         if lower == "backlog" {
@@ -190,10 +193,6 @@ impl FakeTasmota {
                 for part in parts {
                     if let Some(n) = part.strip_prefix("Delay ") {
                         let tenths: u64 = n.trim().parse().unwrap_or(0);
-                        s.lock()
-                            .unwrap()
-                            .commands
-                            .push((Instant::now(), part.clone()));
                         std::thread::sleep(Duration::from_millis(tenths * 100));
                         continue;
                     }
@@ -202,7 +201,31 @@ impl FakeTasmota {
             });
             return json!({ "Backlog": "Done" });
         }
+        if lower == "event" && arg.eq_ignore_ascii_case("tgw") {
+            // Threadgarden's rule: off, Mem11 the time, on after its off time. Nothing without the rule.
+            let mut s = state.lock().unwrap();
+            let ours = s.rules.values().any(|r| r.contains("Event#tga do"));
+            if ours && let Some(p) = s.plug.as_mut() {
+                p.on = false;
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs();
+                s.mems.insert(11, now.to_string());
+                let (st, off) = (state.clone(), s.cycle_off);
+                std::thread::spawn(move || {
+                    std::thread::sleep(off);
+                    if let Some(p) = st.lock().unwrap().plug.as_mut() {
+                        p.on = true;
+                    }
+                });
+            }
+            return json!({ "Event": "Done" });
+        }
         let mut s = state.lock().unwrap();
+        if s.broken_reads && (lower.starts_with("rule") || lower.starts_with("mem")) {
+            return json!({ "Command": "Unknown" });
+        }
         match (lower.as_str(), zigbee) {
             ("status", _) if arg == "2" => json!({ "StatusFWR": { "Version": "14.4.1" } }),
             ("status", false) if arg == "8" => {
@@ -228,6 +251,8 @@ impl FakeTasmota {
                 }
                 json!({ "ZbSend": "Done" })
             }
+            // A bridge knows its plug by name only: anything else is an error.
+            ("zbstatus3", true) if arg != DEVICE => json!({ "Command": "Error" }),
             ("zbstatus3", true) => {
                 let p = s.plug.clone().unwrap();
                 json!({ "ZbStatus3": [{ "Device": "0x1234", "Name": DEVICE, "Power": u8::from(p.on),
@@ -238,6 +263,7 @@ impl FakeTasmota {
                 let text = s.rules.get(&n).cloned().unwrap_or_default();
                 json!({ format!("Rule{n}"): { "State": "ON", "Rules": text } })
             }
+            ("timer16", _) => json!({ "Timer16": { "Enable": 0 } }),
             (m, _) if m.starts_with("mem") => {
                 let n: u8 = m[3..].parse().unwrap_or(0);
                 json!({ format!("Mem{n}"): s.mems.get(&n).cloned().unwrap_or_default() })
@@ -281,6 +307,11 @@ impl FakeTasmota {
         s.rules
             .insert(2, "on Event#tga do Backlog Var14 0 endon".into());
         s.mems.insert(11, last_cut_secs.to_string());
+    }
+
+    /// Rule and Mem reads answer something that isn't them.
+    pub fn break_reads(&self) {
+        self.state.lock().unwrap().broken_reads = true;
     }
 
     pub fn is_zigbee(&self) -> bool {

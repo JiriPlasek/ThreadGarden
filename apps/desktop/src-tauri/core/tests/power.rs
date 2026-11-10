@@ -111,11 +111,11 @@ fn off_command(zigbee: bool) -> String {
     }
 }
 
-/// Waits (up to 3 s) for `done`.
+/// Waits (up to 5 s) for `done`.
 fn until(what: &str, done: impl Fn() -> bool) {
     let started = std::time::Instant::now();
     while !done() {
-        assert!(started.elapsed() < Duration::from_secs(3), "never: {what}");
+        assert!(started.elapsed() < Duration::from_secs(5), "never: {what}");
         std::thread::sleep(Duration::from_millis(10));
     }
 }
@@ -169,7 +169,8 @@ fn a_machine_drawing_power_is_not_cycled() {
 #[test]
 fn a_plug_reading_on_but_below_off_watts_is_cycled_as_on_the_desktop() {
     let dir = tempfile::tempdir().unwrap();
-    // On, in standby (2 W, under the default 5 W), heard from a second ago.
+    // On, in standby (2 W, under the default 5 W), heard from a second ago, on a
+    // bridge the desktop set up (Threadgarden's rule in a slot).
     let plug = FakeTasmota::start(
         true,
         Plug {
@@ -178,6 +179,7 @@ fn a_plug_reading_on_but_below_off_watts_is_cycled_as_on_the_desktop() {
             last_seen: 1,
         },
     );
+    plug.with_desktop_rule(0);
     let (core, _, _desk) = set_up(dir.path(), &plug);
     let answer = block_on(turn_on(&core));
     assert_eq!(
@@ -185,22 +187,20 @@ fn a_plug_reading_on_but_below_off_watts_is_cycled_as_on_the_desktop() {
         json!({ "cycled": true, "waitMs": MIN_OFF * 1000 }),
         "{answer}"
     );
-    // Off, the minimum off time on the switch itself (so the phone going away can't leave it off), then on.
-    let backlog = plug
-        .commands()
-        .into_iter()
-        .find(|c| c.starts_with("Backlog"))
-        .expect("a Backlog");
-    assert_eq!(
-        backlog,
-        format!(
-            "Backlog {};Delay {};{}",
-            off_command(true),
-            MIN_OFF * 10,
-            on_command(true)
-        )
+    // The rule cuts and restores: the phone only asks for it, and clears the wake after.
+    let sent = plug.commands();
+    assert!(sent.contains(&"Event tgw".to_string()), "{sent:?}");
+    assert!(
+        sent.contains(&r#"Timer16 {"Enable":0}"#.to_string()),
+        "{sent:?}"
     );
-    until("the plug is off", || !plug.plug().on);
+    assert!(
+        !sent
+            .iter()
+            .any(|c| c.starts_with("Backlog") || c.contains("Delay")),
+        "{sent:?}"
+    );
+    until("the rule restored it", || plug.plug().on);
 
     // A reading from long ago never drives a cut: the PC may have been started since.
     let dir = tempfile::tempdir().unwrap();
@@ -212,56 +212,88 @@ fn a_plug_reading_on_but_below_off_watts_is_cycled_as_on_the_desktop() {
             last_seen: 30,
         },
     );
+    stale.with_desktop_rule(0);
     let (core2, _, _desk2) = set_up(dir.path(), &stale);
     let answer = block_on(turn_on(&core2));
     assert_eq!(
         answer["error"],
         json!({ "code": "POWER_UNREACHABLE", "message": "Couldn't get a fresh reading from the plug; try again." })
     );
-    assert!(
-        !stale
-            .commands()
-            .iter()
-            .any(|c| c.contains("Power\":0") || c.starts_with("Backlog"))
-    );
+    assert!(!stale.commands().contains(&"Event tgw".to_string()));
     core.stop();
     core2.stop();
+}
+
+#[test]
+fn a_bridge_without_threadgardens_rule_is_never_cycled() {
+    let dir = tempfile::tempdir().unwrap();
+    let plug = FakeTasmota::start(
+        true,
+        Plug {
+            on: true,
+            watts: 2.0,
+            last_seen: 1,
+        },
+    );
+    let (core, _, _desk) = set_up(dir.path(), &plug);
+    let answer = block_on(turn_on(&core));
+    assert_eq!(
+        answer["error"],
+        json!({ "code": "POWER_NOT_CONFIGURED", "message": "Set up power control on the desktop first" })
+    );
+    let sent = plug.commands();
+    assert!(
+        !sent
+            .iter()
+            .any(|c| c == "Event tgw" || c.contains("\"Send\"") || c.starts_with("Timer")),
+        "{sent:?}"
+    );
+    assert!(plug.plug().on);
+    core.stop();
 }
 
 #[test]
 fn the_minimum_off_time_holds() {
     let dir = tempfile::tempdir().unwrap();
     let plug = FakeTasmota::start(true, off());
-    // Cut 3 s ago, as the desktop's rule on the bridge wrote down.
+    // Cut 8 s ago (Mem11 has whole seconds: 2 to 3 s of the minimum off time are left).
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs();
-    plug.with_desktop_rule(now - 3);
+    plug.with_desktop_rule(now - (MIN_OFF - 2));
     let (core, _, _desk) = set_up(dir.path(), &plug);
     let answer = block_on(turn_on(&core));
     let wait = answer["result"]["waitMs"]
         .as_u64()
         .unwrap_or_else(|| panic!("{answer}"));
     assert_eq!(answer["result"]["cycled"], false);
-    assert!((5_900..=7_100).contains(&wait), "{wait}");
-    // The on waits on the switch itself; it isn't on yet.
-    let backlog = plug
-        .commands()
-        .into_iter()
-        .find(|c| c.starts_with("Backlog"))
-        .expect("a Backlog");
-    assert!(backlog.starts_with("Backlog Delay "), "{backlog}");
-    assert!(backlog.ends_with(&on_command(true)), "{backlog}");
-    std::thread::sleep(Duration::from_millis(300));
+    assert!((1_000..=3_100).contains(&wait), "{wait}");
+    // Waited out here, not on the switch: nothing but reads went yet.
+    let sent = plug.commands();
+    assert!(
+        !sent
+            .iter()
+            .any(|c| c == &on_command(true) || c.starts_with("Backlog")),
+        "{sent:?}"
+    );
     assert!(!plug.plug().on);
     // Asked again meanwhile: the same answer, nothing more sent.
-    let sent = plug.commands().len();
+    let before = plug.commands().len();
     let again = block_on(turn_on(&core));
     assert_eq!(again["result"], answer["result"]);
-    assert_eq!(plug.commands().len(), sent);
+    assert_eq!(plug.commands().len(), before);
+    // Then the plug's own on, and the wake cleared.
+    until("the plug is on", || plug.plug().on);
+    until("the wake is cleared", || {
+        plug.commands()
+            .contains(&r#"Timer16 {"Enable":0}"#.to_string())
+    });
+    core.stop();
+}
 
-    // The phone's own cut counts too, across a restart.
+#[test]
+fn the_phones_own_cut_holds_across_a_restart() {
     let dir = tempfile::tempdir().unwrap();
     let standby = FakeTasmota::start(
         true,
@@ -271,6 +303,7 @@ fn the_minimum_off_time_holds() {
             last_seen: 1,
         },
     );
+    standby.with_desktop_rule(0);
     let (first, secrets, desk) = set_up(dir.path(), &standby);
     assert_eq!(block_on(turn_on(&first))["result"]["cycled"], true);
     first.stop();
@@ -290,8 +323,147 @@ fn the_minimum_off_time_holds() {
         .unwrap_or_else(|| panic!("{answer}"));
     assert!(wait > 8_000 && wait <= MIN_OFF * 1000, "{wait}");
     drop(desk);
-    core.stop();
     second.stop();
+}
+
+#[test]
+fn a_wait_for_details_cleared_meanwhile_sends_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let plug = FakeTasmota::start(true, off());
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+    plug.with_desktop_rule(now - (MIN_OFF - 2));
+    let (core, _, _desk) = set_up(dir.path(), &plug);
+    let answer = block_on(turn_on(&core));
+    assert!(
+        answer["result"]["waitMs"].as_u64().is_some_and(|w| w > 0),
+        "{answer}"
+    );
+    block_on(async {
+        let mut ws = open(&core).await;
+        call(
+            &mut ws,
+            1,
+            "power.configure",
+            json!({ "machineId": DESK, "config": null }),
+        )
+        .await;
+    });
+    std::thread::sleep(Duration::from_millis(3_500));
+    assert!(!plug.plug().on);
+    assert!(!plug.commands().contains(&on_command(true)));
+    core.stop();
+}
+
+#[test]
+fn a_failed_rule_or_mem_read_fails_turn_on() {
+    let dir = tempfile::tempdir().unwrap();
+    let plug = FakeTasmota::start(true, off());
+    plug.with_desktop_rule(0);
+    let (core, _, _desk) = set_up(dir.path(), &plug);
+    plug.break_reads();
+    let answer = block_on(turn_on(&core));
+    assert_eq!(answer["error"]["code"], "POWER_NOT_TASMOTA", "{answer}");
+    std::thread::sleep(Duration::from_millis(200));
+    assert!(!plug.commands().contains(&on_command(true)));
+    assert!(!plug.plug().on);
+    core.stop();
+}
+
+#[test]
+fn a_zigbee_plug_is_known_to_the_bridge_by_that_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let plug = FakeTasmota::start(true, off());
+    let (core, _) = core(dir.path());
+    let desk = FakeMachine::start(Behaviour::default());
+    block_on(async {
+        pair(&core, &desk).await;
+        let mut ws = open(&core).await;
+        let mut typo = details(&plug);
+        typo["device"] = json!("DeskPlg");
+        let answer = call(
+            &mut ws,
+            1,
+            "power.configure",
+            json!({ "machineId": DESK, "config": typo, "password": PASSWORD }),
+        )
+        .await;
+        assert_eq!(
+            answer["error"],
+            json!({ "code": "POWER_NOT_CONFIGURED", "message": "The bridge has no plug called DeskPlg." })
+        );
+        assert_eq!(
+            call(&mut ws, 2, "power.list", json!({})).await["result"],
+            json!([])
+        );
+        for (i, bad) in ["0x1234", "1234", &"p".repeat(33)].into_iter().enumerate() {
+            let mut d = details(&plug);
+            d["device"] = json!(bad);
+            let answer = call(
+                &mut ws,
+                10 + i as u64,
+                "power.configure",
+                json!({ "machineId": DESK, "config": d, "password": PASSWORD }),
+            )
+            .await;
+            assert!(answer.get("error").is_some(), "{bad}: {answer}");
+        }
+    });
+    core.stop();
+}
+
+/// Everything the phone may send a bridge: reads, the plug's own on and off,
+/// Threadgarden's cycle and its wake timer. Nothing else.
+fn allowed(cmnd: &str) -> bool {
+    let reads = [
+        "Status 2", "Status 8", "Power", "Rule1", "Rule2", "Rule3", "Mem11",
+    ];
+    reads.contains(&cmnd)
+        || cmnd == format!("ZbStatus3 {DEVICE}")
+        || cmnd == format!(r#"ZbSend {{"Device":"{DEVICE}","Read":{{"ActivePower":true}}}}"#)
+        || cmnd == on_command(true)
+        || cmnd == on_command(false)
+        || cmnd == "Event tgw"
+        || cmnd == r#"Timer16 {"Enable":0}"#
+}
+
+#[test]
+fn nothing_else_on_the_bridge_is_touched() {
+    for zigbee in [true, false] {
+        let dir = tempfile::tempdir().unwrap();
+        let plug = FakeTasmota::start(
+            zigbee,
+            Plug {
+                on: true,
+                watts: 2.0,
+                last_seen: 1,
+            },
+        );
+        plug.with_desktop_rule(0);
+        let (core, _, _desk) = set_up(dir.path(), &plug);
+        block_on(async {
+            let mut ws = open(&core).await;
+            call(&mut ws, 1, "power.reading", json!({ "machineId": DESK })).await;
+            // A cycle from standby, then off and on after the off time.
+            assert_eq!(
+                call(&mut ws, 2, "power.turnOn", json!({ "machineId": DESK })).await["result"]["cycled"],
+                true
+            );
+        });
+        until("the rule restored it", || plug.plug().on);
+        let sent = plug.commands();
+        for cmnd in &sent {
+            assert!(allowed(cmnd), "sent {cmnd:?} ({sent:?})");
+            // Every Zigbee command names exactly the configured plug.
+            if let Some(json) = cmnd.strip_prefix("ZbSend ") {
+                let v: Value = serde_json::from_str(json).unwrap();
+                assert_eq!(v["Device"], DEVICE, "{cmnd}");
+            }
+        }
+        core.stop();
+    }
 }
 
 #[test]

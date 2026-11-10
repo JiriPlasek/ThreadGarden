@@ -1,22 +1,27 @@
 //! Turn on a machine through its plug, from the phone: the plug details the
 //! owner typed here (`power.configure`), the password in `Secrets` only, and
-//! the rules of the desktop's `power/hub.ts`:
+//! exactly what the desktop's `power/hub.ts` does (Ruling R16):
 //!
 //! - a fresh reading first, every time;
 //! - a plug that's on and drawing power (at least `offWatts`) is left alone:
 //!   the machine runs;
 //! - on but below `offWatts` (standby), with a reading at most 5 s old, it's
-//!   cycled: off, the minimum off time, on (a PC set to power on after a cut
-//!   boots from that); an older reading never drives a cut;
-//! - off: on, once the minimum off time since the last cut is over (the
-//!   phone's own cuts, and the desktop rule's `Mem11` when the bridge has it);
+//!   cycled with `Event tgw`: Threadgarden's own rule on the bridge (which the
+//!   desktop installs) cuts, restores and writes the cut to `Mem11`. Without
+//!   that rule there's no cycle from here ("Set up power control on the
+//!   desktop first"); an older reading never drives a cut;
+//! - off: on, once the minimum off time since the last cut (`Mem11`, and the
+//!   phone's own) is over; what's left of it is waited out here, as the hub's
+//!   `hold` does, then the plug's own on;
+//! - after a Turn on, the wake is cleared (`Timer16 {"Enable":0}`, best
+//!   effort, on a bridge with Threadgarden's rule), as the hub does;
 //! - one operation at a time per machine: a second Turn on gets the first's
 //!   answer, and one waiting out the off time gets that wait.
 //!
-//! The waits are the switch's own (`Backlog …;Delay …;on`), so a phone that
-//! goes away meanwhile can't leave a machine without power. No rule is ever
-//! installed, no `power.adopt` sent, and nothing is polled: a reading happens
-//! when a screen asks (kept 3 s).
+//! Nothing else on the bridge is ever touched: reads, the plug's own on and
+//! off, `Event tgw` and Threadgarden's `Timer16`. No rule is installed, no
+//! `power.adopt` sent, and nothing is polled: a reading happens when a screen
+//! asks (kept 3 s).
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -35,8 +40,10 @@ use crate::tasmota::{self, AUTH, NOT_CONFIGURED, NOT_TASMOTA, UNREACHABLE, field
 const READING_TTL_MS: u64 = 3000;
 /// A standby reading older than this (seconds) never drives a cycle.
 const FRESH_READING_S: u64 = 5;
-/// Tasmota's longest `Delay`, in tenths of a second.
-const MAX_DELAY: u64 = 3600;
+/// The longest a Zigbee plug's name may be (`isZigbeeName`).
+const ZIGBEE_NAME_MAX: usize = 32;
+/// What a standby cycle needs, and the bridge lacks without the desktop's setup.
+const NEEDS_DESKTOP: &str = "Set up power control on the desktop first";
 
 /// The `Secrets` key of a machine's plug password.
 pub fn password_key(machine_id: &str) -> String {
@@ -70,11 +77,21 @@ fn number(v: f64) -> Value {
     }
 }
 
-/// The Zigbee names Tasmota takes in a command (`isZigbeeName`).
+/// A Zigbee plug's name as Tasmota takes it in a command (`isZigbeeName`):
+/// never an address (`0x…`) or a bare number, which the bridge would read as
+/// another device.
 fn is_zigbee_name(s: &str) -> bool {
     !s.is_empty()
+        && s.len() <= ZIGBEE_NAME_MAX
         && s.chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+        && !s.to_ascii_lowercase().starts_with("0x")
+        && !s.chars().all(|c| c.is_ascii_digit())
+}
+
+/// Threadgarden's rule, as `rules.ts`'s `isOurs` knows it.
+fn is_ours(rule: &str) -> bool {
+    rule.contains("Event#tga do")
 }
 
 /// A plug's settings, as `PowerConfigSchema` reads them (defaults filled in).
@@ -183,29 +200,6 @@ impl PlugConfig {
             "Power 1".into()
         }
     }
-
-    fn off(&self) -> String {
-        if self.zigbee {
-            format!(
-                r#"ZbSend {{"Device":"{}","Send":{{"Power":0}}}}"#,
-                self.device()
-            )
-        } else {
-            "Power 0".into()
-        }
-    }
-}
-
-/// `Delay` commands that wait `ms` on the switch (each at most `MAX_DELAY`).
-fn delays(ms: u64) -> Vec<String> {
-    let mut tenths = ms.div_ceil(100);
-    let mut out = Vec::new();
-    while tenths > 0 {
-        let d = tenths.min(MAX_DELAY);
-        out.push(format!("Delay {d}"));
-        tenths -= d;
-    }
-    out
 }
 
 type Answer = Result<Value, MethodError>;
@@ -221,6 +215,8 @@ pub struct Power {
     pending: Arc<Mutex<HashMap<String, (Value, u64)>>>,
     /// The last reading of each plug, and when.
     cache: Arc<Mutex<HashMap<String, (Value, u64)>>>,
+    /// Bumped when a machine's plug details change or go: a wait under way gives up.
+    generations: Arc<Mutex<HashMap<String, u64>>>,
 }
 
 impl Power {
@@ -232,6 +228,7 @@ impl Power {
             inflight: Arc::default(),
             pending: Arc::default(),
             cache: Arc::default(),
+            generations: Arc::default(),
         }
     }
 
@@ -251,7 +248,18 @@ impl Power {
         Ok((config, password))
     }
 
+    fn generation(&self, machine_id: &str) -> u64 {
+        locked(&self.generations)
+            .get(machine_id)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    /// Forgets readings and waits: a wait under way gives up (its on isn't sent).
     fn forget_state(&self, machine_id: &str) {
+        *locked(&self.generations)
+            .entry(machine_id.to_string())
+            .or_insert(0) += 1;
         locked(&self.pending).remove(machine_id);
         locked(&self.cache).remove(machine_id);
     }
@@ -304,7 +312,27 @@ impl Power {
         // The password checked now, so a typo says so here. An unreachable
         // switch is kept all the same (the phone may be away from home).
         match tasmota::command(&config.address, &password, "Status 2").await {
-            Ok(_) => {}
+            Ok(_) => {
+                // A bridge that answers knows the plug by exactly this name, or it isn't the one.
+                if config.zigbee {
+                    let st = tasmota::command(
+                        &config.address,
+                        &password,
+                        &format!("ZbStatus3 {}", config.device()),
+                    )
+                    .await?;
+                    let named = field(&st, "ZbStatus3")
+                        .and_then(|v| v.get(0))
+                        .and_then(|d| d["Name"].as_str())
+                        .is_some_and(|n| n == config.device());
+                    if !named {
+                        return Err(MethodError::new(
+                            NOT_CONFIGURED,
+                            format!("The bridge has no plug called {}.", config.device()),
+                        ));
+                    }
+                }
+            }
             Err(e) if e.code == AUTH || e.code == NOT_TASMOTA => return Err(e),
             Err(_) => {}
         }
@@ -429,6 +457,7 @@ impl Power {
 
     async fn do_turn_on(&self, machine_id: &str) -> Answer {
         let (config, password) = self.ready(machine_id).await?;
+        let generation = self.generation(machine_id);
         let min_off_ms = config.min_off_seconds * 1000;
         locked(&self.cache).remove(machine_id);
         let reading = self.read_plug(&config, &password).await?;
@@ -437,12 +466,6 @@ impl Power {
                 UNREACHABLE,
                 "The switch didn't report whether the plug is on.",
             ));
-        };
-        let (address, pw) = (config.address.clone(), password.clone());
-        let send = move |cmnds: Vec<String>| {
-            let backlog = format!("Backlog {}", cmnds.join(";"));
-            let (address, pw) = (address.clone(), pw.clone());
-            async move { tasmota::command(&address, &pw, &backlog).await.map(|_| ()) }
         };
         if on {
             let standby = reading["watts"]
@@ -462,12 +485,13 @@ impl Power {
                     "Couldn't get a fresh reading from the plug; try again.",
                 ));
             }
-            // Standby: off, the minimum off time, on, all on the switch.
-            let mut cmnds = vec![config.off()];
-            cmnds.extend(delays(min_off_ms));
-            cmnds.push(config.on());
-            send(cmnds).await?;
+            // Standby: Threadgarden's rule cuts and restores (and writes Mem11), never anything of ours.
+            if !self.has_our_rule(&config, &password).await? {
+                return Err(MethodError::new(NOT_CONFIGURED, NEEDS_DESKTOP));
+            }
             self.note_cut(machine_id).await;
+            tasmota::command(&config.address, &password, "Event tgw").await?;
+            Self::clear_wake(&config, &password).await;
             let answer = json!({ "cycled": true, "waitMs": min_off_ms });
             locked(&self.pending).insert(
                 machine_id.to_string(),
@@ -475,21 +499,69 @@ impl Power {
             );
             return Ok(answer);
         }
-        let cut = self.last_cut(machine_id, &config, &password).await;
+        let cut = self.last_cut(machine_id, &config, &password).await?;
         let wait = cut.map_or(0, |c| (c + min_off_ms).saturating_sub(now_ms()));
         if wait == 0 {
             tasmota::command(&config.address, &password, &config.on()).await?;
+            Self::clear_wake(&config, &password).await;
             return Ok(json!({ "cycled": false, "waitMs": 0 }));
         }
-        let mut cmnds = delays(wait);
-        cmnds.push(config.on());
-        send(cmnds).await?;
+        // What's left of the off time is waited out here, as the hub's `hold`; then the plug's on.
         let answer = json!({ "cycled": false, "waitMs": wait });
         locked(&self.pending).insert(machine_id.to_string(), (answer.clone(), now_ms() + wait));
+        let (me, id) = (self.clone(), machine_id.to_string());
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(wait)).await;
+            // The details changed or went meanwhile: nothing is sent.
+            if me.generation(&id) != generation {
+                return;
+            }
+            locked(&me.pending).remove(&id);
+            locked(&me.cache).remove(&id);
+            // A switch that stays unreachable leaves the plug off; the next reading shows it.
+            if tasmota::command(&config.address, &password, &config.on())
+                .await
+                .is_ok()
+            {
+                Self::clear_wake(&config, &password).await;
+            }
+        });
         Ok(answer)
     }
 
-    /// The phone's own cut, kept with the plug (it outlives a restart).
+    /// Clears a wake left on the bridge, as the hub does after a Turn on (it
+    /// would cut the running machine): Threadgarden's own `Timer16`, only on a
+    /// bridge with Threadgarden's rule. Best effort.
+    async fn clear_wake(config: &PlugConfig, password: &str) {
+        let Ok(true) = Self::rule_on(config, password).await else {
+            return;
+        };
+        let _ = tasmota::command(&config.address, password, r#"Timer16 {"Enable":0}"#).await;
+    }
+
+    async fn has_our_rule(&self, config: &PlugConfig, password: &str) -> Result<bool, MethodError> {
+        Self::rule_on(config, password).await
+    }
+
+    /// Whether a rule slot holds Threadgarden's rule; a read that fails fails this.
+    async fn rule_on(config: &PlugConfig, password: &str) -> Result<bool, MethodError> {
+        for slot in 1..=3 {
+            let rule = tasmota::command(&config.address, password, &format!("Rule{slot}")).await?;
+            let Some(r) = field(&rule, &format!("Rule{slot}")).filter(|r| r.is_object()) else {
+                return Err(MethodError::new(
+                    NOT_TASMOTA,
+                    format!("{} did not answer like a Tasmota device.", config.address),
+                ));
+            };
+            if is_ours(r["Rules"].as_str().unwrap_or_default()) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// The phone's own cut, kept with the plug (it outlives a restart), noted
+    /// before the cut is asked for.
     async fn note_cut(&self, machine_id: &str) {
         let (store, id) = (self.store.clone(), machine_id.to_string());
         let _ = blocking(move || {
@@ -500,32 +572,35 @@ impl Power {
         .await;
     }
 
-    /// The last cut (Unix ms): the phone's, or the desktop rule's `Mem11` when
-    /// the bridge has Threadgarden's rule (read, never written). Unknown: none.
-    async fn last_cut(&self, machine_id: &str, config: &PlugConfig, password: &str) -> Option<u64> {
+    /// The last cut (Unix ms): `Mem11` (written by Threadgarden's rule) when
+    /// the bridge has the rule, or the phone's own, whichever is later. A read
+    /// that fails fails the Turn on, as the hub's `lastCut` throws.
+    async fn last_cut(
+        &self,
+        machine_id: &str,
+        config: &PlugConfig,
+        password: &str,
+    ) -> Result<Option<u64>, MethodError> {
         let ours = self.store.plug_cut(machine_id);
-        let mut theirs = None;
-        for slot in 1..=3 {
-            let Ok(rule) =
-                tasmota::command(&config.address, password, &format!("Rule{slot}")).await
-            else {
-                break;
-            };
-            let text = field(&rule, &format!("Rule{slot}"))
-                .and_then(|r| r["Rules"].as_str())
-                .unwrap_or_default();
-            if text.contains("Event#tga do") {
-                if let Ok(mem) = tasmota::command(&config.address, password, "Mem11").await {
-                    let secs = field(&mem, "Mem11").and_then(|v| match v {
-                        Value::String(s) => s.trim().parse::<u64>().ok(),
-                        v => v.as_u64(),
-                    });
-                    theirs = secs.filter(|s| *s > 0).map(|s| s * 1000);
-                }
-                break;
-            }
+        if !Self::rule_on(config, password).await? {
+            return Ok(ours);
         }
-        ours.max(theirs)
+        let mem = tasmota::command(&config.address, password, "Mem11").await?;
+        let text = match field(&mem, "Mem11") {
+            Some(Value::String(s)) => s.trim().to_string(),
+            Some(v @ Value::Number(_)) => v.to_string(),
+            _ => {
+                return Err(MethodError::new(
+                    NOT_TASMOTA,
+                    format!("{} did not answer like a Tasmota device.", config.address),
+                ));
+            }
+        };
+        let theirs = match text.as_str() {
+            "" | "0" => None,
+            t => t.parse::<u64>().ok().filter(|s| *s > 0).map(|s| s * 1000),
+        };
+        Ok(ours.max(theirs))
     }
 
     fn note_measurement(&self, p: &Value) -> Answer {
@@ -582,14 +657,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn delays_split_at_tasmotas_longest() {
-        assert_eq!(delays(10_000), ["Delay 100"]);
-        assert_eq!(delays(600_000), ["Delay 3600", "Delay 2400"]);
-        assert_eq!(delays(150), ["Delay 2"]);
-        assert!(delays(0).is_empty());
-    }
-
-    #[test]
     fn details_read_with_the_protocols_defaults() {
         let c = PlugConfig::read(&json!({ "kind": "tasmota-zigbee", "address": " 192.168.1.106 ", "device": "DeskPlug" })).unwrap();
         assert_eq!(
@@ -602,10 +669,14 @@ mod tests {
             &json!({ "kind": "tasmota-plug", "address": "plug.local", "device": "ignored" }),
         )
         .unwrap();
-        assert_eq!(
-            (wifi.on(), wifi.off(), wifi.device),
-            ("Power 1".to_string(), "Power 0".to_string(), None)
-        );
+        assert_eq!((wifi.on(), wifi.device), ("Power 1".to_string(), None));
+        // Never an address or a bare number, never too long.
+        for bad in ["0x1234", "0X1A", "1234", &"a".repeat(33), "has space"] {
+            let v = json!({ "kind": "tasmota-zigbee", "address": "x", "device": bad });
+            assert!(PlugConfig::read(&v).is_err(), "{bad}");
+        }
+        let v = json!({ "kind": "tasmota-zigbee", "address": "x", "device": "Plug-2" });
+        assert!(PlugConfig::read(&v).is_ok());
         assert!(
             PlugConfig::read(&json!({ "kind": "tasmota-zigbee", "address": "x", "device": null }))
                 .is_err()
