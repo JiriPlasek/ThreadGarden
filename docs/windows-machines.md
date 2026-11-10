@@ -4,6 +4,47 @@ This worker runs directly on Windows as your signed-in user. It uses your existi
 
 The native worker supports history, live chats, projects, Clone, Move to and updates from Settings. It has no power control or idle shutdown. It does not register a Windows service or scheduled task, store your Windows password, or start at boot.
 
+## If you already have a WSL worker
+
+The two installations are independent. Native setup does not change your WSL
+distro, `.wslconfig`, WSL boot task or Hyper-V firewall rule. It adds its own
+Windows installation and firewall rule. Each worker updates its own installation:
+the WSL worker uses the Linux release; the native worker uses the Windows zip.
+
+By default, native Threadgarden data is in `%APPDATA%\threadgarden`; WSL data is
+in `~/.local/share/threadgarden` inside its distro. Each uses its own environment's
+Claude login and history. They have separate machine identities, certificates and
+paired devices. Installing native does not migrate or combine WSL chats, settings
+or pairings, and the existing WSL pairing cannot connect to the native worker.
+
+Both default to TCP 47380. The WSL setup uses mirrored networking, so treat them
+as alternatives on the same PC at the default port. Running both at once would
+need separate ports and corresponding firewall configuration; neither installer
+sets that up. Also, a running WSL worker's power controls can shut down the whole
+Windows PC, including a native worker running on it.
+
+To switch while keeping the WSL installation and its history:
+
+1. Finish any work on the WSL worker. From Windows PowerShell, stop its service
+   and disable its automatic startup (replace `threadgarden` if your distro has
+   another name):
+
+   ```powershell
+   wsl -d threadgarden -- systemctl --user disable --now threadgarden
+   ```
+
+   This leaves the distro and its data in place. The existing Windows boot task
+   may still start the distro, but its disabled Threadgarden service will not
+   start automatically.
+2. Install and start the native worker as described below, then run
+   `threadgarden pair` in Windows PowerShell and add it as a new machine in
+   Settings. Give it a distinct name if the old WSL entry has the same name.
+3. Check that the Windows projects and chats you wanted are visible. You can
+   keep the old WSL machine entry for later or remove it from Settings.
+
+To switch back, first run `threadgarden stop` in Windows PowerShell, then
+`wsl -d threadgarden -- systemctl --user enable --now threadgarden`.
+
 ## Prepare the PC
 
 Use a normal, non-administrator PowerShell under the Windows account whose tools and history you want. Make sure Claude Code works there (`claude --version`) and is signed in. Git and any tools your projects need must work in the same Windows account. Clone uses Git; creating GitHub repositories also needs `gh` installed and signed in.
