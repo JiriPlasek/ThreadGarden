@@ -136,6 +136,10 @@ export const readingFromUsage = (resp: unknown, now: number): UsageReading | und
     const r = toEpochMs(v.resets_at);
     if (u === undefined && r === undefined) return undefined;
     const w: UsageWindow = { key, observedAt: now, source: 'usage' };
+    const reportedStatus = status(v.status);
+    if (reportedStatus) w.status = reportedStatus;
+    const reportedLabel = str(v.label);
+    if (reportedLabel) w.label = reportedLabel;
     if (label) w.label = label;
     if (u !== undefined) w.utilization = u;
     if (r !== undefined) w.resetsAt = r;
@@ -234,6 +238,7 @@ export const USAGE_READ_TIMEOUT_MS = 10_000;
 export const USAGE_AUTO_READ_MS = 5 * 60_000;
 
 export type UsageTrackerDeps = {
+  runtime?: 'claude' | 'codex';
   /** `threadgarden.db` (the `usage_limits` table); without it nothing is persisted. */
   raw?: DatabaseSync;
   now: () => number;
@@ -316,6 +321,10 @@ export class UsageTracker {
     // API key, a logged-out chat): coming back as someone else never inherits them.
     let { windowsOf } = this.account;
     let dropped = false;
+    if (this.deps.runtime === 'codex' && known && known.kind !== account.kind) {
+      this.dropWindows();
+      dropped = true;
+    }
     if (email && windowsOf !== email) {
       if (windowsOf) {
         this.dropWindows();
@@ -345,7 +354,14 @@ export class UsageTracker {
     delete this.account.subscriptionType;
     delete this.account.rateLimitsAvailable;
     try {
-      this.deps.raw?.prepare('DELETE FROM usage_limits WHERE key != ?').run(ACCOUNT_KEY);
+      if (this.deps.runtime === 'codex')
+        this.deps.raw
+          ?.prepare('DELETE FROM usage_limits WHERE key LIKE ? AND key != ?')
+          .run('codex:%', `codex:${ACCOUNT_KEY}`);
+      else
+        this.deps.raw
+          ?.prepare('DELETE FROM usage_limits WHERE key NOT LIKE ? AND key != ?')
+          .run('codex:%', ACCOUNT_KEY);
     } catch (err) {
       this.deps.onError(err, 'usage store');
     }
@@ -451,6 +467,10 @@ export class UsageTracker {
       this.deps.onError(new Error('usage reading had an unexpected shape'), 'usage');
       return;
     }
+    if (isRec(resp)) {
+      const who = UsageAccountSchema.safeParse(resp.account);
+      if (who.success) this.noteAccount(who.data);
+    }
     let changed = false;
     for (const w of reading.windows) changed = this.put(w) || changed;
     const account: Account = { ...this.account };
@@ -495,7 +515,11 @@ export class UsageTracker {
           `INSERT INTO usage_limits (key, json, observed_at) VALUES (?, ?, ?)
            ON CONFLICT(key) DO UPDATE SET json = excluded.json, observed_at = excluded.observed_at`,
         )
-        .run(key, JSON.stringify(value), this.deps.now());
+        .run(
+          `${this.deps.runtime === 'codex' ? 'codex:' : ''}${key}`,
+          JSON.stringify(value),
+          this.deps.now(),
+        );
     } catch (err) {
       this.deps.onError(err, 'usage store');
     }
@@ -506,13 +530,16 @@ export class UsageTracker {
     if (!raw) return;
     try {
       for (const r of raw.prepare('SELECT key, json FROM usage_limits').all()) {
+        const key = String(r.key);
+        if (this.deps.runtime === 'codex' ? !key.startsWith('codex:') : key.startsWith('codex:'))
+          continue;
         let value: unknown;
         try {
           value = JSON.parse(r.json as string);
         } catch {
           continue; // a corrupt row is forgotten
         }
-        if (r.key === ACCOUNT_KEY) {
+        if ((this.deps.runtime === 'codex' ? key.slice(6) : key) === ACCOUNT_KEY) {
           if (!isRec(value)) continue;
           const plan = str(value.subscriptionType);
           const available = bool(value.rateLimitsAvailable);

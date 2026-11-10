@@ -6,6 +6,15 @@ const at = 1_000_000;
 const lastReply = { at, cacheTtlMs: 5 * MIN };
 
 describe('cacheWarning', () => {
+  it('does not apply Claude cache lifetime assumptions to Codex', () => {
+    const header = {
+      runtime: 'codex' as const,
+      lastReply,
+      contextUsage: { used: 180_000, max: 200_000 },
+    };
+    expect(cacheExpiresAt(header)).toBeUndefined();
+    expect(cacheWarning(header, at + 10 * MIN)).toBeNull();
+  });
   it('once the cache has expired, a context of 20%+ of the window warns with its tokens', () => {
     const header = { lastReply, contextUsage: { used: 180_000, max: 200_000 } };
     expect(cacheWarning(header, at + 5 * MIN - 1)).toBeNull();

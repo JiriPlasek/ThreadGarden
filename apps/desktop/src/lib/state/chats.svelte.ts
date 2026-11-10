@@ -1,3 +1,4 @@
+import { newChatSessionId } from './refs';
 import {
   AWAY_ERROR,
   type ChatHeaderInfo,
@@ -489,7 +490,7 @@ export class ChatsState {
     // `away.queue`). The chat's id is chosen here, so the machine makes it under
     // the same one and its tab never changes.
     const queued = this.api.status !== 'open';
-    if (queued) params.sessionId ??= crypto.randomUUID();
+    if (queued) params.sessionId ??= newChatSessionId(params.model);
     const { sessionId } = await this.api.request('chat.create', params);
     if (queued) this.waitingNew(sessionId, params);
     // A new chat's list starts at the bottom anyway; this covers one already resident.

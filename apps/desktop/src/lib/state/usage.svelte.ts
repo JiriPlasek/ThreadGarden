@@ -45,8 +45,10 @@ const ORDER = [
 ];
 
 export const windowLabel = (w: Pick<UsageWindow, 'key' | 'label'>): string =>
-  LABELS[w.key] ??
-  (w.key.startsWith('model:') ? `Weekly limit · ${w.label ?? w.key.slice(6)}` : w.key);
+  w.key.startsWith('codex:')
+    ? (w.label ?? w.key)
+    : (LABELS[w.key] ??
+      (w.key.startsWith('model:') ? `Weekly limit · ${w.label ?? w.key.slice(6)}` : w.key));
 
 /** A window's status now: a rejection or warning lapses once its window has reset. */
 export const windowStatus = (w: UsageWindow, now: number): UsageWindow['status'] =>
@@ -140,9 +142,22 @@ export class UsageStore {
    * goes through (the service clears it) or the limit has reset.
    */
   refusal = (sessionId: string): RefusedChat | undefined => {
-    const r = this.value.refused.find((x) => x.sessionId === sessionId);
+    const state = sessionId.startsWith('codex-')
+      ? (this.value.providers?.codex ?? usageEmpty)
+      : this.value;
+    const r = state.refused.find((x) => x.sessionId === sessionId);
     if (!r) return undefined;
     return r.resetsAt !== undefined && r.resetsAt <= this.now ? undefined : r;
+  };
+
+  limitResetAtFor = (sessionId: string): number | undefined => {
+    const state = sessionId.startsWith('codex-')
+      ? (this.value.providers?.codex ?? usageEmpty)
+      : this.value;
+    const times = state.windows
+      .filter((w) => w.status === 'rejected' && w.resetsAt !== undefined && w.resetsAt > this.now)
+      .map((w) => w.resetsAt!);
+    return times.length ? Math.max(...times) : undefined;
   };
 
   /** Asks a running chat on the machine for a fresh reading. */
@@ -201,6 +216,10 @@ export class UsageStore {
     const times = [
       ...this.value.windows.map((w) => w.resetsAt),
       ...this.value.refused.map((r) => r.resetsAt),
+      ...Object.values(this.value.providers ?? {}).flatMap((state) => [
+        ...state.windows.map((w) => w.resetsAt),
+        ...state.refused.map((r) => r.resetsAt),
+      ]),
     ].filter((t): t is number => t !== undefined && t > now);
     if (times.length === 0) return;
     const delay = Math.min(Math.min(...times) - now + 1_000, 24 * 3_600_000);

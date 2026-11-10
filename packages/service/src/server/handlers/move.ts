@@ -524,6 +524,11 @@ export const registerMoveHandlers = (
   };
 
   router.register('move.check', async (p) => {
+    if (p.sessionId.startsWith('codex-'))
+      throw new ServiceError(
+        'NOT_SUPPORTED',
+        'Moving Codex conversations between machines is not available.',
+      );
     const s = host.get(p.sessionId);
     const cwd = store.historyOf(p.sessionId).dir ?? s?.cwd ?? db.getSession(p.sessionId)?.cwd;
     if (!cwd) throw new ServiceError('NOT_FOUND', `Unknown chat ${p.sessionId}`);
@@ -558,6 +563,11 @@ export const registerMoveHandlers = (
   };
 
   router.register('move.exportBegin', async (p) => {
+    if (p.sessionId.startsWith('codex-'))
+      throw new ServiceError(
+        'NOT_SUPPORTED',
+        'Moving Codex conversations between machines is not available.',
+      );
     const { sessionId: id, exportId } = p;
     const held = locks.exportIdOf(id);
     if (held === exportId) {
@@ -685,6 +695,11 @@ export const registerMoveHandlers = (
    * hand-off must never delete newer history).
    */
   router.register('move.commit', async (p) => {
+    if (p.sessionId.startsWith('codex-'))
+      throw new ServiceError(
+        'NOT_SUPPORTED',
+        'Moving Codex conversations between machines is not available.',
+      );
     const id = p.sessionId;
     if (!imports.wasCommitted(p.importId, id)) {
       const row = db.getMovedChat(id);

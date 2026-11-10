@@ -4,6 +4,7 @@ import type { ExternalPoller } from '../../external/poller.js';
 import { checkResume, resumeCommand, type ResumeCheck } from '../../external/resume-safety.js';
 import type { ClaudeFound, ClaudeProblem } from '../../sdk/claude-path.js';
 import { ServiceError, type Router } from '../router.js';
+import { isCodexSession } from '../../sdk/providers.js';
 
 export type ExternalHandlerDeps = {
   /** Absent when `claude` cannot be run; resume checks then answer `unverified`. */
@@ -28,6 +29,9 @@ export type ExternalHandlerDeps = {
   endProcess?: (pid: number) => Promise<void>;
   /** How long `external.stop` waits for an ended process to leave `claude agents`. */
   stopWaitMs?: number;
+  resumeCommand?: (sessionId: string) => Promise<string | undefined>;
+  requireCodex?: () => Promise<void>;
+  codexInfo?: () => { path: string; home: string; historyProblem?: string };
 };
 
 export const STOP_WAIT_MS = 5_000;
@@ -49,11 +53,20 @@ export const makeResumeChecker =
     >,
   ) =>
   async (sessionId: string): Promise<ResumeCheck> => {
+    if (isCodexSession(sessionId))
+      return checkResume({
+        sessionId,
+        external: (await deps.poller?.current('codex')) ?? null,
+        lastModified: deps.lastModifiedOf(sessionId) ?? 0,
+        now: (deps.now ?? Date.now)(),
+      });
     await deps.located?.();
     return checkResume({
       sessionId,
       external:
-        deps.poller && (deps.externalUsable?.() ?? true) ? await deps.poller.current() : null,
+        deps.poller && (deps.externalUsable?.() ?? true)
+          ? await deps.poller.current('claude')
+          : null,
       lastModified: deps.lastModifiedOf(sessionId) ?? 0,
       now: (deps.now ?? Date.now)(),
     });
@@ -95,7 +108,9 @@ export const registerExternalHandlers = (router: Router, deps: ExternalHandlerDe
   router.register('chat.resumeCheck', async (p) => resumeCheck(p.sessionId));
 
   router.register('chat.resumeCommand', async (p) => ({
-    command: resumeCommand(p.sessionId, poller?.available ? poller.snapshot() : null),
+    command:
+      (await deps.resumeCommand?.(p.sessionId)) ??
+      resumeCommand(p.sessionId, poller?.available ? poller.snapshot() : null),
   }));
 
   /**
@@ -149,7 +164,30 @@ export const registerExternalHandlers = (router: Router, deps: ExternalHandlerDe
         : 'path' in c
           ? { found: true, path: c.path, version: c.version }
           : { found: false, problem: c.detail };
+    let codex:
+      | {
+          found: boolean;
+          problem?: string;
+          path?: string;
+          home?: string;
+          historyProblem?: string;
+          externalAvailable?: boolean;
+        }
+      | undefined;
+    if (deps.requireCodex) {
+      try {
+        await deps.requireCodex();
+        codex = {
+          found: true,
+          ...deps.codexInfo?.(),
+          externalAvailable: poller?.providerAvailable('codex') ?? false,
+        };
+      } catch (error) {
+        codex = { found: false, problem: error instanceof Error ? error.message : String(error) };
+      }
+    }
     return {
+      ...(codex ? { codex } : {}),
       claude,
       externalAvailable: poller?.available ?? false,
       indexing: deps.indexing(),

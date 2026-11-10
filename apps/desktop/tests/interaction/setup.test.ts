@@ -13,6 +13,14 @@ const missing = {
 };
 
 describe('setup screen (spec §6.4)', () => {
+  it('opens the app when Codex is available without Claude', async () => {
+    const { context } = await setup((server) => {
+      server.handlers['system.status'] = () => ({ ...missing, codex: { found: true } });
+    });
+    render(AppShell, { context });
+    expect(await screen.findByRole('navigation', { name: 'Places' })).toBeTruthy();
+    expect(screen.queryByRole('region', { name: /set up claude code/i })).toBeNull();
+  });
   it('shows setup screen when claude is missing', async () => {
     let status: unknown = missing;
     const { context } = await setup((server) => {
@@ -61,6 +69,52 @@ describe('setup screen (spec §6.4)', () => {
 });
 
 describe('new chat dialog (spec §5.4)', () => {
+  it('starts Codex with full access and only offers its supported permission modes', async () => {
+    const { server, app, context } = await setup((server) => {
+      Object.assign(server.handlers, {
+        'projects.list': () => [project('p1', 'alpha')],
+        'chat.models': () => [
+          { value: 'codex:test-model', displayName: 'Codex · Test', description: '' },
+        ],
+        'chat.commands': () => [],
+        'files.suggest': () => [],
+        'chat.create': () => ({ sessionId: 'codex-new' }),
+      });
+    });
+    await app.places.refresh();
+    app.interaction.openNewChat('/work/alpha');
+    render(NewChatDialog, { context });
+    const dialog = await screen.findByRole('dialog', { name: /new chat/i });
+    const mode = within(dialog).getByRole('combobox', { name: /permission mode/i });
+    await userEvent.selectOptions(mode, 'plan');
+    const picker = within(dialog).getByRole('combobox', { name: /model/i });
+    await within(picker).findByRole('option', { name: /^Test$/ });
+    await userEvent.selectOptions(picker, 'codex:test-model');
+    await waitFor(() => expect((mode as HTMLSelectElement).value).toBe('plan'));
+    expect(
+      within(mode)
+        .getAllByRole('option')
+        .map((o) => (o as HTMLOptionElement).value),
+    ).toEqual(['default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions']);
+    await userEvent.selectOptions(mode, 'bypassPermissions');
+    const confirmation = await screen.findByRole('alertdialog', {
+      name: 'Enable bypass permissions?',
+    });
+    expect(confirmation.textContent).toContain('Codex will');
+    await userEvent.click(
+      within(confirmation).getByRole('button', { name: 'Enable bypass permissions' }),
+    );
+    await userEvent.type(
+      within(dialog).getByRole('textbox', { name: /message/i }),
+      'use codex{Enter}',
+    );
+    await waitFor(() => expect(server.calls('chat.create')).toHaveLength(1));
+    expect(server.calls('chat.create')[0]!.params).toMatchObject({
+      model: 'codex:test-model',
+      permissionMode: 'bypassPermissions',
+      text: 'use codex',
+    });
+  });
   it('starts a chat in a project with the chosen model and mode', async () => {
     const { server, app, context } = await setup((server) => {
       Object.assign(server.handlers, {

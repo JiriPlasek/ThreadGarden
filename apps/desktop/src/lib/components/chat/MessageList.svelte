@@ -21,6 +21,7 @@
    */
   let {
     items,
+    agentName = 'Claude',
     hasMore = false,
     loadingOlder = false,
     onLoadOlder,
@@ -33,6 +34,7 @@
     stickRequests = 0,
   }: {
     items: readonly ChatItem[];
+    agentName?: string;
     hasMore?: boolean;
     loadingOlder?: boolean;
     onLoadOlder?: () => void;
@@ -56,6 +58,9 @@
   const LOAD_OLDER_PX = 800;
 
   setChatActions({
+    get agentName() {
+      return agentName;
+    },
     get fork() {
       return onFork;
     },

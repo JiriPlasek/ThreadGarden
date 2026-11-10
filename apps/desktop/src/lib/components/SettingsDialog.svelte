@@ -30,8 +30,13 @@
    */
   const { settings, interaction, connection, machineUpdates } = useApp();
 
-  type Form = Omit<Settings, 'claudePath' | 'idleReclaimMinutes' | 'codeFont'> & {
+  type Form = Omit<
+    Settings,
+    'claudePath' | 'codexPath' | 'codexHome' | 'idleReclaimMinutes' | 'codeFont'
+  > & {
     claudePath: string;
+    codexPath: string;
+    codexHome: string;
     idleReclaimMinutes: string;
     codeFont: string;
   };
@@ -39,6 +44,8 @@
   const fromSettings = (s: Settings): Form => ({
     ...s,
     claudePath: s.claudePath ?? '',
+    codexPath: s.codexPath ?? '',
+    codexHome: s.codexHome ?? '',
     idleReclaimMinutes: String(s.idleReclaimMinutes),
     codeFont: s.codeFont ?? '',
   });
@@ -115,9 +122,13 @@
     const next: Settings = {
       ...form,
       claudePath: form.claudePath.trim() || null,
+      codexPath: form.codexPath.trim() || null,
+      codexHome: form.codexHome.trim() || null,
       idleReclaimMinutes: idle,
       codeFont: sanitizeFontFamily(form.codeFont),
     };
+    if (!form.codexPath.trim() && settings.value.codexPath === undefined) delete next.codexPath;
+    if (!form.codexHome.trim() && settings.value.codexHome === undefined) delete next.codexHome;
     const patch: SettingsPatch = {};
     for (const key of Object.keys(next) as (keyof Settings)[]) {
       if (next[key] !== settings.value[key]) Object.assign(patch, { [key]: next[key] });
@@ -128,7 +139,8 @@
       if (patch.startOnLogin !== undefined) await setAutostart(patch.startOnLogin);
       if (Object.keys(patch).length > 0) await settings.update(patch);
       // The service looks for Claude Code again at the new path.
-      if ('claudePath' in patch) interaction.loadStatus().catch(() => {});
+      if ('claudePath' in patch || 'codexPath' in patch || 'codexHome' in patch)
+        interaction.loadStatus().catch(() => {});
       close();
     } catch (err) {
       error = err instanceof Error ? err.message : String(err);
@@ -175,7 +187,7 @@
     <Dialog.Header>
       <Dialog.Title class="text-base">Settings</Dialog.Title>
       <Dialog.Description class="text-xs"
-        >Threadgarden's own settings. Works with Claude Code.</Dialog.Description
+        >Threadgarden's own settings for Claude Code and Codex.</Dialog.Description
       >
     </Dialog.Header>
 
@@ -208,6 +220,45 @@
       </div>
 
       <div class="grid gap-1">
+        <label for="settings-codex-path" class="text-muted-foreground text-xs"
+          >Codex executable</label
+        >
+        <div class="flex gap-1.5">
+          <input
+            id="settings-codex-path"
+            class="{fieldClass} font-mono text-xs"
+            placeholder="Found automatically"
+            spellcheck="false"
+            autocomplete="off"
+            bind:value={form.codexPath}
+          />
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={!isTauri}
+            onclick={async () => {
+              const path = await pickFile();
+              if (path) form.codexPath = path;
+            }}><FileSearchIcon aria-hidden="true" /> Browse…</Button
+          >
+        </div>
+        <label for="settings-codex-home" class="text-muted-foreground text-xs"
+          >Codex data folder</label
+        >
+        <input
+          id="settings-codex-home"
+          class="{fieldClass} font-mono text-xs"
+          placeholder="CODEX_HOME or ~/.codex"
+          spellcheck="false"
+          autocomplete="off"
+          bind:value={form.codexHome}
+        />
+        <p class="text-muted-foreground text-xs">
+          Codex uses its own configuration and login. Run <code>codex login</code> to sign in. Path changes
+          apply to new or resumed chats.
+        </p>
+      </div>
+      <div class="grid gap-1">
         <label for="settings-idle" class="text-muted-foreground text-xs"
           >Close idle chats after (minutes; 0 keeps them open)</label
         >
@@ -238,7 +289,7 @@
             type="checkbox"
             bind:checked={form.autoTitles}
             aria-describedby="settings-auto-titles-hint"
-          /> Name new chats automatically (uses a small model)
+          /> Name new chats automatically (Claude only; uses a small model)
         </label>
         <!-- Ruling R33: titles never go around the provider the user's settings choose. -->
         <p id="settings-auto-titles-hint" class="text-muted-foreground pl-6 text-xs">
@@ -427,10 +478,29 @@
             Claude Code was not found{status.claude.problem ? `: ${status.claude.problem}` : '.'}
           </p>
         {/if}
+        {#if status.codex}
+          <p class={status.codex.found ? '' : 'text-muted-foreground'}>
+            Codex: {status.codex.found
+              ? (status.codex.path ?? 'found')
+              : (status.codex.problem ?? 'not found')}
+          </p>
+          {#if status.codex.historyProblem}<p class="text-warning">
+              Codex history refresh failed: {status.codex.historyProblem}. Previously imported chats
+              remain available.
+            </p>{/if}
+          {#if status.codex.home}<p class="text-muted-foreground">
+              Codex history: <span class="font-mono">{status.codex.home}</span>
+            </p>{/if}
+          <p class="text-muted-foreground">
+            {status.codex.externalAvailable
+              ? 'Codex sessions in the shared runtime are shown.'
+              : 'Shared Codex live status is unavailable. Saved history still imports; continuing a session requires confirming it is not running elsewhere.'}
+          </p>
+        {/if}
         <p class={status.externalAvailable ? '' : 'text-muted-foreground'}>
           {status.externalAvailable
             ? 'External sessions (terminal, background) are shown.'
-            : 'External sessions are unavailable: `claude agents` is missing, failed, or agent view is disabled.'}
+            : 'External sessions are unavailable or disabled. Saved history is still indexed.'}
         </p>
         <p class="text-muted-foreground">
           {#if indexing && indexing.done < indexing.total}

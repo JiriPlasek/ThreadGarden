@@ -25,6 +25,9 @@
   });
 
   const capital = (t: string): string => `${t[0]!.toUpperCase()}${t.slice(1)}`;
+  const showRuntime = $derived(
+    usageAccounts.entries.some((entry) => entry.account?.runtime === 'codex'),
+  );
 
   /** What a section shows for one account entry. */
   const sections = $derived(
@@ -43,8 +46,8 @@
       const detail = noLimits ? (kindText ? kindText : null) : plan;
       return {
         key: e.key,
-        title,
-        heading: detail ? `${title} · ${detail}` : title,
+        title: showRuntime ? `${a?.runtime === 'codex' ? 'Codex' : 'Claude'} · ${title}` : title,
+        heading: `${showRuntime ? `${a?.runtime === 'codex' ? 'Codex' : 'Claude'} · ` : ''}${detail ? `${title} · ${detail}` : title}`,
         // An email names the account; its machines then sit beside it.
         machines: email ? e.machines.map((m) => m.name).join(', ') : '',
         noLimits,
@@ -85,7 +88,7 @@
     <Dialog.Header>
       <Dialog.Title class="text-base">Usage</Dialog.Title>
       <Dialog.Description class="text-xs">
-        Your Claude plan's usage limits, as Claude Code last reported them.
+        Your account usage limits, reported separately by Claude Code and Codex.
       </Dialog.Description>
     </Dialog.Header>
 

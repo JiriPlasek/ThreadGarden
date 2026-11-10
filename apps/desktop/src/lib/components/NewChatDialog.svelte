@@ -22,14 +22,17 @@
   } from '#lib/components/new-chat/start.js';
   import * as Dialog from '#lib/components/ui/dialog/index.js';
   import { nameProblem, projectsApi, supportsProjects } from '#lib/projects.js';
+  import { modelLabel } from '#lib/format/model.js';
   import { useApp } from '#lib/state/context.js';
   import { awayRefusal } from '#lib/state/copy-api.js';
   import { machineAway, machineLabel, machineNameOf } from '#lib/state/machines.svelte.js';
+  import { newChatSessionId } from '#lib/state/refs.js';
   import { newChatDraftKey, type ModelChoice } from '#lib/state/interaction.svelte.js';
 
   /**
    * Starts a chat (spec §5.4): in any listed project or any folder from the
-   * native picker, with a model and permission mode. The first message is written here, with the full
+   * native picker, with a model and permission mode for the chosen runtime.
+   * The first message is written here, with the full
    * composer (`@` files of the chosen folder, `/` commands, images); its draft
    * is kept per folder (`new:<cwd>`).
    *
@@ -51,14 +54,6 @@
    * opens at once ("Starting ‹machine›…").
    */
   const { interaction, places, tabs, settings, scopes, machines, power } = useApp();
-
-  const PERMISSION_MODES = [
-    { value: 'default', label: 'Default (ask before acting)' },
-    { value: 'acceptEdits', label: 'Accept edits' },
-    { value: 'plan', label: 'Plan' },
-    { value: 'auto', label: 'Auto' },
-    { value: 'bypassPermissions', label: 'Bypass permissions' },
-  ];
 
   const byPinnedThenRecent = (a: Project, b: Project): number =>
     Number(b.pinned) - Number(a.pinned) ||
@@ -179,6 +174,16 @@
   /** A folder made whose chat did not start (Start there). */
   let made = $state<NotStarted | null>(null);
   let model = $state('');
+  const PERMISSION_MODES = $derived([
+    { value: 'default', label: 'Default (ask before acting)' },
+    { value: 'acceptEdits', label: 'Accept edits' },
+    { value: 'plan', label: 'Plan' },
+    { value: 'auto', label: 'Auto' },
+    {
+      value: 'bypassPermissions',
+      label: model.startsWith('codex:') ? "Don't ask permissions" : 'Bypass permissions',
+    },
+  ]);
   let mode = $state('default');
   let confirmBypass = $state(false);
   $effect(() => {
@@ -302,10 +307,12 @@
    * message is queued (or the machine or folder changes): sending again after
    * a lost reply asks for the same chat, which the machine makes only once.
    */
-  let pendingNew: { machineId: string; cwd: string; sessionId: string } | null = null;
-  const pendingIdFor = (on: string, at: string): string => {
-    if (pendingNew?.machineId !== on || pendingNew.cwd !== at) {
-      pendingNew = { machineId: on, cwd: at, sessionId: crypto.randomUUID() };
+  let pendingNew: { machineId: string; cwd: string; sessionId: string; codex: boolean } | null =
+    null;
+  const pendingIdFor = (on: string, at: string, model?: string): string => {
+    const codex = model?.startsWith('codex:') ?? false;
+    if (pendingNew?.machineId !== on || pendingNew.cwd !== at || pendingNew.codex !== codex) {
+      pendingNew = { machineId: on, cwd: at, sessionId: newChatSessionId(model), codex };
     }
     return pendingNew.sessionId;
   };
@@ -315,7 +322,8 @@
     // A connected machine names the chat itself, as it always has. The test is
     // `chats.create`'s own (its link isn't open), so an id is kept exactly when
     // the message waits on this device.
-    const sessionId = target.api.status !== 'open' ? pendingIdFor(target.machineId, at) : undefined;
+    const sessionId =
+      target.api.status !== 'open' ? pendingIdFor(target.machineId, at, chat.model) : undefined;
     const id = await target.chats
       .create({ cwd: at, ...chat, ...(sessionId ? { sessionId } : {}) })
       .catch((err: unknown) => {
@@ -355,7 +363,12 @@
     const called = name;
     let result: Result<'projects.create'>;
     try {
-      result = await projectsApi(target.api).create({ createIn, name: called, github });
+      result = await projectsApi(target.api).create({
+        createIn,
+        name: called,
+        github,
+        ...(send.chat.model?.startsWith('codex:') ? { model: send.chat.model } : {}),
+      });
     } catch (err) {
       noteMissingClaude(target, err);
       error = errorText(err);
@@ -435,7 +448,9 @@
     <Dialog.Header>
       <Dialog.Title class="text-base">New chat</Dialog.Title>
       <Dialog.Description class="text-xs"
-        >Claude Code starts in the folder you choose, with your Claude Code settings.</Dialog.Description
+        >{model.startsWith('codex:')
+          ? 'Codex starts in the folder you choose, with your Codex settings and login.'
+          : 'Claude Code starts in the folder you choose, with your Claude Code settings.'}</Dialog.Description
       >
     </Dialog.Header>
 
@@ -529,7 +544,9 @@
       <select id="new-chat-model" class={selectClass} bind:value={model}>
         <option value="">Default</option>
         {#each modelOptions as m (m.value)}
-          <option value={m.value} title={m.description}>{m.displayName || m.value}</option>
+          <option value={m.value} title={m.description}
+            >{modelLabel(m.displayName || m.value)}</option
+          >
         {/each}
       </select>
 
@@ -541,7 +558,7 @@
       </select>
     </div>
 
-    {#if buildFlags.apiKeyOnly && !settings.hasApiKey}
+    {#if buildFlags.apiKeyOnly && !settings.hasApiKey && !model.startsWith('codex:')}
       <p role="note" class="rounded-md bg-amber-500/15 px-2 py-1.5 text-xs">
         This build of Threadgarden runs chats only on an Anthropic API key. Add your key first.
         <button
@@ -569,8 +586,11 @@
           {draftKey}
           cwd={composerCwd}
           commandScope={{ cwd: composerCwd }}
+          agentName={model.startsWith('codex:') ? 'Codex' : 'Claude'}
           label="First message"
-          placeholder="What should Claude do?"
+          placeholder={model.startsWith('codex:')
+            ? 'What should Codex do?'
+            : 'What should Claude do?'}
           autofocus
           onSubmit={create}
           {onControl}
@@ -581,6 +601,7 @@
 </Dialog.Root>
 
 <BypassPermissionsDialog
+  agentName={model.startsWith('codex:') ? 'Codex' : 'Claude'}
   bind:open={confirmBypass}
   onConfirm={() => {
     mode = 'bypassPermissions';

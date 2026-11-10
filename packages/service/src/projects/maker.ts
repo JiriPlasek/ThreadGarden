@@ -31,7 +31,7 @@ export type ProjectMakerDeps = {
   home: string;
   /** Most recent first. */
   recentCwds: () => string[];
-  requireRunnable: () => Promise<void>;
+  requireRunnable: (model?: string) => Promise<void>;
   now?: () => number;
   newId?: () => string;
 };
@@ -101,12 +101,13 @@ export class ProjectMaker {
     createIn: string;
     name: string;
     github: boolean;
+    model?: string;
   }): Promise<{ path: string; repo: string | null; problem: string | null }> {
     const t = this.deps.tools;
     // Checks: everything that can be checked runs before anything is made.
     const refused = nameRefusal(p.name);
     if (refused) throw new ServiceError('INVALID_NAME', refused);
-    await this.deps.requireRunnable();
+    await this.deps.requireRunnable(p.model);
     const place = await this.place(p.createIn);
     const target = path.join(place.dir, p.name);
     if (await this.exists(target)) throw alreadyThere(p.name, p.createIn);
@@ -153,6 +154,7 @@ export class ProjectMaker {
   async clone(p: {
     createIn: string;
     repo: string;
+    model?: string;
   }): Promise<{ status: 'started'; job: CloneJob } | { status: 'existing'; path: string }> {
     const t = this.deps.tools;
     const [owner, name, ...rest] = p.repo.split('/');
@@ -179,7 +181,7 @@ export class ProjectMaker {
       }
       throw alreadyThere(name, p.createIn);
     }
-    await this.deps.requireRunnable();
+    await this.deps.requireRunnable(p.model);
     await this.requireGithub();
 
     // git clones into the empty folder made here, so a failed or cancelled job removes only that.

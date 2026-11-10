@@ -51,6 +51,7 @@ import type {
 } from '../sdk/adapter.js';
 import { startupFailureMessage, type StartupFailureMessage } from '../sdk/startup-failure.js';
 import { ServiceError } from '../server/router.js';
+import { isCodexModel } from '../sdk/providers.js';
 import { EventLog, type ChatEvent, type ChatEventDraft } from './event-log.js';
 import { Normalizer, deriveStatus } from './normalize.js';
 import { TaskTracker, runningCount, taskEnded, taskRunning } from './tasks.js';
@@ -138,7 +139,7 @@ export type LiveSessionDeps = {
   /** A `rate_limit_event` arrived (its `rate_limit_info`, unparsed). A throw is reported. */
   onRateLimit?: (sessionId: string, info: unknown) => void;
   /** The session's `accountInfo()` answer (the current session only). A throw is reported. */
-  onAccount?: (info: AccountInfo) => void;
+  onAccount?: (info: AccountInfo, sessionId?: string) => void;
   /** An assistant message carried the API error `rate_limit` (the turn was refused). */
   onLimitError?: (sessionId: string) => void;
   /** A `result` arrived (every turn end, before `onTurnEnded`). A throw is reported. */
@@ -301,7 +302,7 @@ export class LiveSession {
   /** Starts a new chat (new SDK session) and sends its first message. */
   static create(cwd: string, firstMessage: UserInput, opts: LiveSessionOptions): LiveSession {
     const s = new LiveSession(opts);
-    s.id = opts.sessionId ?? randomUUID();
+    s.id = opts.sessionId ?? `${isCodexModel(opts.model) ? 'codex-' : ''}${randomUUID()}`;
     s.dir = cwd;
     s.startProcess({ sessionId: s.id });
     s.send(firstMessage);
@@ -582,7 +583,11 @@ export class LiveSession {
   /** Effort has no SDK control call; it is set with the `/effort` command, like the CLI. */
   async setEffort(value: string): Promise<void> {
     const session = this.requireLive();
-    session.send(toUserMessage({ text: `/effort ${value}` }, randomUUID(), BUSY.has(this.status)));
+    if (session.setEffort) await session.setEffort(value as Effort);
+    else
+      session.send(
+        toUserMessage({ text: `/effort ${value}` }, randomUUID(), BUSY.has(this.status)),
+      );
     this.chosen.effort = value as Effort;
     this.headerValue.effort = value;
     this.publishStatus();
@@ -782,12 +787,15 @@ export class LiveSession {
     if (!isRec(x)) return;
     const h = this.headerValue;
     if (x.type === 'system' && x.subtype === 'init') {
+      if (x.runtime === 'codex' || x.runtime === 'claude') h.runtime = x.runtime;
+      if (str(x.runtimeVersion)) h.runtimeVersion = str(x.runtimeVersion)!;
       const model = str(x.model);
       const mode = str(x.permissionMode);
       const version = str(x.claude_code_version);
       if (model !== undefined) h.model = model;
       if (mode !== undefined) h.permissionMode = mode;
       if (version !== undefined) h.claudeVersion = version;
+      if (str(x.effort) !== undefined) h.effort = str(x.effort)!;
     } else if (x.type === 'system' && x.subtype === 'status') {
       const mode = str(x.permissionMode);
       if (mode !== undefined) h.permissionMode = mode;
@@ -815,6 +823,15 @@ export class LiveSession {
         const model = this.normalizer.lastReply()?.model;
         this.guard('context window', () => this.deps.onContextWindow?.(this.id, model, max));
       }
+    }
+    if (
+      x.type === 'system' &&
+      (x.subtype === 'init' || x.subtype === 'status') &&
+      isRec(x.contextUsage)
+    ) {
+      const used = num(x.contextUsage.used),
+        max = num(x.contextUsage.max);
+      if (used !== undefined && max !== undefined && max > 0) h.contextUsage = { used, max };
     }
   }
 
@@ -858,7 +875,7 @@ export class LiveSession {
         if (this.session !== session) return;
         this.setAuth(authLabel(info));
         try {
-          this.deps.onAccount?.(info);
+          this.deps.onAccount?.(info, this.id);
         } catch (err) {
           this.report(err, `onAccount (session ${this.id})`);
         }

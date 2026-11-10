@@ -164,6 +164,19 @@ export class Indexer {
     return done;
   }
 
+  /** Refresh one independent history source without rescanning or pruning the others. */
+  refreshSource(
+    read: () => Promise<SDKSessionInfo[]>,
+    owns: (id: string) => boolean,
+  ): Promise<void> {
+    return this.serial(async () => {
+      const infos = await read();
+      this.check();
+      await this.process(infos, false);
+      this.removeVanished(new Set(infos.map((info) => info.sessionId)), owns);
+    });
+  }
+
   /**
    * v1.3 analytics: gathers the statistics of indexed sessions that have none
    * of the current version (sessions indexed by an older Threadgarden), reading each
@@ -433,11 +446,11 @@ export class Indexer {
   }
 
   /** Deletes sessions that no longer exist in the SDK listing (never a live one) and empty projects. */
-  private removeVanished(listed: Set<string>): void {
+  private removeVanished(listed: Set<string>, owns: (id: string) => boolean = () => true): void {
     const live = new Set(this.db.listLive().map((l) => l.sessionId));
     const removed: string[] = [];
     for (const id of this.db.allSessionIds()) {
-      if (listed.has(id) || live.has(id)) continue;
+      if (!owns(id) || listed.has(id) || live.has(id)) continue;
       try {
         this.db.deleteSession(id);
         removed.push(id);

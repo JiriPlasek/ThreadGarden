@@ -92,9 +92,9 @@ export class InteractionState {
     if (api.status === 'open') quietly(this.loadStatus());
   };
 
-  /** True when the service reports no usable Claude Code (setup screen, spec §6.4). */
+  /** Show setup only when neither installed runtime is available. */
   get claudeMissing(): boolean {
-    return this.status !== null && !this.status.claude.found;
+    return this.status !== null && !this.status.claude.found && !this.status.codex?.found;
   }
 
   loadStatus = async (): Promise<void> => {

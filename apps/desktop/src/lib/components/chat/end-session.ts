@@ -14,6 +14,7 @@ export const END_SESSION_AFTER = 'the chat stays in your history and can be resu
  */
 export const endSessionWarning = (o: {
   busy: boolean;
+  agentName?: string;
   tasks: number;
   listed: boolean;
   after?: string;
@@ -24,9 +25,9 @@ export const endSessionWarning = (o: {
   const tasks = `${n} background ${n === 1 ? 'task' : 'tasks'}`;
   const these = o.listed ? `the ${tasks} below` : tasks;
   if (n === 0)
-    return `Claude is still working in this chat. Ending stops the current turn; ${after}`;
+    return `${o.agentName ?? 'Claude'} is still working in this chat. Ending stops the current turn; ${after}`;
   if (o.busy) {
-    return `Claude is still working in this chat. Ending stops the current turn and ${these}; ${after}`;
+    return `${o.agentName ?? 'Claude'} is still working in this chat. Ending stops the current turn and ${these}; ${after}`;
   }
   return `This chat still runs ${these}. Ending the session stops them; ${after}`;
 };

@@ -44,6 +44,41 @@ const make = (run: (args: string[]) => Promise<string>, own: string[] = []) => {
 
 afterEach(() => vi.useRealTimers());
 
+describe('independent provider discovery', () => {
+  it('keeps Claude results when Codex is unavailable and vice versa', async () => {
+    let claudeFails = false;
+    let codexFails = true;
+    const poller = new ExternalPoller(
+      async () => {
+        if (claudeFails) throw new Error('Claude unavailable');
+        return JSON.stringify(SAMPLE);
+      },
+      () => new Set(['codex-owned']),
+      () => {},
+      {
+        codexEnabled: () => true,
+        codex: async () => {
+          if (codexFails) throw new Error('Codex unavailable');
+          return ['codex-external', 'codex-owned'].map((sessionId) => ({
+            sessionId,
+            kind: 'codex',
+            cwd: '/repo',
+            startedAt: 1,
+            status: 'busy',
+            raw: {},
+          }));
+        },
+      },
+    );
+    expect(await poller.current('claude')).toHaveLength(3);
+    expect(await poller.current('codex')).toBeNull();
+    claudeFails = true;
+    codexFails = false;
+    expect(await poller.current('claude')).toBeNull();
+    expect(await poller.current('codex')).toMatchObject([{ sessionId: 'codex-external' }]);
+  });
+});
+
 describe('parseAgents', () => {
   it('parses claude agents output with unknown fields', () => {
     const list = parseAgents(JSON.stringify(SAMPLE));

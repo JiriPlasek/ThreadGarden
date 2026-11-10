@@ -75,6 +75,7 @@
     commandScope,
     working = false,
     queued = 0,
+    agentName = 'Claude',
     placeholder = 'Message Claude…',
     label = 'Message',
     autofocus = false,
@@ -98,6 +99,7 @@
     working?: boolean;
     /** Messages sent while working that wait for the current turn. */
     queued?: number;
+    agentName?: string;
     placeholder?: string;
     label?: string;
     autofocus?: boolean;
@@ -161,6 +163,9 @@
   let files = $state.raw<FileSuggestion[]>([]);
   let filesLoading = $state(false);
   let commands = $state.raw<SlashCommand[] | null>(null);
+  $effect(() => {
+    commands = agentName === 'Codex' ? [] : null;
+  });
   let suggestTimer: ReturnType<typeof setTimeout> | undefined;
   let suggestGen = 0;
 
@@ -207,7 +212,7 @@
     if (commands !== null) return;
     interaction
       .commands(commandScope)
-      .then((list) => (commands = list))
+      .then((list) => (commands = agentName === 'Codex' ? [] : list))
       .catch(() => (commands = []));
   };
 
@@ -547,7 +552,7 @@
 
   const hint = $derived(
     working && text.trim() && !editing
-      ? 'Claude is working: this message will be queued and sent when the current turn ends.'
+      ? `${agentName} is working: this message will be queued and sent when the current turn ends.`
       : null,
   );
   const empty = $derived(!text.trim() && images.length === 0);
@@ -674,7 +679,7 @@
       <button
         type="button"
         class="hover:bg-muted flex h-7 items-center gap-1 rounded-md border px-2 text-xs"
-        title="Stop Claude · {formatCombos(stopKeys).join(' or ')}"
+        title="Stop {agentName} · {formatCombos(stopKeys).join(' or ')}"
         aria-keyshortcuts={ariaKeyShortcuts(stopKeys)}
         onclick={onInterrupt}
       >

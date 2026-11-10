@@ -27,3 +27,7 @@ export const parseChatKey = (key: string): ChatRef | null => {
   if (i <= 0 || i === key.length - 1) return null;
   return { machineId: key.slice(0, i), sessionId: key.slice(i + 1) };
 };
+
+/** Choose the runtime-qualified id before a new chat is queued for an offline machine. */
+export const newChatSessionId = (model?: string): string =>
+  `${model?.startsWith('codex:') ? 'codex-' : ''}${crypto.randomUUID()}`;

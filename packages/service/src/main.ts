@@ -47,6 +47,7 @@ import { AwayQueue } from './away/queue.js';
 import { registerAwayHandlers } from './server/handlers/away.js';
 import { registerCopyHandlers } from './server/handlers/copies.js';
 import { registerChatHandlers } from './server/handlers/chat.js';
+import { isCodexSession } from './sdk/providers.js';
 import { busyOf, MoveLocks, registerMoveHandlers, type MoveGit } from './server/handlers/move.js';
 import { makeResumeChecker, registerExternalHandlers } from './server/handlers/external.js';
 import { registerFileHandlers } from './server/handlers/files.js';
@@ -575,6 +576,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       const opened = openDb(path.join(dataDir, DB_FILE));
       db = opened;
       opened.pruneReceivedMessages(clock() - RECEIVED_MESSAGE_KEEP_MS);
+      opts.adapter.configure?.(opened.getSettings());
       // One registry for the handlers and the remote listener: the live pairing
       // code and the revoke listeners belong to it.
       const devices = new DeviceRegistry(
@@ -687,9 +689,9 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
               : Promise.reject(new Error('Claude Code is not available'));
           }
         : undefined);
-    if (run) {
+    if (run || opts.adapter?.externalSessions) {
       poller = new ExternalPoller(
-        run,
+        run ?? (() => Promise.reject(new Error('Claude Code is not available'))),
         // Only *live* Threadgarden chats are Threadgarden's own processes. A paused or failed
         // chat has none, so one that is running now runs in a terminal (§4.4).
         // v1.2 C1: so are the title queries Threadgarden runs (`claude` lists them while they run).
@@ -711,6 +713,12 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         },
         {
           enabled: () => externalUsable() && (db?.getSettings().externalPolling ?? true),
+          ...(opts.adapter?.externalSessions
+            ? {
+                codex: () => opts.adapter!.externalSessions!(),
+                codexEnabled: () => db?.getSettings().externalPolling ?? true,
+              }
+            : {}),
           onError: (err) => log.error(`external poller: ${String(err)}`),
         },
       );
@@ -744,10 +752,31 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       const usageTracker = new UsageTracker({
         raw: opened.raw,
         now: clock,
-        emit: (state) => broadcastRef.fn({ event: 'usage.changed', data: state }),
+        emit: (state) =>
+          broadcastRef.fn({
+            event: 'usage.changed',
+            data: {
+              ...state,
+              ...(adapter.requireCodex ? { providers: { codex: codexUsageTracker.state() } } : {}),
+            },
+          }),
         timers: opts.sessionTimers ?? realTimers,
         onError,
       });
+      const codexUsageTracker = new UsageTracker({
+        runtime: 'codex',
+        raw: opened.raw,
+        now: clock,
+        timers: opts.sessionTimers ?? realTimers,
+        onError,
+        emit: (state) =>
+          broadcastRef.fn({
+            event: 'usage.changed',
+            data: { ...usageTracker.state(), providers: { codex: state } },
+          }),
+      });
+      const trackerFor = (id?: string) =>
+        id && isCodexSession(id) ? codexUsageTracker : usageTracker;
       usage = usageTracker;
       /** Set once the chat handlers exist (scheduled sends go out through `chat.send`). */
       const scheduledRef: { current?: ScheduledSends } = {};
@@ -786,18 +815,23 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
           opened.setTurnEnded(id, at);
           emitChat({ event: 'sessions.changed', data: { sessionIds: [id] } });
           // v1.2 C1: a new chat's first turn is over: it gets its generated title.
-          titlesRef.current?.turnEnded(id);
+          if (isCodexSession(id)) titlesRef.current?.forget(id);
+          else titlesRef.current?.turnEnded(id);
         },
         // v1.1 §4: live activity may reorder the projects.
         onActivity: () => projectOrderRef.current?.notify(),
         // Ruling R29: running background tasks put a chat under Running, idle or not.
         onRunningTasks: (id) => emitChat({ event: 'sessions.changed', data: { sessionIds: [id] } }),
         // v1.3 B: usage limits, and the scheduled send whose turn this was.
-        onRateLimit: (id, info) => usageTracker.observeEvent(id, info),
-        onAccount: (info) => usageTracker.noteAccount(accountOf(info)),
-        onLimitError: (id) => usageTracker.noteRefusal(id),
+        onRateLimit: (id, info) => trackerFor(id).observeEvent(id, info),
+        onAccount: (info, id) =>
+          trackerFor(id).noteAccount({
+            ...accountOf(info),
+            ...(id && isCodexSession(id) ? { runtime: 'codex' as const } : {}),
+          }),
+        onLimitError: (id) => trackerFor(id).noteRefusal(id),
         onTurnResult: (id) => {
-          const refused = usageTracker.turnEnded(id);
+          const refused = trackerFor(id).turnEnded(id);
           // After the session has finished handling this result.
           setImmediate(() => scheduledRef.current?.turnEnded(id, refused));
         },
@@ -807,6 +841,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       host = sessionHost;
       // v1.3 B: the meter keeps up by itself, from a running chat's usage reading.
       usageTracker.autoRefresh(() => sessionHost.usageReader());
+      codexUsageTracker.autoRefresh(() => sessionHost.usageReader('codex'));
 
       const catalogRef: { current?: Catalog } = {};
       // Chats moved here live in Threadgarden's own store. Every history read
@@ -848,6 +883,13 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         broadcastRef.fn(e);
         if (e.event === 'chat.status') {
           const { sessionId, status } = e.data as { sessionId: string; status: ChatStatus };
+          if (isCodexSession(sessionId) && ['idle', 'failed', 'paused'].includes(status)) {
+            setImmediate(() => {
+              void index
+                .refresh([sessionId])
+                .catch((error: unknown) => onError(error, 'index Codex chat'));
+            });
+          }
           setImmediate(() => scheduledRef.current?.statusChanged(sessionId, status));
           // A turn started or ended: a blocked shutdown's notice no longer holds.
           setImmediate(() => {
@@ -929,6 +971,10 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         folderExists: (p) => folders.exists(p),
         onSettingsChanged: (patch) => {
           if (patch.claudePath !== undefined && opts.locateClaude) relocate();
+          if (patch.codexPath !== undefined || patch.codexHome !== undefined) {
+            adapter.configure?.(opened.getSettings());
+            startSync?.();
+          }
         },
       });
       const chatHandlers = registerChatHandlers(router, {
@@ -999,7 +1045,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
           const s = sessionHost.get(id);
           return s !== undefined && s.live && IN_TURN.has(s.status);
         },
-        limitResetAt: () => usageTracker.limitResetAt(),
+        limitResetAt: (id) => trackerFor(id).limitResetAt(),
         exists: (id) => sessionHost.get(id) !== undefined || cat.summary(id) !== undefined,
         describe: (id) => {
           const d = describeChat(id);
@@ -1014,6 +1060,9 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         usage: usageTracker,
         scheduled: scheduledSends,
         reader: () => sessionHost.usageReader(),
+        ...(adapter.requireCodex
+          ? { codexUsage: codexUsageTracker, codexReader: () => sessionHost.usageReader('codex') }
+          : {}),
       });
       watcher = watchProjects(
         path.join(claudeDir, 'projects'),
@@ -1021,14 +1070,42 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
           void index.refresh(ids).catch((err: unknown) => log.error(`refresh: ${String(err)}`)),
         { onError: (err) => log.error(`watcher: ${String(err)}`) },
       );
-      startSync = () =>
-        void index
+      const claudeWatcher = watcher;
+      let pollingHistory = false;
+      const codexTimer = adapter.listPolledSessions
+        ? setInterval(() => {
+            if (pollingHistory || closing) return;
+            pollingHistory = true;
+            void index
+              .refreshSource(() => adapter.listPolledSessions!(), isCodexSession)
+              .catch((error: unknown) => log.error(`Codex history refresh: ${String(error)}`))
+              .finally(() => {
+                pollingHistory = false;
+              });
+          }, 30_000)
+        : undefined;
+      codexTimer?.unref();
+      watcher = {
+        close: () => {
+          claudeWatcher?.close();
+          clearInterval(codexTimer);
+          codexUsageTracker.dispose();
+          adapter.dispose?.();
+        },
+      };
+      let syncing: Promise<void> | undefined;
+      startSync = () => {
+        syncing ??= index
           .fullSync()
           // A sync is when folders are known to be worth checking again (v1.1 §4).
           .then(() =>
             closing ? undefined : folders.refresh(opened.listProjects().map((p) => p.path)),
           )
-          .catch((err: unknown) => log.error(`full sync: ${String(err)}`));
+          .catch((err: unknown) => log.error(`full sync: ${String(err)}`))
+          .finally(() => {
+            syncing = undefined;
+          });
+      };
     }
 
     registerFileHandlers(router, { index: new FileIndex() });
@@ -1040,6 +1117,9 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       lastModifiedOf: (id) => db?.getSession(id)?.lastModified,
       claude: () => claude.current,
       indexing: () => indexing,
+      resumeCommand: async (id) => opts.adapter?.resumeCommand?.(id),
+      ...(opts.adapter?.requireCodex ? { requireCodex: () => opts.adapter!.requireCodex!() } : {}),
+      ...(opts.adapter?.codexInfo ? { codexInfo: () => opts.adapter!.codexInfo!() } : {}),
       now: clock,
     });
 

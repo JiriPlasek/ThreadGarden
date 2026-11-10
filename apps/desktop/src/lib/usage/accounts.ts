@@ -32,7 +32,7 @@ export type UsageEntry = {
 const keyOf = (m: UsageMachine): string => {
   const a = m.state.account;
   const email = a?.kind === 'login' ? a.email?.trim().toLowerCase() : undefined;
-  return email ? `email:${email}` : `machine:${m.machineId}`;
+  return `${a?.runtime === 'codex' ? 'codex:' : ''}${email ? `email:${email}` : `machine:${m.machineId}`}`;
 };
 
 /** Newest reading per window key, in the order the keys first appear. */
@@ -52,6 +52,29 @@ const newestWindows = (machines: UsageMachine[]): UsageWindow[] => {
  * order); each entry sits where its first machine does.
  */
 export const groupUsage = (machines: UsageMachine[]): UsageEntry[] => {
+  machines = machines.flatMap((machine) => {
+    const providers = Object.entries(machine.state.providers ?? {}).map(([runtime, state]) => ({
+      ...machine,
+      state: {
+        ...state,
+        account: {
+          ...(state.account ?? { kind: 'login' as const }),
+          runtime: runtime === 'codex' ? ('codex' as const) : ('claude' as const),
+        },
+      },
+    }));
+    return [
+      ...(providers.length && !machine.state.account && !machine.state.windows.length
+        ? []
+        : [machine]),
+      ...providers.filter(
+        (provider) =>
+          provider.state.windows.length ||
+          provider.state.account.email ||
+          provider.state.rateLimitsAvailable !== undefined,
+      ),
+    ];
+  });
   const groups = new Map<string, UsageMachine[]>();
   for (const m of machines) {
     const key = keyOf(m);

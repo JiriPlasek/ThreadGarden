@@ -38,6 +38,9 @@
   });
 
   const now = $derived(usageAccounts.now);
+  const showRuntime = $derived(
+    usageAccounts.entries.some((entry) => entry.account?.runtime === 'codex'),
+  );
   const hasReset = (w: UsageWindow): boolean => w.resetsAt !== undefined && w.resetsAt <= now;
 
   const SHORT: Record<string, string> = {
@@ -97,7 +100,7 @@
       const asOf = e.asOf === undefined ? undefined : clockTime(e.asOf);
       const names = e.machines.map((m) => m.name).join(', ');
       const lines = [
-        e.account?.email ?? 'Account not known yet',
+        `${showRuntime ? `${e.account?.runtime === 'codex' ? 'Codex' : 'Claude'} · ` : ''}${e.account?.email ?? 'Account not known yet'}`,
         `Machines: ${names}`,
         ...e.windows.map(line),
         ...(asOf ? [`As of ${asOf}`] : []),
@@ -105,7 +108,11 @@
       out.push({
         key: e.key,
         windows,
-        where: machines.several ? names : '',
+        where: showRuntime
+          ? `${e.account?.runtime === 'codex' ? 'Codex' : 'Claude'}${machines.several ? ` · ${names}` : ''}`
+          : machines.several
+            ? names
+            : '',
         asOf,
         title: lines.join('\n'),
         label: `Usage: ${lines.join('; ')}`,

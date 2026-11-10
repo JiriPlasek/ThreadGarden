@@ -16,6 +16,7 @@
   import { formatHoldUntil } from '#lib/format/hold.js';
   import { fullTime } from '#lib/format/time.js';
   import { baseName, rawStatus, shownStatus } from '#lib/components/layout/chat-info.js';
+  import { modelLabel } from '#lib/format/model.js';
   import IconButton from '#lib/components/layout/IconButton.svelte';
   import ProjectIcon from '#lib/components/layout/ProjectIcon.svelte';
   import StatusIcon from '#lib/components/layout/StatusIcon.svelte';
@@ -68,15 +69,17 @@
   /** With more than one machine, the header names the chat's machine. */
   const machineName = $derived(machines.several ? machineNameOf(machines, machineId) : null);
 
-  const PERMISSION_MODES = [
+  const sessionId = $derived(chat.sessionId);
+  const PERMISSION_MODES = $derived([
     { value: 'default', label: 'Default' },
     { value: 'acceptEdits', label: 'Accept edits' },
     { value: 'plan', label: 'Plan' },
     { value: 'auto', label: 'Auto' },
-    { value: 'bypassPermissions', label: 'Bypass permissions' },
-  ];
-
-  const sessionId = $derived(chat.sessionId);
+    {
+      value: 'bypassPermissions',
+      label: sessionId.startsWith('codex-') ? "Don't ask permissions" : 'Bypass permissions',
+    },
+  ]);
   const header = $derived(chat.header);
   const summary = $derived(chat.summary);
   /** Threadgarden's own process runs this chat: header controls and End session apply. */
@@ -122,7 +125,7 @@
     withCurrent(
       (chat.models ?? []).map((m) => ({ value: m.value, label: m.displayName || m.value })),
       header.model,
-    ),
+    ).map((option) => ({ ...option, label: modelLabel(option.label) })),
   );
   const effortOptions = $derived(
     withCurrent(
@@ -132,7 +135,11 @@
       header.effort,
     ),
   );
-  const modeOptions = $derived(withCurrent(PERMISSION_MODES, header.permissionMode));
+  const modeOptions = $derived(
+    withCurrent(PERMISSION_MODES, header.permissionMode).map((option) =>
+      option.value === 'custom' ? { ...option, label: 'Custom (Codex configuration)' } : option,
+    ),
+  );
 
   let error = $state<string | null>(null);
   let confirmBypass = $state(false);
@@ -185,7 +192,12 @@
   const runningTasks = $derived(chat.tasks.filter(taskRunning));
   const busy = $derived(status === 'working' || status === 'needsYou');
   const endDescription = $derived(
-    endSessionWarning({ busy, tasks: runningTasks.length, listed: true }) ?? undefined,
+    endSessionWarning({
+      agentName: sessionId.startsWith('codex-') ? 'Codex' : 'Claude',
+      busy,
+      tasks: runningTasks.length,
+      listed: true,
+    }) ?? undefined,
   );
   const endNow = async (): Promise<void> => {
     await chats.end(sessionId);
@@ -303,7 +315,7 @@
                 <ArchiveIcon /> Archive
               </DropdownMenu.Item>
             {/if}
-            {#if machines.several && !chat.movedTo && supportsMove(machines.get(machineId))}
+            {#if machines.several && !chat.movedTo && !sessionId.startsWith('codex-') && supportsMove(machines.get(machineId))}
               <DropdownMenu.Separator />
               <DropdownMenu.Item
                 class="py-1 text-xs"
@@ -440,6 +452,11 @@
           </span>
           {usage.pct}%
         </span>
+      {:else if sessionId.startsWith('codex-')}
+        <span
+          class="text-muted-foreground"
+          title="Codex has not reported a context reading for this chat">Context not reported</span
+        >
       {/if}
       {#if !usage && header.contextTokens !== undefined}
         <!-- From the history, when no run of this chat (or its model) has said the window's size. -->
@@ -463,6 +480,9 @@
       {#if header.claudeVersion}
         <span title="Claude Code version">claude {header.claudeVersion}</span>
       {/if}
+      {#if header.runtimeVersion && header.runtime === 'codex'}
+        <span title="Codex version recorded for this chat">codex {header.runtimeVersion}</span>
+      {/if}
     </div>
   </div>
 </header>
@@ -479,6 +499,7 @@
 </ConfirmDialog>
 
 <BypassPermissionsDialog
+  agentName={sessionId.startsWith('codex-') ? 'Codex' : 'Claude'}
   bind:open={confirmBypass}
   onConfirm={async () => {
     if (bypassSession) await chats.setPermissionMode(bypassSession, 'bypassPermissions');

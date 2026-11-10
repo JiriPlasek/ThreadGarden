@@ -118,7 +118,11 @@
     if (!createIn) throw new Error('Choose where to clone it first.');
     const on = projectsApi(send.target.api);
     const chosen = repo;
-    const result = await on.clone({ createIn, repo: chosen });
+    const result = await on.clone({
+      createIn,
+      repo: chosen,
+      ...(send.chat.model?.startsWith('codex:') ? { model: send.chat.model } : {}),
+    });
     if (result.status === 'existing') {
       if (live) existing = { path: result.path, send };
       return null;
