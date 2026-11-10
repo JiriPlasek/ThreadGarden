@@ -1,18 +1,18 @@
 <script lang="ts">
   import type { Snippet } from 'svelte';
   import { Button } from '#lib/components/ui/button/index.js';
-  import * as Tooltip from '#lib/components/ui/tooltip/index.js';
-  import { ariaKeyShortcuts, formatShortcut, type Combo } from '#lib/shortcuts.js';
+  import ActionTooltip from '#lib/components/ActionTooltip.svelte';
+  import { ariaKeyShortcuts, type Combo } from '#lib/shortcuts.js';
 
   /**
    * Icon-only button: `label` is its accessible name and its tooltip. A
    * `shortcut` (keys as in `shortcuts.ts`) follows the label in the tooltip
-   * ("New chat · Ctrl+N") and is announced through `aria-keyshortcuts`.
+   * in a secondary color and is announced through `aria-keyshortcuts`.
    */
   let {
     label,
     onclick,
-    children,
+    children: icon,
     class: className,
     side = 'bottom',
     disabled = false,
@@ -34,32 +34,25 @@
     pressed?: boolean;
   } = $props();
 
-  const keys = $derived(shortcut ? formatShortcut(shortcut) : null);
   const aria = $derived(shortcut ? ariaKeyShortcuts([shortcut]) || undefined : undefined);
 </script>
 
-<Tooltip.Provider delayDuration={400}>
-  <Tooltip.Root>
-    <Tooltip.Trigger>
-      {#snippet child({ props })}
-        <Button
-          {...props}
-          variant="ghost"
-          size="icon-xs"
-          class="text-muted-foreground hover:text-foreground {className ?? ''}"
-          aria-label={label}
-          aria-keyshortcuts={aria}
-          aria-pressed={pressed}
-          {tabindex}
-          {disabled}
-          {onclick}
-          {onauxclick}
-        >
-          {@render children()}
-        </Button>
-      {/snippet}
-    </Tooltip.Trigger>
-    <Tooltip.Content {side} class="px-2 py-1">{keys ? `${label} · ${keys}` : label}</Tooltip.Content
+<ActionTooltip {label} combos={shortcut ? [shortcut] : undefined} {side}>
+  {#snippet children({ props })}
+    <Button
+      {...props}
+      variant="ghost"
+      size="icon-xs"
+      class="text-muted-foreground hover:text-foreground {className ?? ''}"
+      aria-label={label}
+      aria-keyshortcuts={aria}
+      aria-pressed={pressed}
+      {tabindex}
+      {disabled}
+      {onclick}
+      {onauxclick}
     >
-  </Tooltip.Root>
-</Tooltip.Provider>
+      {@render icon()}
+    </Button>
+  {/snippet}
+</ActionTooltip>

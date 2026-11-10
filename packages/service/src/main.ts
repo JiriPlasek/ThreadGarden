@@ -920,6 +920,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       registerHistoryHandlers(router, {
         db: opened,
         catalog: cat,
+        emit: emitChat,
         quickSearch: createQuickSearch(opened, cat),
         buckets: bucketList,
         icons: new ProjectIcons({

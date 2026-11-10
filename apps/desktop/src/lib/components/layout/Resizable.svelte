@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatCombos, shortcut } from '#lib/shortcuts.js';
   /**
    * Vertical drag handle between two columns. Dragging (pointer capture) or the
    * arrow keys change `width` within [min, max]; double-click restores `initial`.
@@ -60,6 +61,11 @@
   role="separator"
   aria-orientation="vertical"
   aria-label={label}
+  title="{label} · {formatCombos(shortcut('resize-arrows').combos).join(
+    ' / ',
+  )} to resize (Shift for bigger steps), {formatCombos(shortcut('resize-ends').combos).join(
+    ' / ',
+  )} for limits, {formatCombos(shortcut('resize-reset').combos).join(' or ')} to reset"
   aria-valuenow={width}
   aria-valuemin={min}
   aria-valuemax={max}

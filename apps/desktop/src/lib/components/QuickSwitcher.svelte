@@ -16,10 +16,12 @@
   import SettingsIcon from '@lucide/svelte/icons/settings';
   import type { Component } from 'svelte';
   import ProjectIcon from '#lib/components/layout/ProjectIcon.svelte';
+  import ShortcutHint from '#lib/components/ShortcutHint.svelte';
+  import PickerKeyHints from '#lib/components/PickerKeyHints.svelte';
   import * as Dialog from '#lib/components/ui/dialog/index.js';
   import { supportsMove } from '#lib/projects.js';
   import { useApp } from '#lib/state/context.js';
-  import { formatShortcut, shortcut, type Combo } from '#lib/shortcuts.js';
+  import { shortcut, type Combo } from '#lib/shortcuts.js';
   import { ARCHIVE_OLDER_DAYS } from '#lib/state/buckets.svelte.js';
   import { machineNameOf } from '#lib/state/machines.svelte.js';
   import { askArchiveOlderIn } from '#lib/state/merged-list.svelte.js';
@@ -85,7 +87,13 @@
   });
 
   const COMMANDS: Command[] = [
-    { id: 'new-chat', label: 'New chat in…', icon: PlusIcon, run: () => interaction.openNewChat() },
+    {
+      id: 'new-chat',
+      label: 'New chat in…',
+      icon: PlusIcon,
+      run: () => interaction.openNewChat(),
+      keys: shortcut('new-chat').combos[0],
+    },
     {
       id: 'stop-all',
       label: 'Stop all work',
@@ -306,10 +314,7 @@
             <Icon class="text-muted-foreground mt-0.5 size-4 shrink-0" aria-hidden="true" />
             <span class="truncate" data-label>{row.command.label}</span>
             {#if row.command.keys}
-              <kbd
-                class="bg-muted text-muted-foreground ml-auto shrink-0 rounded border px-1.5 font-sans text-xs leading-5"
-                >{formatShortcut(row.command.keys)}</kbd
-              >
+              <ShortcutHint combos={[row.command.keys]} />
             {/if}
           {:else}
             {#if row.hit.archived}
@@ -370,5 +375,6 @@
     {#if query.trim() && hits.length === 0 && commands.length === 0}
       <p class="text-muted-foreground px-3 pb-3 text-sm">No matching chats.</p>
     {/if}
+    <PickerKeyHints switcher />
   </Dialog.Content>
 </Dialog.Root>

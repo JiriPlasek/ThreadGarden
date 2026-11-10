@@ -9,6 +9,8 @@
   import { Button } from '#lib/components/ui/button/index.js';
   import { rowPx } from '#lib/interface-scale.js';
   import { supportsMove } from '#lib/projects.js';
+  import ActionTooltip from '#lib/components/ActionTooltip.svelte';
+  import { ariaKeyShortcuts, isChatRenameKey, shortcut } from '#lib/shortcuts.js';
   import { ARCHIVE_OLDER_DAYS } from '#lib/state/buckets.svelte.js';
   import { useApp } from '#lib/state/context.js';
   import {
@@ -372,6 +374,11 @@
   };
 
   const BUCKET_KEYS: Readonly<Record<string, Bucket>> = { e: 'archived', h: 'onHold', a: 'active' };
+  const BULK_ACTIONS = [
+    { label: 'Make active', bucket: 'active', shortcutId: 'list-activate' },
+    { label: 'Put on hold…', bucket: 'onHold', shortcutId: 'list-hold' },
+    { label: 'Archive', bucket: 'archived', shortcutId: 'list-archive' },
+  ] as const;
 
   /** Moves the cursor to the `index`-th chat (headers are not stops). */
   const moveTo = (index: number): void => {
@@ -394,6 +401,11 @@
 
   const onListKey = (e: KeyboardEvent): void => {
     const i = cursorIndex;
+    if (isChatRenameKey(e)) {
+      e.preventDefault();
+      renaming = grouped.chats[i] ?? null;
+      return;
+    }
     const key = e.key.toLowerCase();
     if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && key === 'a') {
       e.preventDefault();
@@ -492,6 +504,18 @@
 
   /** Left/Right move between the bulk bar's buttons (toolbar keys). */
   const onBarKey = (e: KeyboardEvent): void => {
+    const bucket = BUCKET_KEYS[e.key.toLowerCase()];
+    if (bucket && !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey) {
+      e.preventDefault();
+      if (!e.repeat) moveFromKeys(bucket);
+      return;
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      clearSelection();
+      viewport?.focus();
+      return;
+    }
     if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
     const buttons = [...(e.currentTarget as HTMLElement).querySelectorAll('button')];
     const at = buttons.indexOf(document.activeElement as HTMLButtonElement);
@@ -566,16 +590,27 @@
       <span class="min-w-0 flex-1 truncate font-medium tabular-nums"
         >{selectedChats.length} selected</span
       >
-      <Button variant="ghost" size="xs" onclick={() => move(selectedChats, 'active', true)}
-        >Make active</Button
+      {#each BULK_ACTIONS as action (action.bucket)}
+        <ActionTooltip label={action.label} combos={shortcut(action.shortcutId).combos}>
+          {#snippet children({ props })}
+            <Button
+              {...props}
+              variant="ghost"
+              size="xs"
+              aria-keyshortcuts={ariaKeyShortcuts(shortcut(action.shortcutId).combos)}
+              onclick={() => move(selectedChats, action.bucket, true)}>{action.label}</Button
+            >
+          {/snippet}
+        </ActionTooltip>
+      {/each}
+      <IconButton
+        label="Clear selection"
+        shortcut={shortcut('list-select-clear').combos[0]}
+        onclick={() => {
+          clearSelection();
+          viewport?.focus();
+        }}><XIcon /></IconButton
       >
-      <Button variant="ghost" size="xs" onclick={() => move(selectedChats, 'onHold', true)}
-        >Put on hold…</Button
-      >
-      <Button variant="ghost" size="xs" onclick={() => move(selectedChats, 'archived', true)}
-        >Archive</Button
-      >
-      <IconButton label="Clear selection" onclick={clearSelection}><XIcon /></IconButton>
     </div>
   {/if}
 
