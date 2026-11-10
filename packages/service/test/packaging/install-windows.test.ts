@@ -106,7 +106,8 @@ describe.skipIf(process.platform !== 'win32')('headless install.ps1', { timeout:
     (await readdir(base)).filter((n) => !['bin', 'node', 'current'].includes(n)).sort();
 
   beforeEach(async () => {
-    root = join(await mkdtemp(join(tmpdir(), 'tg-win-')), 'with space');
+    // Windows CI can expose TEMP as an 8.3 path; PowerShell expands it to the long path.
+    root = join(await realpath(await mkdtemp(join(tmpdir(), 'tg-win-'))), 'with space');
     local = join(root, 'local');
     base = join(local, 'threadgarden-headless');
     log = join(root, 'calls.log');
