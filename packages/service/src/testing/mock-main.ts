@@ -1278,6 +1278,8 @@ export const startMockService = async (o: MockOptions = {}): Promise<MockService
       installSignalHandlers: o.installSignalHandlers ?? true,
       // Never the real `systemctl poweroff`: a mock must not power off a developer's machine.
       poweroff: mockPoweroff,
+      // The mock worker models the Linux power-capable worker on every test host.
+      platform: remote ? 'linux' : process.platform,
       // Never detected: a mock run inside WSL is not a Windows worker.
       host: null,
       ...(remote

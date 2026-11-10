@@ -9,6 +9,14 @@ WSL. [A Windows PC as the worker (WSL)](#a-windows-pc-as-the-worker-wsl) says
 what is different there, including what its chats can reach on Windows; the
 rest of this guide applies to it as written for the Ubuntu PC.
 
+To reuse repositories, tools and Claude Code history already on Windows, use the
+[native Windows worker](windows-machines.md). It runs under your signed-in account,
+starts manually, and has no power control or idle shutdown.
+If a WSL worker is already installed on the same PC, see
+[switching between WSL and native](windows-machines.md#if-you-already-have-a-wsl-worker)
+for the separate histories and pairings, shared default port, and how to stop one
+without deleting its data.
+
 ## What it does
 
 - The Ubuntu PC runs the **Threadgarden service headless**: no window, started

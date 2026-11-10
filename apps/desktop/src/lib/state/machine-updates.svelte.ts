@@ -277,7 +277,9 @@ export class MachineUpdatesState {
 
   private notBack = (id: string, version: string): string => {
     const name = machineNameOf(this.deps!.machines, id);
-    return `${name} hasn't come back since it began updating to ${version}. It may need a look over SSH.`;
+    const access =
+      this.deps!.machines.get(id)?.info?.platform === 'win32' ? 'Remote Desktop' : 'SSH';
+    return `${name} hasn't come back since it began updating to ${version}. It may need a look over ${access}.`;
   };
 
   /**

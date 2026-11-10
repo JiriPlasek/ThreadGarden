@@ -27,6 +27,14 @@ A headless service answers paired devices over the network ([Machines](docs/arch
 
 **Updating a machine is a frozen contract.** A machine's old updater and old `apply.sh` run against every future release, and any later desktop must be able to start them, so a machine left behind can always catch up. Besides `update.start` and `update.status` (only optional additions), these must stay: the tarball's name and folder layout, `install.sh` at its root and `threadgarden.service` in the release, `install.sh` honouring `SUDO` and `THREADGARDEN_SKIPPED_FILE`, the keys of `last.json`, and `serviceVersion`, `protocolVersion`, `machine.id` and `machine.capabilities` in `hello`. The list is in `packages/protocol/src/update.ts`.
 
+The native Windows update contract also freezes the asset name
+`threadgarden-headless-<version>-windows-x64.zip` and its `.sha256`, the same root
+folder with `VERSION`, `install.ps1`, `bin/node.exe`, `bin/threadgarden.cmd` and
+`lib/service.mjs`, and `install.ps1` honoring `THREADGARDEN_UNATTENDED=1` without
+elevation. The stable installed `bin/threadgarden.cmd` and `node/node.exe`, the
+`current` junction, and apply-script arguments (installer, version, from,
+installBase, updateDir, timeoutS) must remain compatible with older updaters.
+
 ## Workflow
 
 - One branch per change, opened as a pull request against `main`.

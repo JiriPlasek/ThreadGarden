@@ -4,8 +4,18 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PROTOCOL_VERSION } from '@threadgarden/protocol';
-import { NOT_LISTENING, NOT_RUNNING, parseArgs, runCli, type Command } from '../src/cli.js';
-import { writeDiscovery } from '../src/discovery.js';
+import {
+  NOT_LISTENING,
+  NOT_LISTENING_WINDOWS,
+  NOT_RUNNING,
+  NOT_RUNNING_WINDOWS,
+  START_FAILED_WINDOWS,
+  parseArgs,
+  runCli,
+  usageFor,
+  type Command,
+} from '../src/cli.js';
+import { readDiscovery, writeDiscovery } from '../src/discovery.js';
 import { startService, type ServiceHandle } from '../src/main.js';
 import { generateCorpus } from '../src/testing/corpus.js';
 
@@ -55,6 +65,19 @@ describe('parseArgs', () => {
     }
   });
 
+  it('parses start and stop', () => {
+    expect(parseArgs(['start'])).toEqual({ kind: 'start' });
+    expect(parseArgs(['stop'])).toEqual({ kind: 'stop' });
+    expect(parseArgs(['start', 'now'])).toEqual({
+      kind: 'error',
+      message: 'Usage: threadgarden start',
+    });
+    expect(parseArgs(['stop', 'now'])).toEqual({
+      kind: 'error',
+      message: 'Usage: threadgarden stop',
+    });
+  });
+
   it('explains wrong usage', () => {
     expect(parseArgs(['revoke'])).toEqual({
       kind: 'error',
@@ -94,7 +117,7 @@ describe('runCli', () => {
   const out = (s: string) => void lines.push(s);
   const run = (cmd: Command, dataDir = join(dir, 'data')) => {
     lines = [];
-    return runCli(cmd, { dataDir, out });
+    return runCli(cmd, { dataDir, out, platform: 'linux' });
   };
 
   beforeAll(async () => {
@@ -274,5 +297,228 @@ describe('runCli', () => {
     );
     expect(code).toBe(0);
     expect(calls).toEqual(['devices.list']);
+  });
+});
+
+describe('runCli on Windows', () => {
+  let dir: string;
+  let svc: ServiceHandle;
+  let lines: string[];
+  const out = (s: string) => void lines.push(s);
+  const serve = {
+    execPath: 'C:\\tg\\node\\node.exe',
+    args: ['C:\\tg\\current\\lib\\service.mjs', 'serve', '--headless'],
+  };
+  const noSleep = async () => {};
+  const win = (
+    cmd: Command,
+    dataDir: string,
+    extra: Partial<Parameters<typeof runCli>[1]> = {},
+  ) => {
+    lines = [];
+    return runCli(cmd, { dataDir, out, platform: 'win32', serve, sleep: noSleep, ...extra });
+  };
+
+  beforeAll(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'threadgarden-cli-win-'));
+    svc = await startService({
+      dataDir: join(dir, 'data'),
+      claudeConfigDir: join(dir, 'claude-missing'),
+      adapter: generateCorpus({ sessions: 1, projects: 1, bigSessionMessages: 0 }),
+      installSignalHandlers: false,
+      headless: true,
+      remote: { addresses: ['127.0.0.1'], port: 0 },
+    });
+  });
+  afterAll(async () => {
+    await svc.close();
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('start and stop on linux name systemctl and change nothing', async () => {
+    const detached: string[] = [];
+    for (const kind of ['start', 'stop'] as const) {
+      lines = [];
+      const code = await runCli(
+        { kind },
+        {
+          dataDir: join(dir, 'data'),
+          out,
+          platform: 'linux',
+          serve,
+          detach: async (cmd) => {
+            detached.push(cmd);
+            return 1;
+          },
+        },
+      );
+      expect(code).toBe(1);
+      expect(lines).toEqual([
+        `On this machine systemd runs Threadgarden: systemctl --user ${kind} threadgarden`,
+      ]);
+    }
+    expect(detached).toEqual([]);
+    expect(await readDiscovery(join(dir, 'data'))).not.toBeNull();
+  });
+
+  it('start spawns the service detached, hidden, with stdio ignored', async () => {
+    const empty = await mkdtemp(join(dir, 'start-'));
+    const live = (await readDiscovery(join(dir, 'data')))!;
+    const spawned: { cmd: string; args: string[] }[] = [];
+    const code = await win({ kind: 'start' }, empty, {
+      detach: async (cmd, args) => {
+        spawned.push({ cmd, args });
+        // What the started service does first: say where it listens.
+        await writeDiscovery(empty, live);
+        return live.pid;
+      },
+    });
+    expect(code).toBe(0);
+    expect(spawned).toEqual([{ cmd: serve.execPath, args: serve.args }]);
+    expect(lines[0]).toMatch(/^Threadgarden \S+ is running \(protocol \d+, headless\)\.$/);
+    expect(lines).toContain('Listening for devices on 127.0.0.1:' + live.remotePort);
+  });
+
+  it('start refuses when a service already runs and says whether it is headless', async () => {
+    const detach = async () => {
+      throw new Error('must not start a second service');
+    };
+    expect(await win({ kind: 'start' }, join(dir, 'data'), { detach })).toBe(0);
+    expect(lines[0]).toBe('Threadgarden is already running.');
+    expect(lines[1]).toMatch(/is running \(protocol \d+, headless\)/);
+
+    const local = join(dir, 'desktop');
+    const plain = await startService({ dataDir: local, installSignalHandlers: false });
+    try {
+      expect(await win({ kind: 'start' }, local, { detach })).toBe(1);
+      expect(lines).toEqual([
+        'Threadgarden is already running for this user, but not headless (the desktop app). ' +
+          'Quit it completely, then run threadgarden start again.',
+      ]);
+    } finally {
+      await plain.close();
+    }
+  });
+
+  it('start gives up after 15 s and points at the log', async () => {
+    const empty = await mkdtemp(join(dir, 'never-'));
+    let slept = 0;
+    const code = await win({ kind: 'start' }, empty, {
+      detach: async () => 4242,
+      sleep: async (ms) => {
+        slept += ms;
+      },
+    });
+    expect(code).toBe(1);
+    expect(slept).toBe(15_000);
+    expect(lines).toEqual([START_FAILED_WINDOWS]);
+    expect(START_FAILED_WINDOWS).toBe(
+      'Threadgarden did not start. See %APPDATA%\\threadgarden\\logs\\service.log.',
+    );
+  });
+
+  it('start reports a service that could not be started at all', async () => {
+    const empty = await mkdtemp(join(dir, 'broken-'));
+    const code = await win({ kind: 'start' }, empty, {
+      detach: async () => {
+        throw new Error('spawn C:\\tg\\node\\node.exe ENOENT');
+      },
+    });
+    expect(code).toBe(1);
+    expect(lines).toEqual([
+      'Error: could not start Threadgarden: spawn C:\\tg\\node\\node.exe ENOENT',
+    ]);
+  });
+
+  const ownService = async (name: string) => {
+    const dataDir = join(dir, name);
+    const own = await startService({
+      dataDir,
+      claudeConfigDir: join(dir, 'claude-missing'),
+      adapter: generateCorpus({ sessions: 1, projects: 1, bigSessionMessages: 0 }),
+      installSignalHandlers: false,
+      headless: true,
+      remote: { addresses: ['127.0.0.1'], port: 0 },
+    });
+    const state = { closed: false };
+    own.onClosed(() => {
+      state.closed = true;
+    });
+    return { dataDir, own, state };
+  };
+
+  it('stop calls service.shutdown with stopAll and waits for the pid to exit', async () => {
+    const { dataDir, own, state } = await ownService('stop');
+    try {
+      const killed: number[] = [];
+      const code = await win({ kind: 'stop' }, dataDir, {
+        alive: () => !state.closed,
+        kill: async (pid) => void killed.push(pid),
+        sleep: (ms) => new Promise((r) => setTimeout(r, Math.min(ms, 20))),
+      });
+      expect(code).toBe(0);
+      expect(lines).toEqual(['Stopped Threadgarden.']);
+      expect(state.closed).toBe(true);
+      expect(killed).toEqual([]);
+    } finally {
+      await own.close();
+    }
+  });
+
+  it('stop with nothing running says so and exits 0', async () => {
+    const empty = await mkdtemp(join(dir, 'idle-'));
+    expect(await win({ kind: 'stop' }, empty)).toBe(0);
+    expect(lines).toEqual(['Threadgarden is not running.']);
+  });
+
+  it('stop kills the process tree when it outlives the timeout', async () => {
+    const { dataDir, own } = await ownService('stuck');
+    try {
+      const pid = (await readDiscovery(dataDir))!.pid;
+      const killed: number[] = [];
+      let slept = 0;
+      const code = await win({ kind: 'stop' }, dataDir, {
+        alive: () => true,
+        kill: async (p) => void killed.push(p),
+        sleep: async (ms) => {
+          slept += ms;
+        },
+      });
+      expect(code).toBe(0);
+      expect(slept).toBe(30_000);
+      expect(killed).toEqual([pid]);
+      expect(lines).toEqual(['Stopped Threadgarden.']);
+    } finally {
+      await own.close();
+    }
+  });
+
+  it('win32 uses NOT_RUNNING_WINDOWS and NOT_LISTENING_WINDOWS', async () => {
+    const empty = await mkdtemp(join(dir, 'none-'));
+    expect(await win({ kind: 'status' }, empty)).toBe(1);
+    expect(lines).toEqual([NOT_RUNNING_WINDOWS]);
+    expect(NOT_RUNNING_WINDOWS).toBe(
+      'Threadgarden is not running. Start it with: threadgarden start',
+    );
+
+    const local = join(dir, 'plain');
+    const plain = await startService({ dataDir: local, installSignalHandlers: false });
+    try {
+      expect(await win({ kind: 'pair' }, local)).toBe(1);
+      expect(lines).toEqual([NOT_LISTENING_WINDOWS]);
+      expect(NOT_LISTENING_WINDOWS).toBe(
+        'Not listening for devices: no private network address yet. Threadgarden checks ' +
+          'again every minute; see %APPDATA%\\threadgarden\\logs\\service.log.',
+      );
+    } finally {
+      await plain.close();
+    }
+  });
+
+  it('lists start and stop in the help on Windows only', async () => {
+    expect(await win({ kind: 'help' }, join(dir, 'nowhere'))).toBe(0);
+    expect(lines.join('\n')).toMatch(/^ {2}start {3,}Start the service in the background/m);
+    expect(lines.join('\n')).toMatch(/^ {2}stop {3,}Stop the service and its chats/m);
+    expect(usageFor('linux')).not.toMatch(/^ {2}start /m);
   });
 });

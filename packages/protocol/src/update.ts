@@ -10,6 +10,12 @@ import { z } from 'zod';
  *   to the folder `threadgarden-headless-<version>/` with `VERSION` and `install.sh`
  *   at its root, and `threadgarden.service` in it;
  * - `install.sh` honours the environment's `SUDO` and `THREADGARDEN_SKIPPED_FILE`;
+ * - native Windows: `threadgarden-headless-<version>-windows-x64.zip` and `.sha256`,
+ *   the same root folder with VERSION, install.ps1, bin/node.exe,
+ *   bin/threadgarden.cmd and lib/service.mjs; install.ps1 honors
+ *   THREADGARDEN_UNATTENDED=1 (no elevation); the installed stable bin/threadgarden.cmd,
+ *   node/node.exe and current junction; apply arguments: installer, version, from,
+ *   installBase, updateDir, timeoutS;
  * - `last.json`'s keys, those of `UpdateStatus`: `apply.sh` reads `state` and
  *   `version` from what the new version writes, and an old service reads what `apply.sh` writes;
  * - `hello`'s `serviceVersion`, `protocolVersion`, `machine.id` and `machine.capabilities`.
@@ -19,7 +25,7 @@ import { z } from 'zod';
 export const UPDATE_CAPABILITY = 'update';
 
 export const UPDATE_ERRORS = {
-  /** The machine cannot update itself (not an x64 Linux install made by the installer). */
+  /** The machine cannot update itself (not an installed x64 Linux or native Windows worker). */
   NOT_SUPPORTED: 'NOT_SUPPORTED',
   /** An update is already running. */
   UPDATE_RUNNING: 'UPDATE_RUNNING',

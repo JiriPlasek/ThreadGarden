@@ -184,11 +184,9 @@ export type StartOptions = {
    * (devices live in the database). Default: neither, as on a desktop.
    */
   headless?: boolean;
-  /**
-   * Headless only: powers the machine off (default `systemctl poweroff`, or Windows'
-   * `shutdown.exe` in WSL; tests replace it). One passed in is always used: no test
-   * or mock ever reaches Windows.
-   */
+  /** The platform `hello` reports and capabilities follow. Default `process.platform` (tests replace it). */
+  platform?: NodeJS.Platform;
+  /** Headless Linux only: `systemctl poweroff`, or Windows' `shutdown.exe` in WSL. */
   poweroff?: () => Promise<void>;
   /**
    * What the machine runs on: `wsl` a worker in WSL on a Windows PC, which Windows
@@ -278,6 +276,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   const clearTimer = opts.clearInterval ?? ((t) => clearInterval(t));
   const log = opts.logger ?? createLogger(dataDir);
   const headless = opts.headless === true;
+  const platform = (opts.platform ?? process.platform) as MachineInfo['platform'];
   if (headless && !opts.adapter) throw new Error('A headless service needs history (an adapter)');
   /** A worker in WSL: only a headless machine is ever one. */
   const wsl = headless && (opts.host === undefined ? detectWsl() : opts.host === 'wsl');
@@ -339,17 +338,17 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     return {
       id,
       name,
-      platform: process.platform as MachineInfo['platform'],
+      platform,
       headless,
       home: os.homedir(),
       // `away` is every service's (This PC too): it takes message and chat ids. It is added
       // here, not to `CAPABILITIES`, since a service of this build answers for it, like `power`.
-      // `power` is for headless machines only (a desktop is never switched off this way).
+      // Native Windows has no power controller; WSL keeps the Linux power path.
       capabilities: headless
         ? [
             ...CAPABILITIES,
             AWAY_CAPABILITY,
-            POWER_CAPABILITY,
+            ...(platform === 'linux' ? [POWER_CAPABILITY] : []),
             ...(canUpdate() ? [UPDATE_CAPABILITY] : []),
           ]
         : [...CAPABILITIES, AWAY_CAPABILITY],
@@ -402,15 +401,16 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   /** New project and Clone (with a database); its running clones stop with the service. */
   let maker: ProjectMaker | undefined;
   /** Idle tracking for idle shutdown (a headless machine's power control). */
-  const idle = headless
-    ? new IdleMonitor({
-        sessions: () => host?.list() ?? [],
-        external: () => (opts.externals ?? (() => poller?.snapshot() ?? []))(),
-        // null is "never"; 60 until the database is open.
-        minutes: () => (db ? db.getSettings().idleShutdownMinutes : 60),
-        now: clock,
-      })
-    : undefined;
+  const idle =
+    headless && platform === 'linux'
+      ? new IdleMonitor({
+          sessions: () => host?.list() ?? [],
+          external: () => (opts.externals ?? (() => poller?.snapshot() ?? []))(),
+          // null is "never"; 60 until the database is open.
+          minutes: () => (db ? db.getSettings().idleShutdownMinutes : 60),
+          now: clock,
+        })
+      : undefined;
   let powerMachine: ReturnType<typeof registerPowerMachineHandlers> | undefined;
   /** Idle and manual shutdown (headless, with a database). */
   let shutdown: ShutdownSequence | undefined;

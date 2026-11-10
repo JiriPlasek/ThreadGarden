@@ -325,6 +325,20 @@ describe('Settings → Machines → updating', () => {
     await userEvent.click(link);
     expect(open).toHaveBeenCalledWith(GUIDE);
   });
+
+  it('a native Windows machine links to its own update instructions', async () => {
+    const env = await start({ canUpdate: false });
+    const machine = env.app.machines.get(M1)!;
+    machine.info = { ...machine.info!, platform: 'win32' };
+    const card = await openSettings(env);
+    expect(
+      card
+        .getByRole('link', { name: 'Update it on the Windows PC this once' })
+        .getAttribute('href'),
+    ).toBe(
+      'https://github.com/JiriPlasek/ThreadGarden/blob/main/docs/windows-machines.md#updating',
+    );
+  });
 });
 
 describe('the dot on Settings', () => {

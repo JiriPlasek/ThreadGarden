@@ -121,6 +121,19 @@ powershell -ExecutionPolicy Bypass -File .\threadgarden-setup-worker.ps1
 
 Then open the distro with `wsl -d threadgarden`, run `cd ~`, and do steps 3 to 6 above inside it. The [guide](docs/remote-machines.md#a-windows-pc-as-the-worker-wsl) explains what the script changes, power control and removal.
 
+## Connect a native Windows machine
+
+To use a PC's existing Windows repos, tools, Claude Code login and history, install the [native Windows worker](docs/windows-machines.md). Download and verify the `threadgarden-headless-windows-x64.zip` release, extract it and run its `install.ps1` as your normal Windows user. Then open a new terminal and run `threadgarden pair`; add the address and code in Settings → Machines.
+
+After a reboot, run `threadgarden start`. It runs in the background while you stay signed in, without WSL or a system account. Stop it with `threadgarden stop`. This option has no power control or idle shutdown.
+
+| Windows worker | Environment and history | Startup | Power control |
+| --- | --- | --- | --- |
+| Native | Your existing Windows account, tools and Claude history | Run `threadgarden start` after signing in | None |
+| WSL | The dedicated Linux distro's tools, login and Claude history | At boot, including before sign-in | Optional; shuts down the whole PC |
+
+Installing native leaves an existing WSL installation in place. They have separate data and pairings, and both default to port 47380, so stop the WSL worker before switching to native. The [switching guide](docs/windows-machines.md#if-you-already-have-a-wsl-worker) explains how to keep the distro and its history.
+
 ## Your data
 
 Threadgarden never writes to `~/.claude`; the only things there are Claude Code's own transcripts of your chats. A chat moved to another machine is kept in Threadgarden's data on that machine.

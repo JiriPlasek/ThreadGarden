@@ -103,6 +103,7 @@ const rig = async (
     version: o.local ? null : o.version === undefined ? FROM : o.version,
     canUpdate: o.canUpdate ?? !o.local,
     client,
+    info: null as MachineEntry['info'],
   };
   const sides: FakeClient[] = [];
   const reach = { side: true };
@@ -534,24 +535,35 @@ describe('MachineUpdatesState: following an update', () => {
     expect(state.outcome(ID)).toEqual(failed);
   });
 
-  it('a machine that never comes back fails honestly after the reconnect wait plus 90 s', async () => {
-    const r = await started('restarting');
-    const limit = RECONNECT_WAIT_MS + 90_000;
-    drop(r);
-    await vi.advanceTimersByTimeAsync(limit - 5_000);
-    expect(state.stage(ID)).toBe('restarting');
-    expect(state.outcome(ID)).toBeNull();
+  it.each(['linux', 'win32'] as const)(
+    'a %s machine that never comes back names the recovery method',
+    async (platform) => {
+      const r = await started('restarting');
+      r.m.info = {
+        id: ID,
+        name: 'Ubuntu PC',
+        platform,
+        headless: true,
+        home: '/home/test',
+        capabilities: [],
+      };
+      const limit = RECONNECT_WAIT_MS + 90_000;
+      drop(r);
+      await vi.advanceTimersByTimeAsync(limit - 5_000);
+      expect(state.stage(ID)).toBe('restarting');
+      expect(state.outcome(ID)).toBeNull();
 
-    await vi.advanceTimersByTimeAsync(5_000);
-    expect(state.stage(ID)).toBeNull();
-    expect(state.outcome(ID)).toEqual({
-      state: 'failed',
-      version: LATEST,
-      from: FROM,
-      reason: 'start',
-      detail: expect.stringContaining('Ubuntu PC'),
-    });
-  });
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(state.stage(ID)).toBeNull();
+      expect(state.outcome(ID)).toEqual({
+        state: 'failed',
+        version: LATEST,
+        from: FROM,
+        reason: 'start',
+        detail: `Ubuntu PC hasn't come back since it began updating to ${LATEST}. It may need a look over ${platform === 'win32' ? 'Remote Desktop' : 'SSH'}.`,
+      });
+    },
+  );
 
   it('a machine stuck reading running gets the same limit', async () => {
     await started('restarting');
