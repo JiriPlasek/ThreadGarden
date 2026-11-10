@@ -9,6 +9,9 @@ import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.app.AlertDialog
 
 class MainActivity : TauriActivity() {
+  /** onCreate has just sent CONNECT itself. */
+  private var justCreated = false
+
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
     // The core before the webview, so the screens' service_connection finds it.
@@ -16,6 +19,7 @@ class MainActivity : TauriActivity() {
     // Opening the app connects again after a Disconnect; being made again (a
     // configuration change, the process restored) isn't opening it.
     if (savedInstanceState == null) CoreService.start(this, CoreService.ACTION_CONNECT)
+    justCreated = true
     super.onCreate(savedInstanceState)
     if (savedInstanceState == null) openChat(intent)
     firstRun()
@@ -33,6 +37,20 @@ class MainActivity : TauriActivity() {
   override fun onStart() {
     super.onStart()
     CoreBridge.front(true)
+    // Back from Recents after Disconnect counts as opening the app again
+    // (R14); back from Android's battery dialog doesn't.
+    val fromBattery = CoreBridge.batteryDialogOpen
+    CoreBridge.batteryDialogOpen = false
+    if (!justCreated && !fromBattery && !CoreBridge.linksOn()) {
+      CoreService.start(this, CoreService.ACTION_CONNECT)
+    }
+    justCreated = false
+  }
+
+  // A battery dialog that only paused the activity (no onStart to clear it).
+  override fun onResume() {
+    super.onResume()
+    CoreBridge.batteryDialogOpen = false
   }
 
   override fun onStop() {

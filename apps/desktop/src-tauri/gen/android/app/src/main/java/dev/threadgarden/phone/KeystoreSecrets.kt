@@ -5,6 +5,7 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Log
 import java.io.File
+import java.io.FileOutputStream
 import java.io.IOException
 import java.security.GeneralSecurityException
 import java.security.InvalidKeyException
@@ -23,9 +24,9 @@ import org.json.JSONObject
  * AndroidKeyStore. The file is `[IV length][IV][ciphertext + tag]` of a JSON
  * object. Nothing here logs a key's value.
  *
- * A key that's gone or can't open the file (a restored or reset phone) loses
- * the secrets: the machines then show as needing to be paired again, rather
- * than the app failing. Any other failure (the file unreadable, the keystore
+ * A key that's gone, or a file it can't open (a restored or reset phone, a
+ * damaged file), loses the secrets: the file is set aside and the machines
+ * show as needing to be paired again, rather than the app failing. Any other failure (the file unreadable, the keystore
  * busy) throws, so a passing fault never wipes the pairings.
  */
 object KeystoreSecrets {
@@ -76,27 +77,35 @@ object KeystoreSecrets {
     val loaded = try {
       decode(decrypt(bytes, existingKey() ?: throw UnrecoverableKeyException("the key is gone")))
     } catch (e: UnrecoverableKeyException) {
-      forget(f, e) // The key is gone or can't be had.
+      setAside(f, e, keyGone = true) // The key is gone or can't be had.
     } catch (e: InvalidKeyException) {
-      forget(f, e) // Invalidated (KeyPermanentlyInvalidatedException).
+      setAside(f, e, keyGone = true) // Invalidated (KeyPermanentlyInvalidatedException).
     } catch (e: AEADBadTagException) {
-      forget(f, e) // Another key's file.
+      setAside(f, e, keyGone = false) // Damaged, or another key's file.
     } catch (e: IllegalArgumentException) {
-      forget(f, e) // A damaged file.
+      setAside(f, e, keyGone = false) // Damaged.
     } catch (e: org.json.JSONException) {
-      forget(f, e)
+      setAside(f, e, keyGone = false)
     }
     values = loaded
     return loaded
   }
 
-  private fun forget(f: File, e: Exception): Map<String, String> {
+  /**
+   * Starts empty, with the unreadable file kept aside as
+   * `secrets.bin.unreadable-<ms>` for recovery by hand. The key goes only
+   * when it's the key that failed; a damaged file keeps it.
+   */
+  private fun setAside(f: File, e: Exception, keyGone: Boolean): Map<String, String> {
     Log.w(TAG, "The secrets can't be opened (${e.javaClass.simpleName}): pair the machines again")
-    f.delete()
-    try {
-      keyStore().deleteEntry(ALIAS)
-    } catch (_: GeneralSecurityException) {
-    } catch (_: IOException) {
+    val aside = File(f.parentFile, "${f.name}.unreadable-${System.currentTimeMillis()}")
+    if (!f.renameTo(aside)) f.delete()
+    if (keyGone) {
+      try {
+        keyStore().deleteEntry(ALIAS)
+      } catch (_: GeneralSecurityException) {
+      } catch (_: IOException) {
+      }
     }
     return emptyMap()
   }
@@ -108,7 +117,11 @@ object KeystoreSecrets {
     val iv = cipher.iv
     val sealed = cipher.doFinal(JSONObject(next).toString().toByteArray(Charsets.UTF_8))
     val tmp = File(f.parentFile, f.name + ".tmp")
-    tmp.writeBytes(byteArrayOf(iv.size.toByte()) + iv + sealed)
+    FileOutputStream(tmp).use {
+      it.write(byteArrayOf(iv.size.toByte()) + iv + sealed)
+      // On disk before the rename, so a power cut leaves the old file or the new one.
+      it.fd.sync()
+    }
     if (!tmp.renameTo(f)) throw IOException("the secrets file could not be replaced")
     values = next
   }

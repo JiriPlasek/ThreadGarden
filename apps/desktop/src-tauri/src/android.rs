@@ -11,6 +11,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::{Duration, Instant};
 
 use threadgarden_core::secrets::Secrets;
 use threadgarden_core::{AlertKind, Core, CoreConfig, CoreError, CoreHandle, LinkStatus};
@@ -24,12 +25,19 @@ pub type Chat = (String, String);
 /// How a core is started: [`Core::start`] on the phone; tests start their own.
 pub type Starter = fn(CoreConfig) -> Result<CoreHandle, CoreError>;
 
+/// How long an opened alert waits for the screens. Longer, and it's an old
+/// tap the screens never took: opening its chat later would surprise.
+pub const OPEN_WAITS: Duration = Duration::from_secs(30);
+
 /// The app's hold on its core, one per process.
+///
+/// Lock order: `core`, then `screen`. Never the other way round: a screen
+/// update during a start would wait for the start, which waits for it.
 pub struct Keeper {
     starter: Starter,
     core: Mutex<Option<CoreHandle>>,
     screen: Mutex<Screen>,
-    opened: Mutex<Option<Chat>>,
+    opened: Mutex<Option<(Chat, Instant)>>,
 }
 
 #[derive(Default)]
@@ -104,21 +112,21 @@ impl Keeper {
     /// The screens say which chat is on screen (none: `None`). Returns the chat
     /// now on screen, whose alert can go.
     pub fn show(&self, chat: Option<Chat>) -> Option<Chat> {
-        let mut screen = lock(&self.screen);
-        screen.chat = chat;
-        self.tell(&screen)
+        self.change_screen(|s| s.chat = chat)
     }
 
     /// The app came to the front, or went to the background.
     pub fn front(&self, front: bool) -> Option<Chat> {
-        let mut screen = lock(&self.screen);
-        screen.front = front;
-        self.tell(&screen)
+        self.change_screen(|s| s.front = front)
     }
 
-    fn tell(&self, screen: &Screen) -> Option<Chat> {
+    /// Both locks, in their order, so the core hears the changes in the order made.
+    fn change_screen(&self, change: impl FnOnce(&mut Screen)) -> Option<Chat> {
+        let core = lock(&self.core);
+        let mut screen = lock(&self.screen);
+        change(&mut screen);
         let on_screen = screen.on_screen();
-        if let Some(core) = self.core() {
+        if let Some(core) = core.as_ref().filter(|c| !c.is_stopped()) {
             core.set_active(on_screen.clone());
         }
         on_screen
@@ -127,12 +135,23 @@ impl Keeper {
     /// An alert was opened: its chat waits for the screens, which may not be
     /// listening yet (the activity is still being made).
     pub fn opened(&self, chat: Chat) {
-        *lock(&self.opened) = Some(chat);
+        self.opened_at(chat, Instant::now());
     }
 
-    /// The opened alert's chat, once.
+    /// The opened alert's chat, once, unless it has waited too long.
     pub fn take_opened(&self) -> Option<Chat> {
-        lock(&self.opened).take()
+        self.take_opened_at(Instant::now())
+    }
+
+    fn opened_at(&self, chat: Chat, now: Instant) {
+        *lock(&self.opened) = Some((chat, now));
+    }
+
+    fn take_opened_at(&self, now: Instant) -> Option<Chat> {
+        lock(&self.opened)
+            .take()
+            .filter(|(_, at)| now.saturating_duration_since(*at) <= OPEN_WAITS)
+            .map(|(chat, _)| chat)
     }
 }
 
@@ -268,6 +287,62 @@ mod tests {
         core.stop();
     }
 
+    /// A starter that waits at a gate, so another call can be made while it runs.
+    static GATE: (Mutex<u8>, std::sync::Condvar) = (Mutex::new(0), std::sync::Condvar::new());
+
+    fn gated(config: CoreConfig) -> Result<CoreHandle, CoreError> {
+        let (state, changed) = &GATE;
+        let mut s = lock(state);
+        *s = 1;
+        changed.notify_all();
+        while *s != 2 {
+            s = changed.wait(s).unwrap_or_else(|e| e.into_inner());
+        }
+        drop(s);
+        Core::spawn(config)
+    }
+
+    #[test]
+    fn the_screens_can_speak_while_the_core_starts() {
+        let dir = tempfile::tempdir().unwrap();
+        let keeper = Arc::new(Keeper::new(gated));
+        let starting = {
+            let (k, d) = (keeper.clone(), dir.path().to_path_buf());
+            std::thread::spawn(move || {
+                k.start(d, secrets(), "Test phone".into()).unwrap();
+            })
+        };
+        let (state, changed) = &GATE;
+        let mut s = lock(state);
+        while *s != 1 {
+            s = changed.wait(s).unwrap_or_else(|e| e.into_inner());
+        }
+        drop(s);
+        // The screens say what's on screen while the core is being started.
+        let showing = {
+            let k = keeper.clone();
+            std::thread::spawn(move || {
+                k.front(true);
+                k.show(Some(("m1".into(), "s1".into())));
+            })
+        };
+        std::thread::sleep(Duration::from_millis(200));
+        *lock(state) = 2;
+        changed.notify_all();
+        let (done, finished) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            starting.join().unwrap();
+            showing.join().unwrap();
+            let _ = done.send(());
+        });
+        // Taken in opposite orders, the two would wait for each other forever.
+        assert!(
+            finished.recv_timeout(Duration::from_secs(10)).is_ok(),
+            "deadlocked"
+        );
+        keeper.core().unwrap().stop();
+    }
+
     #[test]
     fn the_chat_on_screen_counts_only_while_the_app_is_in_front() {
         let dir = tempfile::tempdir().unwrap();
@@ -293,6 +368,24 @@ mod tests {
         keeper.opened(("m1".into(), "s2".into()));
         assert_eq!(keeper.take_opened(), Some(("m1".into(), "s2".into())));
         assert_eq!(keeper.take_opened(), None);
+    }
+
+    #[test]
+    fn an_old_opened_alert_is_dropped() {
+        let keeper = keeper();
+        let at = Instant::now();
+        keeper.opened_at(("m1".into(), "s1".into()), at);
+        assert_eq!(
+            keeper.take_opened_at(at + OPEN_WAITS - Duration::from_secs(1)),
+            Some(("m1".into(), "s1".into()))
+        );
+        keeper.opened_at(("m1".into(), "s1".into()), at);
+        assert_eq!(
+            keeper.take_opened_at(at + OPEN_WAITS + Duration::from_secs(1)),
+            None
+        );
+        // Dropped, not kept for later.
+        assert_eq!(keeper.take_opened_at(at), None);
     }
 
     #[test]

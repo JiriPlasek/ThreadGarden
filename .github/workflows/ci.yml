@@ -197,6 +197,13 @@ jobs:
         env:
           CC_aarch64_linux_android: ${{ env.NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang
           AR_aarch64_linux_android: ${{ env.NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+      # The Android-only Rust (JNI, the commands): the desktop's clippy never sees it.
+      # After the build, which made the UI that generate_context! embeds.
+      - run: cargo clippy --target aarch64-linux-android --lib -- -D warnings
+        working-directory: apps/desktop/src-tauri
+        env:
+          CC_aarch64_linux_android: ${{ env.NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang
+          AR_aarch64_linux_android: ${{ env.NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
       - uses: actions/upload-artifact@v4
         with:
           name: threadgarden-android-debug

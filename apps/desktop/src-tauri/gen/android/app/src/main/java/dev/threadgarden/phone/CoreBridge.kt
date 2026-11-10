@@ -25,6 +25,9 @@ object CoreBridge {
 
   @Volatile private var app: Context? = null
 
+  /** Android's battery dialog was opened: coming back from it isn't opening the app. */
+  @Volatile var batteryDialogOpen = false
+
   init {
     // The service and the boot receiver can run without the activity, which loads it too.
     System.loadLibrary("threadgarden_lib")
@@ -49,6 +52,7 @@ object CoreBridge {
   @JvmStatic external fun disconnect()
   @JvmStatic external fun networkChanged()
   @JvmStatic external fun statusText(): String
+  @JvmStatic external fun linksOn(): Boolean
   @JvmStatic external fun front(front: Boolean)
   @JvmStatic external fun opened(machineId: String, sessionId: String)
 
@@ -68,12 +72,16 @@ object CoreBridge {
   @JvmStatic fun postAlert(machineId: String, sessionId: String, title: String) {
     val c = app ?: return
     val tag = "$machineId/$sessionId"
+    // The chat in the data makes each chat's PendingIntent its own (request codes could collide).
+    val chat = Uri.Builder().scheme("threadgarden").authority("chat")
+      .appendPath(machineId).appendPath(sessionId).build()
     val open = Intent(c, MainActivity::class.java)
+      .setData(chat)
       .putExtra(EXTRA_MACHINE, machineId)
       .putExtra(EXTRA_SESSION, sessionId)
       .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
     val tap = PendingIntent.getActivity(
-      c, tag.hashCode(), open, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+      c, 0, open, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
     )
     val n = Notification.Builder(c, CoreService.ALERTS)
       .setContentTitle(title)
@@ -108,6 +116,7 @@ object CoreBridge {
   @JvmStatic fun requestBatteryExemption() {
     val c = app ?: return
     if (batteryExempt()) return
+    batteryDialogOpen = true
     c.startActivity(
       Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:${c.packageName}"))
         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
@@ -118,8 +127,16 @@ object CoreBridge {
     app?.let { CoreService.start(it, CoreService.ACTION_CONNECT) }
   }
 
-  @JvmStatic fun stopService() {
-    app?.let { it.stopService(Intent(it, CoreService::class.java)) }
+  /** Disconnect, the same way as the notification's action. */
+  @JvmStatic fun disconnectService() {
+    val c = app ?: return
+    try {
+      c.startService(Intent(c, CoreService::class.java).setAction(CoreService.ACTION_DISCONNECT))
+    } catch (e: IllegalStateException) {
+      // Not allowed from the background: the links close all the same.
+      log("Disconnect without the service: ${e.javaClass.simpleName}")
+      disconnect()
+    }
   }
 
   /** For `adb logcat -s Threadgarden`. Rust never passes a secret or a frame here. */

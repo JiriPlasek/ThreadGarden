@@ -282,19 +282,22 @@ type OpenedChat = { machineId: string; sessionId: string };
  * The phone: the owner opened an alert, and the chat it names is to be shown.
  * The app says so with the `alerts://open` event. An alert that started the
  * app came before anything listened: it waits in the shell, and is taken once
- * the listener is up (and taken again after each event, so it isn't shown a
- * second time by later screens). Elsewhere nothing opens a chat. Resolves to
- * an unsubscribe function.
+ * the listener is up. Each event takes it too, so later screens don't show it
+ * again, and an event while that first take is on its way wins: the waiting
+ * chat is the same or older, so it isn't shown as well. Elsewhere nothing
+ * opens a chat. Resolves to an unsubscribe function.
  */
 export const onOpenChat = async (cb: (chat: OpenedChat) => void): Promise<() => void> => {
   if (!phoneTauri) return () => {};
   const take = (): Promise<OpenedChat | null> => invoke<OpenedChat | null>('alerts_take_open');
+  let heard = false;
   const off = await listen<OpenedChat>('alerts://open', (e) => {
+    heard = true;
     cb(e.payload);
     void take().catch(() => {});
   });
   const waiting = await take().catch(() => null);
-  if (waiting) cb(waiting);
+  if (waiting && !heard) cb(waiting);
   return off;
 };
 

@@ -45,8 +45,6 @@ futures-util = { version = "0.3", default-features = false, features = ["sink", 
 [target.'cfg(target_os = "android")'.dependencies]
 threadgarden-core = { path = "core" }
 jni = "0.21"
-# The core's events channel.
-tokio = { version = "1", features = ["sync"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [

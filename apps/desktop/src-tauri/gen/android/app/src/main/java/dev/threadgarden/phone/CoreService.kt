@@ -35,6 +35,8 @@ class CoreService : Service() {
     private const val NETWORK_DEBOUNCE_MS = 3_000L
 
     @Volatile private var instance: CoreService? = null
+    /** Guards `stopping` against a status posted while Disconnect removes the notification. */
+    private val statusLock = Any()
 
     fun channels(c: Context) {
       val nm = c.getSystemService(NotificationManager::class.java)
@@ -43,15 +45,26 @@ class CoreService : Service() {
     }
 
     fun start(c: Context, action: String?) {
-      c.startForegroundService(Intent(c, CoreService::class.java).setAction(action))
+      try {
+        c.startForegroundService(Intent(c, CoreService::class.java).setAction(action))
+      } catch (e: IllegalStateException) {
+        // ForegroundServiceStartNotAllowedException: Android didn't allow it from here.
+        CoreBridge.log("The service could not start: ${e.javaClass.simpleName}")
+      }
     }
 
     fun postStatus(text: String) {
       val s = instance ?: return
-      s.getSystemService(NotificationManager::class.java).notify(STATUS_ID, s.status(text))
+      synchronized(statusLock) {
+        // After Disconnect, a late status would bring the notification back for good.
+        if (s.stopping) return
+        s.getSystemService(NotificationManager::class.java).notify(STATUS_ID, s.status(text))
+      }
     }
   }
 
+  /** Disconnect has begun: no status is posted any more. */
+  private var stopping = false
   private val main = Handler(Looper.getMainLooper())
   private var network: ConnectivityManager.NetworkCallback? = null
   private var current: Network? = null
@@ -70,15 +83,26 @@ class CoreService : Service() {
 
   override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
     if (intent?.action == ACTION_DISCONNECT) {
+      // Before the core's own status about it, which would post the notification again.
+      synchronized(statusLock) { stopping = true }
       CoreBridge.disconnect()
       stopForeground(STOP_FOREGROUND_REMOVE)
+      getSystemService(NotificationManager::class.java).cancel(STATUS_ID)
       stopSelf()
       return START_NOT_STICKY
     }
+    synchronized(statusLock) { stopping = false }
     // Every startForegroundService needs its startForeground.
     val n = status(CoreBridge.statusText())
-    if (Build.VERSION.SDK_INT >= 34) startForeground(STATUS_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
-    else startForeground(STATUS_ID, n)
+    try {
+      if (Build.VERSION.SDK_INT >= 34) startForeground(STATUS_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+      else startForeground(STATUS_ID, n)
+    } catch (e: IllegalStateException) {
+      // ForegroundServiceStartNotAllowedException (a sticky restart in the background, say).
+      CoreBridge.log("Not allowed to run in the foreground: ${e.javaClass.simpleName}")
+      stopSelf()
+      return START_NOT_STICKY
+    }
     if (intent?.action == ACTION_CONNECT) CoreBridge.connect()
     // Killed by Android: started again (with no intent; the core keeps its own Disconnect).
     return START_STICKY

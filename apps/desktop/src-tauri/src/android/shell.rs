@@ -120,7 +120,6 @@ fn follow(core: &CoreHandle) {
     let spawned = std::thread::Builder::new()
         .name("threadgarden-events".into())
         .spawn(move || {
-            use tokio::sync::broadcast::error::RecvError;
             loop {
                 match events.blocking_recv() {
                     Ok(CoreEvent::Alert {
@@ -141,9 +140,10 @@ fn follow(core: &CoreHandle) {
                         log(&format!("link to {machine_id} failed: {reason}"));
                     }
                     Ok(_) => {}
+                    // The core is gone.
+                    Err(_) if events.is_closed() => break,
                     // Missed some: the next status says where the links are.
-                    Err(RecvError::Lagged(_)) => {}
-                    Err(RecvError::Closed) => break,
+                    Err(_) => {}
                 }
             }
         });
@@ -251,6 +251,19 @@ pub extern "system" fn Java_dev_threadgarden_phone_CoreBridge_statusText<'l>(
         .map(|c| status_text(c.link_status()))
         .unwrap_or_default();
     env.new_string(text).unwrap_or_default()
+}
+
+/// Whether the alert links are on (the owner didn't choose Disconnect).
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_dev_threadgarden_phone_CoreBridge_linksOn(
+    _env: JNIEnv,
+    _class: JClass,
+) -> jboolean {
+    if KEEPER.core().is_some_and(|c| c.link_status().on) {
+        JNI_TRUE
+    } else {
+        JNI_FALSE
+    }
 }
 
 /// The activity came to the front or went to the background.
@@ -396,21 +409,12 @@ pub async fn request_battery_exemption() -> Result<(), String> {
     blocking(|| call("requestBatteryExemption", &[]).map_err(|_| "no-battery-dialog".into())).await
 }
 
-/// Disconnect, as the notification's action: the links close and the service
-/// (with its notification) stops. The screens keep the core.
+/// Disconnect: the same path as the notification's action (the service's
+/// `ACTION_DISCONNECT`), so the links close before the notification goes and
+/// no status can put it back. The screens keep the core.
 #[tauri::command]
 pub async fn disconnect() -> Result<(), String> {
-    blocking(|| {
-        // Logged and carried on: the links are closed either way, only
-        // remembering it across a restart failed.
-        if let Some(core) = KEEPER.core()
-            && let Err(e) = core.disconnect()
-        {
-            log(&format!("disconnect: {e}"));
-        }
-        call("stopService", &[]).map_err(|_| "no-service".into())
-    })
-    .await
+    blocking(|| call("disconnectService", &[]).map_err(|_| "no-service".into())).await
 }
 
 #[tauri::command]

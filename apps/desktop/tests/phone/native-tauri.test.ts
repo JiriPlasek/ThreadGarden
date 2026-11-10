@@ -114,6 +114,29 @@ describe('native in Tauri, phone or desktop', () => {
     tauri.invoke.mockImplementation(async () => null);
   });
 
+  it('an alert opened while the waiting one is being taken is shown once', async () => {
+    vi.stubEnv('TAURI_ENV_PLATFORM', 'android');
+    let release: (v: unknown) => void = () => {};
+    let first = true;
+    tauri.invoke.mockImplementation(async (cmd: string) => {
+      if (cmd !== 'alerts_take_open') return null;
+      if (!first) return null;
+      first = false;
+      // The first take is still on its way when the event comes; both name the same chat.
+      return new Promise((r) => (release = r));
+    });
+    const native = await load();
+    const opened: unknown[] = [];
+    const subscribing = native.onOpenChat((c) => opened.push(c));
+    await vi.waitFor(() => expect(events.handlers.has('alerts://open')).toBe(true));
+    await vi.waitFor(() => expect(first).toBe(false));
+    events.handlers.get('alerts://open')?.({ payload: { machineId: 'm1', sessionId: 's1' } });
+    release({ machineId: 'm1', sessionId: 's1' });
+    (await subscribing)();
+    expect(opened).toEqual([{ machineId: 'm1', sessionId: 's1' }]);
+    tauri.invoke.mockImplementation(async () => null);
+  });
+
   it("the phone's keep-alive commands reach the shell; the desktop has none", async () => {
     vi.stubEnv('TAURI_ENV_PLATFORM', 'android');
     let native = await load();
