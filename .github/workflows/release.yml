@@ -1,9 +1,10 @@
 name: Release
 
 # Pushing a tag vX.Y.Z publishes Threadgarden X.Y.Z (docs/releasing.md):
-# CI's checks, then signed builds for every platform and the headless package
-# into a draft release, then the update manifest and checksums, and only when
-# all of that succeeded, publishing. A failure leaves a draft, never a half release.
+# CI's checks, then signed builds for every platform, the headless package and
+# the signed Android APK into a draft release, then the update manifest and
+# checksums, and only when all of that succeeded, publishing. A failure leaves
+# a draft, never a half release.
 #
 # "Run workflow" (dry_run), or pushing a commit to the branch
 # `release-rehearsal`, rehearses everything and deletes the draft at the end
@@ -178,8 +179,80 @@ jobs:
             threadgarden-setup-worker.ps1 \
             threadgarden-setup-worker.ps1.sha256
 
+  # The phone app: a release APK for 64-bit ARM, signed with the owner's
+  # Android key (docs/releasing.md, "Once: the Android signing key"), uploaded
+  # to the draft as threadgarden-<version>.apk. Without the key's secrets the
+  # job stops at its first step, so nothing is published.
+  android:
+    needs: [version, draft]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: The Android signing key must be there
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        # Before an hour of building: the signing step's own check, which names what's missing.
+        run: bash scripts/sign-android.sh --check
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: gradle
+      - uses: android-actions/setup-android@v3
+        with:
+          # build-tools for zipalign and apksigner (16 KB page alignment needs 35 or later).
+          packages: platform-tools build-tools;36.0.0
+      # NDK r27d (27.3.13750724), as CI's android job and the local builds.
+      - uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r27d
+          local-cache: true
+      - run: echo "NDK_HOME=${{ steps.ndk.outputs.ndk-path }}" >> "$GITHUB_ENV"
+      - run: rustup toolchain install
+      - run: rustup target add aarch64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+          shared-key: android-aarch64-release
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: The draft to upload to
+        run: test -n "${{ needs.draft.outputs.release_id }}" || { echo "::error::No draft release id"; exit 1; }
+      # Unsigned: Gradle never sees the key, the next step signs.
+      - name: Build the release APK
+        run: pnpm --filter desktop exec tauri android build --apk --target aarch64 --ci
+        env:
+          CC_aarch64_linux_android: ${{ env.NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang
+          AR_aarch64_linux_android: ${{ env.NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+      - name: Sign it
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: >-
+          bash scripts/sign-android.sh
+          apps/desktop/src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release-unsigned.apk
+          "dist-android/threadgarden-$VERSION.apk"
+      - name: Upload it to the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.version.outputs.tag }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: gh release upload "$TAG" --clobber "dist-android/threadgarden-$VERSION.apk"
+
   publish:
-    needs: [version, bundle, headless]
+    needs: [version, bundle, headless, android]
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -199,6 +272,8 @@ jobs:
           base="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG"
           node scripts/make-manifest.mjs assets "$VERSION" "$base"
           node scripts/check-manifest.mjs assets/latest.json "$VERSION" $(ls assets)
+          # The phone's update notice looks for exactly this name.
+          test -f "assets/threadgarden-$VERSION.apk" || { echo "::error::The release has no threadgarden-$VERSION.apk"; exit 1; }
           node scripts/release-sums.mjs assets
           (cd assets && sha256sum -c SHA256SUMS)
           gh release upload "$TAG" --clobber assets/latest.json assets/SHA256SUMS
