@@ -7,10 +7,13 @@
   import EllipsisIcon from '@lucide/svelte/icons/ellipsis';
   import InboxIcon from '@lucide/svelte/icons/inbox';
   import PauseIcon from '@lucide/svelte/icons/pause';
+  import PencilIcon from '@lucide/svelte/icons/pencil';
   import PowerIcon from '@lucide/svelte/icons/power';
   import TerminalIcon from '@lucide/svelte/icons/terminal';
   import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
   import BypassPermissionsDialog from '#lib/components/BypassPermissionsDialog.svelte';
+  import RenameDialog from '#lib/components/layout/RenameDialog.svelte';
+  import ShortcutHint from '#lib/components/ShortcutHint.svelte';
   import { Button } from '#lib/components/ui/button/index.js';
   import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
   import { formatHoldUntil } from '#lib/format/hold.js';
@@ -21,7 +24,7 @@
   import StatusIcon from '#lib/components/layout/StatusIcon.svelte';
   import { copyText } from '#lib/native.js';
   import { supportsMove } from '#lib/projects.js';
-  import { shortcut } from '#lib/shortcuts.js';
+  import { ariaKeyShortcuts, isChatRenameKey, shortcut } from '#lib/shortcuts.js';
   import { taskRunning, type ChatState } from '#lib/state/chats.svelte.js';
   import { useApp, useScope } from '#lib/state/context.js';
   import { machineNameOf } from '#lib/state/machines.svelte.js';
@@ -62,9 +65,9 @@
     onToggleActivity?: () => void;
   } = $props();
 
-  const { machines, interaction } = useApp();
+  const { machines, interaction, agents } = useApp();
   /** The chat's machine: its chat, project and bucket stores. */
-  const { chats, places, buckets, machineId } = useScope();
+  const { chats, places, buckets, sessions, machineId } = useScope();
   /** With more than one machine, the header names the chat's machine. */
   const machineName = $derived(machines.several ? machineNameOf(machines, machineId) : null);
 
@@ -79,6 +82,16 @@
   const sessionId = $derived(chat.sessionId);
   const header = $derived(chat.header);
   const summary = $derived(chat.summary);
+  let renaming = $state(false);
+  const rename = async (id: string, title: string | null): Promise<void> => {
+    await sessions.rename(id, title);
+    void agents.refresh().catch(() => {});
+  };
+  const onWindowKey = (e: KeyboardEvent): void => {
+    if (!summary || !isChatRenameKey(e)) return;
+    e.preventDefault();
+    renaming = true;
+  };
   /** Threadgarden's own process runs this chat: header controls and End session apply. */
   const live = $derived(!readOnly && chat.ownedLive);
   const external = $derived(!readOnly && chat.live ? (summary?.external ?? null) : null);
@@ -231,6 +244,8 @@
     'bg-background hover:bg-muted h-6 max-w-40 truncate rounded border px-1 text-xs disabled:cursor-not-allowed disabled:opacity-60';
 </script>
 
+<svelte:window onkeydown={onWindowKey} />
+
 <header class="shrink-0 border-b">
   <div class="flex h-10 items-center gap-2 px-4">
     {#if chat.loaded}
@@ -290,17 +305,28 @@
             {/snippet}
           </DropdownMenu.Trigger>
           <DropdownMenu.Content align="end" class="min-w-40">
+            <DropdownMenu.Item
+              class="py-1 text-xs"
+              aria-keyshortcuts={ariaKeyShortcuts(shortcut('chat-rename').combos)}
+              onSelect={() => (renaming = true)}
+            >
+              <PencilIcon /> Rename… <ShortcutHint combos={shortcut('chat-rename').combos} />
+            </DropdownMenu.Item>
+            <DropdownMenu.Separator />
             {#if bucket !== 'active'}
               <DropdownMenu.Item class="py-1 text-xs" onSelect={() => moveTo('active')}>
                 <InboxIcon /> Make active
+                <ShortcutHint combos={shortcut('list-activate').combos} scopeLabel="chat list" />
               </DropdownMenu.Item>
             {/if}
             <DropdownMenu.Item class="py-1 text-xs" onSelect={() => moveTo('onHold')}>
               <PauseIcon /> Put on hold…
+              <ShortcutHint combos={shortcut('list-hold').combos} scopeLabel="chat list" />
             </DropdownMenu.Item>
             {#if bucket !== 'archived'}
               <DropdownMenu.Item class="py-1 text-xs" onSelect={() => moveTo('archived')}>
                 <ArchiveIcon /> Archive
+                <ShortcutHint combos={shortcut('list-archive').combos} scopeLabel="chat list" />
               </DropdownMenu.Item>
             {/if}
             {#if machines.several && !chat.movedTo && supportsMove(machines.get(machineId))}
@@ -466,6 +492,12 @@
     </div>
   </div>
 </header>
+
+<RenameDialog
+  chat={renaming ? summary : null}
+  onSubmit={rename}
+  onClose={() => (renaming = false)}
+/>
 
 <ConfirmDialog
   bind:open={confirmEnd}

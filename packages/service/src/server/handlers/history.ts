@@ -20,7 +20,7 @@ export type HistoryHandlerDeps = {
   onSettingsChanged?: (patch: SettingsPatch) => void;
   /** v1.2 buckets; default: one over `db`/`catalog` that sends events to `emit`. */
   buckets?: Buckets;
-  /** Events (`sessions.changed`, …) for the default `buckets`. */
+  /** Events (`sessions.changed`, …) for metadata updates and the default `buckets`. */
   emit?: (e: EventMsg) => void;
   /** v1.3 project icons; default: a `ProjectIcons` over the real file system. */
   icons?: Pick<ProjectIcons, 'get'>;
@@ -74,6 +74,9 @@ export const registerHistoryHandlers = (router: Router, deps: HistoryHandlerDeps
     if (p.customTitle !== undefined) db.setCustomTitle(p.sessionId, p.customTitle);
     if (p.pinned !== undefined) db.setSessionPinned(p.sessionId, p.pinned);
     catalog.invalidate();
+    if (p.customTitle !== undefined || p.pinned !== undefined) {
+      deps.emit?.({ event: 'sessions.changed', data: { sessionIds: [p.sessionId] } });
+    }
     return {};
   });
 

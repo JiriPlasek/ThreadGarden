@@ -15,6 +15,7 @@
   import { useApp } from '#lib/state/context.js';
   import { SCALES } from '#lib/interface-scale.js';
   import { formatShortcut, shortcut } from '#lib/shortcuts.js';
+  import ShortcutHint from './ShortcutHint.svelte';
   import { IDLE_MINUTES_MAX } from '#lib/state/settings.svelte.js';
   import AppearancePreview from './AppearancePreview.svelte';
   import MachinesSettings from './MachinesSettings.svelte';
@@ -109,6 +110,7 @@
 
   const scaleUp = formatShortcut(shortcut('scale-up').combos[0]!);
   const scaleDown = formatShortcut(shortcut('scale-down').combos[0]!);
+  const scaleReset = formatShortcut(shortcut('scale-reset').combos[0]!);
 
   const save = async (): Promise<void> => {
     if (idle === null) return;
@@ -277,7 +279,7 @@
           <select
             id="settings-scale"
             class={fieldClass}
-            title="Applies at once"
+            title="Applies at once · {scaleUp} / {scaleDown} · {scaleReset} resets to default"
             value={String(settings.scale)}
             onchange={(e) => settings.setScale(Number(e.currentTarget.value))}
           >
@@ -451,6 +453,7 @@
     <Dialog.Footer class="sm:justify-between">
       <Button variant="ghost" size="sm" class="text-muted-foreground" onclick={showShortcuts}>
         <KeyboardIcon aria-hidden="true" /> Keyboard shortcuts…
+        <ShortcutHint combos={shortcut('shortcuts').combos} />
       </Button>
       <div class="flex flex-col-reverse gap-2 sm:flex-row">
         <Button variant="outline" size="sm" onclick={close}>Cancel</Button>

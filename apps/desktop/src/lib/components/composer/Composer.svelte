@@ -8,6 +8,8 @@
   import SquareIcon from '@lucide/svelte/icons/square';
   import { onDestroy, onMount, tick, untrack } from 'svelte';
   import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
+  import ActionTooltip from '#lib/components/ActionTooltip.svelte';
+  import PickerKeyHints from '#lib/components/PickerKeyHints.svelte';
   import { clockTime } from '#lib/format/usage.js';
   import { readDroppedImage } from '#lib/native.js';
   import { ariaKeyShortcuts, formatCombos, shortcut } from '#lib/shortcuts.js';
@@ -544,6 +546,9 @@
   const sendKeys = $derived(
     shortcut(settings.value.enterToSend ? 'composer-send' : 'composer-send-mod').combos,
   );
+  const newlineKeys = $derived(
+    shortcut(settings.value.enterToSend ? 'composer-newline' : 'composer-newline-plain').combos,
+  );
 
   const hint = $derived(
     working && text.trim() && !editing
@@ -608,6 +613,7 @@
             onHover={(i) => (active = i)}
           />
         {/if}
+        <PickerKeyHints />
       </div>
     {/if}
     <textarea
@@ -616,6 +622,13 @@
       rows="1"
       class="placeholder:text-muted-foreground block w-full resize-none overflow-hidden bg-transparent px-3 pt-2.5 pb-1 text-sm leading-5 outline-none disabled:cursor-not-allowed disabled:opacity-50"
       aria-label={label}
+      title="{formatCombos(sendKeys).join(' or ')} to send · {formatCombos(newlineKeys).join(
+        ' or ',
+      )} for a new line · {formatCombos(shortcut('composer-mention').combos).join(
+        ' or ',
+      )} for files · {formatCombos(shortcut('composer-command').combos).join(
+        ' or ',
+      )} at the start for commands"
       aria-autocomplete="list"
       aria-controls={picker ? listId : undefined}
       aria-activedescendant={activeId}
@@ -642,15 +655,22 @@
   {/if}
 
   <div class="flex items-center gap-1 px-2 pb-1.5">
-    <button
-      type="button"
-      class="text-muted-foreground hover:text-foreground hover:bg-muted flex size-7 items-center justify-center rounded-md"
-      aria-label="Attach images"
-      title="Attach images (or paste / drop them)"
-      onclick={() => fileInput?.click()}
+    <ActionTooltip
+      label="Attach images (or paste / drop them)"
+      combos={shortcut('composer-paste').combos}
     >
-      <ImagePlusIcon class="size-4" aria-hidden="true" />
-    </button>
+      {#snippet children({ props })}
+        <button
+          {...props}
+          type="button"
+          class="text-muted-foreground hover:text-foreground hover:bg-muted flex size-7 items-center justify-center rounded-md"
+          aria-label="Attach images"
+          onclick={() => fileInput?.click()}
+        >
+          <ImagePlusIcon class="size-4" aria-hidden="true" />
+        </button>
+      {/snippet}
+    </ActionTooltip>
     <input
       bind:this={fileInput}
       type="file"
@@ -671,15 +691,19 @@
       {/if}
     </div>
     {#if working && onInterrupt}
-      <button
-        type="button"
-        class="hover:bg-muted flex h-7 items-center gap-1 rounded-md border px-2 text-xs"
-        title="Stop Claude · {formatCombos(stopKeys).join(' or ')}"
-        aria-keyshortcuts={ariaKeyShortcuts(stopKeys)}
-        onclick={onInterrupt}
-      >
-        <SquareIcon class="size-3.5 fill-current" aria-hidden="true" /> Stop
-      </button>
+      <ActionTooltip label="Stop Claude" combos={stopKeys}>
+        {#snippet children({ props })}
+          <button
+            {...props}
+            type="button"
+            class="hover:bg-muted flex h-7 items-center gap-1 rounded-md border px-2 text-xs"
+            aria-keyshortcuts={ariaKeyShortcuts(stopKeys)}
+            onclick={onInterrupt}
+          >
+            <SquareIcon class="size-3.5 fill-current" aria-hidden="true" /> Stop
+          </button>
+        {/snippet}
+      </ActionTooltip>
     {/if}
     {#if limited && onSchedule && resetAt !== undefined && !editing}
       <button
@@ -704,20 +728,24 @@
       >
     {/if}
     <div class="flex items-center">
-      <button
-        type="button"
-        class="bg-primary text-primary-foreground flex size-7 items-center justify-center disabled:opacity-40 {onSchedule &&
-        !editing
-          ? 'rounded-l-md'
-          : 'rounded-md'}"
-        aria-label={sendLabel}
-        title="{sendLabel} · {formatCombos(sendKeys).join(' or ')}"
-        aria-keyshortcuts={ariaKeyShortcuts(sendKeys)}
-        disabled={sending || empty || disabled}
-        onclick={() => void submit()}
-      >
-        <ArrowUpIcon class="size-4" aria-hidden="true" />
-      </button>
+      <ActionTooltip label={sendLabel} combos={sendKeys}>
+        {#snippet children({ props })}
+          <button
+            {...props}
+            type="button"
+            class="bg-primary text-primary-foreground flex size-7 items-center justify-center disabled:opacity-40 {onSchedule &&
+            !editing
+              ? 'rounded-l-md'
+              : 'rounded-md'}"
+            aria-label={sendLabel}
+            aria-keyshortcuts={ariaKeyShortcuts(sendKeys)}
+            disabled={sending || empty || disabled}
+            onclick={() => void submit()}
+          >
+            <ArrowUpIcon class="size-4" aria-hidden="true" />
+          </button>
+        {/snippet}
+      </ActionTooltip>
       {#if onSchedule && !editing}
         <DropdownMenu.Root>
           <DropdownMenu.Trigger>

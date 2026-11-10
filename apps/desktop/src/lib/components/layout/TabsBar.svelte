@@ -1,13 +1,15 @@
 <script lang="ts">
   import ChartColumnIcon from '@lucide/svelte/icons/chart-column';
   import PlusIcon from '@lucide/svelte/icons/plus';
+  import SearchIcon from '@lucide/svelte/icons/search';
   import XIcon from '@lucide/svelte/icons/x';
   import * as ContextMenu from '#lib/components/ui/context-menu/index.js';
+  import ShortcutHint from '#lib/components/ShortcutHint.svelte';
   import { useApp } from '#lib/state/context.js';
   import { machineAway } from '#lib/state/machines.svelte.js';
   import { parseChatKey } from '#lib/state/refs.js';
   import { cn } from '#lib/utils.js';
-  import { shortcut } from '#lib/shortcuts.js';
+  import { formatCombos, shortcut } from '#lib/shortcuts.js';
   import { ANALYTICS_TAB_ID, rawStatus, shownStatus, tabId } from './chat-info';
   import IconButton from './IconButton.svelte';
   import RunningBadge from './RunningBadge.svelte';
@@ -141,9 +143,13 @@
   others: boolean;
   /** Some tab is to the right of this one. */
   right: boolean;
+  active: boolean;
 })}
   <ContextMenu.Content class="min-w-40">
-    <ContextMenu.Item class="py-1 text-xs" onSelect={m.close}>Close</ContextMenu.Item>
+    <ContextMenu.Item class="py-1 text-xs" onSelect={m.close}>
+      Close
+      {#if m.active}<ShortcutHint combos={shortcut('tab-close').combos} />{/if}
+    </ContextMenu.Item>
     <ContextMenu.Item class="py-1 text-xs" disabled={!m.others} onSelect={m.closeOthers}>
       Close others
     </ContextMenu.Item>
@@ -215,6 +221,7 @@
           closeToRight: tabs.closeChats,
           others: tabs.open.length > 0,
           right: tabs.open.length > 0,
+          active: tabs.analyticsShown,
         })}
       </ContextMenu.Root>
     {/if}
@@ -243,7 +250,11 @@
                 aria-selected={active}
                 aria-controls="chat-panel"
                 tabindex={active ? 0 : -1}
-                title={t.title}
+                title="{t.title} ? {formatCombos(shortcut('tab-close-click').combos).join(
+                  ' or ',
+                )} to close{active
+                  ? ` ? ${formatCombos(shortcut('chat-rename').combos).join(' or ')} to rename`
+                  : ''}"
                 class="focus-visible:ring-ring/50 flex h-full min-w-0 flex-1 items-center gap-1.5 pr-1 pl-3 text-xs outline-none focus-visible:ring-2 focus-visible:ring-inset"
                 onclick={() => tabs.activate(key)}
                 onmousedown={(e) => e.button === 1 && e.preventDefault()}
@@ -280,11 +291,17 @@
           closeToRight: () => tabs.closeToRight(key),
           others: tabs.open.length > 1 || tabs.analyticsOpen,
           right: i < tabs.open.length - 1,
+          active,
         })}
       </ContextMenu.Root>
     {/each}
   </div>
-  <div class="flex w-9 shrink-0 items-center justify-center">
+  <div class="flex shrink-0 items-center justify-center gap-0.5 px-1">
+    <IconButton
+      label="Quick switcher"
+      shortcut={shortcut('quick-switcher').combos[0]}
+      onclick={() => (interaction.switcherOpen = true)}><SearchIcon /></IconButton
+    >
     <IconButton label="New chat" shortcut={shortcut('new-chat').combos[0]} onclick={newChat}>
       <PlusIcon />
     </IconButton>

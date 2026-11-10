@@ -101,6 +101,12 @@ export const SHORTCUTS: readonly Shortcut[] = [
 
   // Chat list — ChatList.
   {
+    id: 'chat-rename',
+    group: 'Chat list',
+    combos: [['F2']],
+    description: 'Rename the focused chat in the list, or the current chat elsewhere',
+  },
+  {
     id: 'list-move',
     group: 'Chat list',
     combos: [['Up'], ['Down']],
@@ -348,6 +354,20 @@ export const detectPlatform = (nav: NavigatorLike | undefined): Platform => {
 /** The platform of this window. */
 export const currentPlatform = (): Platform =>
   detectPlatform(typeof navigator === 'undefined' ? undefined : (navigator as NavigatorLike));
+
+/** F2 belongs to the list cursor first, then to the open chat; popups own their keys. */
+export const isChatRenameKey = (e: KeyboardEvent): boolean =>
+  e.key === 'F2' &&
+  !e.ctrlKey &&
+  !e.metaKey &&
+  !e.altKey &&
+  !e.shiftKey &&
+  !e.repeat &&
+  !e.isComposing &&
+  !e.defaultPrevented &&
+  !document.querySelector(
+    '[role="dialog"]:not([data-state="closed"]), [role="alertdialog"]:not([data-state="closed"]), [role="menu"]:not([data-state="closed"])',
+  );
 
 const LABELS: Record<Platform, Record<string, string>> = {
   other: { Mod: 'Ctrl', Ctrl: 'Ctrl', Shift: 'Shift', Alt: 'Alt' },
