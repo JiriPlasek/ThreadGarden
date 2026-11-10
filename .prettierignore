@@ -9,6 +9,9 @@ build
 .svelte-kit
 apps/desktop/src-tauri/gen
 build-e2e
+build-e2e-phone
+.svelte-kit-phone
 test-results
 playwright-report
 apps/desktop/src-tauri/binaries
+packages/protocol/test/fixtures/core-answers

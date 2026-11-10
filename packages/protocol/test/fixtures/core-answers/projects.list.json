@@ -1,0 +1,9 @@
+{
+  "cases": [
+    {
+      "params": {},
+      "result": []
+    }
+  ],
+  "method": "projects.list"
+}

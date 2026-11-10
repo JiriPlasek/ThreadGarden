@@ -55,7 +55,14 @@
    * Rows are keyed by machine and session id, and act through their machine.
    * With This PC alone, the list is This PC's `sessions`, as always.
    */
-  let { onCollapse }: { onCollapse?: () => void } = $props();
+  let {
+    onCollapse,
+    onOpen,
+  }: {
+    onCollapse?: () => void;
+    /** A chat was opened from the list (the phone then shows it). */
+    onOpen?: (chat: MachineChat) => void;
+  } = $props();
 
   const { sessions, places, tabs, agents, settings, machines, scopes, power, interaction } =
     useApp();
@@ -272,6 +279,7 @@
   const open = (chat: MachineChat): void => {
     cursor = keyOf(chat);
     tabs.openTab({ machineId: chat.machineId, sessionId: chat.sessionId });
+    onOpen?.(chat);
   };
 
   const clearSelection = (): void => {

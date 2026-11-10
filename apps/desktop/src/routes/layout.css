@@ -239,3 +239,28 @@
     color: var(--shiki-dark);
   }
 }
+
+/*
+ * The phone (`data-phone`, set by PhoneShell): every control is a touch target
+ * of at least 44 px. Unlayered, so it wins over the utilities' fixed sizes.
+ */
+:root[data-phone]
+  :is(
+    button,
+    select,
+    textarea,
+    [role='button'],
+    [role='tab'],
+    [role='menuitem'],
+    [role='menuitemradio'],
+    [role='menuitemcheckbox'],
+    input:not([type='checkbox'], [type='radio'], [type='hidden'], [type='file'])
+  ) {
+  min-height: 44px;
+  min-width: 44px;
+}
+/* A choice's label is its target: the box itself stays its own size. */
+:root[data-phone] label:has(> input:is([type='checkbox'], [type='radio'])) {
+  min-height: 44px;
+  align-items: center;
+}

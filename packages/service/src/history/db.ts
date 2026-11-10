@@ -995,6 +995,23 @@ export class Db implements LiveRegistry {
     return this.getSettings();
   }
 
+  // --- Let my phone connect -------------------------------------------------------
+
+  /** Whether the owner turned Let my phone connect on (off until they do). */
+  getPhoneAccess(): boolean {
+    const r = this.raw.prepare('SELECT enabled FROM phone_access WHERE id = 1').get();
+    return r ? r.enabled === 1 : false;
+  }
+
+  setPhoneAccess(enabled: boolean): void {
+    this.raw
+      .prepare(
+        `INSERT INTO phone_access (id, enabled) VALUES (1, ?)
+         ON CONFLICT(id) DO UPDATE SET enabled = excluded.enabled`,
+      )
+      .run(enabled ? 1 : 0);
+  }
+
   getUiState(key: string): unknown {
     const r = this.raw.prepare('SELECT json FROM ui_state WHERE key = ?').get(key);
     if (!r) return undefined;

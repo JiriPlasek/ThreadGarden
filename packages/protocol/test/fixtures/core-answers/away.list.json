@@ -1,0 +1,12 @@
+{
+  "cases": [
+    {
+      "params": {},
+      "result": {
+        "items": [],
+        "states": []
+      }
+    }
+  ],
+  "method": "away.list"
+}

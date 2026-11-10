@@ -20,7 +20,9 @@
     type NotStarted,
     type Send,
   } from '#lib/components/new-chat/start.js';
+  import { Button } from '#lib/components/ui/button/index.js';
   import * as Dialog from '#lib/components/ui/dialog/index.js';
+  import { isPhone } from '#lib/native.js';
   import { nameProblem, projectsApi, supportsProjects } from '#lib/projects.js';
   import { useApp } from '#lib/state/context.js';
   import { awayRefusal } from '#lib/state/copy-api.js';
@@ -49,6 +51,10 @@
    * its projects and its home folder, as Existing folder only. The first
    * message waits on this device until the machine is up, and the chat's tab
    * opens at once ("Starting ‹machine›…").
+   *
+   * The phone (`isPhone`) has no This PC: the Machine select is always there
+   * and never offers it, and the dialog opens on the last machine a chat was
+   * started on (while it can take one), else the first that can.
    */
   const { interaction, places, tabs, settings, scopes, machines, power } = useApp();
 
@@ -105,6 +111,7 @@
    */
   const choices = $derived(
     machines.list.flatMap((m) => {
+      if (isPhone && m.local) return [];
       if (m.status === 'on' && power.takesWork(m.id) && scopes.get(m.id)) {
         return [{ id: m.id, label: machineLabel(m), disabled: false }];
       }
@@ -121,20 +128,43 @@
   /** A machine a chat can start on now: it has its stores and takes work, or its message can wait for it. */
   const usable = (id: string | null | undefined): id is string =>
     !!id &&
+    !(isPhone && id === local.machineId) &&
     ((!!scopes.get(id) && machines.get(id)?.status === 'on' && power.takesWork(id)) ||
       awayOffer(id)?.refusal === null);
   /** The chosen machine is away: only its existing folders can be offered. */
   const away = $derived(!onThisPc && machineAway(machines, scope.machineId));
   /**
+   * The phone with no machine a chat can start on (none paired, or none on): the
+   * dialog is left on its own scope, the core, which has no folders and runs
+   * nothing. Only Add machine is offered then.
+   */
+  const noMachine = $derived(isPhone && onThisPc);
+  const nothingPaired = $derived(machines.list.every((m) => m.local));
+  /** Add machine lives in Settings → Machines; New chat steps aside for it. */
+  const addMachine = (): void => {
+    interaction.closeNewChat();
+    interaction.settingsSection = 'machines';
+    interaction.settingsOpen = true;
+    interaction.addMachineOpen = true;
+  };
+
+  /** The phone's: the machine the last chat was started on. */
+  let lastUsed = $state<string | null>(null);
+
+  /**
    * The machine the dialog opens on: the one asked for, else the selected
    * project place's, when it is on (or away, with its message able to wait);
-   * else This PC.
+   * else This PC. On the phone, else the last machine used, else the first
+   * that can take a chat.
    */
   const startMachine = (): string => {
     const sel = places.selected;
     const want =
       interaction.newChat.machineId ?? (sel.kind === 'project' ? sel.machineId : undefined);
-    return usable(want) ? want : local.machineId;
+    if (usable(want)) return want;
+    if (!isPhone) return local.machineId;
+    if (usable(lastUsed)) return lastUsed;
+    return choices.find((m) => !m.disabled)?.id ?? local.machineId;
   };
 
   const projects = $derived(
@@ -257,10 +287,11 @@
     if (updateHint && tab !== 'existing') tab = 'existing';
   });
 
-  // The chosen machine was removed while the dialog is open: back to This PC, with its folder.
+  // The chosen machine was removed while the dialog is open: back to This PC (on the
+  // phone, the first machine that can take a chat), with its folder.
   $effect(() => {
     if (!interaction.newChat.open || scopes.get(machineId)) return;
-    untrack(() => chooseMachine(local.machineId));
+    untrack(() => chooseMachine(isPhone ? startMachine() : local.machineId));
   });
 
   /** The folder the models are asked for: the chosen one, else where a new project goes. */
@@ -324,6 +355,7 @@
       });
     pendingNew = null;
     created = true;
+    lastUsed = target.machineId;
     target.interaction.focusComposer(id);
     tabs.openTab({ machineId: target.machineId, sessionId: id });
     interaction.closeNewChat();
@@ -439,144 +471,155 @@
       >
     </Dialog.Header>
 
-    {#if machines.several}
+    {#if noMachine}
+      <div role="note" class="grid justify-items-start gap-2 text-sm">
+        <p>
+          {nothingPaired
+            ? 'Add a machine to start a chat on it.'
+            : 'None of your machines is on. Turn one on, or add another.'}
+        </p>
+        <Button size="sm" onclick={addMachine}>Add machine…</Button>
+      </div>
+    {:else}
+      {#if machines.several || isPhone}
+        <div class="grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-2 text-xs">
+          <label for="new-chat-machine" class="text-muted-foreground">Machine</label>
+          <select
+            id="new-chat-machine"
+            disabled={cloning}
+            class={selectClass}
+            value={scope.machineId}
+            onchange={(e) => chooseMachine(e.currentTarget.value)}
+          >
+            {#if !choices.some((m) => m.id === scope.machineId)}
+              <option value={scope.machineId}>{machineNameOf(machines, scope.machineId)}</option>
+            {/if}
+            {#each choices as m (m.id)}
+              <option value={m.id} disabled={m.disabled}>{m.label}</option>
+            {/each}
+          </select>
+        </div>
+      {/if}
+
+      <div role="tablist" aria-label="Start from" class="-mb-2 flex gap-1 border-b text-xs">
+        {#each TABS as t (t.id)}
+          <button
+            type="button"
+            role="tab"
+            id="new-chat-tab-{t.id}"
+            aria-selected={tab === t.id}
+            aria-controls="new-chat-panel"
+            disabled={(t.id !== 'existing' && !!updateHint) || (cloning && t.id !== tab)}
+            title={t.id === 'existing' ? undefined : (updateHint ?? undefined)}
+            class="-mb-px border-b-2 px-2.5 py-1.5 disabled:opacity-50 {tab === t.id
+              ? 'border-primary text-foreground'
+              : 'text-muted-foreground hover:text-foreground border-transparent'}"
+            onclick={() => (tab = t.id)}>{t.label}</button
+          >
+        {/each}
+      </div>
+
+      <div
+        id="new-chat-panel"
+        role="tabpanel"
+        aria-labelledby="new-chat-tab-{tab}"
+        class="grid gap-2"
+      >
+        {#if tab === 'existing'}
+          <ExistingFolderTab
+            {folders}
+            bind:cwd
+            {onThisPc}
+            api={projectsOf}
+            {machineName}
+            {home}
+            blocked={updateHint}
+            onPick={pickFolder}
+          />
+        {:else if tab === 'new'}
+          {#key scope.machineId}
+            <NewProjectTab
+              bind:name
+              bind:createIn
+              bind:github
+              api={projectsOf}
+              {onThisPc}
+              {machineName}
+              platform={machines.get(scope.machineId)?.info?.platform}
+              {home}
+            />
+          {/key}
+        {:else}
+          {#key scope.machineId}
+            <CloneTab
+              bind:this={cloneTab}
+              bind:busy={cloning}
+              bind:createIn
+              api={projectsOf}
+              thisPc={localProjects}
+              {onThisPc}
+              {machineName}
+              {home}
+              startIn={startInFolder}
+            />
+          {/key}
+        {/if}
+      </div>
+
       <div class="grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-2 text-xs">
-        <label for="new-chat-machine" class="text-muted-foreground">Machine</label>
-        <select
-          id="new-chat-machine"
-          disabled={cloning}
-          class={selectClass}
-          value={scope.machineId}
-          onchange={(e) => chooseMachine(e.currentTarget.value)}
-        >
-          {#if !choices.some((m) => m.id === scope.machineId)}
-            <option value={scope.machineId}>{machineNameOf(machines, scope.machineId)}</option>
-          {/if}
-          {#each choices as m (m.id)}
-            <option value={m.id} disabled={m.disabled}>{m.label}</option>
+        <label for="new-chat-model" class="text-muted-foreground">Model</label>
+        <select id="new-chat-model" class={selectClass} bind:value={model}>
+          <option value="">Default</option>
+          {#each modelOptions as m (m.value)}
+            <option value={m.value} title={m.description}>{m.displayName || m.value}</option>
+          {/each}
+        </select>
+
+        <label for="new-chat-mode" class="text-muted-foreground">Permission mode</label>
+        <select id="new-chat-mode" class={selectClass} value={mode} onchange={chooseMode}>
+          {#each PERMISSION_MODES as m (m.value)}
+            <option value={m.value}>{m.label}</option>
           {/each}
         </select>
       </div>
-    {/if}
 
-    <div role="tablist" aria-label="Start from" class="-mb-2 flex gap-1 border-b text-xs">
-      {#each TABS as t (t.id)}
-        <button
-          type="button"
-          role="tab"
-          id="new-chat-tab-{t.id}"
-          aria-selected={tab === t.id}
-          aria-controls="new-chat-panel"
-          disabled={(t.id !== 'existing' && !!updateHint) || (cloning && t.id !== tab)}
-          title={t.id === 'existing' ? undefined : (updateHint ?? undefined)}
-          class="-mb-px border-b-2 px-2.5 py-1.5 disabled:opacity-50 {tab === t.id
-            ? 'border-primary text-foreground'
-            : 'text-muted-foreground hover:text-foreground border-transparent'}"
-          onclick={() => (tab = t.id)}>{t.label}</button
-        >
-      {/each}
-    </div>
-
-    <div
-      id="new-chat-panel"
-      role="tabpanel"
-      aria-labelledby="new-chat-tab-{tab}"
-      class="grid gap-2"
-    >
-      {#if tab === 'existing'}
-        <ExistingFolderTab
-          {folders}
-          bind:cwd
-          {onThisPc}
-          api={projectsOf}
-          {machineName}
-          {home}
-          blocked={updateHint}
-          onPick={pickFolder}
-        />
-      {:else if tab === 'new'}
-        {#key scope.machineId}
-          <NewProjectTab
-            bind:name
-            bind:createIn
-            bind:github
-            api={projectsOf}
-            {onThisPc}
-            {machineName}
-            platform={machines.get(scope.machineId)?.info?.platform}
-            {home}
-          />
-        {/key}
-      {:else}
-        {#key scope.machineId}
-          <CloneTab
-            bind:this={cloneTab}
-            bind:busy={cloning}
-            bind:createIn
-            api={projectsOf}
-            thisPc={localProjects}
-            {onThisPc}
-            {machineName}
-            {home}
-            startIn={startInFolder}
-          />
-        {/key}
-      {/if}
-    </div>
-
-    <div class="grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-2 text-xs">
-      <label for="new-chat-model" class="text-muted-foreground">Model</label>
-      <select id="new-chat-model" class={selectClass} bind:value={model}>
-        <option value="">Default</option>
-        {#each modelOptions as m (m.value)}
-          <option value={m.value} title={m.description}>{m.displayName || m.value}</option>
-        {/each}
-      </select>
-
-      <label for="new-chat-mode" class="text-muted-foreground">Permission mode</label>
-      <select id="new-chat-mode" class={selectClass} value={mode} onchange={chooseMode}>
-        {#each PERMISSION_MODES as m (m.value)}
-          <option value={m.value}>{m.label}</option>
-        {/each}
-      </select>
-    </div>
-
-    {#if buildFlags.apiKeyOnly && !settings.hasApiKey}
-      <p role="note" class="rounded-md bg-amber-500/15 px-2 py-1.5 text-xs">
-        This build of Threadgarden runs chats only on an Anthropic API key. Add your key first.
-        <button
-          type="button"
-          class="underline underline-offset-2"
-          onclick={() => (interaction.settingsOpen = true)}>Open settings</button
-        >
-      </p>
-    {/if}
-
-    {#if error}
-      <p class="text-destructive text-xs" role="alert">
-        {error}
-        {#if made}
-          <button type="button" class="underline underline-offset-2" onclick={startThere}
-            >Start there</button
+      {#if buildFlags.apiKeyOnly && !settings.hasApiKey}
+        <p role="note" class="rounded-md bg-amber-500/15 px-2 py-1.5 text-xs">
+          This build of Threadgarden runs chats only on an Anthropic API key. Add your key first.
+          <button
+            type="button"
+            class="underline underline-offset-2"
+            onclick={() => (interaction.settingsOpen = true)}>Open settings</button
           >
-        {/if}
-      </p>
-    {/if}
+        </p>
+      {/if}
 
-    {#key `${scope.machineId}\n${draftKey}`}
-      <InScope {scope}>
-        <Composer
-          {draftKey}
-          cwd={composerCwd}
-          commandScope={{ cwd: composerCwd }}
-          label="First message"
-          placeholder="What should Claude do?"
-          autofocus
-          onSubmit={create}
-          {onControl}
-        />
-      </InScope>
-    {/key}
+      {#if error}
+        <p class="text-destructive text-xs" role="alert">
+          {error}
+          {#if made}
+            <button type="button" class="underline underline-offset-2" onclick={startThere}
+              >Start there</button
+            >
+          {/if}
+        </p>
+      {/if}
+
+      {#key `${scope.machineId}\n${draftKey}`}
+        <InScope {scope}>
+          <Composer
+            {draftKey}
+            cwd={composerCwd}
+            commandScope={{ cwd: composerCwd }}
+            label="First message"
+            placeholder="What should Claude do?"
+            autofocus
+            onSubmit={create}
+            {onControl}
+          />
+        </InScope>
+      {/key}
+    {/if}
   </Dialog.Content>
 </Dialog.Root>
 

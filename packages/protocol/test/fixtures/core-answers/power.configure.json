@@ -1,0 +1,19 @@
+{
+  "cases": [
+    {
+      "error": {
+        "code": "NOT_FOUND"
+      },
+      "params": {
+        "config": {
+          "address": "192.0.2.20",
+          "device": "DeskPlug",
+          "kind": "tasmota-zigbee"
+        },
+        "machineId": "m1",
+        "password": "p"
+      }
+    }
+  ],
+  "method": "power.configure"
+}

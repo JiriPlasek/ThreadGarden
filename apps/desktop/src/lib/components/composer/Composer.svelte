@@ -9,7 +9,7 @@
   import { onDestroy, onMount, tick, untrack } from 'svelte';
   import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
   import { clockTime } from '#lib/format/usage.js';
-  import { readDroppedImage } from '#lib/native.js';
+  import { isPhone, readDroppedImage } from '#lib/native.js';
   import { ariaKeyShortcuts, formatCombos, shortcut } from '#lib/shortcuts.js';
   import { useApp, useScope } from '#lib/state/context.js';
   import { machineNameOf } from '#lib/state/machines.svelte.js';
@@ -654,7 +654,7 @@
     <input
       bind:this={fileInput}
       type="file"
-      accept={IMAGE_TYPES.join(',')}
+      accept={isPhone ? 'image/*' : IMAGE_TYPES.join(',')}
       multiple
       class="hidden"
       tabindex="-1"

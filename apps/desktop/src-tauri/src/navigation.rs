@@ -8,11 +8,11 @@ use tauri::{Manager, Runtime, Url};
 /// Where the app's own pages are served from on this platform.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppOrigin {
-    /// Windows serves the app from `http(s)://tauri.localhost`; macOS and Linux
-    /// from `tauri://localhost`.
+    /// Windows and Android serve the app from `http(s)://tauri.localhost`;
+    /// macOS and Linux from `tauri://localhost`.
     pub windows: bool,
-    /// Tauri's `useHttpsScheme` window option (Windows only; default `false`,
-    /// i.e. `http://tauri.localhost`).
+    /// Tauri's `useHttpsScheme` window option (Windows and Android only;
+    /// default `false`, i.e. `http://tauri.localhost`).
     pub https: bool,
     /// The dev server (`build.devUrl`), only while running under `tauri dev`.
     pub dev: Option<Url>,
@@ -36,7 +36,7 @@ impl AppOrigin {
             None
         };
         AppOrigin {
-            windows: cfg!(windows),
+            windows: cfg!(any(windows, target_os = "android")),
             https,
             dev,
         }
@@ -44,9 +44,9 @@ impl AppOrigin {
 }
 
 /// True for the app's own origin: `http://tauri.localhost` (`https://` with
-/// `useHttpsScheme`) on Windows, `tauri://localhost` on macOS and Linux, never
-/// with an explicit port; and the dev server when one is given. `about:blank`
-/// is allowed for webview start-up.
+/// `useHttpsScheme`) on Windows and Android, `tauri://localhost` on macOS and
+/// Linux, never with an explicit port; and the dev server when one is given.
+/// `about:blank` is allowed for webview start-up.
 pub fn is_app_url(url: &Url, origin: &AppOrigin) -> bool {
     let host = url.host_str();
     let app_scheme = match (origin.windows, origin.https) {

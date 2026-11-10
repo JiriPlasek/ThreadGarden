@@ -1,0 +1,12 @@
+{
+  "cases": [
+    {
+      "params": {
+        "machineId": "m1",
+        "sessionId": "s1"
+      },
+      "result": null
+    }
+  ],
+  "method": "copies.chat"
+}

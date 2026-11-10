@@ -1,0 +1,15 @@
+{
+  "cases": [
+    {
+      "error": {
+        "code": "POWER_NOT_CONFIGURED"
+      },
+      "params": {
+        "kind": "running",
+        "machineId": "m1",
+        "watts": 48.5
+      }
+    }
+  ],
+  "method": "power.noteMeasurement"
+}

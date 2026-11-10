@@ -1,0 +1,14 @@
+{
+  "cases": [
+    {
+      "error": {
+        "code": "NOT_FOUND"
+      },
+      "params": {
+        "machineId": "m1",
+        "token": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    }
+  ],
+  "method": "machines.unlock"
+}

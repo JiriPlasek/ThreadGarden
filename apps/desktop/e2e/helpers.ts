@@ -1,5 +1,12 @@
 import { expect, type Locator, type Page } from '@playwright/test';
-import { MOCK_PORT, MOCK_TOKEN, REMOTE_LOCAL_PORT, REMOTE_LOCAL_TOKEN } from './env';
+import {
+  MOCK_PORT,
+  MOCK_TOKEN,
+  PHONE_MOCK_PORT,
+  PHONE_MOCK_TOKEN,
+  REMOTE_LOCAL_PORT,
+  REMOTE_LOCAL_TOKEN,
+} from './env';
 
 /** Chats in the mock's history: 1,000 generated sessions plus one big one. */
 export const MOCK_CHATS = 1001;
@@ -43,6 +50,10 @@ const mockCall = async <T>(
 /** One request to the main mock service (This PC). */
 export const serviceCall = <T>(method: string, params: unknown): Promise<T> =>
   mockCall<T>(MOCK_PORT, MOCK_TOKEN, method, params);
+
+/** One request to the phone's mock (answering like the phone's core), as the phone's screens. */
+export const phoneCall = <T>(method: string, params: unknown): Promise<T> =>
+  mockCall<T>(PHONE_MOCK_PORT, PHONE_MOCK_TOKEN, method, params);
 
 /** One request to the remote mock service (Ubuntu) as its own desktop: for its `mock.*` methods. */
 export const remoteCall = <T>(method: string, params: unknown): Promise<T> =>

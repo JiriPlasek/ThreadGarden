@@ -1,0 +1,11 @@
+{
+  "cases": [
+    {
+      "params": {
+        "visible": true
+      },
+      "result": {}
+    }
+  ],
+  "method": "ui.visibility"
+}

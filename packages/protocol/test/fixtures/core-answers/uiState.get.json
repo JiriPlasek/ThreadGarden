@@ -1,0 +1,26 @@
+{
+  "cases": [
+    {
+      "params": {
+        "key": "tabs"
+      },
+      "result": {
+        "value": null
+      }
+    },
+    {
+      "params": {
+        "key": "tabs"
+      },
+      "result": {
+        "value": {
+          "active": "m1:s1",
+          "open": [
+            "m1:s1"
+          ]
+        }
+      }
+    }
+  ],
+  "method": "uiState.get"
+}
