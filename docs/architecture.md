@@ -1520,7 +1520,9 @@ Decisions made during the build that change behaviour described in the design:
 - **Messages that produce no item.** SDK messages that carry no content for
   the reader (progress, status, rate-limit and init events, the CLI's
   `command_lifecycle` telemetry, successful hook output, which the terminal
-  does not show either) produce no chat item. Failed hooks and other
+  does not show either) produce no chat item. `system/permission_check_status`
+  updates the existing running tool row with "Checking permission…" until
+  `done` or the tool result; it never adds a separate chat item. Failed hooks and other
   content-bearing system messages appear as system lines. Truly unknown types
   still render raw, and consecutive unknown items are collapsed into one
   expandable "N unrecognised items" row.

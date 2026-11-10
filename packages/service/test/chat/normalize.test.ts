@@ -475,9 +475,6 @@ describe('Normalizer', () => {
       'worker_shutting_down',
       'plugin_install',
       'elicitation_complete',
-      // Not in SDK 0.3.314; a newer CLI sends it while a tool call waits on its
-      // permission check ('checking' after ~4 s, then 'done').
-      'permission_check_status',
     ];
     const samples = [
       ...topLevel.map((type, i) => ({ type, uuid: `t${i}`, session_id: 's' })),
