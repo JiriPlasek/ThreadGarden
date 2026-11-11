@@ -42,6 +42,9 @@ describe('settings dialog', () => {
       'Default permission mode for new chats',
     ) as HTMLSelectElement;
     expect(picker.value).toBe('auto');
+    // It promises only what this app sends: a chat.create without a mode uses that machine's own.
+    const hint = document.getElementById(picker.getAttribute('aria-describedby') ?? '');
+    expect(hint?.textContent).toMatch(/Chats you start in this app begin in this mode/);
     await userEvent.selectOptions(picker, 'bypassPermissions');
     const cancelled = await screen.findByRole('alertdialog', {
       name: 'Enable bypass permissions?',

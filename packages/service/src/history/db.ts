@@ -632,15 +632,16 @@ export class Db implements LiveRegistry {
   }
 
   /**
-   * Removes a session's row, index text and "Your turn" state. `meta` and
-   * `drafts` are kept on purpose (cheap, and a Threadgarden title survives a
-   * transcript that reappears).
+   * Removes a session's row, index text, "Your turn" state and permission
+   * mode. `meta` and `drafts` are kept on purpose (cheap, and a Threadgarden
+   * title survives a transcript that reappears).
    */
   deleteSession(sessionId: string): void {
     this.raw.exec('BEGIN');
     try {
       this.raw.prepare('DELETE FROM sessions WHERE session_id = ?').run(sessionId);
       this.raw.prepare('DELETE FROM turn_state WHERE session_id = ?').run(sessionId);
+      this.forgetPermissionMode(sessionId);
       this.raw.prepare('DELETE FROM fts_gen WHERE session_id = ?').run(sessionId);
       this.deleteFtsRowids(this.ftsRows(sessionId).map((r) => r.rowid));
       this.deleteStatsRows(sessionId);
@@ -1048,6 +1049,11 @@ export class Db implements LiveRegistry {
         'INSERT INTO chat_permissions (session_id, mode) VALUES (?, ?) ON CONFLICT(session_id) DO UPDATE SET mode = excluded.mode',
       )
       .run(sessionId, mode);
+  }
+
+  /** The chat is gone from here (deleted, or moved to another machine). */
+  forgetPermissionMode(sessionId: string): void {
+    this.raw.prepare('DELETE FROM chat_permissions WHERE session_id = ?').run(sessionId);
   }
 
   // --- Context windows ----------------------------------------------------------------

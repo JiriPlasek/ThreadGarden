@@ -34,6 +34,8 @@ export type { LiveRegistry } from './live-session.js';
 export const RECLAIM_INTERVAL_MS = 60_000;
 export const INTERRUPTED_TEXT =
   'Interrupted when the Threadgarden service stopped — send a message to resume';
+export const ROOT_BYPASS_NOTE =
+  'Started in Ask before acting instead of Bypass permissions: Threadgarden runs as root on this machine, and Claude Code refuses Bypass permissions as root.';
 
 export type SessionHostDeps = {
   adapter: AgentAdapter;
@@ -51,6 +53,12 @@ export type SessionHostDeps = {
   /** The chat's last mode, independent of the new-chat default. */
   getPermissionMode?: (sessionId: string) => ChatPermissionMode | undefined;
   onPermissionMode?: LiveSessionDeps['onPermissionMode'];
+  /**
+   * False where Claude Code refuses Bypass permissions (the service runs as
+   * root, `canBypassPermissions`): a new chat asking for it starts in
+   * `default` with a note saying why. Default: allowed.
+   */
+  canBypass?: () => boolean;
   describe?: LiveSessionDeps['describe'];
   /** Contained failures (see module doc); also handed to every session. Default: `console.error`. */
   onError?: LiveSessionDeps['onError'];
@@ -118,15 +126,18 @@ export class SessionHost {
     choices: SessionChoices = {},
     sessionId?: string,
   ): LiveSession {
+    const asked = choices.permissionMode ?? this.deps.getSettings().defaultPermissionMode;
+    const refused = asked === 'bypassPermissions' && this.deps.canBypass?.() === false;
     const s = LiveSession.create(
       cwd,
       firstMessage,
       this.options({
         ...choices,
-        permissionMode: choices.permissionMode ?? this.deps.getSettings().defaultPermissionMode,
+        permissionMode: refused ? 'default' : asked,
         ...(sessionId === undefined ? {} : { sessionId }),
       }),
     );
+    if (refused) s.note('warning', ROOT_BYPASS_NOTE);
     this.sessions.set(s.sessionId, s);
     return s;
   }

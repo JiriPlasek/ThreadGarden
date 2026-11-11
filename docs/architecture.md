@@ -1203,11 +1203,16 @@ no Claude Code, and the app contains no Node.
   requires confirmation; cancelling keeps the previous mode. Non-root sessions
   start with the SDK's `allowDangerouslySkipPermissions`, so a running chat can
   switch to bypass. Root sessions omit this flag because the CLI refuses to start
-  with it; explicitly selecting bypass as root remains unsupported by the CLI.
+  with it, and refuses bypass itself: on a root service a new chat asking for
+  bypass (the saved default or an explicit choice) starts in `default`
+  instead, with a warning line in the chat saying why.
   The default preference applies only to new chats. The `chat_permissions`
   table records each chat's mode when its process starts, its picker changes,
-  or the SDK reports a mode in `system/init` or `system/status`. Resume, crash
-  recovery, and history headers use that record; a fork inherits it. No mode
+  or the SDK reports a different mode in `system/init` or `system/status` (a
+  repeated one is not written again). Resume, crash recovery, and history
+  headers use that record; a fork inherits it. A chat's row goes when the chat
+  is deleted (its transcript vanished) or moved away; Move to… does not carry
+  the mode over. No mode
   is inferred for old chats without a record: they continue with Claude Code's
   own settings until a mode is chosen or reported. Modes from before this
   change cannot be recovered through the SDK's history API. Bypass is chosen

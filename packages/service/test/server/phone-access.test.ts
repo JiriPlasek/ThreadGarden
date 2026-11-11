@@ -455,20 +455,21 @@ describe('Let my phone connect, when things go wrong', () => {
   });
 
   it('a database from before it reads as off once upgraded', () => {
-    const fresh = new DatabaseSync(':memory:');
-    migrate(fresh);
-    const latest = (fresh.prepare('PRAGMA user_version').get() as { user_version: number })
-      .user_version;
-    fresh.close();
-    // Every step but the last, the one that added it.
-    const raw = new DatabaseSync(':memory:');
-    migrate(raw, latest - 1);
-    const tables = () =>
+    const tablesOf = (db: DatabaseSync) =>
       (
-        raw.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as {
+        db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as {
           name: string;
         }[]
       ).map((t) => t.name);
+    // The step that added it, wherever later steps put it.
+    const probe = new DatabaseSync(':memory:');
+    let added = 0;
+    while (!tablesOf(probe).includes('phone_access') && added < 1_000) migrate(probe, ++added);
+    probe.close();
+    // Every step before that one.
+    const raw = new DatabaseSync(':memory:');
+    migrate(raw, added - 1);
+    const tables = () => tablesOf(raw);
     expect(tables()).not.toContain('phone_access');
     migrate(raw);
     expect(tables()).toContain('phone_access');

@@ -215,8 +215,8 @@
           {/each}
         </select>
         <p id="settings-permission-hint" class="text-muted-foreground text-xs">
-          New chats start with this mode, including on other machines. Existing chats keep their own
-          mode when continued, even after a restart.
+          Chats you start in this app begin in this mode, whichever machine runs them. Existing
+          chats keep their own mode when continued, even after a restart.
         </p>
       </div>
       {#if !isPhone}

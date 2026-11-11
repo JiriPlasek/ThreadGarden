@@ -255,6 +255,8 @@ export class LiveSession {
   private readonly log: EventLog;
   private readonly timers: Timers;
   private readonly chosen: SessionChoices;
+  /** The mode last handed to `onPermissionMode`, so an unchanged one is not written again. */
+  private recordedMode: ChatPermissionMode | undefined;
   /** Every item published by this instance, by id, in first-seen order. */
   private readonly items = new Map<string, ChatItem>();
   private readonly pending = new Map<string, Pending>();
@@ -787,6 +789,9 @@ export class LiveSession {
     const parsed = PermissionModeSchema.safeParse(value);
     if (!parsed.success) return;
     this.chosen.permissionMode = parsed.data;
+    // `system/init` and every `system/status` repeat the mode: record only a change.
+    if (parsed.data === this.recordedMode) return;
+    this.recordedMode = parsed.data;
     this.guard('permission mode', () => this.deps.onPermissionMode?.(this.id, parsed.data));
   }
 

@@ -273,6 +273,21 @@ describe('context windows', () => {
   });
 });
 
+describe('chat permission modes', () => {
+  it("a deleted chat's mode goes with it; the other chats keep theirs", () => {
+    const db = openDb(':memory:');
+    db.upsertSession(info('gone'), 'p');
+    db.setPermissionMode('gone', 'auto');
+    db.setPermissionMode('kept', 'plan');
+    db.deleteSession('gone');
+    expect(db.getPermissionMode('gone')).toBeUndefined();
+    expect(db.getPermissionMode('kept')).toBe('plan');
+    db.forgetPermissionMode('kept');
+    expect(db.getPermissionMode('kept')).toBeUndefined();
+    db.close();
+  });
+});
+
 describe('v1.2 chat titles', () => {
   it('stores provisional and generated titles apart from the custom title', () => {
     const db = openDb(':memory:');
