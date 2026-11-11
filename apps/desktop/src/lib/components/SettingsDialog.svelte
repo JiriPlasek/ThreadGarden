@@ -2,6 +2,7 @@
   import {
     ACCENTS,
     CODE_FONT_MAX,
+    PERMISSION_MODE_OPTIONS,
     sanitizeFontFamily,
     type Settings,
     type SettingsPatch,
@@ -17,6 +18,7 @@
   import { formatShortcut, shortcut } from '#lib/shortcuts.js';
   import { IDLE_MINUTES_MAX } from '#lib/state/settings.svelte.js';
   import AppearancePreview from './AppearancePreview.svelte';
+  import BypassPermissionsDialog from './BypassPermissionsDialog.svelte';
   import MachinesSettings from './MachinesSettings.svelte';
   import PhoneSettings from './phone/PhoneSettings.svelte';
   import UpdatesSettings from './UpdatesSettings.svelte';
@@ -65,6 +67,13 @@
   let keyInput = $state('');
   let keyBusy = $state(false);
   let keyError = $state<string | null>(null);
+  let confirmBypass = $state(false);
+  const choosePermissionDefault = (event: Event & { currentTarget: HTMLSelectElement }): void => {
+    const value = event.currentTarget.value as Settings['defaultPermissionMode'];
+    event.currentTarget.value = form.defaultPermissionMode;
+    if (value === 'bypassPermissions' && value !== form.defaultPermissionMode) confirmBypass = true;
+    else form.defaultPermissionMode = value;
+  };
 
   /** Scrolls to and focuses the section the opener asked for (e.g. "Open settings" on a machine that needs attention). */
   const showSection = (): void => {
@@ -97,6 +106,7 @@
     }
     // The Add machine dialog never outlives Settings, whichever way Settings closed.
     if (!open && interaction.addMachineOpen) interaction.addMachineOpen = false;
+    if (!open) confirmBypass = false;
     wasOpen = open;
   });
 
@@ -189,6 +199,26 @@
     </Dialog.Header>
 
     <section class="grid gap-3" aria-label="General">
+      <div class="grid gap-1">
+        <label for="settings-permission-mode" class="text-muted-foreground text-xs"
+          >Default permission mode for new chats</label
+        >
+        <select
+          id="settings-permission-mode"
+          class={fieldClass}
+          value={form.defaultPermissionMode}
+          onchange={choosePermissionDefault}
+          aria-describedby="settings-permission-hint"
+        >
+          {#each PERMISSION_MODE_OPTIONS as mode (mode.value)}
+            <option value={mode.value}>{mode.label}</option>
+          {/each}
+        </select>
+        <p id="settings-permission-hint" class="text-muted-foreground text-xs">
+          Chats you start in this app begin in this mode, whichever machine runs them. Existing
+          chats keep their own mode when continued, even after a restart.
+        </p>
+      </div>
       {#if !isPhone}
         <div class="grid gap-1">
           <label for="settings-claude-path" class="text-muted-foreground text-xs"
@@ -492,3 +522,10 @@
     </Dialog.Footer>
   </Dialog.Content>
 </Dialog.Root>
+
+<BypassPermissionsDialog
+  bind:open={confirmBypass}
+  onConfirm={() => {
+    form.defaultPermissionMode = 'bypassPermissions';
+  }}
+/>

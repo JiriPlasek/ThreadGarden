@@ -647,6 +647,8 @@ export const registerMoveHandlers = (
     }
     // A stale Claude process must never answer here.
     release(id);
+    // Its mode doesn't follow it, and isn't kept here for a chat that is gone.
+    db.forgetPermissionMode(id);
     if (locks.exportIdOf(id) === p.exportId) locks.unlock(id);
     exports.drop(p.exportId);
     catalog.invalidate();

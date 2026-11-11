@@ -33,7 +33,7 @@ export const sendOf = (o: {
     text: o.text,
     images: o.images,
     ...(o.model ? { model: o.model } : {}),
-    ...(o.mode !== 'default' ? { permissionMode: o.mode } : {}),
+    permissionMode: o.mode,
   },
 });
 

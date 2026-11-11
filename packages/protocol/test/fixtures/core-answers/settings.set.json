@@ -13,6 +13,7 @@
         "claudePath": null,
         "codeFont": "Fira Code x",
         "darkStyle": "default",
+        "defaultPermissionMode": "default",
         "enterToSend": true,
         "externalPolling": true,
         "idleReclaimMinutes": 15,

@@ -41,7 +41,7 @@ import { DB_FILE, migrateDataDir } from './migrate-data-dir.js';
 import { ChatStore } from './move/store.js';
 import type { AgentAdapter } from './sdk/adapter.js';
 import type { ClaudeFound, ClaudeProblem } from './sdk/claude-path.js';
-import { buildSessionEnv } from './sdk/real-adapter.js';
+import { buildSessionEnv, canBypassPermissions } from './sdk/real-adapter.js';
 import { CopyStore } from './away/copies.js';
 import { AwayDeliverer, connectToMachine } from './away/deliverer.js';
 import { AwayQueue } from './away/queue.js';
@@ -876,6 +876,9 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         ...(opts.sessionTimers ? { timers: opts.sessionTimers } : {}),
         isPinned: (id) => opened.isSessionPinned(id),
         getSettings: () => opened.getSettings(),
+        getPermissionMode: (id) => opened.getPermissionMode(id),
+        onPermissionMode: (id, mode) => opened.setPermissionMode(id, mode),
+        canBypass: canBypassPermissions,
         describe: describeChat,
         onError,
         seqBase: seqBaseForEpoch(epoch),

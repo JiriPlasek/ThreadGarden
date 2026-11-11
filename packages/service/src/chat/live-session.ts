@@ -26,6 +26,7 @@
  */
 import { randomUUID } from 'node:crypto';
 import { basename } from 'node:path';
+import { PermissionModeSchema, type ChatPermissionMode } from '@threadgarden/protocol';
 import type {
   ChatHeaderInfo,
   ChatItem,
@@ -149,6 +150,8 @@ export type LiveSessionDeps = {
    * of a chat no process runs. A throw is reported.
    */
   onContextWindow?: (sessionId: string, model: string | undefined, tokens: number) => void;
+  /** Remembers the effective mode, including changes reported by Claude itself. */
+  onPermissionMode?: (sessionId: string, mode: ChatPermissionMode) => void;
 };
 
 export const defaultOnError = (err: unknown, context: string): void => {
@@ -252,6 +255,8 @@ export class LiveSession {
   private readonly log: EventLog;
   private readonly timers: Timers;
   private readonly chosen: SessionChoices;
+  /** The mode last handed to `onPermissionMode`, so an unchanged one is not written again. */
+  private recordedMode: ChatPermissionMode | undefined;
   /** Every item published by this instance, by id, in first-seen order. */
   private readonly items = new Map<string, ChatItem>();
   private readonly pending = new Map<string, Pending>();
@@ -296,6 +301,7 @@ export class LiveSession {
       ...(deps.permissionMode === undefined ? {} : { permissionMode: deps.permissionMode }),
     };
     if (deps.effort !== undefined) this.headerValue.effort = deps.effort;
+    if (deps.permissionMode !== undefined) this.headerValue.permissionMode = deps.permissionMode;
   }
 
   /** Starts a new chat (new SDK session) and sends its first message. */
@@ -574,8 +580,7 @@ export class LiveSession {
   async setPermissionMode(value: string): Promise<void> {
     const mode = value as PermissionMode;
     await this.requireLive().setPermissionMode(mode);
-    this.chosen.permissionMode = mode;
-    this.headerValue.permissionMode = value;
+    this.rememberPermissionMode(mode);
     this.publishStatus();
   }
 
@@ -643,6 +648,8 @@ export class LiveSession {
       ...extra,
     });
     this.session = session;
+    if (this.chosen.permissionMode !== undefined)
+      this.rememberPermissionMode(this.chosen.permissionMode);
     this.startupFailureValue = undefined;
     this.normalizer = new Normalizer({ now: this.deps.now });
     // The SDK's task state is per process: a new process starts with none.
@@ -777,6 +784,17 @@ export class LiveSession {
 
   // ── header ──────────────────────────────────────────────────────────────
 
+  private rememberPermissionMode(value: string): void {
+    this.headerValue.permissionMode = value;
+    const parsed = PermissionModeSchema.safeParse(value);
+    if (!parsed.success) return;
+    this.chosen.permissionMode = parsed.data;
+    // `system/init` and every `system/status` repeat the mode: record only a change.
+    if (parsed.data === this.recordedMode) return;
+    this.recordedMode = parsed.data;
+    this.guard('permission mode', () => this.deps.onPermissionMode?.(this.id, parsed.data));
+  }
+
   private updateHeader(m: SDKMessage): void {
     const x: unknown = m;
     if (!isRec(x)) return;
@@ -786,11 +804,11 @@ export class LiveSession {
       const mode = str(x.permissionMode);
       const version = str(x.claude_code_version);
       if (model !== undefined) h.model = model;
-      if (mode !== undefined) h.permissionMode = mode;
+      if (mode !== undefined) this.rememberPermissionMode(mode);
       if (version !== undefined) h.claudeVersion = version;
     } else if (x.type === 'system' && x.subtype === 'status') {
       const mode = str(x.permissionMode);
-      if (mode !== undefined) h.permissionMode = mode;
+      if (mode !== undefined) this.rememberPermissionMode(mode);
     } else if (x.type === 'assistant' && !x.parent_tool_use_id) {
       const usage = isRec(x.message) ? x.message.usage : undefined;
       if (isRec(usage)) {

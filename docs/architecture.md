@@ -1194,12 +1194,29 @@ no Claude Code, and the app contains no Node.
   desktop: over loopback for This PC's service, over the pinned TLS link for
   a paired machine.
 - **Permissions.** Threadgarden offers the default, acceptEdits, plan, auto
-  and bypassPermissions permission modes. Selecting bypass in either mode picker
+  and bypassPermissions permission modes. The SDK's `default` mode is labelled
+  "Ask before acting". Settings has a saved `defaultPermissionMode` for new
+  chats, initially `default`; the New chat picker starts with that preference
+  each time it opens and sends the selected mode explicitly, including to
+  another machine. Calls to `chat.create` without a mode use the service's
+  preference. Selecting bypass in a chat picker or as the saved default
   requires confirmation; cancelling keeps the previous mode. Non-root sessions
   start with the SDK's `allowDangerouslySkipPermissions`, so a running chat can
   switch to bypass. Root sessions omit this flag because the CLI refuses to start
-  with it; explicitly selecting bypass as root remains unsupported by the CLI.
-  Bypass is only ever chosen in the mode picker, and "always allow"
+  with it, and refuses bypass itself: on a root service a new chat asking for
+  bypass (the saved default or an explicit choice) starts in `default`
+  instead, with a warning line in the chat saying why.
+  The default preference applies only to new chats. The `chat_permissions`
+  table records each chat's mode when its process starts, its picker changes,
+  or the SDK reports a different mode in `system/init` or `system/status` (a
+  repeated one is not written again). Resume, crash recovery, and history
+  headers use that record; a fork inherits it. A chat's row goes when the chat
+  is deleted (its transcript vanished) or moved away; Move to… does not carry
+  the mode over. No mode
+  is inferred for old chats without a record: they continue with Claude Code's
+  own settings until a mode is chosen or reported. Modes from before this
+  change cannot be recovered through the SDK's history API. Bypass is chosen
+  in a picker or inherited from a saved choice, and "always allow"
   suggestions that would switch a session to bypass are filtered out.
 - **Capabilities.** The window gets only the Tauri permissions it uses: core
   defaults, notifications, the open-folder dialog, clipboard write, autostart

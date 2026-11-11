@@ -6,9 +6,14 @@ import {
   type Settings,
 } from '@threadgarden/protocol';
 import { MAX_SEQ_EPOCH, nextSeqEpoch, seqBaseForEpoch } from '../../src/chat/event-log.js';
-import { SessionHost, type SessionHostDeps } from '../../src/chat/session-host.js';
+import {
+  ROOT_BYPASS_NOTE,
+  SessionHost,
+  type SessionHostDeps,
+} from '../../src/chat/session-host.js';
 import { FakeAdapter } from '../../src/testing/fake-adapter.js';
 import {
+  init,
   ManualTimers,
   MemoryRegistry,
   notification,
@@ -16,6 +21,7 @@ import {
   settle,
   started,
   statuses,
+  sys,
 } from './live-helpers.js';
 
 class ThrowingRegistry extends MemoryRegistry {
@@ -245,6 +251,66 @@ describe('SessionHost', () => {
     expect(host.liveCount()).toBe(1);
   });
 
+  it('restores the remembered permission mode after an interrupted service, before any SDK init', () => {
+    const ctx = setup({ getPermissionMode: () => 'auto' });
+    ctx.registry.markLive('interrupted', '/proj');
+    expect(ctx.host.recoverAfterRestart()).toBe(1);
+    expect(ctx.host.get('interrupted')?.header.permissionMode).toBe('auto');
+    ctx.settings.defaultPermissionMode = 'plan';
+    ctx.host.ensureLive('interrupted', '/proj');
+    expect(ctx.adapter.lastSession().options.permissionMode).toBe('auto');
+  });
+
+  it.each([
+    ['the new-chat default', {}],
+    ['an explicit choice', { permissionMode: 'bypassPermissions' as const }],
+  ])(
+    'as root, a new chat asking for Bypass by %s starts in Ask before acting, with a note why',
+    (_, choices) => {
+      const recorded: string[] = [];
+      const ctx = setup({
+        canBypass: () => false,
+        onPermissionMode: (_id, mode) => recorded.push(mode),
+      });
+      ctx.settings.defaultPermissionMode = 'bypassPermissions';
+      const s = ctx.host.create('/proj', { text: 'hi' }, choices);
+      expect(ctx.adapter.lastSession().options.permissionMode).toBe('default');
+      expect(s.header.permissionMode).toBe('default');
+      expect(recorded).toEqual(['default']);
+      expect(s.snapshot(10).items).toContainEqual(
+        expect.objectContaining({ kind: 'system', level: 'warning', text: ROOT_BYPASS_NOTE }),
+      );
+      ctx.host.stopAll();
+    },
+  );
+
+  it('as root, other modes start as asked and without a note', () => {
+    const ctx = setup({ canBypass: () => false });
+    ctx.settings.defaultPermissionMode = 'auto';
+    const s = ctx.host.create('/proj', { text: 'hi' });
+    expect(ctx.adapter.lastSession().options.permissionMode).toBe('auto');
+    expect(s.snapshot(10).items.some((i) => i.kind === 'system')).toBe(false);
+    ctx.host.stopAll();
+  });
+
+  it('records a chat mode only when it changes, not on every init and status frame', async () => {
+    const recorded: string[] = [];
+    const ctx = setup({ onPermissionMode: (_id, mode) => recorded.push(mode) });
+    const s = ctx.host.create('/proj', { text: 'hi' }, { permissionMode: 'auto' });
+    const fake = ctx.adapter.lastSession();
+    fake.emit(init(s.sessionId, { permissionMode: 'auto' }));
+    fake.emit(sys('status', { status: null, permissionMode: 'auto' }));
+    fake.emit(sys('status', { status: 'compacting', permissionMode: 'auto' }));
+    await settle();
+    expect(recorded).toEqual(['auto']);
+    fake.emit(sys('status', { status: null, permissionMode: 'plan' }));
+    fake.emit(sys('status', { status: null, permissionMode: 'plan' }));
+    await settle();
+    await s.setPermissionMode('plan');
+    expect(recorded).toEqual(['auto', 'plan']);
+    ctx.host.stopAll();
+  });
+
   it('end closes the session, reports history and forgets it', async () => {
     const ctx = setup();
     const { s, fake } = await idleChat(ctx);
@@ -391,7 +457,7 @@ describe('SessionHost', () => {
       onError: (_err, context) => errors.push(context),
     });
     ctx.host.start();
-    const s = ctx.host.create('/a', { text: 'one' });
+    const s = ctx.host.create('/a', { text: 'one' }, { permissionMode: 'default' });
     expect(() => ctx.timers.advance(3 * MIN)).not.toThrow();
     expect(errors).toEqual(['idle reclaim', 'idle reclaim', 'idle reclaim']);
     expect(s.live).toBe(true);

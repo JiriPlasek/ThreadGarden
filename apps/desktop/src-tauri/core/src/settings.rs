@@ -7,6 +7,14 @@ use std::sync::OnceLock;
 use regex::Regex;
 use serde_json::{Map, Value, json};
 
+/// `PERMISSION_MODES` in `packages/protocol/src/permissions.ts`.
+const PERMISSION_MODES: &[&str] = &[
+    "default",
+    "acceptEdits",
+    "plan",
+    "auto",
+    "bypassPermissions",
+];
 const THEMES: &[&str] = &["system", "light", "dark"];
 const ACCENTS: &[&str] = &[
     "graphite", "blue", "teal", "green", "violet", "rose", "amber",
@@ -31,8 +39,13 @@ enum Kind {
 }
 
 /// Every setting, in the protocol's order, with its default.
-fn fields() -> [(&'static str, Kind, Value); 15] {
+fn fields() -> [(&'static str, Kind, Value); 16] {
     [
+        (
+            "defaultPermissionMode",
+            Kind::OneOf(PERMISSION_MODES),
+            json!("default"),
+        ),
         ("claudePath", Kind::NullableString, Value::Null),
         ("idleReclaimMinutes", Kind::Number, json!(15)),
         ("idleShutdownMinutes", Kind::Minutes, json!(60)),

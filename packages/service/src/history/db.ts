@@ -9,6 +9,8 @@ import './sqlite-warning.js';
 import { DatabaseSync } from 'node:sqlite';
 import {
   SettingsSchema,
+  PermissionModeSchema,
+  type ChatPermissionMode,
   type Bucket,
   type Settings,
   type SettingsPatch,
@@ -630,15 +632,16 @@ export class Db implements LiveRegistry {
   }
 
   /**
-   * Removes a session's row, index text and "Your turn" state. `meta` and
-   * `drafts` are kept on purpose (cheap, and a Threadgarden title survives a
-   * transcript that reappears).
+   * Removes a session's row, index text, "Your turn" state and permission
+   * mode. `meta` and `drafts` are kept on purpose (cheap, and a Threadgarden
+   * title survives a transcript that reappears).
    */
   deleteSession(sessionId: string): void {
     this.raw.exec('BEGIN');
     try {
       this.raw.prepare('DELETE FROM sessions WHERE session_id = ?').run(sessionId);
       this.raw.prepare('DELETE FROM turn_state WHERE session_id = ?').run(sessionId);
+      this.forgetPermissionMode(sessionId);
       this.raw.prepare('DELETE FROM fts_gen WHERE session_id = ?').run(sessionId);
       this.deleteFtsRowids(this.ftsRows(sessionId).map((r) => r.rowid));
       this.deleteStatsRows(sessionId);
@@ -1028,6 +1031,29 @@ export class Db implements LiveRegistry {
         'INSERT INTO ui_state (key, json) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET json = excluded.json',
       )
       .run(key, JSON.stringify(value));
+  }
+
+  // --- Chat permissions ---------------------------------------------------------------
+
+  getPermissionMode(sessionId: string): ChatPermissionMode | undefined {
+    const row = this.raw
+      .prepare('SELECT mode FROM chat_permissions WHERE session_id = ?')
+      .get(sessionId);
+    const parsed = PermissionModeSchema.safeParse(row?.mode);
+    return parsed.success ? parsed.data : undefined;
+  }
+
+  setPermissionMode(sessionId: string, mode: ChatPermissionMode): void {
+    this.raw
+      .prepare(
+        'INSERT INTO chat_permissions (session_id, mode) VALUES (?, ?) ON CONFLICT(session_id) DO UPDATE SET mode = excluded.mode',
+      )
+      .run(sessionId, mode);
+  }
+
+  /** The chat is gone from here (deleted, or moved to another machine). */
+  forgetPermissionMode(sessionId: string): void {
+    this.raw.prepare('DELETE FROM chat_permissions WHERE session_id = ?').run(sessionId);
   }
 
   // --- Context windows ----------------------------------------------------------------

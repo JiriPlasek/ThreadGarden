@@ -14,7 +14,7 @@
  * failing session never escape the reclaim timer or `stopAll`; they are
  * reported through `onError` and the remaining sessions carry on.
  */
-import type { ChatStatus, EventMsg, Settings } from '@threadgarden/protocol';
+import type { ChatPermissionMode, ChatStatus, EventMsg, Settings } from '@threadgarden/protocol';
 import type { AgentAdapter, SessionStore } from '../sdk/adapter.js';
 import { EventLog, type ChatEvent } from './event-log.js';
 import {
@@ -34,6 +34,8 @@ export type { LiveRegistry } from './live-session.js';
 export const RECLAIM_INTERVAL_MS = 60_000;
 export const INTERRUPTED_TEXT =
   'Interrupted when the Threadgarden service stopped — send a message to resume';
+export const ROOT_BYPASS_NOTE =
+  'Started in Ask before acting instead of Bypass permissions: Threadgarden runs as root on this machine, and Claude Code refuses Bypass permissions as root.';
 
 export type SessionHostDeps = {
   adapter: AgentAdapter;
@@ -46,8 +48,17 @@ export type SessionHostDeps = {
   timers?: Timers;
   /** Pinned chats are never reclaimed (Ruling R1). */
   isPinned: (sessionId: string) => boolean;
-  /** `idleReclaimMinutes` is read at every reclaim pass; 0 disables reclaim. */
+  /** Reads the new-chat permission default on creation and idle minutes on each reclaim pass. */
   getSettings: () => Settings;
+  /** The chat's last mode, independent of the new-chat default. */
+  getPermissionMode?: (sessionId: string) => ChatPermissionMode | undefined;
+  onPermissionMode?: LiveSessionDeps['onPermissionMode'];
+  /**
+   * False where Claude Code refuses Bypass permissions (the service runs as
+   * root, `canBypassPermissions`): a new chat asking for it starts in
+   * `default` with a note saying why. Default: allowed.
+   */
+  canBypass?: () => boolean;
   describe?: LiveSessionDeps['describe'];
   /** Contained failures (see module doc); also handed to every session. Default: `console.error`. */
   onError?: LiveSessionDeps['onError'];
@@ -115,11 +126,18 @@ export class SessionHost {
     choices: SessionChoices = {},
     sessionId?: string,
   ): LiveSession {
+    const asked = choices.permissionMode ?? this.deps.getSettings().defaultPermissionMode;
+    const refused = asked === 'bypassPermissions' && this.deps.canBypass?.() === false;
     const s = LiveSession.create(
       cwd,
       firstMessage,
-      this.options({ ...choices, ...(sessionId === undefined ? {} : { sessionId }) }),
+      this.options({
+        ...choices,
+        permissionMode: refused ? 'default' : asked,
+        ...(sessionId === undefined ? {} : { sessionId }),
+      }),
     );
+    if (refused) s.note('warning', ROOT_BYPASS_NOTE);
     this.sessions.set(s.sessionId, s);
     return s;
   }
@@ -147,6 +165,7 @@ export class SessionHost {
       sessionId,
       cwd,
       this.options({
+        ...this.savedPermissions(sessionId),
         ...current?.choices,
         ...(log ? { log } : {}),
         ...(from.sessionStore === undefined ? {} : { sessionStore: from.sessionStore }),
@@ -230,10 +249,16 @@ export class SessionHost {
     for (const { sessionId, cwd } of entries) {
       try {
         if (this.sessions.get(sessionId)?.live) continue;
-        const s = LiveSession.restore(sessionId, cwd, 'failed', this.options({}), {
-          level: 'error',
-          text: INTERRUPTED_TEXT,
-        });
+        const s = LiveSession.restore(
+          sessionId,
+          cwd,
+          'failed',
+          this.options(this.savedPermissions(sessionId)),
+          {
+            level: 'error',
+            text: INTERRUPTED_TEXT,
+          },
+        );
         this.sessions.set(sessionId, s);
         count++;
         this.deps.registry.markEnded(sessionId);
@@ -323,6 +348,11 @@ export class SessionHost {
     }
   }
 
+  private savedPermissions(sessionId: string): SessionChoices {
+    const permissionMode = this.deps.getPermissionMode?.(sessionId);
+    return permissionMode === undefined ? {} : { permissionMode };
+  }
+
   private options(extra: Partial<LiveSessionOptions>): LiveSessionOptions {
     const {
       adapter,
@@ -339,6 +369,7 @@ export class SessionHost {
       onLimitError,
       onTurnResult,
       onContextWindow,
+      onPermissionMode,
     } = this.deps;
     return {
       adapter,
@@ -358,6 +389,7 @@ export class SessionHost {
       ...(onLimitError ? { onLimitError } : {}),
       ...(onTurnResult ? { onTurnResult } : {}),
       ...(onContextWindow ? { onContextWindow } : {}),
+      ...(onPermissionMode ? { onPermissionMode } : {}),
       ...extra,
       log: extra.log ?? new EventLog(undefined, this.seqBase),
     };
