@@ -17,6 +17,95 @@ import { CWD, fill, pushStatus, renderChat, SID } from './helpers';
 type SendParams = { sessionId: string; text: string; images?: unknown[] };
 
 describe('composer', () => {
+  const offerReply = (server: Parameters<typeof pushStatus>[0], seq = 2) =>
+    server.push('chat.status', {
+      sessionId: SID,
+      seq,
+      status: 'idle',
+      promptSuggestion: { id: `prediction-${seq}`, text: 'Run the tests' },
+    });
+
+  it('shows a predicted reply as ghost text; Tab accepts and Enter sends', async () => {
+    const { server, composer } = await renderChat();
+    offerReply(server);
+    await screen.findByRole('button', { name: 'Tab to accept suggestion' });
+    expect(composer().value).toBe('');
+    expect(server.calls('drafts.set')).toHaveLength(0);
+    composer().focus();
+    await userEvent.keyboard('{Enter}');
+    expect(server.calls('chat.send')).toHaveLength(0);
+    await userEvent.keyboard('{Tab}');
+    expect(composer().value).toBe('Run the tests');
+    expect(document.activeElement).toBe(composer());
+    expect(server.calls('chat.send')).toHaveLength(0);
+    await userEvent.keyboard('{Enter}');
+    await waitFor(() => expect(server.calls('chat.send')).toHaveLength(1));
+    expect(server.calls('chat.send')[0]!.params).toEqual({ sessionId: SID, text: 'Run the tests' });
+    await waitFor(() => expect(composer().value).toBe(''));
+    expect(screen.queryByRole('button', { name: 'Tab to accept suggestion' })).toBeNull();
+  });
+
+  it('Escape dismisses a reply and it stays dismissed across remount and status updates', async () => {
+    const { server, composer, view, context } = await renderChat();
+    offerReply(server);
+    await screen.findByRole('button', { name: 'Tab to accept suggestion' });
+    composer().focus();
+    await userEvent.keyboard('{Escape}');
+    expect(screen.queryByRole('button', { name: 'Tab to accept suggestion' })).toBeNull();
+    expect(server.calls('chat.interrupt')).toHaveLength(0);
+    server.push('chat.status', {
+      sessionId: SID,
+      seq: 3,
+      status: 'idle',
+      promptSuggestion: { id: 'prediction-2', text: 'Run the tests' },
+    });
+    view.unmount();
+    render(ChatView, { props: { ref: { machineId: LOCAL, sessionId: SID } }, context });
+    await waitFor(() => expect(composer()).toBeTruthy());
+    expect(screen.queryByRole('button', { name: 'Tab to accept suggestion' })).toBeNull();
+    offerReply(server, 4);
+    expect(await screen.findByRole('button', { name: 'Tab to accept suggestion' })).toBeTruthy();
+  });
+
+  it('typing dismisses the prediction and an existing draft is never replaced', async () => {
+    const { server, composer } = await renderChat();
+    offerReply(server);
+    await screen.findByRole('button', { name: 'Tab to accept suggestion' });
+    await fill(composer(), 'My own reply');
+    expect(screen.queryByRole('button', { name: 'Tab to accept suggestion' })).toBeNull();
+    offerReply(server, 3);
+    await waitFor(() => expect(composer().value).toBe('My own reply'));
+    await fill(composer(), '');
+    expect(screen.queryByRole('button', { name: 'Tab to accept suggestion' })).toBeNull();
+  });
+
+  it('Shift+Tab and composing Tab do not accept a suggestion; clicking accepts it', async () => {
+    const { server, composer } = await renderChat();
+    offerReply(server);
+    const accept = await screen.findByRole('button', { name: 'Tab to accept suggestion' });
+    composer().focus();
+    await fireEvent.keyDown(composer(), { key: 'Tab', isComposing: true });
+    await fireEvent.keyDown(composer(), { key: 'Tab', keyCode: 229 });
+    await userEvent.keyboard('{Shift>}{Tab}{/Shift}');
+    expect(composer().value).toBe('');
+    await userEvent.click(accept);
+    expect(composer().value).toBe('Run the tests');
+    expect(server.calls('chat.send')).toHaveLength(0);
+  });
+
+  it('clears predictions when a new turn starts', async () => {
+    const { server, composer } = await renderChat();
+    offerReply(server);
+    await screen.findByRole('button', { name: 'Tab to accept suggestion' });
+    pushStatus(server, 3, 'working');
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'Tab to accept suggestion' })).toBeNull(),
+    );
+    composer().focus();
+    await userEvent.keyboard('{Tab}');
+    expect(composer().value).toBe('');
+  });
+
   it('Enter sends, Shift+Enter adds a line, and the box clears', async () => {
     const { server, composer } = await renderChat();
     await userEvent.type(composer(), 'first line{Shift>}{Enter}{/Shift}second line');

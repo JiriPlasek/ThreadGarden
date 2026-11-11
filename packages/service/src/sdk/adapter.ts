@@ -57,6 +57,8 @@ export type StartOptions = {
   model?: string;
   effort?: Effort;
   permissionMode?: PermissionMode;
+  /** The "Suggest my next reply" setting: the SDK's `promptSuggestions`, only when true. */
+  promptSuggestions?: boolean;
   env: Record<string, string | undefined>;
   claudePath: string;
   canUseTool: CanUseTool;

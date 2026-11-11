@@ -32,6 +32,7 @@ import type {
   ChatStatus,
   ChatTask,
   EventMsg,
+  PromptSuggestion,
 } from '@threadgarden/protocol';
 import type {
   AccountInfo,
@@ -103,6 +104,8 @@ export type LiveSessionDeps = {
   registry: LiveRegistry;
   claudePath: string;
   env: Record<string, string | undefined>;
+  /** The "Suggest my next reply" setting when the session was created or resumed; default off. */
+  promptSuggestions?: boolean;
   /** Event sink (the WebSocket broadcast). Must not throw; a throw is ignored. */
   emit(e: EventMsg): void;
   now(): number;
@@ -174,6 +177,7 @@ export type LiveSnapshot = {
   waitingFor?: string;
   /** Tasks of the running process (empty when there is none). */
   tasks: ChatTask[];
+  promptSuggestion: PromptSuggestion | null;
 };
 
 /** Why Claude Code refused to start this session (§6.4); `setup` asks for the setup screen. */
@@ -249,6 +253,9 @@ export class LiveSession {
   private dir = '';
   private session: AgentSession | null = null;
   private normalizer: Normalizer;
+  private promptSuggestion: PromptSuggestion | null = null;
+  /** Only accept the prediction following an uninterrupted result with no queued input. */
+  private awaitingSuggestion = false;
   private readonly log: EventLog;
   private readonly timers: Timers;
   private readonly chosen: SessionChoices;
@@ -442,6 +449,7 @@ export class LiveSession {
       header: this.header,
       ...(waitingFor === undefined ? {} : { waitingFor }),
       tasks: this.tracker.list(),
+      promptSuggestion: this.promptSuggestion,
     };
   }
 
@@ -460,6 +468,8 @@ export class LiveSession {
     const uuid = randomUUID();
     session.send(toUserMessage(input, uuid, queued));
     onSubmitted?.(); // the message is with Claude; what follows is only our bookkeeping
+    this.promptSuggestion = null;
+    this.awaitingSuggestion = false;
     if (queued) this.queuedInputs++;
     this.firstText ??= input.text;
     const images = (input.images ?? []).map((i) => ({
@@ -633,12 +643,13 @@ export class LiveSession {
   // ── process ─────────────────────────────────────────────────────────────
 
   private startProcess(extra: Pick<StartOptions, 'sessionId' | 'resume' | 'sessionStore'>): void {
-    const { adapter, claudePath, env } = this.deps;
+    const { adapter, claudePath, env, promptSuggestions } = this.deps;
     const session = adapter.start({
       cwd: this.dir,
       env,
       claudePath,
       canUseTool: this.canUseTool,
+      ...(promptSuggestions === true ? { promptSuggestions } : {}),
       ...this.chosen,
       ...extra,
     });
@@ -711,6 +722,7 @@ export class LiveSession {
       this.noteActivity();
       this.updateHeader(m);
       this.requestAuth(m);
+      this.noteSuggestion(m);
       const r = this.normalizer.push(m);
       this.syncLastReply();
       if (r.items.length > 0) this.pushItems(r.items, r.replace);
@@ -733,6 +745,28 @@ export class LiveSession {
         ],
         false,
       );
+    }
+  }
+
+  private noteSuggestion(m: SDKMessage): void {
+    const x: unknown = m;
+    if (!isRec(x)) return;
+    if (x.type === 'result') {
+      this.awaitingSuggestion =
+        x.subtype === 'success' &&
+        x.is_error === false &&
+        !this.interruptRequested &&
+        this.queuedInputs === 0;
+    } else if (
+      x.type === 'prompt_suggestion' &&
+      this.awaitingSuggestion &&
+      this.statusValue === 'idle'
+    ) {
+      const text = str(x.suggestion)?.trim();
+      const id = str(x.uuid);
+      if (!text || !id) return;
+      this.awaitingSuggestion = false;
+      this.promptSuggestion = { id, text };
     }
   }
 
@@ -993,16 +1027,25 @@ export class LiveSession {
   // ── events ──────────────────────────────────────────────────────────────
 
   private setStatus(next: ChatStatus): void {
+    if (next !== 'idle') {
+      this.promptSuggestion = null;
+      this.awaitingSuggestion = false;
+    }
     if (next === 'idle') this.idleSinceValue ??= this.deps.now();
     else this.idleSinceValue = null;
     this.statusValue = next;
     this.publishStatus();
   }
 
-  /** Emits `chat.status` when status, waitingFor or header changed since the last one. */
+  /** Emits `chat.status` when status, waitingFor, header or prediction changed. */
   private publishStatus(): void {
     const waitingFor = this.waitingFor();
-    const key = JSON.stringify([this.statusValue, waitingFor, this.headerValue]);
+    const key = JSON.stringify([
+      this.statusValue,
+      waitingFor,
+      this.headerValue,
+      this.promptSuggestion,
+    ]);
     if (key === this.published) return;
     this.published = key;
     this.flush(); // items emitted before this status stay before it
@@ -1013,6 +1056,7 @@ export class LiveSession {
         sessionId: this.id,
         status: this.statusValue,
         header: this.header,
+        promptSuggestion: this.promptSuggestion,
         ...(waitingFor === undefined ? {} : { waitingFor }),
       },
     });

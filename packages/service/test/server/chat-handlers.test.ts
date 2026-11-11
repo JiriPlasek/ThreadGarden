@@ -100,6 +100,33 @@ const code = async (method: string, params: unknown) => (await call(method, para
 type Opened = { items: ChatItem[]; hasMore: boolean; seq: number; summary: { live: boolean } };
 const ids = (items: ChatItem[]) => items.map((i) => i.id);
 
+it('chat.open and chat.since expose transient prompt predictions without adding history items', async () => {
+  const adapter = new FakeAdapter();
+  await start(adapter);
+  const { sessionId } = await ok<{ sessionId: string }>('chat.create', { cwd: dir, text: 'hello' });
+  const fake = adapter.lastSession();
+  fake.emit(result('r1'));
+  await settle();
+  const before = await ok<Opened>('chat.open', { sessionId, tail: 100 });
+  fake.emit(
+    sdk({ type: 'prompt_suggestion', uuid: 'p1', session_id: sessionId, suggestion: 'Run tests' }),
+  );
+  await settle();
+  const opened = await ok<Opened & { promptSuggestion: unknown }>('chat.open', {
+    sessionId,
+    tail: 100,
+  });
+  expect(opened.promptSuggestion).toEqual({ id: 'p1', text: 'Run tests' });
+  expect(ids(opened.items)).not.toContain('p1');
+  const replay = await ok<{ events: unknown[] }>('chat.since', { sessionId, seq: before.seq });
+  expect(replay.events).toContainEqual(
+    expect.objectContaining({ promptSuggestion: opened.promptSuggestion }),
+  );
+  await ok('chat.send', { sessionId, text: 'my reply' });
+  const next = await ok<{ promptSuggestion: unknown }>('chat.open', { sessionId, tail: 0 });
+  expect(next.promptSuggestion).toBeNull();
+});
+
 /** Streams one assistant text block (stream-start uuid `sb`, final message `fin`) and a result. */
 const streamedReply = (adapter: FakeAdapter, text: string) => {
   const fake = adapter.lastSession();

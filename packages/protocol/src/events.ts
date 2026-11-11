@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { AwayItemSchema, AwayStateSchema } from './away.js';
-import { ChatHeaderInfoSchema, ChatStatusSchema } from './chat.js';
+import { ChatHeaderInfoSchema, ChatStatusSchema, PromptSuggestionSchema } from './chat.js';
 import { ChatItemSchema } from './items.js';
 import { PairedMachineSchema, PhoneAccessSchema } from './machines.js';
 import { MachinePowerStatusSchema } from './power.js';
@@ -22,6 +22,8 @@ export const ChatStatusEventSchema = z.object({
   status: ChatStatusSchema,
   header: ChatHeaderInfoSchema.optional(),
   waitingFor: z.string().optional(),
+  /** Current prediction; null clears it. Optional for older services. */
+  promptSuggestion: PromptSuggestionSchema.nullable().optional(),
 });
 export type ChatStatusEvent = z.infer<typeof ChatStatusEventSchema>;
 

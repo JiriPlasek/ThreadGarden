@@ -152,6 +152,21 @@ describe('settings dialog', () => {
     expect(env.app.settings.value.autoTitles).toBe(false);
   });
 
+  it('"Suggest my next reply" is off by default, says what it costs, and can be turned on', async () => {
+    const env = await withSettings();
+    const dialog = await openDialog(env);
+    const toggle = within(dialog).getByLabelText(/^suggest my next reply$/i) as HTMLInputElement;
+    expect(toggle.checked).toBe(false);
+    const hint = within(dialog).getByText(/an extra model call after every turn/i);
+    expect(hint.textContent).toMatch(/costs money with an API key/);
+    expect(toggle.getAttribute('aria-describedby')).toBe(hint.id);
+    await userEvent.click(toggle);
+    await userEvent.click(within(dialog).getByRole('button', { name: /^save$/i }));
+    await waitFor(() => expect(env.server.calls('settings.set')).toHaveLength(1));
+    expect(env.server.calls('settings.set')[0]!.params).toEqual({ promptSuggestions: true });
+    expect(env.app.settings.value.promptSuggestions).toBe(true);
+  });
+
   it('shows system info: Claude Code, external sessions and indexing', async () => {
     const env = await withSettings();
     env.server.handlers['system.status'] = () => ({

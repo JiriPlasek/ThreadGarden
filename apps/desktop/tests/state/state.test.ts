@@ -63,6 +63,45 @@ describe('chats', () => {
     return { chats, frames, runFrame: () => frames.splice(0).forEach((f) => f()) };
   };
 
+  it('loads a prediction from chat.open and recovers a newer one through chat.since', async () => {
+    const { chats } = setup();
+    const open = server.handlers['chat.open']!;
+    server.handlers['chat.open'] = (p) => ({
+      ...(open(p) as object),
+      promptSuggestion: { id: 'p1', text: 'Run tests' },
+    });
+    await chats.open('s1');
+    const chat = chats.get('s1')!;
+    expect(chat.promptSuggestion).toEqual({ id: 'p1', text: 'Run tests' });
+    chat.dismissSuggestion();
+    server.handlers['chat.since'] = () => ({
+      events: [
+        {
+          sessionId: 's1',
+          seq: 11,
+          status: 'idle',
+          promptSuggestion: { id: 'p1', text: 'Run tests' },
+        },
+      ],
+      seq: 11,
+    });
+    await chats.resync();
+    expect(chat.promptSuggestion).toBeNull();
+    server.handlers['chat.since'] = () => ({
+      events: [
+        {
+          sessionId: 's1',
+          seq: 12,
+          status: 'idle',
+          promptSuggestion: { id: 'p2', text: 'Review changes' },
+        },
+      ],
+      seq: 12,
+    });
+    await chats.resync();
+    expect(chat.promptSuggestion).toEqual({ id: 'p2', text: 'Review changes' });
+  });
+
   it('chats batches streaming updates per frame', async () => {
     const { chats, frames, runFrame } = setup();
     await chats.open('s1');
