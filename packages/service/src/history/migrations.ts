@@ -319,6 +319,19 @@ const steps: string[] = [
     tokens INTEGER NOT NULL
   );
   `,
+  // Let my phone connect: one row, apart from the settings a paired device may change.
+  // context_windows again: a development build of the phone branch ran this table
+  // as the step before, so a database from it has phone_access but not that one.
+  `
+  CREATE TABLE IF NOT EXISTS phone_access (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    enabled INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS context_windows (
+    key TEXT PRIMARY KEY,
+    tokens INTEGER NOT NULL
+  );
+  `,
 ];
 
 /** Runs the steps not run yet; `upTo` stops early (tests build older schemas with it). */

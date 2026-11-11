@@ -11,6 +11,8 @@ export default tseslint.config(
       '**/.svelte-kit/**',
       '**/build/**',
       '**/build-e2e/**',
+      '**/build-e2e-phone/**',
+      '**/.svelte-kit-phone/**',
       '**/test-results/**',
       '**/playwright-report/**',
       '**/src-tauri/gen/**',

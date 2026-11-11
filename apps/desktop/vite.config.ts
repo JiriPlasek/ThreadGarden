@@ -29,6 +29,9 @@ export default defineConfig({
         runes: ({ filename }) =>
           filename.split(/[/\\]/).includes('node_modules') ? undefined : true,
       },
+      // The phone's Playwright build keeps its own output: `vite preview` serves
+      // from here, so two builds in one run must not share it.
+      outDir: process.env.THREADGARDEN_KIT_OUT ?? '.svelte-kit',
       // A static SPA: every route falls back to index.html (no server, no SSR).
       // `THREADGARDEN_UI_OUT` lets the Playwright build (mock address baked in) go elsewhere.
       adapter: adapter({

@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { AwayItemSchema, AwayStateSchema } from './away.js';
 import { ChatHeaderInfoSchema, ChatStatusSchema, PromptSuggestionSchema } from './chat.js';
 import { ChatItemSchema } from './items.js';
-import { PairedMachineSchema } from './machines.js';
+import { PairedMachineSchema, PhoneAccessSchema } from './machines.js';
 import { MachinePowerStatusSchema } from './power.js';
 import { ChatTaskSchema } from './tasks.js';
 import { UpdateStatusSchema } from './update.js';
@@ -87,6 +87,8 @@ export const events = {
   // ── v1.4: machines ─────────────────────────────────────────────────────────
   /** Every paired machine (as `machines.list`), after any change; local clients only. */
   'machines.changed': z.array(PairedMachineSchema),
+  /** Let my phone connect changed (as `phoneAccess.get`); local clients only. */
+  'phoneAccess.changed': PhoneAccessSchema,
   /** Power: this machine's power status changed (machines that advertise `power`). */
   'power.changed': MachinePowerStatusSchema,
   /** Protocol 10: this machine's update changed stage or ended. */

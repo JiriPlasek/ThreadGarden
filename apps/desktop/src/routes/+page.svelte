@@ -1,11 +1,15 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { goto } from '$app/navigation';
+  import { page } from '$app/state';
   import AppShell from '#lib/components/layout/AppShell.svelte';
   import ServiceBanner from '#lib/components/ServiceBanner.svelte';
   import ServiceDialogs from '#lib/components/ServiceDialogs.svelte';
   import { Button } from '#lib/components/ui/button/index.js';
   import { startApp } from '#lib/state/app.js';
   import { connection } from '#lib/state/connection.svelte.js';
+  import { isPhone } from '#lib/native.js';
+  import { phoneNav } from '#lib/state/phone-nav.svelte.js';
 
   let failure = $state<string | null>(null);
 
@@ -24,6 +28,54 @@
   };
 
   onMount(start);
+
+  /**
+   * The phone's levels (and an open dialog) are history entries (shallow
+   * routing), so the back gesture, which goes back in the webview, moves up
+   * one level or closes the dialog; from the top it leaves the app as usual.
+   * The entries change one at a time, each after the one before has landed.
+   */
+  if (isPhone) {
+    let queue = Promise.resolve();
+    let popped = false;
+    const then = (step: () => Promise<void>): void => {
+      queue = queue.then(step).catch(() => {});
+    };
+    const traversed = (): Promise<void> =>
+      new Promise((resolve) =>
+        window.addEventListener('popstate', () => resolve(), { once: true }),
+      );
+    phoneNav.bind({
+      push: (level, o) =>
+        then(() =>
+          goto(page.url.href, {
+            state: { phone: level, ...(o?.dialog ? { dialog: true } : {}) },
+            shallow: true,
+          }),
+        ),
+      replace: (level) =>
+        then(() => goto(page.url.href, { state: { phone: level }, shallow: true, replace: true })),
+      back: (steps) =>
+        then(async () => {
+          const done = traversed();
+          history.go(-steps);
+          await done;
+        }),
+    });
+    onMount(() => {
+      const onPop = (): void => {
+        popped = true;
+      };
+      window.addEventListener('popstate', onPop);
+      return () => window.removeEventListener('popstate', onPop);
+    });
+    $effect(() => {
+      const state = page.state;
+      if (!popped) return;
+      popped = false;
+      phoneNav.popped(state.phone);
+    });
+  }
 
   /** After the first successful connection the layout stays up; drops show a banner. */
   const ready = $derived(connection.status === 'open' || connection.status === 'reconnecting');

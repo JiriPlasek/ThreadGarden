@@ -73,6 +73,9 @@ describe('methods a paired device may not call', () => {
     'devices.list',
     'machine.rename',
     'update.latest',
+    // Let my phone connect: the owner's switch, never a device's.
+    'phoneAccess.get',
+    'phoneAccess.set',
     ...powerClient,
     ...machinesMethods,
     ...awayMethods,
@@ -100,6 +103,20 @@ describe('methods a paired device may not call', () => {
       const res = await call(ws, method, {});
       expect(res).toMatchObject({ error: { code: 'FORBIDDEN' } });
       expect(res).not.toHaveProperty('result');
+    } finally {
+      ws.close();
+    }
+  });
+
+  // The phone's core alone answers it, to its own screens: a device never gets it through.
+  it('answers alerts.setActive from a paired device with an error, never a result', async () => {
+    const ws = await open(svc.remote!.port, device.token);
+    try {
+      const res = await call(ws, 'alerts.setActive', { machineId: 'm1', sessionId: 's1' });
+      expect(res).not.toHaveProperty('result');
+      expect(['METHOD_NOT_FOUND', 'FORBIDDEN']).toContain(
+        (res as { error?: { code: string } }).error?.code,
+      );
     } finally {
       ws.close();
     }

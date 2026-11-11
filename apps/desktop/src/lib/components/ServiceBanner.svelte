@@ -1,6 +1,7 @@
 <script lang="ts">
   import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
   import { Button } from '#lib/components/ui/button/index.js';
+  import { isPhone } from '#lib/native.js';
   import { useApp } from '#lib/state/context.js';
 
   /**
@@ -8,7 +9,8 @@
    * the service speaks another protocol, so nothing works until it restarts.
    * Otherwise a thin bar, shown while an older (or newer) service of the same
    * protocol is running. Either way Threadgarden never restarts it on its own while
-   * agents may run: **Restart service** asks first (`ServiceDialogs`).
+   * agents may run: **Restart service** asks first (`ServiceDialogs`). The
+   * phone's core is part of the app, so there's no service to restart there.
    */
   let { blocking = false }: { blocking?: boolean } = $props();
 
@@ -32,7 +34,7 @@
       </Button>
     </div>
   </main>
-{:else if connection.restartNeeded}
+{:else if connection.restartNeeded && !isPhone}
   <div
     role="status"
     class="bg-muted text-muted-foreground flex shrink-0 items-center gap-2 px-3 py-1 text-xs"

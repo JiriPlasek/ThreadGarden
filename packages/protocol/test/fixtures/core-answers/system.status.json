@@ -1,0 +1,18 @@
+{
+  "cases": [
+    {
+      "params": {},
+      "result": {
+        "claude": {
+          "found": false
+        },
+        "externalAvailable": false,
+        "indexing": {
+          "done": 0,
+          "total": 0
+        }
+      }
+    }
+  ],
+  "method": "system.status"
+}

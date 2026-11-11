@@ -7,6 +7,9 @@ import {
   REMOTE_MOCK_PORT,
   REMOTE_PAIRING_CODE,
   FAKE_SWITCH_PORT,
+  PHONE_MOCK_PORT,
+  PHONE_MOCK_TOKEN,
+  PHONE_UI_PORT,
   UI_PORT,
 } from './env';
 
@@ -25,8 +28,14 @@ import {
  * fixed pairing code. The UI reaches it through the first mock's relay. With
  * `--fake-tasmota` it also holds a fake Tasmota Zigbee bridge (`power.spec.ts`),
  * whose plug brings it back when `away.spec.ts` has switched it off.
+ *
+ * The phone project (`phone.spec.ts`) runs at a phone's viewport, with touch,
+ * against a third mock that answers like the phone's core (`MOCK_PHONE=1`),
+ * paired with the remote mock, and a UI built for the phone. The web servers
+ * start one after another, so the remote mock is up before the phone pairs.
  */
 const UI_URL = `http://127.0.0.1:${UI_PORT}`;
+const PHONE_UI_URL = `http://127.0.0.1:${PHONE_UI_PORT}`;
 
 export default defineConfig({
   testDir: '.',
@@ -46,7 +55,20 @@ export default defineConfig({
     ...devices['Desktop Chrome'],
     viewport: { width: 1400, height: 900 },
   },
-  projects: [{ name: 'chromium' }],
+  projects: [
+    { name: 'chromium', testIgnore: /phone\.spec\.ts/ },
+    {
+      name: 'phone',
+      testMatch: /phone\.spec\.ts/,
+      use: {
+        baseURL: PHONE_UI_URL,
+        viewport: { width: 412, height: 915 },
+        deviceScaleFactor: 2.625,
+        isMobile: true,
+        hasTouch: true,
+      },
+    },
+  ],
   webServer: [
     {
       command: 'pnpm --filter @threadgarden/service mock',
@@ -83,6 +105,36 @@ export default defineConfig({
         THREADGARDEN_UI_OUT: 'build-e2e',
       },
       url: UI_URL,
+      reuseExistingServer: false,
+      timeout: 240_000,
+      stdout: 'ignore',
+    },
+    {
+      // After the remote mock: it pairs with it (never with 47380, a real machine's port).
+      command: `pnpm --filter @threadgarden/service mock --pair-port ${REMOTE_MOCK_PORT} --pairing-code ${REMOTE_PAIRING_CODE}`,
+      env: {
+        MOCK_PHONE: '1',
+        THREADGARDEN_MOCK_PORT: String(PHONE_MOCK_PORT),
+        THREADGARDEN_MOCK_TOKEN: PHONE_MOCK_TOKEN,
+      },
+      port: PHONE_MOCK_PORT,
+      reuseExistingServer: false,
+      timeout: 120_000,
+      stdout: 'pipe',
+    },
+    {
+      // After the desktop build, into folders of its own (the preview serves from them).
+      command: `pnpm build && pnpm exec vite preview --host 127.0.0.1 --port ${PHONE_UI_PORT} --strictPort`,
+      cwd: '..',
+      env: {
+        VITE_THREADGARDEN_MOCK_URL: `ws://127.0.0.1:${PHONE_MOCK_PORT}`,
+        VITE_THREADGARDEN_MOCK_TOKEN: PHONE_MOCK_TOKEN,
+        VITE_THREADGARDEN_PHONE: '1',
+        THREADGARDEN_UI_OUT: 'build-e2e-phone',
+        // Its own SvelteKit output too: `vite preview` serves from there.
+        THREADGARDEN_KIT_OUT: '.svelte-kit-phone',
+      },
+      url: PHONE_UI_URL,
       reuseExistingServer: false,
       timeout: 240_000,
       stdout: 'ignore',

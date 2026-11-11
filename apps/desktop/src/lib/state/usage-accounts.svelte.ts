@@ -5,6 +5,7 @@
  * nothing (never answered, or kept an empty state) is not listed.
  */
 import type { UsageState } from '@threadgarden/protocol';
+import { isPhone } from '../native';
 import { groupUsage, type UsageEntry, type UsageMachine } from '../usage/accounts';
 import { quietly } from './api';
 import { machineNameOf, machines } from './machines.svelte';
@@ -20,10 +21,13 @@ export class UsageAccounts {
   /** Fresh readings are on their way (the dialog shows it). */
   refreshing = $state(false);
 
-  private readonly scopes: Pick<Scopes, 'all'>;
+  private readonly scopes: Pick<Scopes, 'all'> & Partial<Pick<Scopes, 'local'>>;
   private readonly names: (machineId: string) => string;
 
-  constructor(scopes: Pick<Scopes, 'all'>, names: (machineId: string) => string) {
+  constructor(
+    scopes: Pick<Scopes, 'all'> & Partial<Pick<Scopes, 'local'>>,
+    names: (machineId: string) => string,
+  ) {
     this.scopes = scopes;
     this.names = names;
   }
@@ -31,7 +35,11 @@ export class UsageAccounts {
   /** The account entries, This PC's first, then in the order of the machines. */
   entries = $derived.by((): UsageEntry[] => {
     const list: UsageMachine[] = [];
-    for (const { machineId, usage } of this.scopes.all()) {
+    // The phone's local scope is its core, which runs no chats: no usage of its own.
+    const here = isPhone ? this.scopes.local?.() : undefined;
+    for (const scope of this.scopes.all()) {
+      const { machineId, usage } = scope;
+      if (scope === here) continue;
       if (!usage.connected && isEmpty(usage.value)) continue;
       list.push({
         machineId,

@@ -1,0 +1,16 @@
+{
+  "cases": [
+    {
+      "params": {},
+      "result": {
+        "active": 0,
+        "all": 0,
+        "archived": 0,
+        "needsYou": 0,
+        "onHold": 0,
+        "running": 0
+      }
+    }
+  ],
+  "method": "places.counts"
+}

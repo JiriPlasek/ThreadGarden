@@ -16,15 +16,24 @@ export const VERSION_FILES = [
   'packages/service/package.json',
   'packages/protocol/package.json',
   'apps/desktop/src-tauri/tauri.conf.json',
+  // The Android app's version name (its version code follows from it).
+  'apps/desktop/src-tauri/tauri.android.conf.json',
   'apps/desktop/src-tauri/Cargo.toml',
   'apps/desktop/src-tauri/Cargo.lock',
+  // The phone's core reports its version as the service's in `hello`.
+  'apps/desktop/src-tauri/core/Cargo.toml',
+  'apps/desktop/src-tauri/core/Cargo.lock',
 ];
 
-/** How to find the version in each kind of file: the first match's group 2 is replaced. */
+/**
+ * How to find the version in each kind of file: the first match's group 2 is
+ * replaced. In a lock file, every entry of the app and of the core is (the
+ * app's lock lists the core too).
+ */
 const PATTERNS = {
   json: /^(\s*"version"\s*:\s*")([^"]+)(")/m,
   toml: /^(\[package\][^[]*?^version\s*=\s*")([^"]+)(")/m,
-  lock: /^(name = "threadgarden"\r?\nversion = ")([^"]+)(")/m,
+  lock: /^(name = "threadgarden(?:-core)?"\r?\nversion = ")([^"]+)(")/gm,
 };
 
 const patternFor = (file) =>
@@ -43,7 +52,8 @@ export const setVersion = async (root, version) => {
     const path = join(root, file);
     const text = await readFile(path, 'utf8');
     const pattern = patternFor(file);
-    if (!pattern.test(text)) throw new Error(`No version found in ${file}`);
+    // `search`, not `test`: it ignores the global lock pattern's `lastIndex`.
+    if (text.search(pattern) < 0) throw new Error(`No version found in ${file}`);
     const next = text.replace(pattern, (_m, before, _old, after) => `${before}${version}${after}`);
     if (next !== text) {
       await writeFile(path, next);

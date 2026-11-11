@@ -62,7 +62,9 @@ jobs:
       - run: rustc --version && cargo clippy --version
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: apps/desktop/src-tauri
+          workspaces: |
+            apps/desktop/src-tauri
+            apps/desktop/src-tauri/core
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:
@@ -77,6 +79,20 @@ jobs:
         working-directory: apps/desktop/src-tauri
       - run: cargo test
         working-directory: apps/desktop/src-tauri
+      # The phone's core, a crate of its own for now; its tests include the
+      # check that the protocol's contract fixtures match its answers.
+      - run: cargo fmt --check
+        working-directory: apps/desktop/src-tauri/core
+      - run: cargo clippy --all-targets -- -D warnings
+        working-directory: apps/desktop/src-tauri/core
+      - run: cargo test
+        working-directory: apps/desktop/src-tauri/core
+      # Pairing cross-check: the core (its `pair_check` example, built by
+      # `cargo test`) against a real headless service. Skipped where it isn't built.
+      - run: pnpm --filter @threadgarden/service exec vitest run test/core-pairing.test.ts
+        env:
+          # Fail, not skip, if the binary is missing.
+          THREADGARDEN_CORE_PAIRING: '1'
 
   # Release bundles with the Node sidecar and the bundled service, then the UI's
   # end-to-end and performance specs (Playwright, Chromium) against the mock service.
@@ -142,3 +158,59 @@ jobs:
           name: playwright-${{ matrix.target }}
           retention-days: 7
           path: apps/desktop/test-results/
+
+  # The Android app: the same UI and shell with the desktop-only parts left out,
+  # as a debug APK for 64-bit ARM phones.
+  android:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+          cache: gradle
+      - uses: android-actions/setup-android@v3
+        with:
+          # Named: the default list asks for `tools`, which the runner's sdkmanager no longer has.
+          packages: platform-tools
+      # NDK r27d (27.3.13750724), the one the app is built with locally.
+      - uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r27d
+          # Not cached: the cache came back without bin/clang (a link it didn't keep),
+          # which failed every build after; the download takes about a minute.
+      - run: echo "NDK_HOME=${{ steps.ndk.outputs.ndk-path }}" >> "$GITHUB_ENV"
+      - run: rustup toolchain install
+      - run: rustup target add aarch64-linux-android
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+          shared-key: android-aarch64
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # Tauri reads CI=true from the runner: no prompts. The core's TLS (ring)
+      # has C and assembly, built with the NDK's clang for the phone.
+      - run: pnpm --filter desktop android:build
+        env:
+          CC_aarch64_linux_android: ${{ env.NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang
+          AR_aarch64_linux_android: ${{ env.NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+      # The Android-only Rust (JNI, the commands): the desktop's clippy never sees it.
+      # After the build, which made the UI that generate_context! embeds.
+      - run: cargo clippy --target aarch64-linux-android --lib -- -D warnings
+        working-directory: apps/desktop/src-tauri
+        env:
+          CC_aarch64_linux_android: ${{ env.NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android26-clang
+          AR_aarch64_linux_android: ${{ env.NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-ar
+      - uses: actions/upload-artifact@v4
+        with:
+          name: threadgarden-android-debug
+          retention-days: 7
+          if-no-files-found: error
+          path: apps/desktop/src-tauri/gen/android/app/build/outputs/apk/**/*.apk

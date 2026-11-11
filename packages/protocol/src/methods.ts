@@ -27,6 +27,7 @@ import {
   MachineInfoSchema,
   MachinePortSchema,
   PairedMachineSchema,
+  PhoneAccessSchema,
 } from './machines.js';
 import { GitStateSchema, MoveBusySchema, MoveKeySchema, MovePeerSchema } from './move.js';
 import {
@@ -150,6 +151,15 @@ export const methods = {
     z.object({ machineId: z.string(), revoke: z.boolean() }),
     z.object({ revoked: z.boolean() }),
   ),
+  // ── Let my phone connect (local only, no protocol bump) ────────────────────
+  /** Whether this desktop listens for paired devices, and where. */
+  'phoneAccess.get': def(empty, PhoneAccessSchema),
+  /**
+   * Turns listening on (a certificate is made the first time) or off (every
+   * device socket closes at once; pairings stay). `HEADLESS` on a headless
+   * machine, which always listens.
+   */
+  'phoneAccess.set': def(z.object({ enabled: z.boolean() }), PhoneAccessSchema),
   /** v1.2: `active`, `onHold`, `archived` per bucket; `all` (= `active`) stays for older UIs. */
   'places.counts': def(
     empty,
@@ -646,8 +656,11 @@ export const methods = {
   ),
   // ── update (protocol 10) ── frozen: only optional additions ───────────────
   // Errors: `UPDATE_ERRORS`. All that is frozen with these: the comment in `update.ts`.
-  /** Local only: the latest release version, asked of GitHub by this machine's service. */
-  'update.latest': def(empty, z.object({ version: z.string() })),
+  /**
+   * Local only: the latest release version, asked of GitHub by this machine's
+   * service. The phone's core adds `url`: the release's APK, when it has one.
+   */
+  'update.latest': def(empty, z.object({ version: z.string(), url: z.string().optional() })),
   /** Updates this machine to `version`; `force` goes on although chats run (`busy` says how many). */
   'update.start': def(
     z.object({ version: z.string(), force: z.boolean() }),
@@ -707,6 +720,15 @@ export const methods = {
   'away.cancel': def(z.object({ id: z.string() }), empty),
   /** Tries the machine's failed messages again. */
   'away.retry': def(machineIdOnly, empty),
+  // ── the phone (no protocol bump: local to the phone's core only) ──────────
+  /**
+   * The chat on the phone's screen, which the core's alert links leave out;
+   * null (or a null in it) when none is (the app is in the background).
+   */
+  'alerts.setActive': def(
+    z.object({ machineId: z.string().nullable(), sessionId: z.string().nullable() }).nullable(),
+    empty,
+  ),
 } as const;
 
 export type MethodName = keyof typeof methods;

@@ -1,6 +1,6 @@
 {
   "name": "desktop",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "prepare": "svelte-kit sync || echo ''",
     "tauri": "tauri",
+    "android:build": "tauri android build --debug --apk --target aarch64",
     "lint": "eslint .",
     "format": "prettier --write .",
     "typecheck": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",

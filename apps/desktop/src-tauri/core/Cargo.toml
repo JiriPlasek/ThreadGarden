@@ -1,0 +1,36 @@
+[package]
+name = "threadgarden-core"
+# The app's version: `hello` reports it as the service version (a test checks they agree).
+version = "0.10.0"
+description = "The phone's stand-in for the local Threadgarden service"
+edition = "2024"
+rust-version = "1.90"
+publish = false
+
+# Standalone until the Android service wires it into the app's workspace.
+[workspace]
+
+[dependencies]
+# Rust, plus ring's C and assembly (TLS): Android needs the NDK's clang as CC/AR for it.
+tokio = { version = "1", features = ["rt-multi-thread", "net", "sync", "time", "macros", "io-util"] }
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+getrandom = { version = "0.3", features = ["std"] }
+subtle = "2"
+# `\p{L}` and `\p{N}` exactly as the protocol's code font sanitiser has them.
+regex = { version = "1", default-features = false, features = ["std", "unicode-gencat"] }
+# TLS to the machines: ring only (no aws-lc, no OpenSSL), certificates pinned by fingerprint.
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+ring = "0.17"
+# The update check's one HTTPS request to GitHub: Mozilla's roots, compiled in.
+webpki-roots = "1"
+base64 = "0.22"
+
+[dev-dependencies]
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["connect", "handshake"] }
+tempfile = "3"
+# The test machines' certificates.
+rcgen = { version = "0.13", default-features = false, features = ["ring", "pem"] }

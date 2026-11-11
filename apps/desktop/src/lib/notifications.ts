@@ -30,15 +30,26 @@
  * ("Ubuntu PC · tg-cli · needs permission"). The window's focus and the tray
  * badge are watched once: the badge shows This PC's Needs you count, which
  * already adds up every machine's.
+ *
+ * The phone (`isPhone`) does none of this: its core alerts, also while the
+ * screens are closed, and has no tray. It never reports `ui.visibility`, which
+ * would change the machine's pace for its other clients, and never stores the
+ * announced holds on a machine. The core is only told which chat is in front
+ * of the owner (`setActiveChat`), so it doesn't alert for that one.
  */
 import type { ChatStatus, ChatSummary } from '@threadgarden/protocol';
 import { baseName } from './components/layout/chat-info';
-import { notify as nativeNotify, setTrayNeedsYou as nativeSetTray } from './native';
+import {
+  isPhone,
+  notify as nativeNotify,
+  setActiveChat as nativeSetActiveChat,
+  setTrayNeedsYou as nativeSetTray,
+} from './native';
 import { quietly } from './state/api';
 import { machineLabel, machineNameOf, type MachinesState } from './state/machines.svelte';
 import type { PowerState } from './state/power.svelte';
 import type { PlacesState } from './state/places.svelte';
-import { chatKey } from './state/refs';
+import { chatKey, parseChatKey } from './state/refs';
 import type { MachineScope, Scopes } from './state/scope';
 import type { SettingsState } from './state/settings.svelte';
 import type { TabsState } from './state/tabs.svelte';
@@ -60,12 +71,14 @@ export type AttentionDeps = {
   settings: Pick<SettingsState, 'value'>;
   /** Power control: a machine whose idle shutdown is paused by unpushed work notifies once (Task 15). */
   power?: Pick<PowerState, 'onBlocked' | 'watchBlocked' | 'needsYouCount'>;
-  /** The tabs (chat keys): the active one is the chat in front of the user. */
-  tabs: Pick<TabsState, 'active'>;
+  /** The tabs (chat keys): the active one is the chat in front of the user (the phone follows it). */
+  tabs: Pick<TabsState, 'active'> & Partial<Pick<TabsState, 'subscribe'>>;
   /** This PC's places: the tray count (Needs you summed across machines). */
   places: Pick<PlacesState, 'subscribeCounts'>;
   notify?: typeof nativeNotify;
   setTrayNeedsYou?: typeof nativeSetTray;
+  /** The phone's: tells the core the chat in front of the owner. */
+  setActiveChat?: typeof nativeSetActiveChat;
   win?: Window;
   /** How long live returns from hold are gathered into one notification (tests shorten it). */
   backFromHoldBatchMs?: number;
@@ -73,6 +86,7 @@ export type AttentionDeps = {
 
 /** Starts watching every machine; returns a function that stops. */
 export const startAttention = (deps: AttentionDeps): (() => void) => {
+  if (isPhone) return followActiveChat(deps);
   const { scopes, places } = deps;
   const setTray = deps.setTrayNeedsYou ?? nativeSetTray;
   const win = deps.win ?? window;
@@ -125,6 +139,30 @@ export const startAttention = (deps: AttentionDeps): (() => void) => {
     offScopes();
     offTray();
     offBlocked?.();
+  };
+};
+
+/**
+ * The phone's part: the core is told the active chat while the app is in front,
+ * and none while it's in the background, each change once.
+ */
+const followActiveChat = (deps: AttentionDeps): (() => void) => {
+  const tell = deps.setActiveChat ?? nativeSetActiveChat;
+  const doc = (deps.win ?? window).document;
+  let told: string | null | undefined;
+  const update = (): void => {
+    const key = doc.visibilityState === 'hidden' ? null : deps.tabs.active;
+    if (key === told) return;
+    told = key;
+    const ref = key === null ? null : parseChatKey(key);
+    quietly(tell(ref?.machineId ?? null, ref?.sessionId ?? null));
+  };
+  doc.addEventListener('visibilitychange', update);
+  const offTabs = deps.tabs.subscribe?.(update);
+  update();
+  return () => {
+    doc.removeEventListener('visibilitychange', update);
+    offTabs?.();
   };
 };
 
