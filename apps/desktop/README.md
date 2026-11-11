@@ -1,6 +1,6 @@
 # desktop
 
-The composer shows Claude Code's predicted next reply as muted text when the chat is idle and the draft has no text or images. Tab accepts it into the draft, then the usual send shortcut submits it (Enter by default); Escape dismisses it. Typing dismisses a prediction, existing drafts are preserved, and file/command pickers keep their keyboard handling. Predictions arrive through `chat.status` and `chat.open` and stay dismissed across composer remounts and reconnect replay while the chat remains loaded.
+With Settings → "Suggest my next reply" on (off by default), the composer shows Claude Code's predicted next reply as muted text when the chat is idle and the draft has no text or images. Tab accepts it into the draft, then the usual send shortcut submits it (Enter by default); Escape dismisses it. The phone has neither key: its button says "Use suggestion". Typing dismisses a prediction, existing drafts are preserved, and file/command pickers keep their keyboard handling. Predictions arrive through `chat.status` and `chat.open` and stay dismissed across composer remounts and reconnect replay while the chat remains loaded.
 
 Threadgarden's desktop app: a Tauri 2 shell (Rust, `src-tauri/`) around a SvelteKit 3 static SPA (`src/`, Svelte 5 runes, Tailwind CSS 4, shadcn-svelte theme tokens for light and dark). The UI talks to the service directly over its WebSocket; Rust handles only native concerns.
 

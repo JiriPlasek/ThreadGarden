@@ -20,6 +20,7 @@
         "lightStyle": "default",
         "notifications": true,
         "notifyOnFinish": true,
+        "promptSuggestions": false,
         "startOnLogin": false,
         "theme": "dark",
         "uiFont": "inter"

@@ -237,6 +237,21 @@ describe('SessionHost', () => {
     expect(adapter.started).toHaveLength(2);
   });
 
+  it('asks for prompt suggestions only while the setting is on, read at every start', async () => {
+    const ctx = setup();
+    const { host, adapter, timers, settings } = ctx;
+    const { s } = await idleChat(ctx, '/proj');
+    expect(adapter.lastSession().options).not.toHaveProperty('promptSuggestions');
+
+    settings.promptSuggestions = true;
+    host.reclaimIdle(timers.now() + 15 * MIN);
+    host.ensureLive(s.sessionId, '/proj');
+    expect(adapter.lastSession().options.promptSuggestions).toBe(true);
+    host.create('/other', { text: 'hi' });
+    expect(adapter.lastSession().options.promptSuggestions).toBe(true);
+    host.stopAll();
+  });
+
   it('ensureLive resumes a history chat the host has never seen', () => {
     const { host, adapter } = setup();
     const s = host.ensureLive('hist-1', '/old');
@@ -391,9 +406,11 @@ describe('SessionHost', () => {
       onError: (_err, context) => errors.push(context),
     });
     ctx.host.start();
+    // The chat still starts, without prompt suggestions.
     const s = ctx.host.create('/a', { text: 'one' });
+    expect(ctx.adapter.lastSession().options).not.toHaveProperty('promptSuggestions');
     expect(() => ctx.timers.advance(3 * MIN)).not.toThrow();
-    expect(errors).toEqual(['idle reclaim', 'idle reclaim', 'idle reclaim']);
+    expect(errors).toEqual(['settings', 'idle reclaim', 'idle reclaim', 'idle reclaim']);
     expect(s.live).toBe(true);
     ctx.host.dispose();
   });

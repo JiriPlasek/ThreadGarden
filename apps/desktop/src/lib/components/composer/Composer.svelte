@@ -720,11 +720,13 @@
       {:else if visibleSuggestion}
         <span id="{uid}-suggestion">
           <span class="sr-only">Suggested reply: {visibleSuggestion.text}. </span>
+          <!-- The phone has no Tab or Esc: the button is the way in, and typing dismisses. -->
           <button
             type="button"
             class="hover:text-foreground"
-            onclick={() => void acceptSuggestion()}>Tab to accept suggestion</button
-          > · Esc to dismiss
+            onclick={() => void acceptSuggestion()}
+            >{isPhone ? 'Use suggestion' : 'Tab to accept suggestion'}</button
+          >{#if !isPhone}{' · Esc to dismiss'}{/if}
         </span>
       {:else if hint}
         {hint}

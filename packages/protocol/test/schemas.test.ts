@@ -494,6 +494,15 @@ describe('protocol schemas', () => {
     });
   });
 
+  it('promptSuggestions is off by default, also for settings stored before it existed', () => {
+    expect(settingsDefaults.promptSuggestions).toBe(false);
+    expect(SettingsSchema.parse({ notifications: false }).promptSuggestions).toBe(false);
+    expect(SettingsPatchSchema.parse({ promptSuggestions: true })).toEqual({
+      promptSuggestions: true,
+    });
+    expect(SettingsPatchSchema.safeParse({ promptSuggestions: 'yes' }).success).toBe(false);
+  });
+
   // ── v1.3 E: appearance ────────────────────────────────────────────────────
 
   describe('v1.3 appearance settings', () => {

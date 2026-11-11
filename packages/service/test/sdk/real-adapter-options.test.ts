@@ -24,7 +24,6 @@ describe('buildQueryOptions', () => {
     expect(o.systemPrompt).toEqual({ type: 'preset', preset: 'claude_code' });
     expect(o.settingSources).toEqual(['user', 'project', 'local']);
     expect(o.includePartialMessages).toBe(true);
-    expect(o.promptSuggestions).toBe(true);
     expect(o.pathToClaudeCodeExecutable).toBe('/home/u/.local/bin/claude');
     expect(o.cwd).toBe('/work/proj');
     expect(o.canUseTool).toBe(canUseTool);
@@ -51,11 +50,18 @@ describe('buildQueryOptions', () => {
         'includePartialMessages',
         'pathToClaudeCodeExecutable',
         'perTaskStopAffordance',
-        'promptSuggestions',
         'settingSources',
         'systemPrompt',
       ].sort(),
     );
+  });
+
+  it('asks for prompt suggestions only when the setting is on', () => {
+    expect(buildQueryOptions(start())).not.toHaveProperty('promptSuggestions');
+    expect(buildQueryOptions(start({ promptSuggestions: false }))).not.toHaveProperty(
+      'promptSuggestions',
+    );
+    expect(buildQueryOptions(start({ promptSuggestions: true })).promptSuggestions).toBe(true);
   });
 
   it('declares the per-task stop affordance, so Stop / Esc on a turn spares background tasks', () => {

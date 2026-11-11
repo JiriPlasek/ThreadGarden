@@ -365,7 +365,8 @@ class ScriptedSession extends FakeSession {
         result: '',
       }),
     );
-    if (!interrupted && lower.includes('suggest')) {
+    // As the SDK: a prediction only for a session started with `promptSuggestions`.
+    if (!interrupted && this.options.promptSuggestions === true && lower.includes('suggest')) {
       this.out(
         msg({
           type: 'prompt_suggestion',

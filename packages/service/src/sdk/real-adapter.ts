@@ -111,7 +111,6 @@ export const buildQueryOptions = (o: StartOptions): Options => {
     settingSources: ['user', 'project', 'local'],
     systemPrompt: { type: 'preset', preset: 'claude_code' },
     includePartialMessages: true,
-    promptSuggestions: true,
     perTaskStopAffordance: true,
     canUseTool: o.canUseTool,
     env: { ...o.env, CLAUDE_CODE_STARTUP_FAILURE_RESULTS: '1' },
@@ -124,6 +123,8 @@ export const buildQueryOptions = (o: StartOptions): Options => {
   if (o.model !== undefined) opts.model = o.model;
   if (o.effort !== undefined) opts.effort = o.effort;
   if (o.permissionMode !== undefined) opts.permissionMode = o.permissionMode;
+  // Each prediction is an extra model call after every turn: only when the user asked for them.
+  if (o.promptSuggestions === true) opts.promptSuggestions = true;
   return opts;
 };
 

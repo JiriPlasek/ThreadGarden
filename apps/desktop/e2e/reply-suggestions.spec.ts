@@ -1,11 +1,20 @@
 import { expect, test } from '@playwright/test';
-import { openApp, resetTabs } from './helpers';
+import { openApp, resetTabs, serviceCall } from './helpers';
+
+// Suggest my next reply is off by default; the specs share the mock, so it goes back off.
+test.beforeEach(async () => {
+  await serviceCall('settings.set', { promptSuggestions: true });
+});
+test.afterEach(async () => {
+  await serviceCall('settings.set', { promptSuggestions: false });
+});
 
 test('a predicted reply is visible, Tab accepts it and Enter sends it', async ({ page }) => {
   await resetTabs();
   await openApp(page);
   const list = page.getByRole('region', { name: 'Chat list' });
-  await list.locator('[role="option"][data-session-id="session-998"]').click();
+  // A chat no other spec runs: its process starts now, with the setting on.
+  await list.locator('[role="option"][data-session-id="session-999"]').click();
   const composer = page.getByRole('textbox', { name: 'Message' });
   await composer.fill('Please suggest a follow-up');
   await composer.press('Enter');

@@ -198,6 +198,13 @@ const settingsFields = {
    * sentence).
    */
   autoTitles: z.boolean(),
+  /**
+   * Suggest my next reply: sessions started while it is on pass the SDK's
+   * `promptSuggestions`, so Claude Code predicts the next message after every
+   * finished turn. Each prediction is an extra model call, also in chats nobody
+   * watches, so it is off unless the user turns it on.
+   */
+  promptSuggestions: z.boolean(),
   // ── v1.3 E: appearance ──
   /** Drives the primary, ring and selection colours in both themes. */
   accent: z.enum(ACCENTS),
@@ -226,6 +233,7 @@ export const SettingsSchema = z.object({
   notifyOnFinish: settingsFields.notifyOnFinish.default(true),
   // ── v1.2 C1: chat titles ──
   autoTitles: settingsFields.autoTitles.default(true),
+  promptSuggestions: settingsFields.promptSuggestions.default(false),
   // ── v1.3 E: appearance ──
   // Read leniently (`.catch`): a stored value this build does not know (a newer
   // accent, a corrupt row) reads as the default instead of failing the object.

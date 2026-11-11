@@ -104,6 +104,8 @@ export type LiveSessionDeps = {
   registry: LiveRegistry;
   claudePath: string;
   env: Record<string, string | undefined>;
+  /** The "Suggest my next reply" setting when the session was created or resumed; default off. */
+  promptSuggestions?: boolean;
   /** Event sink (the WebSocket broadcast). Must not throw; a throw is ignored. */
   emit(e: EventMsg): void;
   now(): number;
@@ -641,12 +643,13 @@ export class LiveSession {
   // ── process ─────────────────────────────────────────────────────────────
 
   private startProcess(extra: Pick<StartOptions, 'sessionId' | 'resume' | 'sessionStore'>): void {
-    const { adapter, claudePath, env } = this.deps;
+    const { adapter, claudePath, env, promptSuggestions } = this.deps;
     const session = adapter.start({
       cwd: this.dir,
       env,
       claudePath,
       canUseTool: this.canUseTool,
+      ...(promptSuggestions === true ? { promptSuggestions } : {}),
       ...this.chosen,
       ...extra,
     });

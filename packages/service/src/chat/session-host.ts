@@ -323,6 +323,16 @@ export class SessionHost {
     }
   }
 
+  /** "Suggest my next reply", read at every start; unreadable settings leave it off. */
+  private promptSuggestions(): boolean {
+    try {
+      return this.deps.getSettings().promptSuggestions;
+    } catch (err) {
+      this.report(err, 'settings');
+      return false;
+    }
+  }
+
   private options(extra: Partial<LiveSessionOptions>): LiveSessionOptions {
     const {
       adapter,
@@ -345,6 +355,7 @@ export class SessionHost {
       registry,
       claudePath: this.deps.claudePath(),
       env: this.deps.env(),
+      promptSuggestions: this.promptSuggestions(),
       emit,
       now,
       timers: this.timers,
