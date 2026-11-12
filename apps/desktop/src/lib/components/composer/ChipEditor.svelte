@@ -115,6 +115,23 @@
     previous = current;
     onChange(current.text, true);
   };
+  /**
+   * Deletes a selection, or the chip next to the caret, whole (true: done, the
+   * native delete must not run). Undefined chips and plain text are left to it.
+   */
+  const deleteChips = (backward: boolean): boolean => {
+    const range = selection();
+    const adjacent = attachedTags(text, attachments).find((tag) =>
+      backward ? tag.end === range.start : tag.start === range.end,
+    );
+    if (range.start === range.end && !adjacent) return false;
+    replace(
+      adjacent && range.start === range.end ? adjacent.start : range.start,
+      adjacent && range.start === range.end ? adjacent.end : range.end,
+      '',
+    );
+    return true;
+  };
   const keydown = (e: KeyboardEvent): void => {
     if (e.target !== element) {
       if (
@@ -146,18 +163,8 @@
       replace(range.start, range.end, '\n');
       return;
     }
-    if (e.key === 'Backspace' || e.key === 'Delete') {
-      const adjacent = attachedTags(text, attachments).find((tag) =>
-        e.key === 'Backspace' ? tag.end === range.start : tag.start === range.end,
-      );
-      if (range.start !== range.end || adjacent) {
-        e.preventDefault();
-        replace(
-          adjacent && range.start === range.end ? adjacent.start : range.start,
-          adjacent && range.start === range.end ? adjacent.end : range.end,
-          '',
-        );
-      }
+    if ((e.key === 'Backspace' || e.key === 'Delete') && deleteChips(e.key === 'Backspace')) {
+      e.preventDefault();
     }
     if (
       !mod &&
@@ -183,6 +190,13 @@
       e.preventDefault();
       const s = selection();
       replace(s.start, s.end, '\n');
+    } else if (
+      // Keyboards that send no Backspace/Delete key (Android's: "Unidentified") delete this way.
+      (e.inputType === 'deleteContentBackward' || e.inputType === 'deleteContentForward') &&
+      !disabled &&
+      deleteChips(e.inputType === 'deleteContentBackward')
+    ) {
+      e.preventDefault();
     } else if (e.inputType === 'historyUndo' || e.inputType === 'historyRedo') {
       e.preventDefault();
       const value =

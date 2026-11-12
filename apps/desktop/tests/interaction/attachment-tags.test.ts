@@ -48,6 +48,22 @@ describe('attachment tags in the composer', () => {
     expect(composer().textContent).toBe('before ');
   });
 
+  it('deletes a chip whole when the keyboard sends only a delete input, as Gboard does', async () => {
+    const { composer } = await renderChat();
+    await pasteImage(composer());
+    await waitFor(() => expect(composer().textContent).toBe('[Image #1]'));
+    setEditorSelection(composer(), '[Image #1]'.length);
+    // Android keyboards send keydown "Unidentified", then the delete as an input type.
+    const backspace = new InputEvent('beforeinput', {
+      inputType: 'deleteContentBackward',
+      bubbles: true,
+      cancelable: true,
+    });
+    await fireEvent(composer(), backspace);
+    expect(backspace.defaultPrevented).toBe(true);
+    expect(composer().textContent).toBe('');
+  });
+
   it('edits a scheduled paste with its image and restores the previous draft', async () => {
     const wire = `<pasted_content id="abcd">\n${paste}\n</pasted_content id="abcd">\n\n[Image #2]`;
     const scheduled = {

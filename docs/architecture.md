@@ -520,7 +520,13 @@ ends with a "Waiting for Claude…" row and the seconds waited; it appears after
 400 ms of quiet, so back-to-back outputs never make it flicker.
 
 **Attachment tags.** The plain-text contenteditable editor renders `[Image #N]`
-and `[Pasted text #N +K lines]` as non-editable, atomic attachment chips.
+and `[Pasted text #N +K lines]` as non-editable, atomic attachment chips. On
+the phone the box is a plain textarea (`PlainEditor`) where the tags stay text:
+checked on Android 15 with Gboard, the chip editor lost an autocorrected word
+typed after a chip (it re-renders under the keyboard's edit) and could not
+delete a chip, since Gboard sends no Backspace key, only a
+`deleteContentBackward` input, by then with the deleted character already
+selected. Both editors delete a tag whole on that input too.
 Image attachment inserts a tag at the caret; text pasted over 8 lines or 800
 characters collapses. Badges preview on hover or keyboard focus; clicking pins
 the preview until an outside click or Escape. Scrolling over a pasted-text

@@ -229,7 +229,7 @@
   };
 
   let root = $state<HTMLDivElement | null>(null);
-  let composerBox = $state<HTMLDivElement | null>(null);
+  let composerBox = $state<HTMLDivElement | HTMLTextAreaElement | null>(null);
   let list = $state<ReturnType<typeof MessageList> | null>(null);
   let composer = $state<ReturnType<typeof Composer> | null>(null);
 
@@ -493,7 +493,10 @@
     const a = document.activeElement;
     if (!a || a === document.body) return false;
     if (!root?.contains(a)) return true;
-    if (a === composerBox) return (composerBox.textContent ?? '').trim() !== '';
+    if (a === composerBox) {
+      const typed = a instanceof HTMLTextAreaElement ? a.value : a.textContent;
+      return (typed ?? '').trim() !== '';
+    }
     return (
       a instanceof HTMLInputElement ||
       a instanceof HTMLTextAreaElement ||

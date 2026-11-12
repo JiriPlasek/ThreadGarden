@@ -17,6 +17,7 @@
   import type { SendWhen } from '#lib/state/scheduled.svelte.js';
   import Attachments from './Attachments.svelte';
   import ChipEditor from './ChipEditor.svelte';
+  import PlainEditor from './PlainEditor.svelte';
   import { pasteLabel } from '@threadgarden/protocol';
   import {
     activeImages,
@@ -137,7 +138,8 @@
       onSave: (text: string, images: ImageRef[]) => Promise<boolean>;
       onStop: () => void;
     };
-    editorElement?: HTMLDivElement | null;
+    /** The box typed in: a contenteditable, on the phone a textarea (`PlainEditor`). */
+    editorElement?: HTMLDivElement | HTMLTextAreaElement | null;
   } = $props();
 
   const { settings, scopes, machines } = useApp();
@@ -157,7 +159,7 @@
   /** Debounce for `files.suggest` while typing after `@`. */
   const SUGGEST_DELAY_MS = 80;
 
-  let editor = $state<ChipEditor | null>(null);
+  let editor = $state<ChipEditor | PlainEditor | null>(null);
   const initial = untrack(
     () =>
       interaction.cachedAttachments(draftKey) ??
@@ -721,23 +723,44 @@
         {/if}
       </div>
     {/if}
-    <ChipEditor
-      bind:this={editor}
-      bind:element={editorElement}
-      {text}
-      {attachments}
-      {label}
-      {placeholder}
-      {disabled}
-      controls={picker ? listId : undefined}
-      {activeId}
-      onChange={oninput}
-      {onkeydown}
-      {onpaste}
-      {oncopy}
-      onCaret={updatePicker}
-      onblur={() => setTimeout(closePicker, 0)}
-    />
+    {#if isPhone}
+      <!-- Android keyboards and chips in a contenteditable don't mix: tags stay text there. -->
+      <PlainEditor
+        bind:this={editor}
+        bind:element={editorElement as HTMLTextAreaElement | null}
+        {text}
+        {attachments}
+        {label}
+        {placeholder}
+        {disabled}
+        controls={picker ? listId : undefined}
+        {activeId}
+        onChange={oninput}
+        {onkeydown}
+        {onpaste}
+        {oncopy}
+        onCaret={updatePicker}
+        onblur={() => setTimeout(closePicker, 0)}
+      />
+    {:else}
+      <ChipEditor
+        bind:this={editor}
+        bind:element={editorElement as HTMLDivElement | null}
+        {text}
+        {attachments}
+        {label}
+        {placeholder}
+        {disabled}
+        controls={picker ? listId : undefined}
+        {activeId}
+        onChange={oninput}
+        {onkeydown}
+        {onpaste}
+        {oncopy}
+        onCaret={updatePicker}
+        onblur={() => setTimeout(closePicker, 0)}
+      />
+    {/if}
   </div>
 
   {#if imageError}
