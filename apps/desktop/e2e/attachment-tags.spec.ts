@@ -253,3 +253,48 @@ test('paste badges wrap, preview, undo and survive tab switches', async ({ page 
     page.getByRole('tooltip', { name: '[Pasted text #1 +40 lines]', exact: true }),
   ).toBeVisible();
 });
+
+test('an IME composition beside a chip (a Czech dead key, then Japanese) commits and undoes cleanly', async ({
+  page,
+  browserName,
+}) => {
+  // Real IME input goes through the renderer's composition path; only Chromium exposes it.
+  test.skip(browserName !== 'chromium', 'CDP Input.imeSetComposition is Chromium-only');
+  await openApp(page);
+  await page
+    .getByRole('region', { name: 'Chat list' })
+    .locator('[data-session-id="session-998"]')
+    .click();
+  const box = page.getByRole('textbox', { name: 'Message' });
+  await box.fill('');
+  await box.evaluate((el) => {
+    const data = new DataTransfer();
+    data.setData('text/plain', Array.from({ length: 20 }, (_, i) => `line ${i + 1}`).join('\n'));
+    el.dispatchEvent(
+      new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }),
+    );
+  });
+  await expect(box.locator('[data-attachment]')).toHaveCount(1);
+  await box.focus();
+  await box.press(endOfMessage);
+  const cdp = await page.context().newCDPSession(page);
+  const compose = (text: string) =>
+    cdp.send('Input.imeSetComposition', {
+      text,
+      selectionStart: text.length,
+      selectionEnd: text.length,
+    });
+  // Czech on a desktop keyboard: the dead key ´ composes, then e commits é.
+  await compose('´');
+  await cdp.send('Input.insertText', { text: 'é' });
+  // Then a CJK IME: several composition steps, one commit.
+  for (const step of ['n', 'ni', 'にほ', '日本']) await compose(step);
+  await cdp.send('Input.insertText', { text: '日本' });
+  await expect(box).toHaveText('[Pasted text #1 +20 lines]é日本');
+  await expect(box.locator('[data-attachment]')).toHaveCount(1);
+  await box.press('ControlOrMeta+z');
+  await expect(box).toHaveText('[Pasted text #1 +20 lines]é');
+  await box.press('ControlOrMeta+z');
+  await expect(box).toHaveText('[Pasted text #1 +20 lines]');
+  await expect(box.locator('[data-attachment]')).toHaveCount(1);
+});
