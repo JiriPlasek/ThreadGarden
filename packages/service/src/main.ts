@@ -901,6 +901,11 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         },
         // The header's context bar for a chat no process runs (after a restart, say).
         onContextWindow: (id, model, tokens) => opened.setContextWindow(id, model, tokens),
+        // Which tag each sent image is: the transcript does not keep it.
+        sentImages: {
+          set: (id, uuid, numbers) => opened.setImageNumbers(id, uuid, numbers),
+          get: (uuid) => opened.imageNumbers(uuid),
+        },
       });
       host = sessionHost;
       // v1.3 B: the meter keeps up by itself, from a running chat's usage reading.

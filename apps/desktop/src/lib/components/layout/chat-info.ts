@@ -1,4 +1,4 @@
-import type { ChatStatus, ChatSummary } from '@threadgarden/protocol';
+import { messagePreview, type ChatStatus, type ChatSummary } from '@threadgarden/protocol';
 
 /**
  * A chat's status as shown while its machine is away (ruling R10): nothing
@@ -15,7 +15,7 @@ export const rawStatus = (
 
 /** One line under the title: what the chat waits for, else its preview (spec §6.1). */
 export const previewLine = (s: Pick<ChatSummary, 'status' | 'waitingFor' | 'preview'>): string =>
-  (s.status === 'needsYou' && s.waitingFor) || s.preview || '';
+  messagePreview((s.status === 'needsYou' && s.waitingFor) || s.preview || '');
 
 /** Last path segment, for chats whose project is not in the project list. */
 export const baseName = (path: string): string =>

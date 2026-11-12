@@ -207,8 +207,11 @@ describe('Db', () => {
     db.setCustomTitle('a', null);
     expect(db.getSession('a')?.customTitle).toBeNull();
 
-    db.setDraft('k', 'hello', 5);
-    expect(db.getDraft('k')).toEqual({ text: 'hello', updatedAt: 5 });
+    db.setDraft('k', 'hello', [], 5);
+    expect(db.getDraft('k')).toEqual({ text: 'hello', images: [], updatedAt: 5 });
+    const image = { mediaType: 'image/png', data: 'AAAA', number: 2 };
+    db.setDraft('k', '[Image #2]', [image], 6);
+    expect(db.getDraft('k')).toEqual({ text: '[Image #2]', images: [image], updatedAt: 6 });
     db.deleteDraft('k');
     expect(db.getDraft('k')).toBeUndefined();
 
@@ -251,6 +254,18 @@ describe('Db', () => {
 });
 
 // ── v1.2 C1: chat titles ──
+
+describe('sent image numbers', () => {
+  it('keeps the tag number of each image a message was sent with, by message uuid', () => {
+    const db = openDb(':memory:');
+    expect(db.imageNumbers('u1')).toBeUndefined();
+    db.setImageNumbers('s1', 'u1', [2, 5]);
+    expect(db.imageNumbers('u1')).toEqual([2, 5]);
+    db.setImageNumbers('s1', 'u1', [3]);
+    expect(db.imageNumbers('u1')).toEqual([3]);
+    db.close();
+  });
+});
 
 describe('context windows', () => {
   it("a chat's own size first, else its model's; the latest report wins", () => {

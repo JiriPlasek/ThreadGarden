@@ -231,7 +231,7 @@ describe('limit notice and scheduled sends in a chat', () => {
     await waitFor(() =>
       expect(created).toEqual([{ sessionId: SID, text: 'Carry on', whenLimitResets: true }]),
     );
-    await waitFor(() => expect(composer().value).toBe(''));
+    await waitFor(() => expect(composer().textContent).toBe(''));
     expect(server.calls('chat.send')).toHaveLength(0);
   });
 
@@ -263,7 +263,7 @@ describe('limit notice and scheduled sends in a chat', () => {
     await userEvent.click(within(dialog).getByRole('button', { name: 'Schedule' }));
     await waitFor(() => expect(created).toHaveLength(1));
     expect(created[0]!.sendAt).toBeGreaterThanOrEqual(before + HOUR - 1000);
-    await waitFor(() => expect(composer().value).toBe(''));
+    await waitFor(() => expect(composer().textContent).toBe(''));
   });
 
   it('lists the chat’s scheduled sends: Send now, Cancel and Edit', async () => {
@@ -302,14 +302,14 @@ describe('limit notice and scheduled sends in a chat', () => {
     // Edit: back into the composer, saved with Save; what was typed before comes back.
     await fill(composer(), 'my draft');
     await userEvent.click(within(rows[0]!).getByRole('button', { name: 'Edit' }));
-    await waitFor(() => expect(composer().value).toBe('Continue with step 3'));
+    await waitFor(() => expect(composer().textContent).toBe('Continue with step 3'));
     expect(screen.getByText(/editing the message scheduled for/i)).toBeTruthy();
     await fill(composer(), 'Continue with step 4');
     await userEvent.click(screen.getByRole('button', { name: /save scheduled message/i }));
     await waitFor(() =>
       expect(calls.at(-1)).toBe('update {"id":"x1","text":"Continue with step 4","images":[]}'),
     );
-    await waitFor(() => expect(composer().value).toBe('my draft'));
+    await waitFor(() => expect(composer().textContent).toBe('my draft'));
     expect(server.calls('chat.send')).toHaveLength(0);
 
     // The list follows the service.

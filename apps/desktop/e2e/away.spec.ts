@@ -233,7 +233,7 @@ test('a reply while away turns it on and is delivered once', async ({ page }) =>
   const composer = page.getByRole('textbox', { name: 'Message' });
   await composer.fill(reply);
   await composer.press('Enter');
-  await expect(composer).toHaveValue('');
+  await expect(composer).toHaveText('');
 
   // This PC switches the plug on at once (only the plug brings Ubuntu back here: nothing
   // calls `mock.comeBack`), and the reply goes out once it's up, about 5 s later.

@@ -99,10 +99,19 @@ export const registerHistoryHandlers = (router: Router, deps: HistoryHandlerDeps
     }),
   );
 
-  router.register('drafts.get', async (p) => ({ text: db.getDraft(p.key)?.text ?? '' }));
+  router.register('drafts.get', async (p) => {
+    const draft = db.getDraft(p.key);
+    return {
+      text: draft?.text ?? '',
+      ...(draft?.images.length ? { images: draft.images } : {}),
+    };
+  });
   router.register('drafts.set', async (p) => {
-    if (p.text === '') db.deleteDraft(p.key);
-    else db.setDraft(p.key, p.text, now());
+    // Without `images`, a draft keeps the ones it has, unless the text is empty
+    // too: a cleared draft from a client that knows nothing of draft images.
+    const images = p.images ?? (p.text === '' ? [] : (db.getDraft(p.key)?.images ?? []));
+    if (p.text === '' && images.length === 0) db.deleteDraft(p.key);
+    else db.setDraft(p.key, p.text, images, now());
     return {};
   });
 

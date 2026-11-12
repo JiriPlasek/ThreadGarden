@@ -1,9 +1,19 @@
-import type { ChatSummary, MovePeer, Result } from '@threadgarden/protocol';
+import type { ChatSummary, ImageRef, MovePeer, Result } from '@threadgarden/protocol';
 import { quietly, type Api } from './api';
 import { chatKey, type ChatRef } from './refs';
+import type { ComposerDraft } from '#lib/components/composer/tags.js';
 
 /** Drafts are written this long after the last keystroke (spec §7: ≤ 300 ms). */
 export const DRAFT_SAVE_DELAY_MS = 300;
+/** A draft as stored: the text as it would be sent (pastes expanded) and its tagged images. */
+export type SavedDraft = { text: string; images: ImageRef[] };
+const EMPTY_DRAFT: SavedDraft = { text: '', images: [] };
+/** Same images, same tags: their data strings are shared, so this is cheap. */
+const sameImages = (a: readonly ImageRef[], b: readonly ImageRef[]): boolean =>
+  a.length === b.length &&
+  a.every(
+    (x, i) => x.data === b[i]!.data && x.number === b[i]!.number && x.mediaType === b[i]!.mediaType,
+  );
 /** Draft key of the composer for a new chat in `cwd`. */
 export const newChatDraftKey = (cwd: string): string => `new:${cwd}`;
 
@@ -84,7 +94,19 @@ export class InteractionState {
   private focusNext: string | null = null;
 
   private api: Api | null = null;
-  private readonly drafts = new Map<string, string>();
+  private readonly drafts = new Map<string, SavedDraft | (() => SavedDraft)>();
+  /** The images the service has for each draft, as far as this window knows. */
+  private readonly storedImages = new Map<string, readonly ImageRef[]>();
+  private readonly attachments = new Map<string, ComposerDraft>();
+  cachedAttachments = (key: string): ComposerDraft | undefined => this.attachments.get(key);
+  saveAttachments = (key: string, draft: ComposerDraft): void => {
+    this.attachments.set(key, draft);
+  };
+  moveAttachments = (from: string, to: string): void => {
+    const draft = this.attachments.get(from);
+    if (draft) this.attachments.set(to, draft);
+    this.attachments.delete(from);
+  };
   private readonly draftTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly commandCache = new Map<string, Promise<SlashCommand[]>>();
 
@@ -107,21 +129,29 @@ export class InteractionState {
   // ── drafts ──────────────────────────────────────────────────────────────
 
   /** The draft known locally (no request); undefined when it has to be fetched. */
-  cachedDraft = (key: string): string | undefined => this.drafts.get(key);
-
-  /** The saved draft for `key` (local cache first, then `drafts.get`). */
-  loadDraft = async (key: string): Promise<string> => {
-    const cached = this.drafts.get(key);
-    if (cached !== undefined || !this.api) return cached ?? '';
-    const { text } = await this.api.request('drafts.get', { key });
-    // Typing that happened meanwhile wins over the stored draft.
-    if (!this.drafts.has(key)) this.drafts.set(key, text);
-    return this.drafts.get(key) ?? text;
+  cachedDraft = (key: string): SavedDraft | undefined => {
+    const value = this.drafts.get(key);
+    return typeof value === 'function' ? value() : value;
   };
 
-  /** Remembers the draft now; the write to the service is debounced. */
-  saveDraft = (key: string, text: string): void => {
-    this.drafts.set(key, text);
+  /** The saved draft for `key` (local cache first, then `drafts.get`). */
+  loadDraft = async (key: string): Promise<SavedDraft> => {
+    const cached = this.cachedDraft(key);
+    if (cached !== undefined || !this.api) return cached ?? EMPTY_DRAFT;
+    const { text, images = [] } = await this.api.request('drafts.get', { key });
+    const saved = { text, images };
+    if (!this.storedImages.has(key)) this.storedImages.set(key, images);
+    // Typing that happened meanwhile wins over the stored draft.
+    if (!this.drafts.has(key)) this.drafts.set(key, saved);
+    return this.cachedDraft(key) ?? saved;
+  };
+
+  /**
+   * Remembers the draft now (or how to make it, called when it is read); the
+   * write to the service is debounced.
+   */
+  saveDraft = (key: string, draft: SavedDraft | (() => SavedDraft)): void => {
+    this.drafts.set(key, draft);
     clearTimeout(this.draftTimers.get(key));
     this.draftTimers.set(
       key,
@@ -129,22 +159,33 @@ export class InteractionState {
     );
   };
 
-  /** Writes a pending draft at once (composer unmount, send). */
+  /**
+   * Writes a pending draft at once (composer unmount, send). Its images go
+   * only when they changed (they can be megabytes, the text is written as it
+   * is typed), and with empty text, which without them clears the draft.
+   */
   flushDraft = (key: string): void => {
     const timer = this.draftTimers.get(key);
     if (timer === undefined) return;
     clearTimeout(timer);
     this.draftTimers.delete(key);
-    if (this.api) {
-      quietly(this.api.request('drafts.set', { key, text: this.drafts.get(key) ?? '' }));
-    }
+    if (!this.api) return;
+    const { text, images } = this.cachedDraft(key) ?? EMPTY_DRAFT;
+    const stored = this.storedImages.get(key);
+    const changed = stored === undefined || !sameImages(images, stored);
+    this.storedImages.set(key, images);
+    quietly(
+      this.api.request('drafts.set', { key, text, ...(changed || text === '' ? { images } : {}) }),
+    );
   };
 
   clearDraft = (key: string): void => {
+    this.attachments.delete(key);
     clearTimeout(this.draftTimers.get(key));
     this.draftTimers.delete(key);
-    this.drafts.set(key, '');
-    if (this.api) quietly(this.api.request('drafts.set', { key, text: '' }));
+    this.drafts.set(key, EMPTY_DRAFT);
+    this.storedImages.set(key, []);
+    if (this.api) quietly(this.api.request('drafts.set', { key, text: '', images: [] }));
   };
 
   // ── lookups ─────────────────────────────────────────────────────────────

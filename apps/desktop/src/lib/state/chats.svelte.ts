@@ -1,3 +1,4 @@
+import { messagePreview } from '@threadgarden/protocol';
 import {
   AWAY_ERROR,
   type ChatHeaderInfo,
@@ -66,6 +67,7 @@ export const runningTasks = (tasks: readonly ChatTask[]): number =>
 
 /** A new chat's title until its machine names it: its first line, as the service makes it. */
 const titleFrom = (text: string): string => {
+  text = messagePreview(text);
   const line = text
     .split('\n')
     .find((l) => l.trim())

@@ -1,5 +1,6 @@
 import {
   compareChats,
+  messagePreview,
   type Bucket,
   type ChatStatus,
   type ChatSummary,
@@ -49,8 +50,8 @@ const short = (s: string): string => s.replace(/\s+/g, ' ').slice(0, FIRST_PROMP
 export const titleFor = (s: TitleParts): string => {
   const custom = clean(s.customTitle);
   if (custom) return custom;
-  const prompt = short(clean(s.firstPrompt));
-  const summary = short(clean(s.summary));
+  const prompt = short(messagePreview(clean(s.firstPrompt)));
+  const summary = short(messagePreview(clean(s.summary)));
   for (const t of [s.generatedTitle, s.sdkTitle]) {
     const title = short(clean(t));
     if (title) return title;
@@ -201,7 +202,9 @@ const isRunning = (s: ChatSummary): boolean => s.status === 'working' || (s.runn
 
 const PREVIEW_MAX = 140;
 const previewOf = (r: SessionRow): string =>
-  (clean(r.firstPrompt) || clean(r.summary)).replace(/\s+/g, ' ').slice(0, PREVIEW_MAX);
+  messagePreview(clean(r.firstPrompt) || clean(r.summary))
+    .replace(/\s+/g, ' ')
+    .slice(0, PREVIEW_MAX);
 
 export const baseName = (p: string): string => p.split(/[\\/]/).filter(Boolean).at(-1) ?? p;
 

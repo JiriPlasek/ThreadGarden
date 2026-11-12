@@ -210,7 +210,7 @@ const openDialog = async (env: Env, choose = true) => {
 };
 
 const message = (dialog: HTMLElement) =>
-  within(dialog).getByRole('textbox', { name: /message/i }) as HTMLTextAreaElement;
+  within(dialog).getByRole('textbox', { name: /message/i }) as HTMLDivElement;
 
 /** Writes the first message for Ubuntu PC's infra folder and sends it; resolves to the chat's id. */
 const sendFirst = async (env: Env): Promise<string> => {
@@ -341,7 +341,7 @@ describe('a new chat on a machine that is away', () => {
     const { dialog } = await openDialog(env);
     await userEvent.type(message(dialog), 'Set up CI{Enter}');
     expect(await within(dialog).findByText('The disk is full')).toBeTruthy();
-    expect(message(dialog).value).toBe('Set up CI');
+    expect(message(dialog).textContent).toBe('Set up CI');
     expect(env.app.tabs.open).toEqual([]);
   });
 

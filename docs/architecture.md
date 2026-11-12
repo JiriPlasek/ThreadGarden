@@ -176,7 +176,12 @@ arrive around the task frames in either order. The prompt, spawn depth and
 workflow name come from `task_started`. The UI orders each section (not
 ended first, then by end time), nests tasks under their `parentTaskId` and
 shows the panel on every chat while the one global `activity.open` setting
-is on; a narrow chat pane opens it as a drawer on request instead.
+is on; a narrow chat pane opens it as a drawer on request instead. A
+subagent's row in the messages takes its status from the same list, by the
+task's `toolUseId`: a background agent's Agent call returns as soon as the
+agent starts, so the row reads Running (with the elapsed time) until the task
+ends; without a task (an old chat) a background launch reads "Started in
+background", never Done.
 
 ## Protocol
 
@@ -508,7 +513,51 @@ with the live session's items (the live version wins for anything both have),
 plus the current seq. The normalized history of a chat is cached (bounded at
 about 32 Mi characters across chats) while the chat's indexed size and mtime
 are unchanged, or for the life of the session object while Threadgarden holds the
-chat. Older items page in with `chat.older`.
+chat. Older items page in with `chat.older`. While a turn of a chat
+Threadgarden runs is working and nothing since the latest user message streams,
+runs a tool or waits on the user (`quietTail` in `chat/rows.ts`), the list
+ends with a "Waiting for Claude…" row and the seconds waited; it appears after
+400 ms of quiet, so back-to-back outputs never make it flicker.
+
+**Attachment tags.** The plain-text contenteditable editor renders `[Image #N]`
+and `[Pasted text #N +K lines]` as non-editable, atomic attachment chips. On
+the phone the box is a plain textarea (`PlainEditor`) where the tags stay text:
+checked on Android 15 with Gboard, the chip editor lost an autocorrected word
+typed after a chip (it re-renders under the keyboard's edit) and could not
+delete a chip, since Gboard sends no Backspace key, only a
+`deleteContentBackward` input, by then with the deleted character already
+selected. Both editors delete a tag whole on that input too.
+Image attachment inserts a tag at the caret; text pasted over 8 lines or 800
+characters collapses. Badges preview on hover or keyboard focus; clicking pins
+the preview until an outside click or Escape. Scrolling over a pasted-text
+badge scrolls its preview without a click. This also works in sent messages.
+Previews render in the document body, outside the virtual list's transformed
+and clipped rows. Their measured bounds determine above/below placement;
+scrolling and resizing update the badge anchor and keep the popup in the viewport.
+Caret movement and deletion treat a chip as one unit. Copy/cut carries the
+actual attachments, renumbered on paste, alongside a plain-text representation.
+The editor maintains text/selection history for undo, including IME edits.
+Removed tags exclude their attachments from send,
+while registries remain in memory for undo. Those registries live by draft key
+in `InteractionState`, so tab switches keep them. Draft writes, scheduling and
+the away queue carry expanded CLI-style `<pasted_content>` blocks, parsed back
+on load, and the images with their tags' numbers. A draft's images are stored
+beside its text (`draft_images`) and written only when they change: `drafts.set`
+without `images` keeps the stored ones, unless the text is empty, which (as
+from a client that knows no draft images) clears the draft. The phone's own
+store keeps text only: its This PC has no chats. Claude gets
+what the terminal sends: the service unwraps the blocks back to the text as
+typed and lists the pastes in the SDK's `inline_pastes`, and the CLI wraps them
+(CLI 2.1.319 does, in the same `<pasted_content>` form, which is what the
+transcript then shows) or sends them plain. Each sent image carries the number
+of its tag (`ImageRef.number`); the transcript keeps the images but not their
+numbers (the SDK drops the CLI's own `imagePasteIds`, and those it gives a
+message sent through the SDK are its own), so the service keeps them by message
+uuid (`sent_images`) and the normalizer puts them back, live and in history. A
+terminal message's images get numbers only when its text has exactly one tag
+per image, in order; otherwise, like images with no tag in the text, they show
+as thumbnails rather than on a guessed badge. Parsing and readable summary
+helpers live in the protocol package.
 
 **External sessions and resume safety** (§4.4, §6.3). The poller runs
 `claude agents --json --all` every 2 s while the window is visible and every
@@ -1398,6 +1447,16 @@ Windows 11, signed in with a subscription. What it established:
   or "Report from a subagent", …) and the full text on demand; the
   `<local-command-caveat>` entry is hidden, as in the terminal. The list is
   closed: any other tag still renders as the user's text.
+- **Loaded skills** (checked 2026-11-06 with Claude Code 2.1.319). When the
+  model calls the Skill tool, the live stream carries the skill's
+  instructions as a user message flagged `isSynthetic`, whose text starts
+  `Base directory for this skill: <dir>` followed by the SKILL.md body; the
+  transcript flags it `isMeta`, and `getSessionMessages` leaves it out. A
+  `/skill` typed as a message emits no user message live at all. The
+  normalizer turns a synthetic or meta message of that shape into one
+  collapsed system notice, "Skill: <folder name>", with the instructions on
+  demand, nested under the subagent that loaded it; the same text without
+  either flag (typed by the user) stays the user's message.
 - **Read-only.** All 1,794 files under the real `projects/` dir (except the
   temp repo's own project dir) and `settings.json` were hashed before the
   service started and after it shut down, around indexing the whole history,
@@ -1479,7 +1538,9 @@ Decisions made during the build that change behaviour described in the design:
 - **Messages that produce no item.** SDK messages that carry no content for
   the reader (progress, status, rate-limit and init events, the CLI's
   `command_lifecycle` telemetry, successful hook output, which the terminal
-  does not show either) produce no chat item. Failed hooks and other
+  does not show either) produce no chat item. `system/permission_check_status`
+  updates the existing running tool row with "Checking permission…" until
+  `done` or the tool result; it never adds a separate chat item. Failed hooks and other
   content-bearing system messages appear as system lines. Truly unknown types
   still render raw, and consecutive unknown items are collapsed into one
   expandable "N unrecognised items" row.

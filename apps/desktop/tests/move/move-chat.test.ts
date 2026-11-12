@@ -256,7 +256,11 @@ describe('MoveChat', () => {
     ]);
     expect(paramsOf(server, 'move.markMoved')[0]!.begunAt).toBeGreaterThanOrEqual(before);
     expect(paramsOf(server, 'move.abort')).toEqual([]);
-    expect(paramsOf(remote, 'drafts.set')).toContainEqual({ key: 's1', text: 'half a thought' });
+    expect(paramsOf(remote, 'drafts.set')).toContainEqual({
+      key: 's1',
+      text: 'half a thought',
+      images: [],
+    });
     expect(paramsOf(remote, 'chat.send')).toEqual([{ sessionId: 's1', text: noteFor() }]);
     expect(app.tabs.open).toEqual([`${M1}/s1`]);
     expect(app.tabs.active).toBe(`${M1}/s1`);
@@ -495,8 +499,12 @@ describe('MoveChat', () => {
       { sessionId: 's1', id: 'q1', text: 'go on', sendAt: expect.any(Number) },
     ]);
     expect(paramsOf(remote, 'scheduled.cancel')).toEqual([{ id: 'q1' }]);
-    expect(paramsOf(server, 'drafts.set')).toContainEqual({ key: 's1', text: 'typed there' });
-    expect(paramsOf(remote, 'drafts.set')).toContainEqual({ key: 's1', text: '' });
+    expect(paramsOf(server, 'drafts.set')).toContainEqual({
+      key: 's1',
+      text: 'typed there',
+      images: [],
+    });
+    expect(paramsOf(remote, 'drafts.set')).toContainEqual({ key: 's1', text: '', images: [] });
     expect(app.tabs.open).toEqual([`${LOCAL}/s1`]);
     expect(app.interaction.pendingMarks).toEqual({});
   });

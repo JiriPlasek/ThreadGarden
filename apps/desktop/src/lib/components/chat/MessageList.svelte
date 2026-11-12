@@ -1,14 +1,16 @@
 <script lang="ts">
-  import type { ChatItem } from '@threadgarden/protocol';
+  import type { ChatItem, ChatTask } from '@threadgarden/protocol';
   import ArrowDownIcon from '@lucide/svelte/icons/arrow-down';
+  import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
   import { onDestroy, untrack } from 'svelte';
   import type { ListMemory } from '#lib/state/chats.svelte.js';
   import { setChatActions, type RequestActions } from './context';
+  import { elapsed } from './format';
   import ItemBoundary from './items/ItemBoundary.svelte';
   import ItemView from './items/ItemView.svelte';
   import ToolGroup from './items/ToolGroup.svelte';
   import UnknownItem from './items/UnknownItem.svelte';
-  import { buildRows, type Row } from './rows';
+  import { buildRows, quietTail, type Row } from './rows';
   import { captureAnchor, computeOffsets, restoreAnchor, visibleRange } from './virtual';
 
   /**
@@ -17,7 +19,8 @@
    * unmeasured rows use an estimate. While the user is at the bottom the list
    * sticks there (streaming); otherwise the row at the top of the viewport stays
    * put when rows above it are measured or older items are prepended. Near the
-   * top it asks for older items.
+   * top it asks for older items. While a turn works with nothing on screen
+   * moving (`quietTail`), a last row says Claude is being waited for.
    */
   let {
     items,
@@ -27,6 +30,8 @@
     onFork,
     requests,
     requestsDocked = false,
+    tasks = [],
+    working = false,
     memory,
     fallbackHeight = 600,
     overscan = 6,
@@ -41,6 +46,10 @@
     requests?: RequestActions;
     /** Waiting requests are answered in the composer's place: the list shows a line for each. */
     requestsDocked?: boolean;
+    /** The chat's tasks: a subagent row shows its task's status (a background agent outlives its call). */
+    tasks?: readonly ChatTask[];
+    /** A turn of a chat Threadgarden runs is in progress (status `working`). */
+    working?: boolean;
     /** Heights and scroll position to resume from (kept per chat across tab switches). */
     memory?: ListMemory;
     /** Viewport height used until the real one is measured (and in tests). */
@@ -55,6 +64,10 @@
   /** Within this distance of the top older items are requested. */
   const LOAD_OLDER_PX = 800;
 
+  const taskByToolUse = $derived(
+    new Map(tasks.flatMap((t) => (t.toolUseId === undefined ? [] : [[t.toolUseId, t] as const]))),
+  );
+
   setChatActions({
     get fork() {
       return onFork;
@@ -65,6 +78,7 @@
     get requestsDocked() {
       return requestsDocked;
     },
+    taskOf: (toolUseId) => taskByToolUse.get(toolUseId),
   });
 
   const mem: ListMemory = untrack(() => memory) ?? {
@@ -82,7 +96,40 @@
   /** Mirrors `mem.stick` for the "jump to latest" button. */
   let stuck = $state(mem.stick);
 
-  const rows = $derived(buildRows(items));
+  // ---- waiting for Claude ----
+
+  /** How long the tail must stay quiet before the row shows: none between back-to-back outputs. */
+  const WAITING_DELAY_MS = 400;
+  type WaitingRow = { kind: 'waiting'; key: string; itemIds: string[] };
+  const WAITING_ROW: WaitingRow = { kind: 'waiting', key: 'tg:waiting', itemIds: [] };
+
+  const quiet = $derived(working && quietTail(items));
+  /** When the tail went quiet; the row shows once WAITING_DELAY_MS have passed. */
+  let quietSince = $state<number | null>(null);
+  let waitingShown = $state(false);
+  let now = $state(Date.now());
+  $effect(() => {
+    if (!quiet) {
+      quietSince = null;
+      waitingShown = false;
+      return;
+    }
+    quietSince = Date.now();
+    const show = setTimeout(() => {
+      now = Date.now();
+      waitingShown = true;
+    }, WAITING_DELAY_MS);
+    const tick = setInterval(() => (now = Date.now()), 1000);
+    return () => {
+      clearTimeout(show);
+      clearInterval(tick);
+    };
+  });
+  const waitedFor = $derived(quietSince === null ? 0 : now - quietSince);
+
+  const rows = $derived<(Row | WaitingRow)[]>(
+    waitingShown ? [...buildRows(items), WAITING_ROW] : buildRows(items),
+  );
   /** Anchors name a row by its first item id: stable when runs grow or regroup. */
   const anchorKeys = $derived(rows.map((r) => r.itemIds[0] ?? r.key));
   const rowOfItem = $derived.by(() => {
@@ -100,7 +147,7 @@
     return i < 0 ? undefined : i;
   };
 
-  const estimate = (row: Row): number => {
+  const estimate = (row: Row | WaitingRow): number => {
     if (row.kind !== 'item') return 28;
     const it = row.item;
     switch (it.kind) {
@@ -338,6 +385,18 @@
           >
             {#if row.kind === 'item'}
               <ItemView item={row.item} children={row.children} />
+            {:else if row.kind === 'waiting'}
+              <div
+                class="text-muted-foreground flex items-center gap-1.5 px-2 py-1 text-xs"
+                role="status"
+                aria-label="Waiting for Claude"
+              >
+                <LoaderCircleIcon class="size-4 shrink-0 animate-spin" aria-hidden="true" />
+                <span>Waiting for Claude…</span>
+                {#if waitedFor >= 1000}
+                  <span class="tabular-nums" aria-hidden="true">{elapsed(waitedFor)}</span>
+                {/if}
+              </div>
             {:else if row.kind === 'unknownGroup'}
               <ItemBoundary item={row.items}><UnknownItem items={row.items} /></ItemBoundary>
             {:else}

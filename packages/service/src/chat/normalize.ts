@@ -35,7 +35,12 @@
  * item supersedes an earlier item with the same id. Consumers must always
  * upsert by id (one push can mix new and replacing items).
  */
-import type { ChatItem, ChatStatus, ImageRef } from '@threadgarden/protocol';
+import {
+  imageTagNumbers,
+  type ChatItem,
+  type ChatStatus,
+  type ImageRef,
+} from '@threadgarden/protocol';
 import type { SDKMessage, SessionMessage } from '../sdk/adapter.js';
 import {
   NON_VISUAL_SYSTEM_SUBTYPES,
@@ -74,6 +79,8 @@ export type NormalizerOptions = {
    * Live, the `result` is the footer.
    */
   turnEnds?: boolean;
+  /** The tag numbers of the images a message was sent with from here, by its uuid. */
+  imageNumbers?: (uuid: string) => readonly number[] | undefined;
 };
 
 /** The last main-thread reply, for the chat header when no process reports one. */
@@ -130,6 +137,7 @@ export class Normalizer {
   /** A `compact_boundary` was shown and its summary message has not arrived yet. */
   private compactPending = false;
   private readonly turnEnds: boolean;
+  private readonly imageNumbers: NormalizerOptions['imageNumbers'];
   private turn: Turn = { usage: new Map() };
   private last: LastReply | undefined;
   /** The prompt cache's lifetime as last written (a read keeps it). */
@@ -138,6 +146,7 @@ export class Normalizer {
   constructor(opts: NormalizerOptions = {}) {
     this.now = opts.now ?? Date.now;
     this.turnEnds = opts.turnEnds ?? false;
+    this.imageNumbers = opts.imageNumbers;
   }
 
   push(m: SDKMessage | SessionMessage): PushResult {
@@ -403,7 +412,8 @@ export class Normalizer {
       items.push(this.unknownBlock(m, block, id));
     });
     if (texts.length > 0 || images.length > 0) {
-      items.unshift(this.userItem(m, base, texts.join('\n'), images));
+      const text = texts.join('\n');
+      items.unshift(this.userItem(m, base, text, this.numbered(m, text, images)));
     }
     return { items, replace };
   }
@@ -420,6 +430,9 @@ export class Normalizer {
    * - `<bash-input>` (a `!` shell command) → `! command`;
    * - local command and `!` shell output (`<local-command-stdout>`,
    *   `<bash-stderr>`, …) → a system line, or nothing when empty;
+   * - a loaded skill's instructions (`isSynthetic` live; `isMeta` in the
+   *   transcript, whose history read drops them) → a collapsed system item
+   *   "Skill: <name>", nested under a subagent that loaded it;
    * - envelopes the CLI injects as user turns (Ruling R27: background-task
    *   notifications, subagent hand-backs, … — see `INJECTED`) → a collapsed
    *   system item with a short label; the local-command caveat → nothing.
@@ -432,6 +445,17 @@ export class Normalizer {
       return shown ? NONE : this.one({ kind: 'compactBoundary', id });
     }
     if (text === undefined) return undefined;
+    const skill = m.isSynthetic === true || m.isMeta === true ? skillLabel(text) : undefined;
+    if (skill !== undefined) {
+      return this.one({
+        kind: 'system',
+        id,
+        level: 'info',
+        text: skill,
+        detail: text,
+        ...this.parentOf(m),
+      });
+    }
     const injected = parseInjected(text);
     if (injected === null) return NONE;
     if (injected !== undefined) {
@@ -450,6 +474,22 @@ export class Normalizer {
       level: output.error ? 'warning' : 'info',
       text: output.text,
     });
+  }
+
+  /**
+   * Each image with the number of its `[Image #N]` tag: the numbers it was sent
+   * with from here (`imageNumbers`), else, for the terminal's messages (whose
+   * own numbers the SDK drops), the text's tags when there is exactly one per
+   * image, in order. Otherwise none: a wrong badge is worse than a thumbnail.
+   */
+  private numbered(m: Rec, text: string, images: ImageRef[]): ImageRef[] {
+    if (images.length === 0) return images;
+    const uuid = str(m.uuid);
+    const sent = uuid === undefined ? undefined : this.imageNumbers?.(uuid);
+    const tags = imageTagNumbers(text);
+    const numbers =
+      sent?.length === images.length ? sent : tags.length === images.length ? tags : undefined;
+    return numbers ? images.map((image, i) => ({ ...image, number: numbers[i]! })) : images;
   }
 
   private userItem(m: Rec, id: string, text: string, images: ImageRef[]): Item<'user'> {
@@ -740,6 +780,23 @@ const parseInjected = (text: string): { text: string; detail: string } | null | 
     // A notification's fields are all worth seeing; a hand-back is just its text.
     detail: name === 'task-notification' ? text.trim() : inner,
   };
+};
+
+const SKILL_HEADER = /^Base directory for this skill: *([^\n]*)/;
+
+/**
+ * A loaded skill's instructions (`Base directory for this skill: <dir>` and
+ * the SKILL.md body) → "Skill: <folder name>"; else undefined. Only asked of
+ * messages the CLI marks synthetic or meta, never of what the user typed.
+ */
+const skillLabel = (text: string): string | undefined => {
+  const dir = SKILL_HEADER.exec(text)?.[1]?.trim();
+  if (dir === undefined) return undefined;
+  const name = dir
+    .split(/[\\/]+/)
+    .filter(Boolean)
+    .at(-1);
+  return name ? `Skill: ${name}` : 'Skill';
 };
 
 const OUTPUT_BLOCK = /<(local-command|bash)-(stdout|stderr)>([\s\S]*?)<\/\1-\2>/g;

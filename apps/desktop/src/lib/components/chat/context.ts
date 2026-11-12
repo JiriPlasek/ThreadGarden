@@ -1,3 +1,4 @@
+import type { ChatTask } from '@threadgarden/protocol';
 import { getContext, setContext } from 'svelte';
 import type { Decision, RespondParams } from '#lib/state/chats.svelte.js';
 
@@ -16,6 +17,8 @@ export type ChatActions = {
   requests?: RequestActions;
   /** Waiting requests are answered elsewhere (in the composer's place): the list shows a line. */
   requestsDocked?: boolean;
+  /** The chat's task started by the tool call `toolUseId` (a subagent's), if it has one. */
+  taskOf?: (toolUseId: string) => ChatTask | undefined;
 };
 
 const KEY = Symbol('threadgarden.chat-actions');

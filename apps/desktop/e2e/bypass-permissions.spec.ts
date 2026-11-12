@@ -14,7 +14,7 @@ test('bypass requires confirmation in the chat header and New chat; Cancel keeps
   const composer = page.getByRole('textbox', { name: 'Message' });
   await composer.fill('Hello');
   await composer.press('Enter');
-  await expect(composer).toHaveValue('');
+  await expect(composer).toHaveText('');
   await expect(page.getByRole('button', { name: 'Stop', exact: true })).toHaveCount(0);
   const headerMode = page.getByRole('combobox', { name: 'Permission mode', exact: true });
   await headerMode.selectOption('plan');

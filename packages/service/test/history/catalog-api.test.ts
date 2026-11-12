@@ -284,6 +284,25 @@ describe('catalog and places API', () => {
     expect(await t.call('drafts.get', { key: 'k' })).toEqual({ text: '' });
     await t.call('drafts.set', { key: 'k', text: 'hello' });
     expect(await t.call('drafts.get', { key: 'k' })).toEqual({ text: 'hello' });
+
+    // A draft's images: sent when they change, kept while only the text does.
+    const image = { mediaType: 'image/png', data: 'AAAA', number: 1 };
+    await t.call('drafts.set', { key: 'k', text: '[Image #1]', images: [image] });
+    await t.call('drafts.set', { key: 'k', text: 'see [Image #1]' });
+    expect(await t.call('drafts.get', { key: 'k' })).toEqual({
+      text: 'see [Image #1]',
+      images: [image],
+    });
+    // An image alone is a draft too.
+    await t.call('drafts.set', { key: 'k', text: '', images: [image] });
+    expect(await t.call('drafts.get', { key: 'k' })).toEqual({ text: '', images: [image] });
+    // Empty text without images is a cleared draft (as a client that knows no images sends it).
+    await t.call('drafts.set', { key: 'k', text: '' });
+    expect(await t.call('drafts.get', { key: 'k' })).toEqual({ text: '' });
+    await t.call('drafts.set', { key: 'k', text: 'x', images: [image] });
+    await t.call('drafts.set', { key: 'k', text: 'x', images: [] });
+    expect(await t.call('drafts.get', { key: 'k' })).toEqual({ text: 'x' });
+
     const s = await t.call('settings.set', { idleReclaimMinutes: 5 });
     expect(s.idleReclaimMinutes).toBe(5);
     expect((await t.call('settings.get')).idleReclaimMinutes).toBe(5);

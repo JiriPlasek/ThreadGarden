@@ -20,14 +20,14 @@ describe('composer', () => {
   it('Enter sends, Shift+Enter adds a line, and the box clears', async () => {
     const { server, composer } = await renderChat();
     await userEvent.type(composer(), 'first line{Shift>}{Enter}{/Shift}second line');
-    expect(composer().value).toBe('first line\nsecond line');
+    expect(composer().textContent).toBe('first line\nsecond line');
     await userEvent.keyboard('{Enter}');
     await waitFor(() => expect(server.calls('chat.send')).toHaveLength(1));
     expect(server.calls('chat.send')[0]!.params).toEqual({
       sessionId: SID,
       text: 'first line\nsecond line',
     });
-    await waitFor(() => expect(composer().value).toBe(''));
+    await waitFor(() => expect(composer().textContent).toBe(''));
   });
 
   it('Enter does not send while an IME composition is active', async () => {
@@ -43,7 +43,7 @@ describe('composer', () => {
     const { app, server, composer } = await renderChat();
     app.settings.value = { ...app.settings.value, enterToSend: false };
     await userEvent.type(composer(), 'a{Enter}b');
-    expect(composer().value).toBe('a\nb');
+    expect(composer().textContent).toBe('a\nb');
     expect(server.calls('chat.send')).toHaveLength(0);
     await userEvent.keyboard('{Control>}{Enter}{/Control}');
     await waitFor(() => expect(server.calls('chat.send')).toHaveLength(1));
@@ -75,7 +75,7 @@ describe('composer', () => {
       expect(composer().getAttribute('aria-activedescendant')).toBe(options[0]!.id);
 
       await userEvent.keyboard('{Enter}');
-      expect(composer().value).toBe('look at @src/lib/server/db/schema.ts ');
+      expect(composer().textContent).toBe('look at @src/lib/server/db/schema.ts ');
       expect(screen.queryByRole('listbox')).toBeNull();
       expect(server.calls('chat.send')).toHaveLength(0);
     },
@@ -101,7 +101,7 @@ describe('composer', () => {
     // Esc closed the picker; it did not interrupt the working chat.
     expect(server.calls('chat.interrupt')).toHaveLength(0);
     await userEvent.keyboard('{Tab}');
-    expect(composer().value).toBe('@');
+    expect(composer().textContent).toBe('@');
   });
 
   it('slash menu lists commands', async () => {
@@ -132,7 +132,7 @@ describe('composer', () => {
     await userEvent.type(composer(), 'comp');
     expect(within(list).getAllByRole('option')).toHaveLength(1);
     await userEvent.keyboard('{Tab}');
-    expect(composer().value).toBe('/compact ');
+    expect(composer().textContent).toBe('/compact ');
   });
 
   it('typing while working shows queued', async () => {
@@ -168,9 +168,9 @@ describe('composer', () => {
     view.unmount();
     render(ChatView, { props: { ref: { machineId: LOCAL, sessionId: SID } }, context });
     await waitFor(() =>
-      expect((screen.getByRole('textbox', { name: /message/i }) as HTMLTextAreaElement).value).toBe(
-        'half-written thought',
-      ),
+      expect(
+        (screen.getByRole('textbox', { name: /message/i }) as HTMLDivElement).textContent,
+      ).toBe('half-written thought'),
     );
   });
 
@@ -207,7 +207,7 @@ describe('composer', () => {
     await userEvent.type(composer(), 'what is this?{Enter}');
     await waitFor(() => expect(server.calls('chat.send')).toHaveLength(1));
     const sent = server.calls('chat.send')[0]!.params as SendParams;
-    expect(sent.images).toEqual([{ mediaType: 'image/png', data: 'iVBORw==' }]);
+    expect(sent.images).toEqual([{ mediaType: 'image/png', data: 'iVBORw==', number: 1 }]);
     await waitFor(() =>
       expect(screen.queryByRole('list', { name: /attached images/i })).toBeNull(),
     );

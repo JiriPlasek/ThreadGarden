@@ -229,7 +229,9 @@ describe('activity panel', () => {
   it('does not tick when nothing runs; an ended task shows its final duration', async () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
     vi.setSystemTime(NOW);
+    // Idle: a working turn has its own ticking "Waiting for Claude" row.
     const { panel } = await renderChat({
+      status: 'idle',
       tasks: [shell({ status: 'stopped', startedAt: NOW - 30_000, endedAt: NOW - 18_000 })],
     });
     expect(vi.getTimerCount()).toBe(0);
@@ -438,6 +440,7 @@ describe('activity panel', () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval', 'Date'] });
     vi.setSystemTime(NOW);
     const { panel } = await renderChat({
+      status: 'idle', // a working turn has its own ticking "Waiting for Claude" row
       tasks: [agent({ status: 'paused', startedAt: NOW - 42_000 })],
     });
     const row = within(panel()!).getByRole('listitem');
@@ -772,5 +775,34 @@ describe('End session with running background work', () => {
     await userEvent.click(screen.getByRole('button', { name: 'End session' }));
     await waitFor(() => expect(server.calls('chat.end')).toHaveLength(1));
     expect(screen.queryByRole('alertdialog')).toBeNull();
+  });
+});
+
+describe('subagent rows follow their task', () => {
+  const launched = tool(
+    'c1',
+    'Agent',
+    { description: 'Explore the parser', prompt: 'look', run_in_background: true },
+    { toolUseId: 'tu-agent', status: 'ok', resultText: 'Async agent launched successfully.' },
+  );
+  const row = () =>
+    within(screen.getByRole('region', { name: 'Messages' })).getByRole('button', {
+      name: /Explore the parser/,
+    });
+
+  it('a background agent shows Running until its task ends, then Done', async () => {
+    const { server } = await renderChat({ status: 'idle', items: [launched], tasks: [agent()] });
+    expect(row().textContent).toContain('Running');
+    expect(row().textContent).not.toContain('Done');
+
+    pushTasks(server, 2, [agent({ status: 'completed', endedAt: Date.now() })]);
+    await waitFor(() => expect(row().textContent).toContain('Done'));
+    expect(row().textContent).not.toContain('Running');
+  });
+
+  it('without its task (an old chat) it says it started in the background', async () => {
+    await renderChat({ status: 'idle', items: [launched], tasks: [] });
+    expect(row().textContent).toContain('Started in background');
+    expect(row().textContent).not.toContain('Done');
   });
 });

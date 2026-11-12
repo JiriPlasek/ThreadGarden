@@ -3,7 +3,7 @@ import type { ChatItem, ChatTask, EventMsg } from '@threadgarden/protocol';
 import { LiveSession, authLabel, type LiveSessionOptions } from '../../src/chat/live-session.js';
 import { Normalizer } from '../../src/chat/normalize.js';
 import { ServiceError } from '../../src/server/router.js';
-import type { PermissionUpdate } from '../../src/sdk/adapter.js';
+import type { PermissionUpdate, SDKMessage } from '../../src/sdk/adapter.js';
 import { FakeAdapter } from '../../src/testing/fake-adapter.js';
 import {
   ManualTimers,
@@ -147,6 +147,60 @@ describe('LiveSession', () => {
     expect(adapter.lastSession().sent[0]!.message.content).toEqual([
       { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: 'B' } },
     ]);
+  });
+
+  it('sends pastes as typed and lists them, so the CLI wraps them as in the terminal', () => {
+    const { adapter, events, opts } = setup();
+    const text = 'see \n\n<pasted_content id="abcd">\na\nb\n</pasted_content id="abcd">\n\n please';
+    const s = LiveSession.create('/p', { text }, opts);
+    const sent = adapter.lastSession().sent[0]!;
+    expect(sent.message.content).toEqual([{ type: 'text', text: 'see a\nb please' }]);
+    expect(sent.inline_pastes).toEqual(['a\nb']);
+    // Shown as the CLI echoes it back when it wraps, so the paste shows as a badge at once.
+    expect(latest(events, sent.uuid!)).toMatchObject({ kind: 'user', text });
+    expect(s.sessionId).toBeTruthy();
+
+    LiveSession.create('/p', { text: 'no paste' }, opts);
+    expect(adapter.lastSession().sent[0]).not.toHaveProperty('inline_pastes');
+  });
+
+  it("keeps each image's tag number, for the echo and for history", async () => {
+    const kept = new Map<string, readonly number[]>();
+    const { adapter, events, opts } = setup({
+      sentImages: {
+        set: (_sessionId, uuid, numbers) => kept.set(uuid, numbers),
+        get: (uuid) => kept.get(uuid),
+      },
+    });
+    const text = '[Image #2] [Image #5] by hand';
+    const s = LiveSession.create(
+      '/p',
+      { text, images: [{ mediaType: 'image/png', dataBase64: 'A', number: 2 }] },
+      opts,
+    );
+    const fake = adapter.lastSession();
+    const uuid = fake.sent[0]!.uuid!;
+    expect(kept.get(uuid)).toEqual([2]);
+    const image = { mediaType: 'image/png', data: 'A', number: 2 };
+    expect(latest(events, uuid)).toMatchObject({ kind: 'user', images: [image] });
+
+    // The echo has no numbers of its own; the image keeps its tag.
+    fake.emit(init(s.sessionId));
+    fake.emit({
+      type: 'user',
+      uuid,
+      session_id: s.sessionId,
+      parent_tool_use_id: null,
+      message: {
+        role: 'user',
+        content: [
+          { type: 'text', text },
+          { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'A' } },
+        ],
+      },
+    } as unknown as SDKMessage);
+    await settle();
+    expect(latest(events, uuid)).toMatchObject({ kind: 'user', images: [image] });
   });
 
   it('send while working queues with priority next', async () => {

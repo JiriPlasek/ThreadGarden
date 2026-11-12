@@ -206,12 +206,13 @@ const carrySends = async (
   }
 };
 
-/** The composer's unsent text goes along; `clear`: and is gone from `from` once it is on `to`. */
+/** The composer's unsent text and images go along; `clear`: and is gone from `from` once it is on `to`. */
 const carryDraft = async (from: Api, to: Api, key: string, clear: boolean): Promise<void> => {
   try {
-    const { text } = await from.request('drafts.get', { key });
-    if (text) await to.request('drafts.set', { key, text });
-    if (text && clear) await from.request('drafts.set', { key, text: '' });
+    const { text, images = [] } = await from.request('drafts.get', { key });
+    if (!text && images.length === 0) return;
+    await to.request('drafts.set', { key, text, images });
+    if (clear) await from.request('drafts.set', { key, text: '', images: [] });
   } catch {
     // A draft is a convenience; the move is done without it.
   }

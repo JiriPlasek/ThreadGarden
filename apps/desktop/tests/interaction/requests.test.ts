@@ -311,7 +311,7 @@ describe('a waiting request takes the composer’s place', () => {
 
     // Answered: the composer is back with the draft as it was, and has focus.
     await waitFor(() => expect(composerHidden()).toBe(false));
-    expect(composer().value).toBe('my draft');
+    expect(composer().textContent).toBe('my draft');
     await waitFor(() => expect(document.activeElement).toBe(composer()));
     expect(view.container.querySelector('[data-docked-request]')).toBeNull();
     expect(screen.queryByText('Waiting for your answer below')).toBeNull();

@@ -74,6 +74,8 @@ export type SessionHostDeps = {
   onTurnResult?: LiveSessionDeps['onTurnResult'];
   /** Handed to every session (see `LiveSessionDeps.onContextWindow`). */
   onContextWindow?: LiveSessionDeps['onContextWindow'];
+  /** Handed to every session (see `LiveSessionDeps.sentImages`). */
+  sentImages?: LiveSessionDeps['sentImages'];
 };
 
 export class SessionHost {
@@ -339,6 +341,7 @@ export class SessionHost {
       onLimitError,
       onTurnResult,
       onContextWindow,
+      sentImages,
     } = this.deps;
     return {
       adapter,
@@ -358,6 +361,7 @@ export class SessionHost {
       ...(onLimitError ? { onLimitError } : {}),
       ...(onTurnResult ? { onTurnResult } : {}),
       ...(onContextWindow ? { onContextWindow } : {}),
+      ...(sentImages ? { sentImages } : {}),
       ...extra,
       log: extra.log ?? new EventLog(undefined, this.seqBase),
     };

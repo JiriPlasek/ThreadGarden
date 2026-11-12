@@ -184,7 +184,13 @@ const model = (v: string | undefined): string | undefined => {
 const toInput = (p: { text: string; images?: ImageRef[] | undefined }): UserInput => ({
   text: p.text,
   ...(p.images?.length
-    ? { images: p.images.map((i) => ({ mediaType: i.mediaType, dataBase64: i.data })) }
+    ? {
+        images: p.images.map((i) => ({
+          mediaType: i.mediaType,
+          dataBase64: i.data,
+          ...(i.number === undefined ? {} : { number: i.number }),
+        })),
+      }
     : {}),
 });
 
@@ -323,7 +329,7 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
       return hit;
     }
     const messages = await adapter.getSessionMessages(sessionId, historyOf(sessionId));
-    const normalizer = new Normalizer({ turnEnds: true });
+    const normalizer = new Normalizer({ turnEnds: true, imageNumbers: (u) => db.imageNumbers(u) });
     const byId = new Map<string, ChatItem>();
     for (const m of messages) for (const item of normalizer.push(m).items) byId.set(item.id, item);
     for (const item of normalizer.finish().items) byId.set(item.id, item);

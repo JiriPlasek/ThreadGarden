@@ -344,8 +344,19 @@ export const methods = {
     }),
     empty,
   ),
-  'drafts.get': def(z.object({ key: z.string() }), z.object({ text: z.string() })),
-  'drafts.set': def(z.object({ key: z.string(), text: z.string() }), empty),
+  'drafts.get': def(
+    z.object({ key: z.string() }),
+    z.object({ text: z.string(), images: z.array(ImageRefSchema).optional() }),
+  ),
+  /**
+   * `text` as the message would send it (pastes expanded); `images` each with
+   * its tag's number. Without `images` the draft keeps its own, unless `text`
+   * is empty: then the draft is cleared.
+   */
+  'drafts.set': def(
+    z.object({ key: z.string(), text: z.string(), images: z.array(ImageRefSchema).optional() }),
+    empty,
+  ),
   'uiState.get': def(z.object({ key: z.string() }), z.object({ value: z.unknown() })),
   'uiState.set': def(z.object({ key: z.string(), value: z.unknown() }), empty),
   'settings.get': def(empty, SettingsSchema),
