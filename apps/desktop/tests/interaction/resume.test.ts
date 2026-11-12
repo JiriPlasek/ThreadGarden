@@ -65,7 +65,7 @@ describe('resume safety (spec §4.4)', () => {
     expect(server.calls('external.stop')[0]!.params).toEqual({ sessionId: SID });
     await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
     // Press Enter again to send it here.
-    expect(composer().value).toBe('continue please');
+    expect(composer().textContent).toBe('continue please');
   });
 
   it('a failed End the process stays in the confirmation dialog', async () => {
