@@ -161,7 +161,10 @@
   const initial = untrack(
     () =>
       interaction.cachedAttachments(draftKey) ??
-      restoreMessage(interaction.cachedDraft(draftKey) ?? ''),
+      restoreMessage(
+        interaction.cachedDraft(draftKey)?.text ?? '',
+        interaction.cachedDraft(draftKey)?.images,
+      ),
   );
   let text = $state(initial.text);
   let attachments = $state.raw<AttachmentsState>(initial.attachments);
@@ -171,7 +174,7 @@
     const value = text;
     const state = attachments;
     interaction.saveAttachments(draftKey, { text: value, attachments: state });
-    interaction.saveDraft(draftKey, value, () => expandPastes(value, state));
+    interaction.saveDraft(draftKey, () => outgoing(value, state));
   };
   const addImages = async (added: ImageRef[]): Promise<void> => {
     const labels: string[] = [];
@@ -625,8 +628,8 @@
       interaction
         .loadDraft(key)
         .then((saved) => {
-          if (!text && saved) {
-            const restored = restoreMessage(saved);
+          if (!text && (saved.text || saved.images.length > 0)) {
+            const restored = restoreMessage(saved.text, saved.images);
             text = restored.text;
             attachments = restored.attachments;
           }

@@ -151,7 +151,7 @@ export const importMessage = (
 };
 
 /** Collapse saved/wire text, consuming only the padding added by serialization. */
-export const restoreMessage = (value: string, images: ImageRef[] = []): ComposerDraft => {
+export const restoreMessage = (value: string, images: readonly ImageRef[] = []): ComposerDraft => {
   const state = emptyAttachments();
   let text = replacePastes(value, (block) => {
     const number = nextNumber(value, state, 'paste');

@@ -535,7 +535,11 @@ Removed tags exclude their attachments from send,
 while registries remain in memory for undo. Those registries live by draft key
 in `InteractionState`, so tab switches keep them. Draft writes, scheduling and
 the away queue carry expanded CLI-style `<pasted_content>` blocks, parsed back
-on load; images stay memory-only and show as missing after restart. Claude gets
+on load, and the images with their tags' numbers. A draft's images are stored
+beside its text (`draft_images`) and written only when they change: `drafts.set`
+without `images` keeps the stored ones, unless the text is empty, which (as
+from a client that knows no draft images) clears the draft. The phone's own
+store keeps text only: its This PC has no chats. Claude gets
 what the terminal sends: the service unwraps the blocks back to the text as
 typed and lists the pastes in the SDK's `inline_pastes`, and the CLI wraps them
 (CLI 2.1.319 does, in the same `<pasted_content>` form, which is what the

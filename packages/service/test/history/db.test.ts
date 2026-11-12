@@ -207,8 +207,11 @@ describe('Db', () => {
     db.setCustomTitle('a', null);
     expect(db.getSession('a')?.customTitle).toBeNull();
 
-    db.setDraft('k', 'hello', 5);
-    expect(db.getDraft('k')).toEqual({ text: 'hello', updatedAt: 5 });
+    db.setDraft('k', 'hello', [], 5);
+    expect(db.getDraft('k')).toEqual({ text: 'hello', images: [], updatedAt: 5 });
+    const image = { mediaType: 'image/png', data: 'AAAA', number: 2 };
+    db.setDraft('k', '[Image #2]', [image], 6);
+    expect(db.getDraft('k')).toEqual({ text: '[Image #2]', images: [image], updatedAt: 6 });
     db.deleteDraft('k');
     expect(db.getDraft('k')).toBeUndefined();
 

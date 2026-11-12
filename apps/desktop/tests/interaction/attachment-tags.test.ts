@@ -137,26 +137,35 @@ describe('attachment tags in the composer', () => {
     next.unmount();
   });
 
-  it('saves full paste text and restores it after a fresh app state; images are missing', async () => {
+  it('keeps pastes and images in a draft across a fresh app state', async () => {
+    type DraftSet = { text: string; images?: { number?: number }[] };
     const first = await renderChat();
     await pasteImage(first.composer());
     await waitFor(() => expect(first.composer().textContent).toBe('[Image #1]'));
     await pasteText(first.composer());
     first.view.unmount();
     await waitFor(() => expect(first.server.calls('drafts.set').length).toBeGreaterThan(0));
-    const saved = (first.server.calls('drafts.set').at(-1)!.params as { text: string }).text;
-    expect(pasteBlocks(saved)[0]?.text).toBe(paste);
+    const sets = first.server.calls('drafts.set').map((c) => c.params as DraftSet);
+    const saved = sets.at(-1)!;
+    expect(pasteBlocks(saved.text)[0]?.text).toBe(paste);
+    // The image went with the first write that had it, and only then.
+    const withImages = sets.filter((s) => s.images !== undefined);
+    expect(withImages).toHaveLength(1);
+    expect(withImages[0]!.images).toEqual([expect.objectContaining({ number: 1 })]);
     const second = await renderChat({
       configure: (s) => {
-        s.handlers['drafts.get'] = () => ({ text: saved });
+        s.handlers['drafts.get'] = () => ({ text: saved.text, images: withImages[0]!.images });
       },
     });
     await waitFor(() =>
       expect(second.composer().textContent).toContain('[Pasted text #1 +40 lines]'),
     );
-    expect(screen.queryByRole('list', { name: 'Attached images' })).toBeNull();
-    await fireEvent.focusIn(screen.getByRole('button', { name: '[Image #1]' }));
-    expect(screen.getByRole('tooltip').textContent).toContain("This image wasn't kept");
+    expect(second.composer().textContent).toContain('[Image #1]');
+    expect(screen.getByRole('list', { name: 'Attached images' })).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await waitFor(() => expect(second.server.calls('chat.send')).toHaveLength(1));
+    const sent = second.server.calls('chat.send')[0]!.params as DraftSet;
+    expect(sent.images).toEqual([expect.objectContaining({ number: 1 })]);
   });
 });
 

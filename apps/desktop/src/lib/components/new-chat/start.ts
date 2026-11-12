@@ -43,12 +43,10 @@ export const asNow = (send: Send): Send => {
   const interaction = send.target.interaction;
   const draft = interaction.cachedAttachments(send.draftKey);
   const current = draft ? outgoing(draft.text, draft.attachments) : null;
-  const text = current?.text ?? interaction.cachedDraft(send.draftKey) ?? send.text;
-  return {
-    ...send,
-    text,
-    chat: { ...send.chat, text, images: current?.images ?? send.chat.images },
-  };
+  const saved = interaction.cachedDraft(send.draftKey);
+  const text = current?.text ?? saved?.text ?? send.text;
+  const images = current?.images ?? saved?.images ?? send.chat.images;
+  return { ...send, text, chat: { ...send.chat, text, images } };
 };
 
 /** A folder the service just made for a new chat (`problem`: a step it skipped, e.g. the repo). */
@@ -117,7 +115,10 @@ export const moveDraft = (
   >,
   n: NotStarted,
 ): void => {
-  interaction.saveDraft(newChatDraftKey(n.path), interaction.cachedDraft(n.draftKey) ?? n.text);
+  interaction.saveDraft(
+    newChatDraftKey(n.path),
+    interaction.cachedDraft(n.draftKey) ?? { text: n.text, images: [] },
+  );
   interaction.moveAttachments(n.draftKey, newChatDraftKey(n.path));
   interaction.clearDraft(n.draftKey);
 };

@@ -69,7 +69,7 @@ describe('moveDraft', () => {
     const wire = '<pasted_content id="abcd">\nfull log\n</pasted_content id="abcd"> [Image #2]';
     const draft = restoreMessage(wire, [image]);
     interaction.saveAttachments('source', draft);
-    interaction.saveDraft('source', outgoing(draft.text, draft.attachments).text);
+    interaction.saveDraft('source', outgoing(draft.text, draft.attachments));
     moveDraft(interaction, {
       machineId: 'm1',
       name: 'p',
@@ -95,7 +95,7 @@ describe('moveDraft', () => {
     text: 'scaffold it',
   };
   const drafts = (cached: string | undefined) => ({
-    cachedDraft: vi.fn(() => cached),
+    cachedDraft: vi.fn(() => (cached === undefined ? undefined : { text: cached, images: [] })),
     saveDraft: vi.fn(),
     clearDraft: vi.fn(),
     moveAttachments: vi.fn(),
@@ -104,13 +104,16 @@ describe('moveDraft', () => {
   it('moves the message as it is now to the folder’s draft', () => {
     const d = drafts('scaffold it, with tests');
     moveDraft(d, left);
-    expect(d.saveDraft).toHaveBeenCalledWith('new:/p/plant', 'scaffold it, with tests');
+    expect(d.saveDraft).toHaveBeenCalledWith('new:/p/plant', {
+      text: 'scaffold it, with tests',
+      images: [],
+    });
     expect(d.clearDraft).toHaveBeenCalledWith('new:project:m1');
   });
 
   it('falls back to the message as sent', () => {
     const d = drafts(undefined);
     moveDraft(d, left);
-    expect(d.saveDraft).toHaveBeenCalledWith('new:/p/plant', 'scaffold it');
+    expect(d.saveDraft).toHaveBeenCalledWith('new:/p/plant', { text: 'scaffold it', images: [] });
   });
 });

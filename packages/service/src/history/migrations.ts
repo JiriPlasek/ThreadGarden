@@ -342,6 +342,14 @@ const steps: string[] = [
     numbers TEXT NOT NULL
   );
   `,
+  // a draft's images (JSON array of `ImageRef`, each with its tag's number), by
+  // the draft's key, so they outlive a restart as its text in `drafts` does.
+  `
+  CREATE TABLE IF NOT EXISTS draft_images (
+    key TEXT PRIMARY KEY,
+    images TEXT NOT NULL
+  );
+  `,
 ];
 
 /** Runs the steps not run yet; `upTo` stops early (tests build older schemas with it). */
