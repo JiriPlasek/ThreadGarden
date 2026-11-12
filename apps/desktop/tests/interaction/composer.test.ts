@@ -207,7 +207,7 @@ describe('composer', () => {
     await userEvent.type(composer(), 'what is this?{Enter}');
     await waitFor(() => expect(server.calls('chat.send')).toHaveLength(1));
     const sent = server.calls('chat.send')[0]!.params as SendParams;
-    expect(sent.images).toEqual([{ mediaType: 'image/png', data: 'iVBORw==' }]);
+    expect(sent.images).toEqual([{ mediaType: 'image/png', data: 'iVBORw==', number: 1 }]);
     await waitFor(() =>
       expect(screen.queryByRole('list', { name: /attached images/i })).toBeNull(),
     );

@@ -50,6 +50,12 @@ export const unwrapPastes = (text: string): { text: string; pastes: string[] } =
   return { text: typed, pastes };
 };
 
+/** The distinct numbers of the `[Image #N]` tags in `text`, ascending. */
+export const imageTagNumbers = (text: string): number[] =>
+  [...new Set([...text.matchAll(/\[Image #([1-9]\d*)\]/g)].map((m) => Number(m[1])))].sort(
+    (a, b) => a - b,
+  );
+
 export const pasteLines = (text: string): number => text.split(/\r\n|\r|\n/).length;
 export const pasteLabel = (number: number, text: string): string =>
   `[Pasted text #${number} +${pasteLines(text)} lines]`;

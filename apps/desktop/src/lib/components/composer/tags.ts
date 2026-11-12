@@ -1,4 +1,10 @@
-import { pasteLabel, pasteLines, replacePastes, type ImageRef } from '@threadgarden/protocol';
+import {
+  imageTagNumbers,
+  pasteLabel,
+  pasteLines,
+  replacePastes,
+  type ImageRef,
+} from '@threadgarden/protocol';
 
 export type Paste = { text: string; id: string };
 const lineCounts = new WeakMap<Paste, number>();
@@ -78,34 +84,34 @@ export const expandPastes = (text: string, state: AttachmentsState): string => {
   return out + text.slice(start);
 };
 
-export const imageNumbers = (text: string): number[] =>
-  [
-    ...new Set(
-      tagsIn(text)
-        .filter((t) => t.kind === 'image')
-        .map((t) => t.number),
-    ),
-  ].sort((a, b) => a - b);
+const hasTag = (text: string) => {
+  const tags = new Set(imageTagNumbers(text));
+  return (image: ImageRef): image is ImageRef & { number: number } =>
+    image.number !== undefined && tags.has(image.number);
+};
 
-export const sentImageMap = (
-  text: string,
-  images: readonly ImageRef[],
-): Record<number, ImageRef> => {
-  const numbers = imageNumbers(text).slice(-images.length);
-  return images.length === 0 ? {} : Object.fromEntries(numbers.map((n, i) => [n, images[i]!]));
+/** A sent message's images by the tag each was sent with, for the tags `text` has. */
+export const taggedImages = (text: string, images: readonly ImageRef[]): Record<number, ImageRef> =>
+  Object.fromEntries(images.filter(hasTag(text)).map((image) => [image.number, image]));
+
+/** A sent message's images that no tag in `text` stands for: shown (or tagged) on their own. */
+export const untaggedImages = (text: string, images: readonly ImageRef[]): ImageRef[] => {
+  const tagged = hasTag(text);
+  return images.filter((image) => !tagged(image));
 };
 
 export const activeImages = (text: string, state: AttachmentsState): [number, ImageRef][] =>
-  imageNumbers(text).flatMap((n) =>
+  imageTagNumbers(text).flatMap((n) =>
     state.images[n] ? [[n, state.images[n]!] as [number, ImageRef]] : [],
   );
 
+/** The message to send: pastes expanded, each image with its tag's number (once, ascending). */
 export const outgoing = (
   text: string,
   state: AttachmentsState,
 ): { text: string; images: ImageRef[] } => ({
   text: expandPastes(text, state),
-  images: activeImages(text, state).map(([, image]) => image),
+  images: activeImages(text, state).map(([number, image]) => ({ ...image, number })),
 });
 
 /** Clipboard attachments receive fresh numbers in the destination draft. */
@@ -153,10 +159,9 @@ export const restoreMessage = (value: string, images: ImageRef[] = []): Composer
     state.nextPaste = number + 1;
     return pasteLabel(number, block.text);
   });
-  state.images = sentImageMap(text, images);
-  // Older scheduled messages had images without positional tags.
-  const mapped = Object.keys(state.images).length;
-  for (const image of images.slice(mapped)) {
+  state.images = taggedImages(text, images);
+  // Images without a tag here (older scheduled messages, say) get one at the end.
+  for (const image of untaggedImages(text, images)) {
     const number = nextNumber(text, state, 'image');
     state.images[number] = image;
     text += `${text && !/\s$/.test(text) ? ' ' : ''}${imageLabel(number)}`;

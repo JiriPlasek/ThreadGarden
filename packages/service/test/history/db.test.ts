@@ -252,6 +252,18 @@ describe('Db', () => {
 
 // ── v1.2 C1: chat titles ──
 
+describe('sent image numbers', () => {
+  it('keeps the tag number of each image a message was sent with, by message uuid', () => {
+    const db = openDb(':memory:');
+    expect(db.imageNumbers('u1')).toBeUndefined();
+    db.setImageNumbers('s1', 'u1', [2, 5]);
+    expect(db.imageNumbers('u1')).toEqual([2, 5]);
+    db.setImageNumbers('s1', 'u1', [3]);
+    expect(db.imageNumbers('u1')).toEqual([3]);
+    db.close();
+  });
+});
+
 describe('context windows', () => {
   it("a chat's own size first, else its model's; the latest report wins", () => {
     const db = openDb(':memory:');

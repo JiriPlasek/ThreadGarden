@@ -1,14 +1,14 @@
 <script lang="ts">
   import { type ImageRef } from '@threadgarden/protocol';
   import AttachmentBadge from '../../composer/AttachmentBadge.svelte';
-  import { restoreMessage, sentImageMap, tagsIn } from '../../composer/tags';
+  import { restoreMessage, taggedImages, tagsIn } from '../../composer/tags';
   let {
     text,
     images = [],
     limit,
   }: { text: string; images?: ImageRef[]; limit?: number } = $props();
   const message = $derived(restoreMessage(text));
-  const mapped = $derived(sentImageMap(message.text, images));
+  const mapped = $derived(taggedImages(message.text, images));
   const display = $derived(message.text);
   const shown = $derived(limit === undefined ? display : display.slice(0, limit));
   const parts = $derived.by(() => {

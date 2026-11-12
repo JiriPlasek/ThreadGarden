@@ -539,11 +539,15 @@ on load; images stay memory-only and show as missing after restart. Claude gets
 what the terminal sends: the service unwraps the blocks back to the text as
 typed and lists the pastes in the SDK's `inline_pastes`, and the CLI wraps them
 (CLI 2.1.319 does, in the same `<pasted_content>` form, which is what the
-transcript then shows) or sends them plain. Sent images
-map to the highest distinct tag numbers in ascending order, including CLI
-messages whose only image is numbered above 1. Untagged older images still use
-thumbnails. Parsing and readable summary helpers live in the protocol package;
-the message wire schema is unchanged.
+transcript then shows) or sends them plain. Each sent image carries the number
+of its tag (`ImageRef.number`); the transcript keeps the images but not their
+numbers (the SDK drops the CLI's own `imagePasteIds`, and those it gives a
+message sent through the SDK are its own), so the service keeps them by message
+uuid (`sent_images`) and the normalizer puts them back, live and in history. A
+terminal message's images get numbers only when its text has exactly one tag
+per image, in order; otherwise, like images with no tag in the text, they show
+as thumbnails rather than on a guessed badge. Parsing and readable summary
+helpers live in the protocol package.
 
 **External sessions and resume safety** (§4.4, §6.3). The poller runs
 `claude agents --json --all` every 2 s while the window is visible and every

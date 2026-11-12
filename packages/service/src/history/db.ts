@@ -630,9 +630,9 @@ export class Db implements LiveRegistry {
   }
 
   /**
-   * Removes a session's row, index text and "Your turn" state. `meta` and
-   * `drafts` are kept on purpose (cheap, and a Threadgarden title survives a
-   * transcript that reappears).
+   * Removes a session's row, index text and "Your turn" state. `meta`,
+   * `drafts` and `sent_images` are kept on purpose (cheap, and a Threadgarden
+   * title or image tag survives a transcript that reappears).
    */
   deleteSession(sessionId: string): void {
     this.raw.exec('BEGIN');
@@ -1039,6 +1039,22 @@ export class Db implements LiveRegistry {
     );
     stmt.run(`chat:${sessionId}`, Math.round(tokens));
     if (model !== undefined) stmt.run(`model:${model}`, Math.round(tokens));
+  }
+
+  /** Remembers the `[Image #N]` number of each image the message `uuid` was sent with, in order. */
+  setImageNumbers(sessionId: string, uuid: string, numbers: readonly number[]): void {
+    this.raw
+      .prepare(
+        `INSERT INTO sent_images (uuid, session_id, numbers) VALUES (?, ?, ?)
+         ON CONFLICT(uuid) DO UPDATE SET numbers = excluded.numbers`,
+      )
+      .run(uuid, sessionId, JSON.stringify(numbers));
+  }
+
+  /** The tag numbers the message `uuid` was sent with; undefined when not sent from here. */
+  imageNumbers(uuid: string): number[] | undefined {
+    const row = this.raw.prepare('SELECT numbers FROM sent_images WHERE uuid = ?').get(uuid);
+    return row ? (JSON.parse(row.numbers as string) as number[]) : undefined;
   }
 
   /** The window size last reported for `sessionId`, else for `model`; undefined when neither was. */

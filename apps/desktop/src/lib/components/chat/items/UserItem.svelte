@@ -5,7 +5,7 @@
   import { isThreadgardenNote } from '#lib/move/note.js';
   import { chatActions } from '../context';
   import UserText from './UserText.svelte';
-  import { restoreMessage, sentImageMap } from '../../composer/tags';
+  import { restoreMessage, untaggedImages } from '../../composer/tags';
 
   /**
    * A user message. Top-level messages offer "Fork from this message" (spec §6.4);
@@ -27,7 +27,8 @@
   let expanded = $state(false);
   const display = $derived(restoreMessage(item.text).text);
   const long = $derived(display.length > LONG);
-  const mapped = $derived(Object.keys(sentImageMap(display, item.images ?? [])).length);
+  /** Images no tag in the text stands for: shown below it. */
+  const untagged = $derived(untaggedImages(display, item.images ?? []));
   const fromThreadgarden = $derived(isThreadgardenNote(item.text));
 </script>
 
@@ -47,9 +48,9 @@
       >{expanded ? 'Show less' : `Show all ${display.length.toLocaleString()} characters`}</button
     >
   {/if}
-  {#if item.images?.length && mapped < item.images.length}
+  {#if untagged.length > 0}
     <div class="mt-1.5 flex flex-wrap gap-1.5">
-      {#each item.images.slice(mapped) as img, i (i)}
+      {#each untagged as img, i (i)}
         <img
           src="data:{img.mediaType};base64,{img.data}"
           alt="Attached image {i + 1}"

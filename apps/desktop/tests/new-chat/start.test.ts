@@ -65,7 +65,7 @@ describe('startInMade', () => {
 describe('moveDraft', () => {
   it('moves the full paste and image registry, and asNow uses the current attachments', () => {
     const interaction = new InteractionState();
-    const image = { mediaType: 'image/png', data: 'YWJj' };
+    const image = { mediaType: 'image/png', data: 'YWJj', number: 2 };
     const wire = '<pasted_content id="abcd">\nfull log\n</pasted_content id="abcd"> [Image #2]';
     const draft = restoreMessage(wire, [image]);
     interaction.saveAttachments('source', draft);

@@ -9,7 +9,8 @@ import {
   outgoing,
   importMessage,
   restoreMessage,
-  sentImageMap,
+  taggedImages,
+  untaggedImages,
 } from '../../src/lib/components/composer/tags';
 
 const image = { mediaType: 'image/png', data: 'YWJj' };
@@ -21,12 +22,12 @@ describe('attachment text and wire forms', () => {
     current.nextImage = 2;
     const copied = importMessage(
       '[Image #1] <pasted_content id="abcd">\nlog contents\n</pasted_content id="abcd">',
-      [image],
+      [{ ...image, number: 1 }], // as copied: each image with its tag
       '[Image #1]',
       current,
     );
     expect(copied.text).toContain('[Image #2]');
-    expect(outgoing(copied.text, copied.attachments).images).toEqual([image]);
+    expect(outgoing(copied.text, copied.attachments).images).toEqual([{ ...image, number: 2 }]);
     expect(outgoing(copied.text, copied.attachments).text).toContain('log contents');
     expect(Object.keys(current.images)).toEqual(['1']);
     expect(current.pastes).toEqual({});
@@ -60,15 +61,33 @@ describe('attachment text and wire forms', () => {
     expect(restored.attachments.pastes[1]).toEqual({ text: 'one\ntwo', id: '058b' });
   });
 
-  it('maps images to the highest distinct numbers and sends each once in numeric order', () => {
+  it('sends each image once, in numeric order, with its tag number', () => {
     const second = { ...image, data: 'ZGVm' };
-    expect(sentImageMap('compare [Image #1] with [Image #2]', [image])).toEqual({ 2: image });
     const state = emptyAttachments();
     state.images = { 2: image, 4: second };
-    expect(outgoing('[Image #4] [Image #2] [Image #4]', state).images).toEqual([image, second]);
+    expect(outgoing('[Image #4] [Image #2] [Image #4]', state).images).toEqual([
+      { ...image, number: 2 },
+      { ...second, number: 4 },
+    ]);
     expect(activeImages('[Image #4 edited]', state)).toEqual([]);
     expect(activeImages('[Image #2]', state)).toEqual([[2, image]]);
-    expect(sentImageMap('[Image #1]', [])).toEqual({});
+  });
+
+  it('pairs sent images with tags by their number, never by position', () => {
+    const tagged = { ...image, number: 2 };
+    // A hand-typed `[Image #9]` after the real tag does not take its image.
+    const text = 'compare [Image #2] with [Image #9]';
+    expect(taggedImages(text, [tagged])).toEqual({ 2: tagged });
+    expect(untaggedImages(text, [tagged])).toEqual([]);
+    // Without a number, or with one the text has no tag for: shown as an image.
+    expect(taggedImages(text, [image])).toEqual({});
+    expect(untaggedImages(text, [image, { ...image, number: 3 }])).toEqual([
+      image,
+      { ...image, number: 3 },
+    ]);
+    const restored = restoreMessage(text, [tagged]);
+    expect(restored.text).toBe(text);
+    expect(restored.attachments.images).toEqual({ 2: tagged });
   });
 
   it('skips manually typed numbers and never reuses a removed number', () => {
@@ -78,7 +97,7 @@ describe('attachment text and wire forms', () => {
     expect(nextNumber('[Image #9]', state, 'image')).toBe(10);
     const restored = restoreMessage('old scheduled message', [image]);
     expect(restored.text).toBe('old scheduled message [Image #1]');
-    expect(outgoing(restored.text, restored.attachments).images).toEqual([image]);
+    expect(outgoing(restored.text, restored.attachments).images).toEqual([{ ...image, number: 1 }]);
   });
 
   it('preserves a trailing carriage return in pasted text', () => {

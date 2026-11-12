@@ -1,6 +1,11 @@
 import { z } from 'zod';
 
-export const ImageRefSchema = z.object({ mediaType: z.string(), data: z.string() });
+export const ImageRefSchema = z.object({
+  mediaType: z.string(),
+  data: z.string(),
+  /** The number of its `[Image #N]` tag in the message text, when known. */
+  number: z.number().int().positive().optional(),
+});
 export type ImageRef = z.infer<typeof ImageRefSchema>;
 
 /**

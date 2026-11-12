@@ -81,7 +81,8 @@ export const realTimers: Timers = {
 
 export type UserInput = {
   text: string;
-  images?: { mediaType: string; dataBase64: string }[];
+  /** `number`: the image's `[Image #N]` tag in `text`, when it has one. */
+  images?: { mediaType: string; dataBase64: string; number?: number }[];
 };
 
 export type PermissionDecision = {
@@ -150,6 +151,15 @@ export type LiveSessionDeps = {
    * of a chat no process runs. A throw is reported.
    */
   onContextWindow?: (sessionId: string, model: string | undefined, tokens: number) => void;
+  /**
+   * The `[Image #N]` number of each image a message was sent with, kept by the
+   * message's uuid: the transcript keeps the images but not which tag each is.
+   * A throw is reported (from `get`, the message's images stay unnumbered).
+   */
+  sentImages?: {
+    set(sessionId: string, uuid: string, numbers: readonly number[]): void;
+    get(uuid: string): readonly number[] | undefined;
+  };
 };
 
 export const defaultOnError = (err: unknown, context: string): void => {
@@ -289,7 +299,7 @@ export class LiveSession {
   constructor(private readonly deps: LiveSessionOptions) {
     this.log = deps.log ?? new EventLog();
     this.timers = deps.timers ?? realTimers;
-    this.normalizer = new Normalizer({ now: deps.now });
+    this.normalizer = this.newNormalizer();
     this.tracker = new TaskTracker({ now: deps.now });
     this.chosen = {
       ...(deps.model === undefined ? {} : { model: deps.model }),
@@ -459,14 +469,21 @@ export class LiveSession {
     const session = this.requireLive();
     const queued = BUSY.has(this.statusValue);
     const uuid = randomUUID();
+    const images = (input.images ?? []).map((i) => ({
+      mediaType: i.mediaType,
+      data: i.dataBase64,
+      ...(i.number === undefined ? {} : { number: i.number }),
+    }));
+    // Before sending, so the echo already finds them.
+    const numbers = images.flatMap((i) => (i.number === undefined ? [] : [i.number]));
+    const sentImages = this.deps.sentImages;
+    if (sentImages && numbers.length > 0 && numbers.length === images.length) {
+      this.guard('sentImages.set', () => sentImages.set(this.id, uuid, numbers));
+    }
     session.send(toUserMessage(input, uuid, queued));
     onSubmitted?.(); // the message is with Claude; what follows is only our bookkeeping
     if (queued) this.queuedInputs++;
     this.firstText ??= input.text;
-    const images = (input.images ?? []).map((i) => ({
-      mediaType: i.mediaType,
-      data: i.dataBase64,
-    }));
     // Shown at once under the uuid sent to the SDK, so an echoed copy upserts instead of duplicating.
     this.pushItems(
       [
@@ -645,7 +662,7 @@ export class LiveSession {
     });
     this.session = session;
     this.startupFailureValue = undefined;
-    this.normalizer = new Normalizer({ now: this.deps.now });
+    this.normalizer = this.newNormalizer();
     // The SDK's task state is per process: a new process starts with none.
     this.forgetTasks();
     this.guard('registry.markLive', () => this.deps.registry.markLive(this.id, this.dir));
@@ -1099,6 +1116,16 @@ export class LiveSession {
     const seq = this.log.append(e);
     const stamped = this.log.get(seq);
     if (stamped) this.out(stamped);
+  }
+
+  private newNormalizer(): Normalizer {
+    const sentImages = this.deps.sentImages;
+    return new Normalizer({
+      now: this.deps.now,
+      ...(sentImages
+        ? { imageNumbers: (uuid) => this.guard('sentImages.get', () => sentImages.get(uuid)) }
+        : {}),
+    });
   }
 
   /** Runs a dependency call; a throw is reported and yields `undefined`. */

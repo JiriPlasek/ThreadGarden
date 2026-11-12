@@ -792,6 +792,34 @@ describe('Normalizer', () => {
     ]);
   });
 
+  it("gives each image its tag's number: as sent from here, else only when the tags leave no doubt", () => {
+    const png = (data: string) => ({
+      type: 'image',
+      source: { type: 'base64', media_type: 'image/png', data },
+    });
+    const prompt = (uuid: string, text: string, images: string[]) =>
+      user(uuid, [{ type: 'text', text }, ...images.map(png)]);
+    const sent: Record<string, number[]> = { mine: [2, 9] };
+    const n = new Normalizer({ now: () => 1, imageNumbers: (uuid) => sent[uuid] });
+    const imagesOf = (r: PushResult) => (r.items[0] as Extract<ChatItem, { kind: 'user' }>).images;
+
+    // Sent from here: the stored numbers, even with a hand-typed tag in the text.
+    expect(
+      imagesOf(n.push(prompt('mine', '[Image #2] then [Image #5] [Image #9]', ['A', 'B']))),
+    ).toEqual([
+      { mediaType: 'image/png', data: 'A', number: 2 },
+      { mediaType: 'image/png', data: 'B', number: 9 },
+    ]);
+    // The terminal's: one distinct tag per image, in order (its only image may be #2).
+    expect(imagesOf(n.push(prompt('cli', 'see [Image #2]', ['A'])))).toEqual([
+      { mediaType: 'image/png', data: 'A', number: 2 },
+    ]);
+    // More tags than images: no guessing, the images show as they are.
+    expect(imagesOf(n.push(prompt('typed', '[Image #1] and [Image #2]', ['A'])))).toEqual([
+      { mediaType: 'image/png', data: 'A' },
+    ]);
+  });
+
   it('normalizes SessionMessage history equivalently to live messages', () => {
     const live: SDKMessage[] = [
       user('u1', 'list files'),

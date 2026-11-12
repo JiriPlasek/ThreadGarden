@@ -460,15 +460,23 @@ describe('Let my phone connect, when things go wrong', () => {
     const latest = (fresh.prepare('PRAGMA user_version').get() as { user_version: number })
       .user_version;
     fresh.close();
-    // Every step but the last, the one that added it.
-    const raw = new DatabaseSync(':memory:');
-    migrate(raw, latest - 1);
-    const tables = () =>
+    const tablesOf = (db: DatabaseSync) =>
       (
-        raw.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as {
+        db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as {
           name: string;
         }[]
       ).map((t) => t.name);
+    // Every step before the one that added it.
+    const adds = Array.from({ length: latest }, (_, i) => i + 1).find((upTo) => {
+      const probe = new DatabaseSync(':memory:');
+      migrate(probe, upTo);
+      const has = tablesOf(probe).includes('phone_access');
+      probe.close();
+      return has;
+    })!;
+    const raw = new DatabaseSync(':memory:');
+    migrate(raw, adds - 1);
+    const tables = () => tablesOf(raw);
     expect(tables()).not.toContain('phone_access');
     migrate(raw);
     expect(tables()).toContain('phone_access');

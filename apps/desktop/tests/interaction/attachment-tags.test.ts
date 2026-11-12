@@ -66,7 +66,7 @@ describe('attachment tags in the composer', () => {
         s.handlers['scheduled.list'] = () => ({ items: [scheduled] });
         s.handlers['scheduled.get'] = () => ({
           ...scheduled,
-          images: [{ mediaType: 'image/png', data: 'YWJj' }],
+          images: [{ mediaType: 'image/png', data: 'YWJj', number: 2 }],
         });
         s.handlers['scheduled.update'] = () => scheduled;
       },
@@ -82,7 +82,7 @@ describe('attachment tags in the composer', () => {
     await waitFor(() => expect(server.calls('scheduled.update')).toHaveLength(1));
     const sent = server.calls('scheduled.update')[0]!.params as { text: string; images: unknown[] };
     expect(pasteBlocks(sent.text)[0]?.text).toBe(paste);
-    expect(sent.images).toEqual([{ mediaType: 'image/png', data: 'YWJj' }]);
+    expect(sent.images).toEqual([{ mediaType: 'image/png', data: 'YWJj', number: 2 }]);
     await waitFor(() => expect(composer().textContent).toBe(draft));
     await userEvent.click(screen.getByRole('button', { name: 'Send' }));
     await waitFor(() => expect(server.calls('chat.send')).toHaveLength(1));
@@ -183,7 +183,7 @@ describe('sent attachment badges', () => {
     expect(within(messages).getAllByRole('img', { name: /Attached image/ })).toHaveLength(2);
     expect(within(messages).queryByRole('button', { name: /Pasted text|Image #/ })).toBeNull();
   });
-  it('maps a lone CLI image to #2 and pins a pasted-text preview on click', async () => {
+  it('shows an image on the tag it was sent with and pins a pasted-text preview on click', async () => {
     await renderChat({
       items: [
         {
@@ -191,7 +191,7 @@ describe('sent attachment badges', () => {
           id: 'u1',
           ts: 0,
           text: `compare [Image #1] with [Image #2]\n\n<pasted_content id="abcd">\n${paste}\n</pasted_content id="abcd">\n\n`,
-          images: [{ mediaType: 'image/png', data: 'YWJj' }],
+          images: [{ mediaType: 'image/png', data: 'YWJj', number: 2 }],
         },
       ],
     });
