@@ -1,4 +1,4 @@
-import { pasteBlocks, pasteLabel, pasteLines, type ImageRef } from '@threadgarden/protocol';
+import { pasteLabel, pasteLines, replacePastes, type ImageRef } from '@threadgarden/protocol';
 
 export type Paste = { text: string; id: string };
 const lineCounts = new WeakMap<Paste, number>();
@@ -147,18 +147,12 @@ export const importMessage = (
 /** Collapse saved/wire text, consuming only the padding added by serialization. */
 export const restoreMessage = (value: string, images: ImageRef[] = []): ComposerDraft => {
   const state = emptyAttachments();
-  let text = '';
-  let start = 0;
-  for (const block of pasteBlocks(value)) {
-    const number = nextNumber(value + text, state, 'paste');
-    const before = value.slice(start, block.start);
-    text += before.endsWith('\n\n') ? before.slice(0, -2) : before;
-    text += pasteLabel(number, block.text);
+  let text = replacePastes(value, (block) => {
+    const number = nextNumber(value, state, 'paste');
     state.pastes[number] = { text: block.text, id: block.id };
     state.nextPaste = number + 1;
-    start = block.end + (value.slice(block.end, block.end + 2) === '\n\n' ? 2 : 0);
-  }
-  text += value.slice(start);
+    return pasteLabel(number, block.text);
+  });
   state.images = sentImageMap(text, images);
   // Older scheduled messages had images without positional tags.
   const mapped = Object.keys(state.images).length;

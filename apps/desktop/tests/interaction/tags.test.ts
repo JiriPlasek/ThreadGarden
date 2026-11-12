@@ -52,6 +52,14 @@ describe('attachment text and wire forms', () => {
     expect(pasteBlocks('<pasted_content id="abcd">\nx\n</pasted_content id="ffff">')).toEqual([]);
   });
 
+  it('restores a paste that ends a message as the CLI writes it (one newline after)', () => {
+    const transcript =
+      'see:\n\n<pasted_content id="058b">\none\ntwo\n</pasted_content id="058b">\n';
+    const restored = restoreMessage(transcript);
+    expect(restored.text).toBe('see:[Pasted text #1 +2 lines]');
+    expect(restored.attachments.pastes[1]).toEqual({ text: 'one\ntwo', id: '058b' });
+  });
+
   it('maps images to the highest distinct numbers and sends each once in numeric order', () => {
     const second = { ...image, data: 'ZGVm' };
     expect(sentImageMap('compare [Image #1] with [Image #2]', [image])).toEqual({ 2: image });

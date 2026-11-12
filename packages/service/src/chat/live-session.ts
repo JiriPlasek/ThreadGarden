@@ -26,12 +26,13 @@
  */
 import { randomUUID } from 'node:crypto';
 import { basename } from 'node:path';
-import type {
-  ChatHeaderInfo,
-  ChatItem,
-  ChatStatus,
-  ChatTask,
-  EventMsg,
+import {
+  unwrapPastes,
+  type ChatHeaderInfo,
+  type ChatItem,
+  type ChatStatus,
+  type ChatTask,
+  type EventMsg,
 } from '@threadgarden/protocol';
 import type {
   AccountInfo,
@@ -1128,8 +1129,10 @@ export class LiveSession {
 }
 
 const toUserMessage = (input: UserInput, uuid: SDKUserMessage['uuid'], queued: boolean) => {
+  // Pastes arrive as `<pasted_content>` blocks; the CLI wraps them (or not) as the terminal does.
+  const { text, pastes } = unwrapPastes(input.text);
   const content: unknown[] = [];
-  if (input.text.length > 0) content.push({ type: 'text', text: input.text });
+  if (text.length > 0) content.push({ type: 'text', text });
   for (const img of input.images ?? []) {
     content.push({
       type: 'image',
@@ -1143,6 +1146,7 @@ const toUserMessage = (input: UserInput, uuid: SDKUserMessage['uuid'], queued: b
     parent_tool_use_id: null,
     uuid,
   };
+  if (pastes.length > 0) m.inline_pastes = pastes;
   if (queued) m.priority = 'next';
   return m;
 };

@@ -221,6 +221,21 @@ const textOf = (m: SDKUserMessage): string => {
     .join('\n');
 };
 
+/** Wraps each of `inline_pastes` where it stands, as CLI 2.1.319 writes it to the transcript. */
+const withPastes = (text: string, pastes: readonly string[] = []): string => {
+  let out = text;
+  let from = 0;
+  for (const paste of pastes) {
+    const at = out.indexOf(paste, from);
+    if (at < 0 || paste.trim() === '') continue;
+    const id = randomUUID().slice(0, 4);
+    const block = `\n\n<pasted_content id="${id}">\n${paste}\n</pasted_content id="${id}">\n\n`;
+    out = out.slice(0, at) + block + out.slice(at + paste.length);
+    from = at + block.length;
+  }
+  return out.endsWith('\n\n') ? out.slice(0, -1) : out;
+};
+
 /** The "agent" subagent's nested subagent: its task, its Agent call, its one tool call. */
 type NestedAgent = { taskId: string; toolUseId: string; parentToolUseId: string; grepId: string };
 
@@ -326,7 +341,7 @@ class ScriptedSession extends FakeSession {
   }
 
   private async reply(m: SDKUserMessage): Promise<void> {
-    const text = textOf(m);
+    const text = withPastes(textOf(m), m.inline_pastes);
     await this.adapter.record(this, {
       type: 'user',
       uuid: m.uuid ?? randomUUID(),

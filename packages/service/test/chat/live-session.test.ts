@@ -149,6 +149,21 @@ describe('LiveSession', () => {
     ]);
   });
 
+  it('sends pastes as typed and lists them, so the CLI wraps them as in the terminal', () => {
+    const { adapter, events, opts } = setup();
+    const text = 'see \n\n<pasted_content id="abcd">\na\nb\n</pasted_content id="abcd">\n\n please';
+    const s = LiveSession.create('/p', { text }, opts);
+    const sent = adapter.lastSession().sent[0]!;
+    expect(sent.message.content).toEqual([{ type: 'text', text: 'see a\nb please' }]);
+    expect(sent.inline_pastes).toEqual(['a\nb']);
+    // Shown as the CLI echoes it back when it wraps, so the paste shows as a badge at once.
+    expect(latest(events, sent.uuid!)).toMatchObject({ kind: 'user', text });
+    expect(s.sessionId).toBeTruthy();
+
+    LiveSession.create('/p', { text: 'no paste' }, opts);
+    expect(adapter.lastSession().sent[0]).not.toHaveProperty('inline_pastes');
+  });
+
   it('send while working queues with priority next', async () => {
     const { adapter, opts } = setup();
     const s = LiveSession.create('/p', { text: 'first' }, opts);
