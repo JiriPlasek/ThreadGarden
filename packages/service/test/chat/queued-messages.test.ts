@@ -4,10 +4,11 @@
  * such a message up at the running turn's next step, or when the turn ends,
  * and says so with a `command_lifecycle` frame. Until then the message is
  * listed as queued, outside the transcript; then it joins the transcript
- * where Claude read it.
+ * where Claude read it. Until then the user can take it back; one Claude will
+ * never read (Stop, the process ended) goes back to the user.
  */
 import { describe, expect, it } from 'vitest';
-import type { ChatItem, EventMsg, QueuedMessage } from '@threadgarden/protocol';
+import type { ChatItem, EventMsg, QueuedMessage, ReturnedMessage } from '@threadgarden/protocol';
 import {
   ITEMS_COALESCE_MS,
   LiveSession,
@@ -31,6 +32,7 @@ const setup = (over: Partial<LiveSessionOptions> = {}) => {
   const events: EventMsg[] = [];
   const turns: number[] = [];
   const errors: string[] = [];
+  const returned: ReturnedMessage[][] = [];
   const opts: LiveSessionOptions = {
     adapter,
     registry: new MemoryRegistry(),
@@ -41,12 +43,13 @@ const setup = (over: Partial<LiveSessionOptions> = {}) => {
     timers,
     onTurnEnded: (_id, at) => turns.push(at),
     onError: (_err, context) => errors.push(context),
+    onReturned: (_id, messages) => returned.push(messages),
     ...over,
   };
   const s = LiveSession.create('/p', { text: 'first' }, opts);
   const fake = adapter.lastSession();
   const firstUuid = fake.sent[0]!.uuid!;
-  return { adapter, timers, events, turns, errors, opts, s, fake, firstUuid };
+  return { adapter, timers, events, turns, errors, returned, opts, s, fake, firstUuid };
 };
 
 /** Every item the session published, latest version per id, in first-seen order. */
@@ -70,6 +73,12 @@ const lastQueued = (events: EventMsg[]): QueuedMessage[] | undefined =>
   )?.queued;
 
 const finished = (events: EventMsg[]) => events.filter((e) => e.event === 'chatFinished');
+
+/** The messages `messagesReturned` events gave back, one list per event. */
+const givenBack = (events: EventMsg[]): ReturnedMessage[][] =>
+  events
+    .filter((e) => e.event === 'messagesReturned')
+    .map((e) => (e.data as { messages: ReturnedMessage[] }).messages);
 
 describe('messages sent while Claude works', () => {
   it('every message goes out with priority next, so Claude never holds one until the turn ends', async () => {
@@ -171,7 +180,7 @@ describe('messages sent while Claude works', () => {
     fake.emit(assistantText('a2', 'Second answer'));
     fake.emit(result('r2'));
     await settle();
-    expect(ids(events)).toEqual([firstUuid, 'a1', 'r1', uuid, 'a2', 'r2']);
+    expect(ids(events)).toEqual([firstUuid, 'a1', 'turn-end:a1', uuid, 'a2', 'turn-end:a2']);
     expect(s.status).toBe('idle');
     expect(turns).toHaveLength(1);
     expect(finished(events)).toHaveLength(1);
@@ -255,7 +264,7 @@ describe('messages sent while Claude works', () => {
     await settle();
     // As before: Claude goes straight on to the queued input, so this is no finished turn.
     expect(turns).toEqual([]);
-    expect(ids(events)).toEqual([fake.sent[0]!.uuid, 'a1', 'r1', uuid]);
+    expect(ids(events)).toEqual([fake.sent[0]!.uuid, 'a1', 'turn-end:a1', uuid]);
     expect(lastQueued(events)).toEqual([]);
     fake.emit(assistantText('a2', 'Second answer'));
     fake.emit(result('r2'));
@@ -263,20 +272,154 @@ describe('messages sent while Claude works', () => {
     expect(turns).toHaveLength(1);
   });
 
-  it('a queued message Claude Code cancels leaves the queue with a note', async () => {
-    const { s, fake, events, firstUuid } = setup();
+  it('a queued message Claude Code cancels goes back to the user, text and images', async () => {
+    const { s, fake, events, returned, firstUuid } = setup();
     fake.emit(lifecycle(firstUuid, 'started'));
-    s.send({ text: 'never mind' });
+    const long = 'x'.repeat(500);
+    s.send({ text: long, images: [{ mediaType: 'image/png', dataBase64: 'AAAA' }] });
     const uuid = fake.sent[1]!.uuid!;
     fake.emit(lifecycle(uuid, 'cancelled'));
     await settle();
     expect(lastQueued(events)).toEqual([]);
-    const last = transcript(events).at(-1);
-    expect(last).toMatchObject({ kind: 'system', level: 'warning' });
-    expect((last as { text: string }).text).toContain('never mind');
+    const back = [{ text: long, images: [{ mediaType: 'image/png', data: 'AAAA' }] }];
+    // The saved draft first, then the message box.
+    expect(returned).toEqual([back]);
+    expect(givenBack(events)).toEqual([back]);
+    expect(ids(events)).toEqual([firstUuid]);
   });
 
-  it('a stopped turn with a queued message is not finished; the message still runs next', async () => {
+  it('Stop gives the queued messages back and is no finished turn', async () => {
+    const { s, fake, events, turns, returned, firstUuid } = setup();
+    fake.emit(lifecycle(firstUuid, 'started'));
+    s.send({ text: 'second' });
+    s.send({ text: 'third' });
+    const [second, third] = [fake.sent[1]!.uuid!, fake.sent[2]!.uuid!];
+    // Claude Code 2.1.319 with `cancelQueued`: the queued ones are cancelled before it answers.
+    fake.interrupt = async () => {
+      fake.emit(lifecycle(second, 'cancelled'));
+      fake.emit(lifecycle(third, 'cancelled'));
+      await settle();
+      expect(returned).toEqual([]); // not one by one: each would go in front of the last
+    };
+    await s.interrupt();
+    fake.emit(result('r1', { subtype: 'error_during_execution', is_error: true }));
+    fake.emit(lifecycle(firstUuid, 'cancelled'));
+    await settle();
+    expect(lastQueued(events)).toEqual([]);
+    const back = [{ text: 'second' }, { text: 'third' }];
+    expect(returned).toEqual([back]);
+    expect(givenBack(events)).toEqual([back]);
+    expect(s.status).toBe('idle');
+    expect(turns).toEqual([]);
+    expect(finished(events)).toEqual([]);
+  });
+
+  it('a turn held for a queued message ends when that message is cancelled instead of started', async () => {
+    const { s, fake, events, turns, firstUuid } = setup();
+    fake.emit(lifecycle(firstUuid, 'started'));
+    s.send({ text: 'second' });
+    const second = fake.sent[1]!.uuid!;
+    fake.emit(result('r1'));
+    fake.emit(lifecycle(firstUuid, 'completed'));
+    await settle();
+    expect(s.status).toBe('working'); // held: Claude goes straight on to "second"
+    // No result follows a message that never ran: the hold must not keep the chat working.
+    fake.emit(lifecycle(second, 'cancelled'));
+    await settle();
+    expect(s.status).toBe('idle');
+    expect(turns).toHaveLength(1);
+    expect(finished(events)).toHaveLength(1);
+    expect(givenBack(events)).toEqual([[{ text: 'second' }]]);
+  });
+
+  it('a held turn the user stops ends when the queued message is cancelled, unfinished', async () => {
+    const { s, fake, events, turns, firstUuid } = setup();
+    fake.emit(lifecycle(firstUuid, 'started'));
+    s.send({ text: 'second' });
+    fake.emit(result('r1'));
+    await settle();
+    fake.interrupt = async () => {
+      fake.emit(lifecycle(fake.sent[1]!.uuid!, 'cancelled'));
+      await settle();
+    };
+    await s.interrupt();
+    expect(s.status).toBe('idle');
+    expect(turns).toEqual([]);
+    expect(finished(events)).toEqual([]);
+    expect(givenBack(events)).toEqual([[{ text: 'second' }]]);
+  });
+
+  it('the hold waits for every message: one cancelled while another still waits keeps it', async () => {
+    const { s, fake, firstUuid } = setup();
+    fake.emit(lifecycle(firstUuid, 'started'));
+    s.send({ text: 'second' });
+    s.send({ text: 'third' });
+    const [second, third] = [fake.sent[1]!.uuid!, fake.sent[2]!.uuid!];
+    fake.emit(result('r1'));
+    fake.emit(lifecycle(second, 'cancelled'));
+    await settle();
+    expect(s.status).toBe('working');
+    fake.emit(lifecycle(third, 'started'));
+    fake.emit(result('r2'));
+    await settle();
+    expect(s.status).toBe('idle');
+  });
+
+  it('a queued message can be taken back before Claude reads it', async () => {
+    const { s, fake, events, returned, firstUuid } = setup();
+    fake.emit(lifecycle(firstUuid, 'started'));
+    s.send({ text: 'oops', images: [{ mediaType: 'image/png', dataBase64: 'AAAA' }] });
+    s.send({ text: 'keep this' });
+    const [oops, keep] = [fake.sent[1]!.uuid!, fake.sent[2]!.uuid!];
+    // Claude Code 2.1.319 sends the `cancelled` frame before it answers.
+    fake.cancelQueued = async (uuid) => {
+      fake.withdrawn.push(uuid);
+      fake.emit(lifecycle(uuid, 'cancelled'));
+      await settle();
+      return true;
+    };
+    expect(await s.withdraw(oops)).toEqual({
+      text: 'oops',
+      images: [{ mediaType: 'image/png', data: 'AAAA' }],
+    });
+    expect(fake.withdrawn).toEqual([oops]);
+    expect(lastQueued(events)?.map((q) => q.id)).toEqual([keep]);
+    // The caller has it: nothing goes back to the draft as well.
+    expect(returned).toEqual([]);
+    expect(givenBack(events)).toEqual([]);
+    expect(ids(events)).toEqual([firstUuid]);
+  });
+
+  it('taking back a message Claude has already taken up fails, and it still joins the transcript', async () => {
+    const { s, fake, events, timers, firstUuid } = setup();
+    fake.emit(lifecycle(firstUuid, 'started'));
+    s.send({ text: 'second' });
+    const uuid = fake.sent[1]!.uuid!;
+    fake.withdrawAnswer = false;
+    await expect(s.withdraw(uuid)).rejects.toMatchObject({ code: 'NOT_QUEUED' });
+    fake.emit(lifecycle(uuid, 'started'));
+    await settle();
+    timers.advance(ITEMS_COALESCE_MS);
+    expect(ids(events)).toEqual([firstUuid, uuid]);
+    // One no longer queued is not asked for.
+    await expect(s.withdraw(uuid)).rejects.toMatchObject({ code: 'NOT_QUEUED' });
+    expect(fake.withdrawn).toEqual([uuid]);
+  });
+
+  it('taking back the message a turn was held for lets the chat go idle', async () => {
+    const { s, fake, events, turns, firstUuid } = setup();
+    fake.emit(lifecycle(firstUuid, 'started'));
+    s.send({ text: 'second' });
+    fake.emit(result('r1'));
+    await settle();
+    expect(s.status).toBe('working');
+    await s.withdraw(fake.sent[1]!.uuid!);
+    expect(s.status).toBe('idle');
+    expect(turns).toHaveLength(1);
+    expect(finished(events)).toHaveLength(1);
+  });
+
+  it('with a Claude Code that keeps queued messages through a Stop, the message still runs next', async () => {
     const { s, fake, events, turns, firstUuid } = setup();
     fake.emit(lifecycle(firstUuid, 'started'));
     s.send({ text: 'second' });
@@ -291,25 +434,26 @@ describe('messages sent while Claude works', () => {
     expect(turns).toHaveLength(1);
   });
 
-  it('messages Claude never read are noted when the process ends', async () => {
-    const { s, events, firstUuid, fake } = setup();
+  it('messages Claude never read go back to the user when the process ends', async () => {
+    const { s, events, returned, firstUuid, fake } = setup();
     fake.emit(lifecycle(firstUuid, 'started'));
     s.send({ text: 'one more thing' });
+    s.send({ text: 'and this' });
     s.end();
     expect(lastQueued(events)).toEqual([]);
-    const last = transcript(events).at(-1);
-    expect(last).toMatchObject({ kind: 'system', level: 'warning' });
-    expect((last as { text: string }).text).toContain('one more thing');
+    const back = [{ text: 'one more thing' }, { text: 'and this' }];
+    expect(returned).toEqual([back]);
+    expect(givenBack(events)).toEqual([back]);
 
-    // A crash notes them too.
+    // A crash gives them back too.
     const crashed = setup();
     crashed.fake.emit(lifecycle(crashed.firstUuid, 'started'));
     crashed.s.send({ text: 'are you there?' });
     crashed.fake.end(new Error('boom'));
     await settle();
     expect(lastQueued(crashed.events)).toEqual([]);
-    const texts = transcript(crashed.events).map((i) => (i as { text?: string }).text ?? '');
-    expect(texts.some((t) => t.includes('are you there?'))).toBe(true);
+    expect(crashed.returned).toEqual([[{ text: 'are you there?' }]]);
+    expect(crashed.s.status).toBe('failed');
   });
 
   it('replays the queue through chat.since like any status change', async () => {

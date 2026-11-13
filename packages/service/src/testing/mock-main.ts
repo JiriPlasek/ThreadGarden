@@ -232,6 +232,8 @@ class ScriptedSession extends FakeSession {
   private readonly shells = new Map<string, string>();
   /** Running "agent" subagent tasks: task id → its stop signal. */
   private readonly agents = new Map<string, AbortController>();
+  /** Messages sent that no turn has started yet. */
+  private readonly waiting = new Set<string>();
 
   constructor(
     options: StartOptions,
@@ -270,26 +272,32 @@ class ScriptedSession extends FakeSession {
   /**
    * Like Claude Code, each message runs after the turns before it, with its
    * `command_lifecycle` frames: queued on arrival, started when its turn
-   * begins, completed when it ends.
+   * begins, completed when it ends; cancelled if taken back or stopped first.
    */
   override send(m: SDKUserMessage): void {
     super.send(m);
-    this.lifecycle(m, 'queued');
+    const uuid = m.uuid;
+    if (uuid !== undefined) {
+      this.waiting.add(uuid);
+      this.lifecycle(uuid, 'queued');
+    }
     this.turn = this.turn
       .then(async () => {
-        this.lifecycle(m, 'started');
+        if (uuid !== undefined) {
+          if (!this.waiting.delete(uuid)) return; // taken back, or cancelled by Stop
+          this.lifecycle(uuid, 'started');
+        }
         await this.reply(m);
-        this.lifecycle(m, 'completed');
+        if (uuid !== undefined) this.lifecycle(uuid, 'completed');
       })
       .catch(() => {});
   }
 
-  private lifecycle(m: SDKUserMessage, state: 'queued' | 'started' | 'completed'): void {
-    if (m.uuid === undefined) return;
+  private lifecycle(uuid: string, state: 'queued' | 'started' | 'completed' | 'cancelled'): void {
     this.out(
       msg({
         type: 'command_lifecycle',
-        command_uuid: m.uuid,
+        command_uuid: uuid,
         state,
         uuid: randomUUID(),
         session_id: this.id,
@@ -297,9 +305,19 @@ class ScriptedSession extends FakeSession {
     );
   }
 
+  /** As Claude Code with `cancelQueued`: the messages still queued are cancelled too. */
   override async interrupt(): Promise<void> {
     await super.interrupt();
+    for (const uuid of this.waiting) this.lifecycle(uuid, 'cancelled');
+    this.waiting.clear();
     this.abort.abort();
+  }
+
+  override async cancelQueued(uuid: string): Promise<boolean> {
+    await super.cancelQueued(uuid);
+    if (!this.waiting.delete(uuid)) return false;
+    this.lifecycle(uuid, 'cancelled');
+    return true;
   }
 
   /** Stops a running "agent" or "server" task, like the CLI: killed, then a stopped notification. */

@@ -38,6 +38,10 @@ check in the pull request or release notes.
       the same turn.
 - [ ] Start a new chat and send a second message right away: both are
       answered, and the chat ends idle with one "finished" notification.
+- [ ] While Claude runs a long command, queue two messages: Remove on one
+      takes it away; Up in the empty message box brings the other back to
+      edit. Queue one more and press Stop: it comes back into the message box,
+      in front of what was typed there, and Claude never answers it.
 - [ ] Type `@` and pick a file; the reply shows Claude saw the file.
 - [ ] Type `/`: commands from Claude Code are listed; `/model` opens the
       model picker; `/config` is shown as unavailable.

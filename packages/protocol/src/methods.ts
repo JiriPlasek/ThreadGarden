@@ -18,7 +18,12 @@ import {
   SettingsSchema,
 } from './chat.js';
 import { ChatItemsEventSchema, ChatStatusEventSchema, ChatTasksEventSchema } from './events.js';
-import { ChatItemSchema, ImageRefSchema, QueuedMessageSchema } from './items.js';
+import {
+  ChatItemSchema,
+  ImageRefSchema,
+  QueuedMessageSchema,
+  ReturnedMessageSchema,
+} from './items.js';
 import {
   DeviceSchema,
   DeviceTokenSchema,
@@ -275,7 +280,17 @@ export const methods = {
     }),
     z.object({ queued: z.boolean() }),
   ),
+  /** Stops the running turn; queued messages Claude has not read come back (`messagesReturned`). */
   'chat.interrupt': def(sessionIdOnly, empty),
+  /**
+   * Takes a queued message back before Claude reads it (by its `queued` id),
+   * to remove or edit it. `NOT_QUEUED` when Claude has already taken it up.
+   * Every service that lists `queued` has it.
+   */
+  'chat.withdraw': def(
+    z.object({ sessionId: z.string(), messageId: z.string() }),
+    ReturnedMessageSchema,
+  ),
   'chat.end': def(sessionIdOnly, empty),
   'chat.setModel': def(setValue, empty),
   'chat.setPermissionMode': def(setValue, empty),

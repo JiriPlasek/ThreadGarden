@@ -543,6 +543,42 @@ describe('chat handlers', () => {
     expect(after.items.at(-1)).toMatchObject({ id: queuedId, kind: 'user', text: 'also this' });
   });
 
+  it('chat.withdraw takes a queued message back; one Claude never reads goes into the draft', async () => {
+    const adapter = new FakeAdapter();
+    await start(adapter);
+    const { sessionId } = await ok<{ sessionId: string }>('chat.create', {
+      cwd: dir,
+      text: 'first',
+    });
+    const fake = adapter.lastSession();
+    fake.emit(lifecycle(fake.sent[0]!.uuid!, 'started'));
+    await settle();
+    await ok('chat.send', { sessionId, text: 'oops' });
+    await ok('chat.send', { sessionId, text: 'second' });
+    await ok('chat.send', { sessionId, text: 'third' });
+    const [oops, second, third] = [fake.sent[1]!.uuid!, fake.sent[2]!.uuid!, fake.sent[3]!.uuid!];
+
+    expect(await ok('chat.withdraw', { sessionId, messageId: oops })).toEqual({ text: 'oops' });
+    expect(fake.withdrawn).toEqual([oops]);
+    fake.withdrawAnswer = false;
+    expect(await code('chat.withdraw', { sessionId, messageId: second })).toBe('NOT_QUEUED');
+    expect(await code('chat.withdraw', { sessionId: 'nope', messageId: second })).toBe(
+      'NOT_QUEUED',
+    );
+
+    // Stop cancels what is still queued: it goes in front of the saved draft.
+    await ok('drafts.set', { key: sessionId, text: 'half-typed' });
+    fake.interrupt = async () => {
+      fake.emit(lifecycle(second, 'cancelled'));
+      fake.emit(lifecycle(third, 'cancelled'));
+      await settle();
+    };
+    await ok('chat.interrupt', { sessionId });
+    expect(await ok('drafts.get', { key: sessionId })).toEqual({
+      text: 'second\nthird\nhalf-typed',
+    });
+  });
+
   it('chat.since for a seq this service never issued is a GAP', async () => {
     await start(new FakeAdapter());
     expect(await code('chat.since', { sessionId: 'whatever', seq: 3 })).toBe('GAP');

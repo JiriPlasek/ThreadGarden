@@ -29,7 +29,10 @@
  * step, or when the turn ends, and reports that with a `command_lifecycle`
  * frame. Until then the message is *queued*: listed in `chat.status`, outside
  * the transcript; when Claude takes it up it joins the transcript there, as in
- * the terminal and in the chat's history.
+ * the terminal and in the chat's history. Until then the user can take it back
+ * (`withdraw`); one Claude will never read (Stop cancelled it, the process
+ * ended) is given back (`onReturned`, `messagesReturned`), as the terminal puts
+ * queued messages back into its input.
  */
 import { randomUUID } from 'node:crypto';
 import { basename } from 'node:path';
@@ -40,6 +43,7 @@ import type {
   ChatTask,
   EventMsg,
   QueuedMessage,
+  ReturnedMessage,
 } from '@threadgarden/protocol';
 import type {
   AccountInfo,
@@ -157,6 +161,12 @@ export type LiveSessionDeps = {
    * of a chat no process runs. A throw is reported.
    */
   onContextWindow?: (sessionId: string, model: string | undefined, tokens: number) => void;
+  /**
+   * Queued messages Claude will never read came back (Stop cancelled them, or
+   * the process ended), oldest first; called before `messagesReturned` is
+   * emitted, so they are in the saved draft first. A throw is reported.
+   */
+  onReturned?: (sessionId: string, messages: ReturnedMessage[]) => void;
 };
 
 export const defaultOnError = (err: unknown, context: string): void => {
@@ -191,8 +201,6 @@ export type StartupFailure = StartupFailureMessage & { reason: string; detail?: 
 
 export const ITEMS_COALESCE_MS = 33;
 export const DEFAULT_DENY_MESSAGE = 'Denied by user in Threadgarden';
-/** A queued message's text quoted in a note is cut to this many characters. */
-const QUOTE_MAX = 200;
 
 type PermissionItem = Extract<ChatItem, { kind: 'permissionRequest' }>;
 type UserItem = Extract<ChatItem, { kind: 'user' }>;
@@ -286,6 +294,10 @@ export class LiveSession {
   private holding = false;
   /** Messages taken up while `holding` that have not completed yet. */
   private readonly heldOpen = new Set<string>();
+  /** Queued messages the user is taking back (`withdraw`): their `cancelled` frame gives nothing back. */
+  private readonly withdrawing = new Set<string>();
+  /** While a Stop is under way: the queued messages it cancelled, given back once it is done. */
+  private stopping: UserItem[] | null = null;
   /**
    * This Claude Code reports when it takes up each message (`command_lifecycle`).
    * Without that (an older CLI) queued messages join the transcript at the
@@ -531,21 +543,51 @@ export class LiveSession {
   }
 
   /**
+   * Takes back a queued message Claude has not read yet (to remove or edit
+   * it), by its `queued` id: its text and images. `NOT_QUEUED` when Claude
+   * has taken it up already (or it came back when the process ended).
+   */
+  async withdraw(id: string): Promise<ReturnedMessage> {
+    const session = this.session;
+    const message = this.waiting.get(id);
+    if (!session || !message) throw notQueued();
+    this.withdrawing.add(id);
+    let cancelled: boolean;
+    try {
+      cancelled = await session.cancelQueued(id);
+    } finally {
+      this.withdrawing.delete(id);
+    }
+    if (!cancelled) throw notQueued();
+    // Claude Code's `cancelled` frame usually came first and dropped it already.
+    this.dropQueued(id);
+    return returned(message);
+  }
+
+  /**
    * Stops the turn in progress (Stop / Esc). The `result` that follows is not
    * a finished turn: the user stopped it from Threadgarden, so there is no
    * `chatFinished` and the chat does not become unread. Pressed while nothing
    * runs, or if the SDK refuses, the next turn end counts as usual.
+   *
+   * The queued messages it cancels go back to the user together, in the order
+   * they were sent (Claude Code cancels them before it answers).
    */
   async interrupt(): Promise<void> {
     const session = this.session;
     if (!session) return;
     const turn = BUSY.has(this.statusValue);
     if (turn) this.interruptRequested = true;
+    const cancelled: UserItem[] = [];
+    this.stopping = cancelled;
     try {
       await session.interrupt();
     } catch (err) {
       if (turn) this.interruptRequested = false;
       throw err;
+    } finally {
+      if (this.stopping === cancelled) this.stopping = null;
+      if (cancelled.length > 0) this.giveBack(cancelled);
     }
   }
 
@@ -1046,7 +1088,16 @@ export class LiveSession {
    * rather than working forever.
    */
   private closeHeld(id: string): void {
-    if (!this.heldOpen.delete(id) || this.heldOpen.size > 0 || this.waiting.size > 0) return;
+    if (this.heldOpen.delete(id)) this.endHoldIfDone();
+  }
+
+  /**
+   * Ends a hold once nothing is queued or in progress any more: every message
+   * taken up since completed, and none waits (one was cancelled or taken back
+   * rather than started, which no `result` follows).
+   */
+  private endHoldIfDone(): void {
+    if (!this.holding || this.heldOpen.size > 0 || this.waiting.size > 0) return;
     this.holding = false;
     if (this.statusValue === 'working') this.setStatus('idle');
     this.resultArrived();
@@ -1066,23 +1117,39 @@ export class LiveSession {
     this.publishStatus();
   }
 
+  /** Claude Code cancelled a queued message (Stop, or the user took it back). */
   private cancelQueued(id: string): void {
     const message = this.waiting.get(id);
     if (!message) return;
-    this.waiting.delete(id);
-    this.note('warning', `Claude Code cancelled ${quote(message)} before reading it.`);
-    this.publishStatus();
+    this.dropQueued(id);
+    if (this.withdrawing.has(id)) return; // `withdraw` hands it over
+    if (this.stopping) this.stopping.push(message);
+    else this.giveBack([message]);
   }
 
-  /** The process is gone: what Claude never read is said, not silently dropped. */
+  /** A queued message left the queue without Claude reading it. */
+  private dropQueued(id: string): void {
+    if (!this.waiting.delete(id)) return;
+    this.publishStatus();
+    this.endHoldIfDone();
+  }
+
+  /** The process is gone: what Claude never read goes back to the user. */
   private abandonQueued(): void {
+    this.holding = false;
+    this.heldOpen.clear();
     if (this.waiting.size === 0) return;
     const messages = [...this.waiting.values()];
     this.waiting.clear();
-    for (const m of messages) {
-      this.note('warning', `Claude Code ended before reading ${quote(m)}, so Claude never saw it.`);
-    }
     this.publishStatus();
+    this.giveBack(messages);
+  }
+
+  /** Messages Claude will never read: into the saved draft, then to the UI's message box. */
+  private giveBack(messages: UserItem[]): void {
+    const back = messages.map(returned);
+    this.guard('onReturned', () => this.deps.onReturned?.(this.id, back));
+    this.out({ event: 'messagesReturned', data: { sessionId: this.id, messages: back } });
   }
 
   /** A turn ended: `onTurnEnded` (Threadgarden's unread state), then `chatFinished` for the UI. */
@@ -1294,13 +1361,14 @@ const toUserMessage = (input: UserInput, uuid: SDKUserMessage['uuid']) => {
   return m;
 };
 
-/** A queued message in a note: its text (cut), else what it carried. */
-const quote = (m: UserItem): string => {
-  const text = m.text.trim().replace(/\s+/g, ' ');
-  if (text) return `“${text.length > QUOTE_MAX ? `${text.slice(0, QUOTE_MAX)}…` : text}”`;
-  const n = m.images?.length ?? 0;
-  return n === 1 ? 'a message with an image' : `a message with ${n} images`;
-};
+/** A queued message given back whole: its text and images. */
+const returned = (m: UserItem): ReturnedMessage => ({
+  text: m.text,
+  ...(m.images?.length ? { images: m.images } : {}),
+});
+
+const notQueued = (): ServiceError =>
+  new ServiceError('NOT_QUEUED', 'Claude has already read this message');
 
 const describeRequest = (
   variant: PermissionItem['variant'],

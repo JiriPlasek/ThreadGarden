@@ -406,7 +406,13 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
     }
     const fallback = historyHeader(sessionId, lastReply);
     if (!s) {
-      return { items: history, seq: host.seqOf(sessionId), header: fallback, tasks: [], queued: [] };
+      return {
+        items: history,
+        seq: host.seqOf(sessionId),
+        header: fallback,
+        tasks: [],
+        queued: [],
+      };
     }
     const snap = s.snapshot(Number.MAX_SAFE_INTEGER);
     const own = new Set(snap.items.map((i) => i.id));
@@ -588,6 +594,12 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
     const s = host.get(p.sessionId);
     if (s?.live) await s.interrupt();
     return {};
+  });
+
+  router.register('chat.withdraw', async (p) => {
+    const s = host.get(p.sessionId);
+    if (!s) throw new ServiceError('NOT_QUEUED', 'Claude has already read this message');
+    return s.withdraw(p.messageId);
   });
 
   const release = (sessionId: string): void => {

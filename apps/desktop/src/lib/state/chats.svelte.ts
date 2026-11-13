@@ -13,6 +13,7 @@ import {
   type MovePeer,
   type QueuedMessage,
   type Result,
+  type ReturnedMessage,
 } from '@threadgarden/protocol';
 import { SvelteMap } from 'svelte/reactivity';
 import { RequestError } from '../service/client';
@@ -486,6 +487,15 @@ export class ChatsState {
       ...(images?.length ? { images } : {}),
     });
     return r.queued;
+  };
+
+  /**
+   * Takes a queued message back before Claude reads it (to remove or edit it):
+   * its text and images. Rejects (`NOT_QUEUED`) once Claude has taken it up.
+   */
+  withdraw = async (sessionId: string, messageId: string): Promise<ReturnedMessage> => {
+    if (!this.api) throw new Error('Not connected to the Threadgarden service');
+    return this.api.request('chat.withdraw', { sessionId, messageId });
   };
 
   /** Starts a chat in `cwd` with its first message; resolves to the new chat's id. */

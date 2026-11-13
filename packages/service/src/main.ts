@@ -8,6 +8,7 @@ import {
   POWER_CAPABILITY,
   PROTOCOL_VERSION,
   UPDATE_CAPABILITY,
+  withReturned,
   type ChatStatus,
   type EventMsg,
   type MachineInfo,
@@ -901,6 +902,15 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         },
         // The header's context bar for a chat no process runs (after a restart, say).
         onContextWindow: (id, model, tokens) => opened.setContextWindow(id, model, tokens),
+        // Queued messages Claude never read go back in front of the chat's draft (its key is the id).
+        onReturned: (id, messages) => {
+          const draft = opened.getDraft(id)?.text ?? '';
+          const text = withReturned(
+            draft,
+            messages.map((m) => m.text),
+          );
+          if (text !== draft) opened.setDraft(id, text, clock());
+        },
       });
       host = sessionHost;
       // v1.3 B: the meter keeps up by itself, from a running chat's usage reading.

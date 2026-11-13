@@ -409,11 +409,23 @@ on one long tool call (a ten-minute build, a foreground subagent) reads a
 queued message only when that call ends. A turn that ends while a message is
 still queued is not finished (Claude goes straight on to it, so the chat stays
 working until that message's own `result`, or, should one ever come without a
-result, until every message taken up since has completed); a message Claude
-read during the turn does not hold the turn's end back. A message Claude never
-read because the process ended is noted in the chat. With a Claude Code that
-sends no lifecycle frames, queued messages join the transcript at the next
-`result`, where such a CLI takes them up.
+result, until every message taken up since has completed, or until a message
+it waited for is cancelled or taken back instead, which no `result` follows); a
+message Claude read during the turn does not hold the turn's end back. With a
+Claude Code that sends no lifecycle frames, queued messages join the transcript
+at the next `result`, where such a CLI takes them up.
+
+As in the terminal, a queued message can be taken back before Claude reads it:
+each greyed row has Remove, and Up in an empty message box brings the last one
+back into the box to edit (`chat.withdraw`, which sends Claude Code's
+`cancel_async_message`; `NOT_QUEUED` once a turn has it). Stop interrupts with
+`cancel_queued`, so Claude Code cancels what is still queued rather than
+running it next, and those messages, like the ones a process that ended never
+read, come back: the service puts their text in front of the chat's saved
+draft, one per line (`withReturned`), and emits `messagesReturned` with their
+text and images, which the chat's composer, if one is on screen, puts in front
+of what it holds. A UI that has not loaded the draft gets the text from the
+service; with no composer on screen the images are not kept.
 
 **Your turn.** When a Threadgarden chat's turn ends (a `result` that leaves it
 waiting for the user, not one with a message still queued, and not one of a turn
@@ -1467,6 +1479,15 @@ unless said otherwise:
 - `priority: 'next'` to an idle process starts a turn at once.
 - A slash command (`/effort low`), idle or queued behind a turn, runs with no
   model turn but still ends with a `result` (`num_turns: 0`) after its output.
+- Probed again on 2026-11-12 (same versions), a follow-up queued while a 15 s
+  `sleep` ran: `interrupt` with `cancel_queued` (the SDK's undeclared
+  `interrupt({ cancelQueued: true })`; `interrupt_cancel_queued_v1` on init)
+  sent the follow-up's `cancelled` frame, then answered with it under
+  `cancelled`, then the turn's `result`; it never ran. A plain `interrupt`
+  answered with it under `still_queued`, and it ran as the next turn.
+  `cancel_async_message` (the SDK's undeclared `cancelAsyncMessage(uuid)`)
+  answered `true` after the follow-up's `cancelled` frame, and the turn went on
+  without it.
 - A follow-up sent while a 30 s foreground command ran was read only when the
   command ended. `priority: 'now'` did not help: it waited for the command too,
   then cancelled the turn. `backgroundTasks()` once the command was running

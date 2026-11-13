@@ -23,6 +23,25 @@ export const QueuedMessageSchema = z.object({
 export type QueuedMessage = z.infer<typeof QueuedMessageSchema>;
 
 /**
+ * A message Claude never read, given back to the user whole: one taken back
+ * from the queue (`chat.withdraw`), or one the queue gave back
+ * (`messagesReturned`).
+ */
+export const ReturnedMessageSchema = z.object({
+  text: z.string(),
+  images: z.array(ImageRefSchema).optional(),
+});
+export type ReturnedMessage = z.infer<typeof ReturnedMessageSchema>;
+
+/**
+ * A chat's draft with messages Claude never read put back in front of it,
+ * oldest first, one per line, as the terminal puts queued messages back into
+ * its input. The service and the composer both merge this way.
+ */
+export const withReturned = (draft: string, texts: readonly string[]): string =>
+  [...texts, draft].filter((t) => t.length > 0).join('\n');
+
+/**
  * Set on items produced inside a subagent: the `tool_use` id of the Agent/Task
  * call that started it (SDK `parent_tool_use_id`). Absent on main-thread items.
  */

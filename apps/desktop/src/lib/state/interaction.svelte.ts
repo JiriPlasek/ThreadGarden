@@ -1,4 +1,10 @@
-import type { ChatSummary, MovePeer, Result } from '@threadgarden/protocol';
+import {
+  withReturned,
+  type ChatSummary,
+  type MovePeer,
+  type Result,
+  type ReturnedMessage,
+} from '@threadgarden/protocol';
 import { quietly, type Api } from './api';
 import { chatKey, type ChatRef } from './refs';
 
@@ -87,10 +93,13 @@ export class InteractionState {
   private readonly drafts = new Map<string, string>();
   private readonly draftTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly commandCache = new Map<string, Promise<SlashCommand[]>>();
+  /** Mounted composers, by draft key: each takes the messages given back to its chat. */
+  private readonly takers = new Map<string, (messages: ReturnedMessage[]) => void>();
 
   init = (api: Api): void => {
     this.api = api;
     api.onOpen(() => this.loadStatus());
+    api.on('messagesReturned', (e) => this.returned(e.sessionId, e.messages));
     if (api.status === 'open') quietly(this.loadStatus());
   };
 
@@ -145,6 +154,38 @@ export class InteractionState {
     this.draftTimers.delete(key);
     this.drafts.set(key, '');
     if (this.api) quietly(this.api.request('drafts.set', { key, text: '' }));
+  };
+
+  /**
+   * The composer showing draft `key` takes messages given back to its chat
+   * (text and images) while mounted; returns the unregister.
+   */
+  takeReturned = (key: string, take: (messages: ReturnedMessage[]) => void): (() => void) => {
+    this.takers.set(key, take);
+    return () => {
+      if (this.takers.get(key) === take) this.takers.delete(key);
+    };
+  };
+
+  /**
+   * Queued messages Claude never read came back (`messagesReturned`; a chat's
+   * draft key is its id). The service has put their text in front of the
+   * saved draft already: a draft not loaded here gets it from there; one
+   * loaded gets it the same way, so a later save keeps it. Without a composer
+   * on screen their images are not kept.
+   */
+  private returned = (key: string, messages: ReturnedMessage[]): void => {
+    const take = this.takers.get(key);
+    if (take) return take(messages);
+    const draft = this.drafts.get(key);
+    if (draft === undefined) return;
+    this.saveDraft(
+      key,
+      withReturned(
+        draft,
+        messages.map((m) => m.text),
+      ),
+    );
   };
 
   // ── lookups ─────────────────────────────────────────────────────────────

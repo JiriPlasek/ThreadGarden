@@ -13,6 +13,7 @@ import {
 } from '../../src/lib/components/composer/input';
 import { user } from '../chat/fixtures';
 import { LOCAL } from '../layout/harness';
+import { RpcFail } from '../service/fake-ws';
 import { CWD, fill, pushItems, pushStatus, renderChat, SID } from './helpers';
 
 type SendParams = { sessionId: string; text: string; images?: unknown[] };
@@ -149,8 +150,7 @@ describe('composer', () => {
     const queued = [{ id: 'q1', text: 'and also check the docs', ts: 1 }];
     server.push('chat.status', { sessionId: SID, seq: 2, status: 'working', queued });
     const bubble = await screen.findByRole('group', { name: /queued message/i });
-    expect(within(bubble).getByText('and also check the docs')).toBeTruthy();
-    expect(bubble.className).toContain('opacity-50');
+    expect(within(bubble).getByText('and also check the docs').closest('.opacity-50')).toBeTruthy();
     // Not in the transcript yet, so there is nothing to fork from.
     expect(within(bubble).queryByRole('button', { name: /fork/i })).toBeNull();
     expect(screen.getByText(/1 message queued/i)).toBeTruthy();
@@ -183,6 +183,83 @@ describe('composer', () => {
     await waitFor(() =>
       expect(screen.queryByRole('group', { name: /queued message/i })).toBeNull(),
     );
+  });
+
+  it('a queued message has a Remove button that takes it back', async () => {
+    const { server } = await renderChat({
+      status: 'working',
+      items: [user('u1')],
+      configure: (s) => {
+        s.handlers['chat.withdraw'] = () => ({ text: 'never mind' });
+      },
+    });
+    const queued = [{ id: 'q1', text: 'never mind', ts: 1 }];
+    server.push('chat.status', { sessionId: SID, seq: 2, status: 'working', queued });
+    const bubble = await screen.findByRole('group', { name: /queued message/i });
+    await userEvent.click(within(bubble).getByRole('button', { name: /remove/i }));
+    await waitFor(() => expect(server.calls('chat.withdraw')).toHaveLength(1));
+    expect(server.calls('chat.withdraw')[0]!.params).toEqual({ sessionId: SID, messageId: 'q1' });
+  });
+
+  it('Up in an empty composer takes the last queued message back to edit it', async () => {
+    const img = { mediaType: 'image/png', data: 'AAAA' };
+    const { server, composer } = await renderChat({
+      status: 'working',
+      items: [user('u1')],
+      configure: (s) => {
+        s.handlers['chat.withdraw'] = () => ({ text: 'second, reworded', images: [img] });
+      },
+    });
+    const queued = [
+      { id: 'q1', text: 'first', ts: 1 },
+      { id: 'q2', text: 'second', ts: 2 },
+    ];
+    server.push('chat.status', { sessionId: SID, seq: 2, status: 'working', queued });
+    await screen.findAllByRole('group', { name: /queued message/i });
+    expect(screen.getByText(/edits the last one/i)).toBeTruthy();
+    composer().focus();
+    await userEvent.keyboard('{ArrowUp}');
+    await waitFor(() => expect(composer().value).toBe('second, reworded'));
+    expect(server.calls('chat.withdraw')[0]!.params).toEqual({ sessionId: SID, messageId: 'q2' });
+    expect(screen.getByRole('img', { name: /attached image 1/i })).toBeTruthy();
+    // Up in a box with text moves the caret, as usual.
+    await userEvent.keyboard('{ArrowUp}');
+    expect(server.calls('chat.withdraw')).toHaveLength(1);
+  });
+
+  it('Up says so when Claude has read the last queued message already', async () => {
+    const { server, composer } = await renderChat({
+      status: 'working',
+      items: [user('u1')],
+      configure: (s) => {
+        s.handlers['chat.withdraw'] = () => {
+          throw new RpcFail('NOT_QUEUED', 'Claude has already read this message');
+        };
+      },
+    });
+    const queued = [{ id: 'q1', text: 'first', ts: 1 }];
+    server.push('chat.status', { sessionId: SID, seq: 2, status: 'working', queued });
+    await screen.findByRole('group', { name: /queued message/i });
+    composer().focus();
+    await userEvent.keyboard('{ArrowUp}');
+    expect(await screen.findByText(/already read this message/i)).toBeTruthy();
+    expect(composer().value).toBe('');
+  });
+
+  it('queued messages given back (Stop) go in front of the draft, images too', async () => {
+    const img = { mediaType: 'image/png', data: 'AAAA' };
+    const { server, composer } = await renderChat({ status: 'working', items: [user('u1')] });
+    await userEvent.type(composer(), 'half-typed');
+    server.push('messagesReturned', {
+      sessionId: SID,
+      messages: [{ text: 'one' }, { text: 'two', images: [img] }],
+    });
+    await waitFor(() => expect(composer().value).toBe('one\ntwo\nhalf-typed'));
+    expect(screen.getByRole('img', { name: /attached image 1/i })).toBeTruthy();
+    // Another chat's are not this one's.
+    server.push('messagesReturned', { sessionId: 'other', messages: [{ text: 'elsewhere' }] });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(composer().value).toBe('one\ntwo\nhalf-typed');
   });
 
   it('draft survives remount', async () => {
