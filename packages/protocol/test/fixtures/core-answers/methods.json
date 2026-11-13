@@ -65,6 +65,7 @@
     "chat.setPermissionMode",
     "chat.since",
     "chat.stopTask",
+    "chat.withdraw",
     "copies.saveChat",
     "copies.saveLists",
     "devices.list",

@@ -219,7 +219,13 @@ export const SHORTCUTS: readonly Shortcut[] = [
     id: 'composer-stop',
     group: 'Composer',
     combos: [['Esc']],
-    description: 'Stop Claude while it is working',
+    description: 'Stop Claude while it is working (queued messages come back to the box)',
+  },
+  {
+    id: 'composer-recall-queued',
+    group: 'Composer',
+    combos: [['Up']],
+    description: 'Take the last queued message back to edit it (in an empty message box)',
   },
   {
     id: 'composer-mention',

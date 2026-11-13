@@ -4,6 +4,44 @@ export const ImageRefSchema = z.object({ mediaType: z.string(), data: z.string()
 export type ImageRef = z.infer<typeof ImageRefSchema>;
 
 /**
+ * A message the user sent while Claude was working that Claude has not read
+ * yet. Claude Code takes it up at the turn's next step (or when the turn
+ * ends); until then it is shown apart from the transcript, and at that point
+ * it becomes a `user` item with the same `id`, where Claude read it.
+ */
+export const QueuedMessageSchema = z.object({
+  id: z.string(),
+  text: z.string(),
+  /**
+   * How many images it carries (absent: none). Not the images: the list goes
+   * out with every status change; the `user` item carries them.
+   */
+  imageCount: z.number().int().positive().optional(),
+  /** When it was sent (epoch ms). */
+  ts: z.number(),
+});
+export type QueuedMessage = z.infer<typeof QueuedMessageSchema>;
+
+/**
+ * A message Claude never read, given back to the user whole: one taken back
+ * from the queue (`chat.withdraw`), or one the queue gave back
+ * (`messagesReturned`).
+ */
+export const ReturnedMessageSchema = z.object({
+  text: z.string(),
+  images: z.array(ImageRefSchema).optional(),
+});
+export type ReturnedMessage = z.infer<typeof ReturnedMessageSchema>;
+
+/**
+ * A chat's draft with messages Claude never read put back in front of it,
+ * oldest first, one per line, as the terminal puts queued messages back into
+ * its input. The service and the composer both merge this way.
+ */
+export const withReturned = (draft: string, texts: readonly string[]): string =>
+  [...texts, draft].filter((t) => t.length > 0).join('\n');
+
+/**
  * Set on items produced inside a subagent: the `tool_use` id of the Agent/Task
  * call that started it (SDK `parent_tool_use_id`). Absent on main-thread items.
  */

@@ -220,15 +220,27 @@ export const usageReader = (q: object): (() => Promise<unknown>) | undefined => 
   return () => Promise.resolve(read.call(q, { skipBehaviors: true }) as unknown);
 };
 
+/**
+ * `Query` methods SDK 0.3.314 has but does not declare: `interrupt` takes
+ * `cancelQueued`, and `cancelAsyncMessage` sends `cancel_async_message`
+ * (both verified with Claude Code 2.1.319, docs/architecture.md).
+ */
+type QueueControls = {
+  interrupt(o: { cancelQueued: boolean }): Promise<unknown>;
+  cancelAsyncMessage(uuid: string): Promise<boolean>;
+};
+
 class RealSession implements AgentSession {
   private closed = false;
   readonly usage: (() => Promise<unknown>) | undefined;
+  private readonly queue: QueueControls;
 
   constructor(
     private readonly q: Query,
     private readonly input: InputQueue,
   ) {
     this.usage = usageReader(q);
+    this.queue = q as unknown as QueueControls;
   }
 
   get messages(): AsyncIterable<SDKMessage> {
@@ -240,7 +252,11 @@ class RealSession implements AgentSession {
   }
 
   async interrupt(): Promise<void> {
-    await this.q.interrupt();
+    await this.queue.interrupt({ cancelQueued: true });
+  }
+
+  async cancelQueued(uuid: string): Promise<boolean> {
+    return (await this.queue.cancelAsyncMessage(uuid)) === true;
   }
 
   setModel(m?: string): Promise<void> {

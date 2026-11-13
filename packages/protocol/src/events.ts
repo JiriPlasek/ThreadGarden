@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { AwayItemSchema, AwayStateSchema } from './away.js';
 import { ChatHeaderInfoSchema, ChatStatusSchema } from './chat.js';
-import { ChatItemSchema } from './items.js';
+import { ChatItemSchema, QueuedMessageSchema, ReturnedMessageSchema } from './items.js';
 import { PairedMachineSchema, PhoneAccessSchema } from './machines.js';
 import { MachinePowerStatusSchema } from './power.js';
 import { ChatTaskSchema } from './tasks.js';
@@ -22,6 +22,12 @@ export const ChatStatusEventSchema = z.object({
   status: ChatStatusSchema,
   header: ChatHeaderInfoSchema.optional(),
   waitingFor: z.string().optional(),
+  /**
+   * Messages sent while Claude was working that it has not read yet, oldest
+   * first (the whole list, replacing the last one). Absent from services that
+   * predate it; empty when nothing waits.
+   */
+  queued: z.array(QueuedMessageSchema).optional(),
 });
 export type ChatStatusEvent = z.infer<typeof ChatStatusEventSchema>;
 
@@ -57,6 +63,17 @@ export const events = {
     sessionId: z.string(),
     title: z.string(),
     projectName: z.string(),
+  }),
+  /**
+   * Queued messages Claude will never read came back (Stop cancelled them, or
+   * the process ended), oldest first: the UI puts them back into the chat's
+   * message box, as the terminal does. The service has already put their text
+   * in front of the chat's saved draft (`withReturned`), so a UI that has not
+   * loaded that draft has nothing to do.
+   */
+  messagesReturned: z.object({
+    sessionId: z.string(),
+    messages: z.array(ReturnedMessageSchema),
   }),
   // ── v1.2 B1: buckets ──────────────────────────────────────────────────────
   /**

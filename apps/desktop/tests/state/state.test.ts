@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ServiceClient } from '../../src/lib/service/client';
 import { ChatsState } from '../../src/lib/state/chats.svelte';
 import { ConnectionState } from '../../src/lib/state/connection.svelte';
+import { InteractionState } from '../../src/lib/state/interaction.svelte';
 import { PlacesState } from '../../src/lib/state/places.svelte';
 import { SessionsState } from '../../src/lib/state/sessions.svelte';
 import { COLUMNS_SAVE_DELAY_MS, SettingsState } from '../../src/lib/state/settings.svelte';
@@ -133,6 +134,22 @@ describe('chats', () => {
     expect(chat.header).toEqual({ model: 'm', effort: 'high' });
   });
 
+  it('a message leaving the queue is in the items the moment it leaves', async () => {
+    const { chats } = setup();
+    await chats.open('s1');
+    const chat = chats.get('s1')!;
+    const queued = [{ id: 'q1', text: 'also this', ts: 1 }];
+    server.push('chat.status', { sessionId: 's1', seq: 11, status: 'working', queued });
+    expect(chat.queuedMessages).toEqual(queued);
+    // Claude reads it: the service sends its item, then a status without it.
+    const user: ChatItem = { kind: 'user', id: 'q1', text: 'also this', ts: 1 };
+    server.push('chat.items', { sessionId: 's1', seq: 12, items: [user] });
+    server.push('chat.status', { sessionId: 's1', seq: 13, status: 'working', queued: [] });
+    // No frame has run: it would otherwise be in neither place until the next one.
+    expect(chat.queuedMessages).toEqual([]);
+    expect(chat.items.map((i) => i.id)).toEqual(['a', 'q1']);
+  });
+
   it('keeps events that arrive while chat.open is in flight', async () => {
     const { chats, runFrame } = setup();
     server.silent.add('chat.open');
@@ -235,6 +252,27 @@ describe('chats', () => {
     await chats.loadOlder('s1');
     expect(chats.get('s1')!.items.map((i) => i.id)).toEqual(['o1', 'a']);
     expect(chats.get('s1')!.hasMore).toBe(false);
+  });
+});
+
+describe('interaction', () => {
+  it('queued messages given back go in front of a loaded draft, with no composer on screen', async () => {
+    const saved: { key: string; text: string }[] = [];
+    server.handlers['drafts.set'] = (p) => {
+      saved.push(p as { key: string; text: string });
+      return {};
+    };
+    const interaction = new InteractionState();
+    interaction.init(client);
+    interaction.saveDraft('s1', 'mine');
+    server.push('messagesReturned', { sessionId: 's1', messages: [{ text: 'one' }] });
+    // A draft not loaded here: the service put the text into the saved one already.
+    server.push('messagesReturned', { sessionId: 's2', messages: [{ text: 'two' }] });
+    await flushAsync();
+    expect(interaction.cachedDraft('s1')).toBe('one\nmine');
+    expect(interaction.cachedDraft('s2')).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(saved).toEqual([{ key: 's1', text: 'one\nmine' }]);
   });
 });
 
