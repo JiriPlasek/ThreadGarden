@@ -21,7 +21,8 @@ describe('a suggested reply on the phone', () => {
     expect(screen.queryByRole('button', { name: 'Tab to accept suggestion' })).toBeNull();
     expect(screen.queryByText(/Esc to dismiss/)).toBeNull();
     await userEvent.click(use);
-    expect(composer().value).toBe('Run the tests');
+    // On the phone the box is a plain textarea (`PlainEditor`).
+    expect((composer() as unknown as HTMLTextAreaElement).value).toBe('Run the tests');
     expect(server.calls('chat.send')).toHaveLength(0);
   });
 });

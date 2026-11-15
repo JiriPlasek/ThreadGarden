@@ -15,12 +15,13 @@ test('a predicted reply is visible, Tab accepts it and Enter sends it', async ({
   const list = page.getByRole('region', { name: 'Chat list' });
   // A chat no other spec runs: its process starts now, with the setting on.
   await list.locator('[role="option"][data-session-id="session-999"]').click();
+  // The badge editor: a contenteditable, so its text, not a value.
   const composer = page.getByRole('textbox', { name: 'Message' });
   await composer.fill('Please suggest a follow-up');
   await composer.press('Enter');
   const accept = page.getByRole('button', { name: 'Tab to accept suggestion' });
   await expect(accept).toBeVisible();
-  await expect(composer).toHaveValue('');
+  await expect(composer).toHaveText('');
   const ghost = page
     .locator('[aria-hidden="true"]')
     .filter({ hasText: /^Run the tests and fix any failures$/ });
@@ -30,9 +31,9 @@ test('a predicted reply is visible, Tab accepts it and Enter sends it', async ({
   await expect(accept).toBeVisible();
   await composer.press('Tab');
   await expect(composer).toBeFocused();
-  await expect(composer).toHaveValue('Run the tests and fix any failures');
+  await expect(composer).toHaveText('Run the tests and fix any failures');
   await expect(accept).toHaveCount(0);
   await composer.press('Enter');
-  await expect(composer).toHaveValue('');
+  await expect(composer).toHaveText('');
   await expect(page.getByText('Run the tests and fix any failures', { exact: true })).toBeVisible();
 });

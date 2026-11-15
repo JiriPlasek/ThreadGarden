@@ -8,16 +8,20 @@
 import './sqlite-warning.js';
 import { DatabaseSync } from 'node:sqlite';
 import {
+  ImageRefSchema,
   SettingsSchema,
   type Bucket,
+  type ImageRef,
   type Settings,
   type SettingsPatch,
 } from '@threadgarden/protocol';
-import type { ZodType } from 'zod';
+import { z, type ZodType } from 'zod';
 import type { LiveRegistry } from '../chat/live-session.js';
 import type { SDKSessionInfo } from '../sdk/adapter.js';
 import { migrate } from './migrations.js';
 import { localDay, type SessionStats } from './stats.js';
+
+const DraftImagesSchema = z.array(ImageRefSchema);
 
 export type SessionRow = {
   sessionId: string;
@@ -630,9 +634,9 @@ export class Db implements LiveRegistry {
   }
 
   /**
-   * Removes a session's row, index text and "Your turn" state. `meta` and
-   * `drafts` are kept on purpose (cheap, and a Threadgarden title survives a
-   * transcript that reappears).
+   * Removes a session's row, index text and "Your turn" state. `meta`,
+   * `drafts` and `sent_images` are kept on purpose (cheap, and a Threadgarden
+   * title or image tag survives a transcript that reappears).
    */
   deleteSession(sessionId: string): void {
     this.raw.exec('BEGIN');
@@ -943,22 +947,48 @@ export class Db implements LiveRegistry {
 
   // --- drafts -------------------------------------------------------------------
 
-  getDraft(key: string): { text: string; updatedAt: number } | undefined {
-    const r = this.raw.prepare('SELECT text, updated_at FROM drafts WHERE key = ?').get(key);
-    return r ? { text: r.text as string, updatedAt: r.updated_at as number } : undefined;
+  getDraft(key: string): { text: string; images: ImageRef[]; updatedAt: number } | undefined {
+    const r = this.raw
+      .prepare(
+        `SELECT d.text, d.updated_at, i.images FROM drafts d
+         LEFT JOIN draft_images i ON i.key = d.key WHERE d.key = ?`,
+      )
+      .get(key);
+    if (!r) return undefined;
+    const images = DraftImagesSchema.safeParse(JSON.parse((r.images as string | null) ?? '[]'));
+    return {
+      text: r.text as string,
+      images: images.success ? images.data : [],
+      updatedAt: r.updated_at as number,
+    };
   }
 
-  setDraft(key: string, text: string, updatedAt: number): void {
-    this.raw
-      .prepare(
-        `INSERT INTO drafts (key, text, updated_at) VALUES (?, ?, ?)
-         ON CONFLICT(key) DO UPDATE SET text = excluded.text, updated_at = excluded.updated_at`,
-      )
-      .run(key, text, updatedAt);
+  setDraft(key: string, text: string, images: readonly ImageRef[], updatedAt: number): void {
+    this.inTransaction(() => {
+      this.raw
+        .prepare(
+          `INSERT INTO drafts (key, text, updated_at) VALUES (?, ?, ?)
+           ON CONFLICT(key) DO UPDATE SET text = excluded.text, updated_at = excluded.updated_at`,
+        )
+        .run(key, text, updatedAt);
+      if (images.length === 0) {
+        this.raw.prepare('DELETE FROM draft_images WHERE key = ?').run(key);
+      } else {
+        this.raw
+          .prepare(
+            `INSERT INTO draft_images (key, images) VALUES (?, ?)
+             ON CONFLICT(key) DO UPDATE SET images = excluded.images`,
+          )
+          .run(key, JSON.stringify(images));
+      }
+    });
   }
 
   deleteDraft(key: string): void {
-    this.raw.prepare('DELETE FROM drafts WHERE key = ?').run(key);
+    this.inTransaction(() => {
+      this.raw.prepare('DELETE FROM drafts WHERE key = ?').run(key);
+      this.raw.prepare('DELETE FROM draft_images WHERE key = ?').run(key);
+    });
   }
 
   // --- settings / ui state ------------------------------------------------------
@@ -1039,6 +1069,22 @@ export class Db implements LiveRegistry {
     );
     stmt.run(`chat:${sessionId}`, Math.round(tokens));
     if (model !== undefined) stmt.run(`model:${model}`, Math.round(tokens));
+  }
+
+  /** Remembers the `[Image #N]` number of each image the message `uuid` was sent with, in order. */
+  setImageNumbers(sessionId: string, uuid: string, numbers: readonly number[]): void {
+    this.raw
+      .prepare(
+        `INSERT INTO sent_images (uuid, session_id, numbers) VALUES (?, ?, ?)
+         ON CONFLICT(uuid) DO UPDATE SET numbers = excluded.numbers`,
+      )
+      .run(uuid, sessionId, JSON.stringify(numbers));
+  }
+
+  /** The tag numbers the message `uuid` was sent with; undefined when not sent from here. */
+  imageNumbers(uuid: string): number[] | undefined {
+    const row = this.raw.prepare('SELECT numbers FROM sent_images WHERE uuid = ?').get(uuid);
+    return row ? (JSON.parse(row.numbers as string) as number[]) : undefined;
   }
 
   /** The window size last reported for `sessionId`, else for `model`; undefined when neither was. */

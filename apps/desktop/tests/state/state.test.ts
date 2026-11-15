@@ -296,22 +296,45 @@ describe('chats', () => {
 
 describe('interaction', () => {
   it('queued messages given back go in front of a loaded draft, with no composer on screen', async () => {
-    const saved: { key: string; text: string }[] = [];
+    const saved: { key: string; text: string; images?: unknown[] }[] = [];
     server.handlers['drafts.set'] = (p) => {
-      saved.push(p as { key: string; text: string });
+      saved.push(p as { key: string; text: string; images?: unknown[] });
       return {};
     };
     const interaction = new InteractionState();
     interaction.init(client);
-    interaction.saveDraft('s1', 'mine');
+    interaction.saveDraft('s1', { text: 'mine', images: [] });
     server.push('messagesReturned', { sessionId: 's1', messages: [{ text: 'one' }] });
     // A draft not loaded here: the service put the text into the saved one already.
     server.push('messagesReturned', { sessionId: 's2', messages: [{ text: 'two' }] });
     await flushAsync();
-    expect(interaction.cachedDraft('s1')).toBe('one\nmine');
+    expect(interaction.cachedDraft('s1')).toEqual({ text: 'one\nmine', images: [] });
     expect(interaction.cachedDraft('s2')).toBeUndefined();
     await vi.advanceTimersByTimeAsync(1000);
-    expect(saved).toEqual([{ key: 's1', text: 'one\nmine' }]);
+    expect(saved).toEqual([{ key: 's1', text: 'one\nmine', images: [] }]);
+  });
+
+  it('a given-back message keeps its images, numbered past the draft’s own', async () => {
+    const interaction = new InteractionState();
+    interaction.init(client);
+    const mine = { mediaType: 'image/png', data: 'MINE', number: 1 };
+    const theirs = { mediaType: 'image/png', data: 'THEIRS', number: 1 };
+    interaction.saveDraft('s1', { text: 'see [Image #1]', images: [mine] });
+    interaction.saveAttachments('s1', {
+      text: 'stale',
+      attachments: { images: {}, pastes: {}, nextImage: 1, nextPaste: 1 },
+    });
+    server.push('messagesReturned', {
+      sessionId: 's1',
+      messages: [{ text: 'look at [Image #1]', images: [theirs] }],
+    });
+    await flushAsync();
+    expect(interaction.cachedDraft('s1')).toEqual({
+      text: 'look at [Image #2]\nsee [Image #1]',
+      images: [{ ...theirs, number: 2 }, mine],
+    });
+    // The next composer restores from the draft, not from the composer state it had.
+    expect(interaction.cachedAttachments('s1')).toBeUndefined();
   });
 });
 

@@ -1,5 +1,11 @@
 <script lang="ts">
-  import type { AwayItem, ImageRef, ReturnedMessage, ScheduledSend } from '@threadgarden/protocol';
+  import {
+    messagePreview,
+    type AwayItem,
+    type ImageRef,
+    type ReturnedMessage,
+    type ScheduledSend,
+  } from '@threadgarden/protocol';
   import ArrowRightLeftIcon from '@lucide/svelte/icons/arrow-right-left';
   import CheckIcon from '@lucide/svelte/icons/check';
   import GaugeIcon from '@lucide/svelte/icons/gauge';
@@ -224,7 +230,7 @@
   };
 
   let root = $state<HTMLDivElement | null>(null);
-  let composerBox = $state<HTMLTextAreaElement | null>(null);
+  let composerBox = $state<HTMLDivElement | HTMLTextAreaElement | null>(null);
   let list = $state<ReturnType<typeof MessageList> | null>(null);
   let composer = $state<ReturnType<typeof Composer> | null>(null);
 
@@ -503,7 +509,10 @@
     const a = document.activeElement;
     if (!a || a === document.body) return false;
     if (!root?.contains(a)) return true;
-    if (a === composerBox) return composerBox.value.trim() !== '';
+    if (a === composerBox) {
+      const typed = a instanceof HTMLTextAreaElement ? a.value : a.textContent;
+      return (typed ?? '').trim() !== '';
+    }
     return (
       a instanceof HTMLInputElement ||
       a instanceof HTMLTextAreaElement ||
@@ -744,6 +753,8 @@
             onFork={readOnly ? undefined : fork}
             requests={readOnly ? undefined : requests}
             requestsDocked={!readOnly}
+            tasks={machineAway ? [] : chat.tasks}
+            {working}
             memory={chat.view}
             stickRequests={chat.stickRequests}
           />
@@ -914,7 +925,7 @@
                 data-away-item
               >
                 {#if w.text}
-                  <p class="text-sm break-words whitespace-pre-wrap">{w.text}</p>
+                  <p class="text-sm break-words whitespace-pre-wrap">{messagePreview(w.text)}</p>
                 {/if}
                 {#if w.imageCount > 0}
                   <p class="text-muted-foreground">{imageCountText(w.imageCount)}</p>
@@ -986,7 +997,7 @@
             <div class="contents" hidden={docked !== undefined}>
               <Composer
                 bind:this={composer}
-                bind:textarea={composerBox}
+                bind:editorElement={composerBox}
                 draftKey={sessionId}
                 cwd={chat.summary?.cwd ?? ''}
                 commandScope={{ sessionId }}

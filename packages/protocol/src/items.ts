@@ -1,6 +1,11 @@
 import { z } from 'zod';
 
-export const ImageRefSchema = z.object({ mediaType: z.string(), data: z.string() });
+export const ImageRefSchema = z.object({
+  mediaType: z.string(),
+  data: z.string(),
+  /** The number of its `[Image #N]` tag in the message text, when known. */
+  number: z.number().int().positive().optional(),
+});
 export type ImageRef = z.infer<typeof ImageRefSchema>;
 
 /**
@@ -40,6 +45,45 @@ export type ReturnedMessage = z.infer<typeof ReturnedMessageSchema>;
  */
 export const withReturned = (draft: string, texts: readonly string[]): string =>
   [...texts, draft].filter((t) => t.length > 0).join('\n');
+
+const IMAGE_TAG = /\[Image #([1-9]\d*)\]/g;
+
+/**
+ * `withReturned` for a draft with images: each given-back message's images,
+ * and the `[Image #N]` tags in its text that stand for them, get numbers past
+ * every tag and image already there, so no two tags in the draft meet. The
+ * service (the saved draft) and the desktop (a draft no composer shows) both
+ * merge this way.
+ */
+export const draftWithReturned = (
+  draft: { text: string; images: readonly ImageRef[] },
+  messages: readonly ReturnedMessage[],
+): { text: string; images: ImageRef[] } => {
+  const taken = [draft.text, ...messages.map((m) => m.text)].flatMap((t) =>
+    [...t.matchAll(IMAGE_TAG)].map((m) => Number(m[1])),
+  );
+  let next = Math.max(0, ...taken, ...draft.images.map((i) => i.number ?? 0)) + 1;
+  const texts: string[] = [];
+  const images: ImageRef[] = [];
+  for (const message of messages) {
+    const fresh = new Map<number, number>();
+    for (const image of message.images ?? []) {
+      if (image.number === undefined) {
+        images.push(image);
+        continue;
+      }
+      if (!fresh.has(image.number)) fresh.set(image.number, next++);
+      images.push({ ...image, number: fresh.get(image.number)! });
+    }
+    texts.push(
+      message.text.replace(IMAGE_TAG, (tag, n: string) => {
+        const number = fresh.get(Number(n));
+        return number === undefined ? tag : `[Image #${number}]`;
+      }),
+    );
+  }
+  return { text: withReturned(draft.text, texts), images: [...images, ...draft.images] };
+};
 
 /**
  * Set on items produced inside a subagent: the `tool_use` id of the Agent/Task
@@ -104,9 +148,11 @@ export const ChatItemSchema = z.discriminatedUnion('kind', [
     setup: z.boolean().optional(),
     /**
      * Full text behind a collapsed item whose `text` is a short label (Ruling
-     * R27: notifications and hand-backs the CLI injects as user turns).
+     * R27: notifications and hand-backs the CLI injects as user turns; a
+     * loaded skill's instructions).
      */
     detail: z.string().optional(),
+    ...parent,
   }),
   z.object({ kind: z.literal('compactBoundary'), id: z.string() }),
   z.object({

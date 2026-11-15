@@ -17,7 +17,7 @@
  * while they had no title at all) are named, never history-only or external ones.
  */
 import { randomUUID } from 'node:crypto';
-import type { EventMsg } from '@threadgarden/protocol';
+import { messagePreview, type EventMsg } from '@threadgarden/protocol';
 import { FIRST_PROMPT_MAX, UNTITLED_TITLE, titleFor } from '../history/catalog.js';
 import type { Db } from '../history/db.js';
 import type { AgentAdapter } from '../sdk/adapter.js';
@@ -65,7 +65,10 @@ const cut = (s: string): string => s.slice(0, FIRST_PROMPT_MAX).trim();
  * collapsed, at most 80 characters. Empty for a message without text.
  */
 export const provisionalTitle = (text: string): string => {
-  const line = text.split(/\r?\n/).find((l) => l.trim() !== '') ?? '';
+  const line =
+    messagePreview(text)
+      .split(/\r?\n/)
+      .find((l) => l.trim() !== '') ?? '';
   const flat = collapse(line);
   // A sentence ends at . ! ? followed by a space (not inside `app.ts` or `v1.2`,
   // nor after an abbreviation such as "e.g.").

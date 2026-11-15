@@ -8,7 +8,7 @@ import {
   POWER_CAPABILITY,
   PROTOCOL_VERSION,
   UPDATE_CAPABILITY,
-  withReturned,
+  draftWithReturned,
   type ChatStatus,
   type EventMsg,
   type MachineInfo,
@@ -902,14 +902,19 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         },
         // The header's context bar for a chat no process runs (after a restart, say).
         onContextWindow: (id, model, tokens) => opened.setContextWindow(id, model, tokens),
-        // Queued messages Claude never read go back in front of the chat's draft (its key is the id).
+        // Which tag each sent image is: the transcript does not keep it.
+        sentImages: {
+          set: (id, uuid, numbers) => opened.setImageNumbers(id, uuid, numbers),
+          get: (uuid) => opened.imageNumbers(uuid),
+        },
+        // Queued messages Claude never read go back in front of the chat's draft (its key
+        // is the id), their images with them, renumbered past the draft's own.
         onReturned: (id, messages) => {
-          const draft = opened.getDraft(id)?.text ?? '';
-          const text = withReturned(
-            draft,
-            messages.map((m) => m.text),
-          );
-          if (text !== draft) opened.setDraft(id, text, clock());
+          const draft = opened.getDraft(id) ?? { text: '', images: [] };
+          const next = draftWithReturned(draft, messages);
+          if (next.text !== draft.text || next.images.length !== draft.images.length) {
+            opened.setDraft(id, next.text, next.images, clock());
+          }
         },
       });
       host = sessionHost;

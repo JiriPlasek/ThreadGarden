@@ -332,6 +332,24 @@ const steps: string[] = [
     tokens INTEGER NOT NULL
   );
   `,
+  // the `[Image #N]` number of each image a message was sent with (JSON array, in
+  // the message's image order), by the message's uuid: the transcript keeps the
+  // images but not which tag each one is (the SDK drops the CLI's own numbers).
+  `
+  CREATE TABLE IF NOT EXISTS sent_images (
+    uuid TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    numbers TEXT NOT NULL
+  );
+  `,
+  // a draft's images (JSON array of `ImageRef`, each with its tag's number), by
+  // the draft's key, so they outlive a restart as its text in `drafts` does.
+  `
+  CREATE TABLE IF NOT EXISTS draft_images (
+    key TEXT PRIMARY KEY,
+    images TEXT NOT NULL
+  );
+  `,
 ];
 
 /** Runs the steps not run yet; `upTo` stops early (tests build older schemas with it). */

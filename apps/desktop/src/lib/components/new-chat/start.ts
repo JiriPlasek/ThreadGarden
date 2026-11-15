@@ -8,6 +8,7 @@ import type { ImageRef } from '@threadgarden/protocol';
 import { RequestError } from '#lib/service/client.js';
 import { newChatDraftKey, type InteractionState } from '#lib/state/interaction.svelte.js';
 import type { MachineScope } from '#lib/state/scope.js';
+import { outgoing } from '#lib/components/composer/tags.js';
 
 /** Everything a send needs, taken when it is sent: a machine switch meanwhile changes none of it. */
 export type Send = {
@@ -39,8 +40,13 @@ export const sendOf = (o: {
 
 /** `send` with the message as it is now in its draft (else as it was sent). */
 export const asNow = (send: Send): Send => {
-  const text = send.target.interaction.cachedDraft(send.draftKey) || send.text;
-  return { ...send, text, chat: { ...send.chat, text } };
+  const interaction = send.target.interaction;
+  const draft = interaction.cachedAttachments(send.draftKey);
+  const current = draft ? outgoing(draft.text, draft.attachments) : null;
+  const saved = interaction.cachedDraft(send.draftKey);
+  const text = current?.text ?? saved?.text ?? send.text;
+  const images = current?.images ?? saved?.images ?? send.chat.images;
+  return { ...send, text, chat: { ...send.chat, text, images } };
 };
 
 /** A folder the service just made for a new chat (`problem`: a step it skipped, e.g. the repo). */
@@ -103,9 +109,16 @@ export const startInMade = async (
 
 /** Start there: the message as it is now (else as it was sent) becomes the made folder's draft. */
 export const moveDraft = (
-  interaction: Pick<InteractionState, 'cachedDraft' | 'saveDraft' | 'clearDraft'>,
+  interaction: Pick<
+    InteractionState,
+    'cachedDraft' | 'saveDraft' | 'clearDraft' | 'moveAttachments'
+  >,
   n: NotStarted,
 ): void => {
-  interaction.saveDraft(newChatDraftKey(n.path), interaction.cachedDraft(n.draftKey) ?? n.text);
+  interaction.saveDraft(
+    newChatDraftKey(n.path),
+    interaction.cachedDraft(n.draftKey) ?? { text: n.text, images: [] },
+  );
+  interaction.moveAttachments(n.draftKey, newChatDraftKey(n.path));
   interaction.clearDraft(n.draftKey);
 };

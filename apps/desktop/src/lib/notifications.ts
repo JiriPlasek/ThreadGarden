@@ -37,7 +37,7 @@
  * announced holds on a machine. The core is only told which chat is in front
  * of the owner (`setActiveChat`), so it doesn't alert for that one.
  */
-import type { ChatStatus, ChatSummary } from '@threadgarden/protocol';
+import { messagePreview, type ChatStatus, type ChatSummary } from '@threadgarden/protocol';
 import { baseName } from './components/layout/chat-info';
 import {
   isPhone,
@@ -200,7 +200,7 @@ const watch = (scope: MachineScope, deps: AttentionDeps, shared: AttentionShared
     return text ? `${machineLabel(m)} · ${text}` : machineLabel(m);
   };
   const say = (title: string, text: string, sessionId: string): void => {
-    quietly(notify(title, body(text), keyOf(sessionId)));
+    quietly(notify(messagePreview(title), body(messagePreview(text)), keyOf(sessionId)));
   };
 
   // ── v1.2 §3: back from hold ──

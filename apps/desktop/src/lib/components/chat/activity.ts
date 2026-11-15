@@ -1,5 +1,6 @@
 import type { ChatTask } from '@threadgarden/protocol';
 import { taskEnded } from '#lib/state/chats.svelte.js';
+import type { ToolCallItem } from './rows';
 
 /** Deepest indent of a nested task; deeper ones still sit under their parent, at this indent. */
 export const MAX_NEST_DEPTH = 3;
@@ -61,6 +62,50 @@ export const taskRows = (tasks: readonly ChatTask[]): TaskRow[] => {
   // Only tasks in a parent loop are left: list each loop from its first task in order.
   for (const t of tasks.slice().sort(compareTasks)) visit(t, 0, undefined);
   return rows;
+};
+
+/** How a subagent's row in the messages reads: its glyph, its word, and while running its start. */
+export type AgentRowStatus = {
+  icon: 'running' | 'ok' | 'error' | 'idle';
+  text: string;
+  /** Start time of a running task, for a live elapsed time. */
+  since?: number;
+};
+
+/** The result an Agent call returns at once when it starts its agent in the background. */
+const LAUNCHED = /^\s*Async agent launched/i;
+
+/**
+ * The status of the Agent/Task call `call`, from its task when the chat's
+ * task list has one: a background agent's call returns as soon as the agent
+ * starts, so only the task knows whether it is still running. Without a task
+ * (an old chat, or one Threadgarden does not run) a background launch says so
+ * rather than claiming Done.
+ */
+export const agentRowStatus = (
+  call: Pick<ToolCallItem, 'status' | 'resultText' | 'input'>,
+  task: ChatTask | undefined,
+): AgentRowStatus => {
+  if (task) {
+    switch (task.status) {
+      case 'completed':
+        return { icon: 'ok', text: 'Done' };
+      case 'failed':
+        return { icon: 'error', text: 'Failed' };
+      case 'stopped':
+        return { icon: 'idle', text: 'Stopped' };
+      case 'paused':
+        return { icon: 'idle', text: 'Paused' };
+    }
+    if (!taskEnded(task)) return { icon: 'running', text: 'Running', since: task.startedAt };
+  }
+  if (call.status === 'running') return { icon: 'running', text: 'Running' };
+  if (call.status === 'error') return { icon: 'error', text: 'Failed' };
+  const input = call.input as Record<string, unknown> | null | undefined;
+  if (input?.run_in_background === true || LAUNCHED.test(call.resultText ?? '')) {
+    return { icon: 'idle', text: 'Started in background' };
+  }
+  return { icon: 'ok', text: 'Done' };
 };
 
 /** A model id or alias as the row shows it: without a leading `claude-`. */

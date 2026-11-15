@@ -49,6 +49,26 @@ export const childrenByParent = (items: readonly ChatItem[]): Map<string, ChatIt
 };
 
 /**
+ * True when nothing since the user's latest message shows progress on its
+ * own: no streaming text, no running tool call (each has a spinner) and no
+ * request waiting for an answer. Only main-thread items count: a subagent's
+ * output sits inside its row, which shows the subagent's status. While a turn
+ * works, a quiet tail means Claude is between outputs (thinking, or waiting on
+ * the API) and nothing on screen says so.
+ */
+export const quietTail = (items: readonly ChatItem[]): boolean => {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i]!;
+    if (parentOf(it)) continue;
+    if (it.kind === 'user') return true;
+    if (it.kind === 'assistantText' && it.streaming) return false;
+    if (it.kind === 'toolCall' && it.status === 'running') return false;
+    if (it.kind === 'permissionRequest' && it.state === 'pending') return false;
+  }
+  return true;
+};
+
+/**
  * Groups `items` (in order) into rows. Items whose subagent call is not among
  * `items` (e.g. not paged in yet) stay at this level: nothing is ever dropped.
  */

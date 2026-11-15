@@ -1,5 +1,6 @@
 <script lang="ts">
   import {
+    ImageRefSchema,
     withReturned,
     type ImageRef,
     type PromptSuggestion,
@@ -21,7 +22,22 @@
   import type { FileSuggestion, SlashCommand } from '#lib/state/interaction.svelte.js';
   import type { SendWhen } from '#lib/state/scheduled.svelte.js';
   import Attachments from './Attachments.svelte';
-  import { caretLineTop } from './caret';
+  import ChipEditor from './ChipEditor.svelte';
+  import PlainEditor from './PlainEditor.svelte';
+  import { pasteLabel } from '@threadgarden/protocol';
+  import {
+    activeImages,
+    emptyAttachments,
+    expandPastes,
+    imageLabel,
+    importMessage,
+    longPaste,
+    nextNumber,
+    outgoing,
+    pasteId,
+    restoreMessage,
+    type AttachmentsState,
+  } from './tags';
   import {
     localCommand,
     menuCommands,
@@ -51,12 +67,13 @@
    * The message box (spec §6.4 "Input"): multi-line, Enter sends (Shift+Enter
    * for a new line; with `enterToSend` off, Ctrl/Cmd+Enter sends), `@` opens
    * the file picker, `/` at the start the command menu, pasted or dropped
-   * images are attached. The draft is kept per `draftKey` (saved debounced).
+   * images are attached. The editor keeps attachment chips atomic; the draft
+   * is kept per `draftKey` (saved debounced).
    *
    * Keystroke budget (spec §8, ≤ 16 ms): per input event this only reads the
-   * caret, scans the current word and resizes the box; file suggestions are
-   * debounced, the draft write is debounced, and the caret is measured only
-   * while a picker is open.
+   * caret and scans displayed text. Collapsed payloads are not re-scanned;
+   * file suggestions and draft serialization are debounced, and caret geometry
+   * is measured only while a picker is open.
    *
    * Esc closes an open picker here; otherwise it bubbles to the chat view,
    * which interrupts a working chat.
@@ -99,7 +116,7 @@
     editing,
     suggestion = null,
     onDismissSuggestion,
-    textarea = $bindable(null),
+    editorElement = $bindable(null),
   }: {
     draftKey: string;
     /** Folder whose files `@` suggests. */
@@ -138,7 +155,8 @@
       onSave: (text: string, images: ImageRef[]) => Promise<boolean>;
       onStop: () => void;
     };
-    textarea?: HTMLTextAreaElement | null;
+    /** The box typed in: a contenteditable, on the phone a textarea (`PlainEditor`). */
+    editorElement?: HTMLDivElement | HTMLTextAreaElement | null;
   } = $props();
 
   const { settings, scopes, machines } = useApp();
@@ -157,10 +175,44 @@
 
   /** Debounce for `files.suggest` while typing after `@`. */
   const SUGGEST_DELAY_MS = 80;
-  const MAX_HEIGHT_PX = 240;
 
-  let text = $state(untrack(() => interaction.cachedDraft(draftKey)) ?? '');
-  let images = $state.raw<ImageRef[]>([]);
+  let editor = $state<ChipEditor | PlainEditor | null>(null);
+  const initial = untrack(
+    () =>
+      interaction.cachedAttachments(draftKey) ??
+      restoreMessage(
+        interaction.cachedDraft(draftKey)?.text ?? '',
+        interaction.cachedDraft(draftKey)?.images,
+      ),
+  );
+  let text = $state(initial.text);
+  let attachments = $state.raw<AttachmentsState>(initial.attachments);
+  const numberedImages = $derived(activeImages(text, attachments));
+  const images = $derived(numberedImages.map(([, image]) => image));
+  const saveDraft = (): void => {
+    const value = text;
+    const state = attachments;
+    interaction.saveAttachments(draftKey, { text: value, attachments: state });
+    interaction.saveDraft(draftKey, () => outgoing(value, state));
+  };
+  const addImages = async (added: ImageRef[]): Promise<void> => {
+    const labels: string[] = [];
+    let state = { ...attachments, images: { ...attachments.images } };
+    for (const image of added) {
+      const number = nextNumber(text, state, 'image');
+      state.images[number] = image;
+      state.nextImage = number + 1;
+      labels.push(imageLabel(number));
+    }
+    attachments = state;
+    if (labels.length) await insertText(labels.join(' '));
+  };
+  const removeImage = async (i: number): Promise<void> => {
+    const number = numberedImages[i]?.[0];
+    if (number === undefined) return;
+    const label = imageLabel(number);
+    await replaceSelection(0, text.length, text.split(label).join(''));
+  };
   let imageError = $state<string | null>(null);
   let sending = $state(false);
   let dragging = $state(false);
@@ -180,16 +232,14 @@
     if (suggestion && (text || images.length > 0)) onDismissSuggestion?.();
   });
 
+  /** The prediction becomes the draft, through the editor (one undo step, saved as typed). */
   const acceptSuggestion = async (): Promise<void> => {
     const value = visibleSuggestion;
     if (!value) return;
-    text = value.text;
     onDismissSuggestion?.();
-    interaction.saveDraft(draftKey, text);
-    await tick();
-    textarea?.focus();
-    textarea?.setSelectionRange(text.length, text.length);
-    resize();
+    await replaceSelection(0, text.length, value.text);
+    editorElement?.focus();
+    editor?.select(text.length);
   };
 
   // ── pickers ─────────────────────────────────────────────────────────────
@@ -226,19 +276,18 @@
 
   /** Inserts `insert` at the caret (or the end), separated from the text before it. */
   const insertText = async (insert: string): Promise<void> => {
-    const el = textarea;
-    const focused = !!el && document.activeElement === el;
-    const start = focused ? (el.selectionStart ?? text.length) : text.length;
-    const end = focused ? (el.selectionEnd ?? start) : text.length;
+    const el = editorElement;
+    const focused = !!el && el.contains(document.activeElement);
+    const start = focused ? (editor?.selection().start ?? text.length) : text.length;
+    const end = focused ? (editor?.selection().end ?? start) : text.length;
     const before = text.slice(0, start);
     const pad = before && !/\s$/.test(before) ? ' ' : '';
-    const next = replaceRange(text, start, end, pad + insert);
-    text = next.text;
-    interaction.saveDraft(draftKey, text);
+    await replaceSelection(start, end, pad + insert);
+  };
+
+  const replaceSelection = async (start: number, end: number, insert: string): Promise<void> => {
+    editor?.replace(start, end, insert);
     await tick();
-    el?.focus();
-    el?.setSelectionRange(next.caret, next.caret);
-    resize();
   };
 
   const loadCommands = (): void => {
@@ -272,10 +321,11 @@
 
   /** Re-reads which picker the caret is in (after typing, clicking or picking). */
   const updatePicker = (): void => {
-    const el = textarea;
+    const el = editorElement;
     if (!el) return;
-    const caret = el.selectionStart ?? text.length;
-    if (el.selectionEnd !== el.selectionStart) return closePicker();
+    const selection = editor?.selection();
+    const caret = selection?.start ?? text.length;
+    if (selection && selection.end !== selection.start) return closePicker();
     const slash = slashAt(text, caret);
     const mention = slash ? null : mentionAt(text, caret);
     const prev = picker;
@@ -290,7 +340,7 @@
       if (prev) closePicker();
       return;
     }
-    anchorBottom = el.clientHeight - caretLineTop(el, picker.token.start);
+    anchorBottom = el.clientHeight - (editor?.caretTop() ?? 0);
   };
 
   const pick = async (i: number): Promise<void> => {
@@ -309,8 +359,11 @@
       }
       if (c?.control) {
         closePicker();
-        text = replaceRange(text, 0, p.token.end, '').text.trimStart();
-        interaction.saveDraft(draftKey, text);
+        await replaceSelection(
+          0,
+          text.length,
+          replaceRange(text, 0, p.token.end, '').text.trimStart(),
+        );
         runControl(c.control);
         return;
       }
@@ -318,71 +371,73 @@
     }
     if (!next) return;
     closePicker();
-    text = next.text;
-    interaction.saveDraft(draftKey, text);
-    await tick();
-    textarea?.focus();
-    textarea?.setSelectionRange(next.caret, next.caret);
-    resize();
+    await replaceSelection(0, text.length, next.text);
+    editorElement?.focus();
+    editor?.select(next.caret);
     // A folder keeps the picker open inside it.
     if (p.kind === 'mention' && files[i]?.kind === 'dir') updatePicker();
   };
 
   // ── typing ──────────────────────────────────────────────────────────────
 
-  const resize = (): void => {
-    const el = textarea;
-    if (!el) return;
-    el.style.height = 'auto';
-    el.style.height = `${Math.min(MAX_HEIGHT_PX, el.scrollHeight)}px`;
-    el.style.overflowY = el.scrollHeight > MAX_HEIGHT_PX ? 'auto' : 'hidden';
-  };
-
-  const oninput = (): void => {
-    onDismissSuggestion?.();
-    notice = null;
-    interaction.saveDraft(draftKey, text);
-    resize();
+  const oninput = (value: string, typed: boolean): void => {
+    text = value;
+    if (typed) {
+      notice = null;
+      onDismissSuggestion?.();
+    }
+    saveDraft();
     updatePicker();
   };
 
   /** What the box holds now (kept while a scheduled message is edited in it). */
-  export const current = (): { text: string; images: ImageRef[] } => ({ text, images });
+  export const current = (): { text: string; images: ImageRef[] } => outgoing(text, attachments);
 
   /** Puts a message back into the box (Edit of a scheduled message), replacing what is there. */
   export const load = async (value: string, imgs: ImageRef[]): Promise<void> => {
-    text = value;
-    images = imgs;
+    editor?.resetHistory();
+    const restored = restoreMessage(value, imgs);
+    text = restored.text;
+    attachments = restored.attachments;
     imageError = null;
     notice = null;
-    interaction.saveDraft(draftKey, text);
+    saveDraft();
     await tick();
-    resize();
-    textarea?.focus();
-    textarea?.setSelectionRange(text.length, text.length);
+    editorElement?.focus();
+    editor?.select(text.length);
   };
 
   /**
-   * Puts messages Claude never read back in front of what the box holds.
-   * `saved`: the service has put their text in front of the saved draft, so a
-   * draft not loaded yet brings it along.
+   * Puts messages Claude never read back in front of what the box holds, as
+   * `withReturned` does: their images and pastes come back as tags, numbered
+   * past the box's own. `saved`: the service has put them in front of the
+   * saved draft, so a draft not loaded yet brings them along.
    */
   const takeBack = async (messages: ReturnedMessage[], saved: boolean): Promise<void> => {
-    if (!saved || interaction.cachedDraft(draftKey) !== undefined) {
-      text = withReturned(
-        text,
-        messages.map((m) => m.text),
-      );
-      interaction.saveDraft(draftKey, text);
-    }
+    if (saved && interaction.cachedDraft(draftKey) === undefined) return;
     const fit = fitImages(
       images,
       messages.flatMap((m) => m.images ?? []),
     );
-    images = [...fit.accepted, ...images];
     if (fit.problem) imageError = fit.problem;
+    const fits = new Set(fit.accepted);
+    let state = attachments;
+    const texts: string[] = [];
+    for (const m of messages) {
+      const kept = (m.images ?? []).filter((image) => fits.has(image));
+      // Into an empty box a message comes back with its own numbers; next to text, past them.
+      const empty = !text && texts.length === 0 && activeImages(text, state).length === 0;
+      const imported = empty
+        ? restoreMessage(m.text, kept)
+        : importMessage(m.text, kept, [...texts, text].join('\n'), state);
+      texts.push(imported.text);
+      state = imported.attachments;
+    }
+    // Set, not typed: the editor follows, and focus stays where it is (also while disabled).
+    attachments = state;
+    text = withReturned(text, texts);
+    saveDraft();
     await tick();
-    resize();
   };
 
   /** Up in an empty box: the last queued message comes back to be edited. */
@@ -393,8 +448,8 @@
       const message = await onRecall();
       if (!message) return;
       await takeBack([message], false);
-      textarea?.focus();
-      textarea?.setSelectionRange(text.length, text.length);
+      editorElement?.focus();
+      editor?.select(text.length);
     } catch (err) {
       notice = err instanceof Error ? err.message : String(err);
     } finally {
@@ -415,7 +470,8 @@
     send: (text: string, images: ImageRef[]) => Promise<boolean> = editing?.onSave ?? onSubmit,
     rethrow = false,
   ): Promise<void> => {
-    const value = text.trim();
+    const prepared = outgoing(text, attachments);
+    const value = prepared.text.trim();
     if ((!value && images.length === 0) || sending || disabled) return;
     sending = true;
     try {
@@ -429,13 +485,15 @@
         }
         if (local?.control) {
           text = '';
+          attachments = emptyAttachments();
           interaction.clearDraft(draftKey);
           runControl(local.control);
           return;
         }
       }
       const sentText = text;
-      const sentImages = images;
+      const sentImages = prepared.images;
+      const sentAttachments = attachments;
       let sent: boolean;
       try {
         sent = await send(value, sentImages);
@@ -448,16 +506,26 @@
         // Text typed while the message was on its way stays in the box.
         if (text === sentText) {
           text = '';
+          attachments = emptyAttachments();
           interaction.clearDraft(draftKey);
         } else {
-          interaction.saveDraft(draftKey, text);
+          saveDraft();
         }
-        images = images.filter((img) => !sentImages.includes(img));
+        if (text) {
+          // A newly typed reference to a sent paste must still carry its contents.
+          // Sent images are removed; images attached during the request remain.
+          attachments = {
+            ...attachments,
+            images: Object.fromEntries(
+              Object.entries(attachments.images).filter(([, image]) => !sentImages.includes(image)),
+            ),
+          };
+          saveDraft();
+        } else if (attachments === sentAttachments) attachments = emptyAttachments();
         imageError = null;
         notice = null;
         closePicker();
         await tick();
-        resize();
       }
     } finally {
       sending = false;
@@ -528,8 +596,9 @@
     }
     try {
       const fit = fitImages(images, await Promise.all(ok.map(readImage)));
-      images = [...images, ...fit.accepted];
       if (fit.problem) problems.push(fit.problem);
+      imageError = problems.length ? problems.join('; ') : null;
+      await addImages(fit.accepted);
     } catch (err) {
       problems.push(err instanceof Error ? err.message : String(err));
     }
@@ -539,18 +608,69 @@
   const onpaste = (e: ClipboardEvent): void => {
     const list = imageFiles(e.clipboardData);
     if (list.length > 0) {
+      e.preventDefault();
       void attach(list);
       return;
+    }
+    e.preventDefault();
+    const copied = e.clipboardData?.getData?.('application/x-threadgarden-message');
+    if (copied) {
+      try {
+        const message = JSON.parse(copied);
+        const parsed = ImageRefSchema.array().safeParse(message.images);
+        if (message.version === 1 && typeof message.text === 'string' && parsed.success) {
+          const fit = fitImages(images, parsed.data);
+          if (fit.problem) {
+            imageError = fit.problem;
+            return;
+          }
+          const imported = importMessage(message.text, parsed.data, text, attachments);
+          attachments = imported.attachments;
+          const s = editor?.selection();
+          void replaceSelection(s?.start ?? text.length, s?.end ?? text.length, imported.text);
+          return;
+        }
+      } catch {
+        /* Other applications can supply arbitrary clipboard formats. */
+      }
     }
     const pasted = e.clipboardData?.getData?.('text/plain') ?? '';
     const mention = pastedPathMention(pasted, cwd);
     if (mention && elsewhere) {
       // A path of This PC's: pasted as plain text, never mentioned on another machine.
       notice = filesElsewhere();
+      const s = editor?.selection();
+      void replaceSelection(s?.start ?? text.length, s?.end ?? text.length, pasted);
     } else if (mention) {
       e.preventDefault();
       void insertText(mention);
+    } else if (longPaste(pasted)) {
+      e.preventDefault();
+      const number = nextNumber(text, attachments, 'paste');
+      try {
+        attachments = {
+          ...attachments,
+          nextPaste: number + 1,
+          pastes: { ...attachments.pastes, [number]: { text: pasted, id: pasteId(pasted) } },
+        };
+        void insertText(pasteLabel(number, pasted));
+      } catch (err) {
+        notice = err instanceof Error ? err.message : String(err);
+      }
+    } else {
+      const s = editor?.selection();
+      void replaceSelection(s?.start ?? text.length, s?.end ?? text.length, pasted);
     }
+  };
+
+  const oncopy = (e: ClipboardEvent, selected: string): void => {
+    if (!e.clipboardData) return;
+    e.preventDefault();
+    e.clipboardData.setData('text/plain', expandPastes(selected, attachments));
+    e.clipboardData.setData(
+      'application/x-threadgarden-message',
+      JSON.stringify({ version: 1, ...outgoing(selected, attachments) }),
+    );
   };
 
   const hasFiles = (e: DragEvent): boolean => [...(e.dataTransfer?.types ?? [])].includes('Files');
@@ -599,7 +719,7 @@
       }
     }
     const fit = fitImages(images, read);
-    if (fit.accepted.length > 0) images = [...images, ...fit.accepted];
+    if (fit.accepted.length > 0) await addImages(fit.accepted);
     if (fit.problem) problems.push(fit.problem);
     imageError = problems.length > 0 ? problems.join('; ') : null;
   };
@@ -623,16 +743,16 @@
       interaction
         .loadDraft(key)
         .then((saved) => {
-          if (!text && saved) {
-            text = saved;
-            void tick().then(resize);
+          if (!text && (saved.text || saved.images.length > 0)) {
+            const restored = restoreMessage(saved.text, saved.images);
+            text = restored.text;
+            attachments = restored.attachments;
           }
         })
         .catch(() => {});
     }
     void tick().then(() => {
-      resize();
-      if (autofocus) textarea?.focus();
+      if (autofocus) editorElement?.focus();
     });
     return () => {
       unregisterDrop();
@@ -661,7 +781,7 @@
   );
 </script>
 
-<!-- The drop zone covers the whole composer; the textarea and buttons inside handle the keyboard. -->
+<!-- The drop zone covers the whole composer; the editor and buttons inside handle the keyboard. -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
   bind:this={root}
@@ -686,7 +806,11 @@
       >
     </div>
   {/if}
-  <Attachments {images} onRemove={(i) => (images = images.filter((_, j) => j !== i))} />
+  <Attachments
+    {images}
+    numbers={numberedImages.map(([n]) => n)}
+    onRemove={(i) => void removeImage(i)}
+  />
 
   <div class="relative grid">
     {#if picker}
@@ -716,6 +840,7 @@
       </div>
     {/if}
     {#if visibleSuggestion}
+      <!-- The prediction shows where the text would be; the editor stays on top for typing. -->
       <div
         class="text-muted-foreground pointer-events-none col-start-1 row-start-1 max-h-60 overflow-hidden px-3 pt-2.5 pb-1 text-sm leading-5 wrap-anywhere whitespace-pre-wrap"
         aria-hidden="true"
@@ -723,24 +848,48 @@
         {visibleSuggestion.text}
       </div>
     {/if}
-    <textarea
-      bind:this={textarea}
-      bind:value={text}
-      style:min-height={visibleSuggestion ? '100%' : undefined}
-      rows="1"
-      class="placeholder:text-muted-foreground col-start-1 row-start-1 block w-full resize-none overflow-hidden bg-transparent px-3 pt-2.5 pb-1 text-sm leading-5 outline-none disabled:cursor-not-allowed disabled:opacity-50"
-      aria-label={label}
-      aria-autocomplete="list"
-      aria-controls={picker ? listId : undefined}
-      aria-activedescendant={activeId}
-      placeholder={visibleSuggestion ? '' : placeholder}
-      aria-describedby={visibleSuggestion ? `${uid}-suggestion` : undefined}
-      {disabled}
-      {oninput}
-      {onkeydown}
-      {onpaste}
-      onclick={updatePicker}
-      onblur={() => setTimeout(closePicker, 0)}></textarea>
+    <div class="col-start-1 row-start-1 min-w-0">
+      {#if isPhone}
+        <!-- Android keyboards and chips in a contenteditable don't mix: tags stay text there. -->
+        <PlainEditor
+          bind:this={editor}
+          bind:element={editorElement as HTMLTextAreaElement | null}
+          {text}
+          {attachments}
+          {label}
+          placeholder={visibleSuggestion ? '' : placeholder}
+          describedby={visibleSuggestion ? `${uid}-suggestion` : undefined}
+          {disabled}
+          controls={picker ? listId : undefined}
+          {activeId}
+          onChange={oninput}
+          {onkeydown}
+          {onpaste}
+          {oncopy}
+          onCaret={updatePicker}
+          onblur={() => setTimeout(closePicker, 0)}
+        />
+      {:else}
+        <ChipEditor
+          bind:this={editor}
+          bind:element={editorElement as HTMLDivElement | null}
+          {text}
+          {attachments}
+          {label}
+          placeholder={visibleSuggestion ? '' : placeholder}
+          describedby={visibleSuggestion ? `${uid}-suggestion` : undefined}
+          {disabled}
+          controls={picker ? listId : undefined}
+          {activeId}
+          onChange={oninput}
+          {onkeydown}
+          {onpaste}
+          {oncopy}
+          onCaret={updatePicker}
+          onblur={() => setTimeout(closePicker, 0)}
+        />
+      {/if}
+    </div>
   </div>
 
   {#if imageError}
