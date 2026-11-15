@@ -57,7 +57,7 @@ describe('autoscroll on send (v1.1 §5)', { timeout: 20_000 }, () => {
     await scrollUp(viewport);
     await fill(env.composer(), 'also this');
     await userEvent.keyboard('{Enter}');
-    await waitFor(() => expect(env.app.chats.get(SID)?.queuedMessages).toBe(1));
+    await waitFor(() => expect(env.server.calls('chat.send')).toHaveLength(1));
     await waitFor(() => expect(viewport.scrollTop).toBe(bottom));
   });
 

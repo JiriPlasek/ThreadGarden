@@ -1,5 +1,10 @@
 <script lang="ts">
-  import type { ImageRef, PromptSuggestion } from '@threadgarden/protocol';
+  import {
+    withReturned,
+    type ImageRef,
+    type PromptSuggestion,
+    type ReturnedMessage,
+  } from '@threadgarden/protocol';
   import ArrowUpIcon from '@lucide/svelte/icons/arrow-up';
   import CalendarClockIcon from '@lucide/svelte/icons/calendar-clock';
   import ChevronUpIcon from '@lucide/svelte/icons/chevron-up';
@@ -68,6 +73,10 @@
    * limit resets" sits next to Send. `editing` turns the box into the editor
    * of a scheduled message (Save instead of Send); `load` puts a message back
    * into it.
+   *
+   * Queued messages Claude never read come back in front of what the box holds,
+   * as in the terminal: those Stop cancelled (or the process ended with), and,
+   * with `onRecall`, the last one Up takes back in an empty box to edit it.
    */
   let {
     draftKey,
@@ -80,6 +89,7 @@
     autofocus = false,
     onSubmit,
     onInterrupt,
+    onRecall,
     onControl,
     onSchedule,
     resetAt,
@@ -98,7 +108,7 @@
     commandScope: { sessionId?: string; cwd?: string };
     /** Claude is working: a message now is queued, and Stop is offered. */
     working?: boolean;
-    /** Messages sent while working that wait for the current turn. */
+    /** Messages sent while working that Claude has not read yet. */
     queued?: number;
     placeholder?: string;
     label?: string;
@@ -108,6 +118,8 @@
     /** Sends; resolves true when the message went out (the box clears) or false to keep it. */
     onSubmit: (text: string, images: ImageRef[]) => Promise<boolean>;
     onInterrupt?: () => void;
+    /** Up in an empty box while messages are queued: takes the last one back (null: none). */
+    onRecall?: () => Promise<ReturnedMessage | null>;
     /** Opens a Threadgarden control for `/model`, `/effort`, `/permissions`; returns a notice when it cannot. */
     onControl?: (control: Control) => string | null;
     /** v1.3 B: schedules the message instead; resolves true when it was scheduled (the box clears). */
@@ -350,6 +362,46 @@
     textarea?.setSelectionRange(text.length, text.length);
   };
 
+  /**
+   * Puts messages Claude never read back in front of what the box holds.
+   * `saved`: the service has put their text in front of the saved draft, so a
+   * draft not loaded yet brings it along.
+   */
+  const takeBack = async (messages: ReturnedMessage[], saved: boolean): Promise<void> => {
+    if (!saved || interaction.cachedDraft(draftKey) !== undefined) {
+      text = withReturned(
+        text,
+        messages.map((m) => m.text),
+      );
+      interaction.saveDraft(draftKey, text);
+    }
+    const fit = fitImages(
+      images,
+      messages.flatMap((m) => m.images ?? []),
+    );
+    images = [...fit.accepted, ...images];
+    if (fit.problem) imageError = fit.problem;
+    await tick();
+    resize();
+  };
+
+  /** Up in an empty box: the last queued message comes back to be edited. */
+  const recall = async (): Promise<void> => {
+    if (!onRecall || sending) return;
+    sending = true;
+    try {
+      const message = await onRecall();
+      if (!message) return;
+      await takeBack([message], false);
+      textarea?.focus();
+      textarea?.setSelectionRange(text.length, text.length);
+    } catch (err) {
+      notice = err instanceof Error ? err.message : String(err);
+    } finally {
+      sending = false;
+    }
+  };
+
   let scheduleOpen = $state(false);
 
   /** Schedules what is in the box (`when`, or the limit's reset). */
@@ -436,6 +488,7 @@
         }
       }
     }
+    const plainKey = !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey;
     if (visibleSuggestion) {
       if (e.key === 'Escape') {
         e.preventDefault();
@@ -443,13 +496,18 @@
         onDismissSuggestion?.();
         return;
       }
-      if (e.key === 'Tab' && !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      if (e.key === 'Tab' && plainKey) {
         e.preventDefault();
         void acceptSuggestion();
         return;
       }
     }
-    if (e.key !== 'Enter') return;
+    if (e.key === 'ArrowUp' && plainKey && empty && queued > 0 && onRecall && !editing) {
+      e.preventDefault();
+      void recall();
+      return;
+    }
+    if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return;
     const mod = e.ctrlKey || e.metaKey;
     const sends = settings.value.enterToSend ? !e.shiftKey && !e.altKey : mod;
     if (sends) {
@@ -554,10 +612,13 @@
   // ── lifecycle ───────────────────────────────────────────────────────────
 
   onMount(() => {
-    const unregister = root
+    const unregisterDrop = root
       ? registerDropTarget({ el: root, drop: dropPaths, hover: (on) => (dragging = on) })
       : () => {};
     const key = draftKey;
+    const unregisterReturns = interaction.takeReturned(key, (messages) => {
+      void takeBack(messages, true);
+    });
     if (interaction.cachedDraft(key) === undefined) {
       interaction
         .loadDraft(key)
@@ -573,7 +634,10 @@
       resize();
       if (autofocus) textarea?.focus();
     });
-    return unregister;
+    return () => {
+      unregisterDrop();
+      unregisterReturns();
+    };
   });
 
   onDestroy(() => {
@@ -588,7 +652,7 @@
 
   const hint = $derived(
     working && text.trim() && !editing
-      ? 'Claude is working: this message will be queued and sent when the current turn ends.'
+      ? 'Claude is working: this message is queued, and Claude reads it at its next step.'
       : null,
   );
   const empty = $derived(!text.trim() && images.length === 0);
@@ -717,6 +781,9 @@
         <span class="rounded bg-amber-500/15 px-1.5 py-px text-amber-900 dark:text-amber-200"
           >{queued} message{queued === 1 ? '' : 's'} queued</span
         >
+        {#if onRecall && empty && !editing && !isPhone}
+          <span class="ml-1">↑ edits the last one</span>
+        {/if}
       {:else if visibleSuggestion}
         <span id="{uid}-suggestion">
           <span class="sr-only">Suggested reply: {visibleSuggestion.text}. </span>

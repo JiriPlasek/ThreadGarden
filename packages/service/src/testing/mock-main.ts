@@ -232,6 +232,8 @@ class ScriptedSession extends FakeSession {
   private readonly shells = new Map<string, string>();
   /** Running "agent" subagent tasks: task id → its stop signal. */
   private readonly agents = new Map<string, AbortController>();
+  /** Messages sent that no turn has started yet. */
+  private readonly waiting = new Set<string>();
 
   constructor(
     options: StartOptions,
@@ -267,14 +269,55 @@ class ScriptedSession extends FakeSession {
     return this.options.resume ?? this.options.sessionId ?? 'mock';
   }
 
+  /**
+   * Like Claude Code, each message runs after the turns before it, with its
+   * `command_lifecycle` frames: queued on arrival, started when its turn
+   * begins, completed when it ends; cancelled if taken back or stopped first.
+   */
   override send(m: SDKUserMessage): void {
     super.send(m);
-    this.turn = this.turn.then(() => this.reply(m)).catch(() => {});
+    const uuid = m.uuid;
+    if (uuid !== undefined) {
+      this.waiting.add(uuid);
+      this.lifecycle(uuid, 'queued');
+    }
+    this.turn = this.turn
+      .then(async () => {
+        if (uuid !== undefined) {
+          if (!this.waiting.delete(uuid)) return; // taken back, or cancelled by Stop
+          this.lifecycle(uuid, 'started');
+        }
+        await this.reply(m);
+        if (uuid !== undefined) this.lifecycle(uuid, 'completed');
+      })
+      .catch(() => {});
   }
 
+  private lifecycle(uuid: string, state: 'queued' | 'started' | 'completed' | 'cancelled'): void {
+    this.out(
+      msg({
+        type: 'command_lifecycle',
+        command_uuid: uuid,
+        state,
+        uuid: randomUUID(),
+        session_id: this.id,
+      }),
+    );
+  }
+
+  /** As Claude Code with `cancelQueued`: the messages still queued are cancelled too. */
   override async interrupt(): Promise<void> {
     await super.interrupt();
+    for (const uuid of this.waiting) this.lifecycle(uuid, 'cancelled');
+    this.waiting.clear();
     this.abort.abort();
+  }
+
+  override async cancelQueued(uuid: string): Promise<boolean> {
+    await super.cancelQueued(uuid);
+    if (!this.waiting.delete(uuid)) return false;
+    this.lifecycle(uuid, 'cancelled');
+    return true;
   }
 
   /** Stops a running "agent" or "server" task, like the CLI: killed, then a stopped notification. */
@@ -332,7 +375,25 @@ class ScriptedSession extends FakeSession {
       uuid: m.uuid ?? randomUUID(),
       message: { role: 'user', content: text },
     });
-    if (text.startsWith('/')) return; // e.g. `/effort high`: no turn
+    if (text.startsWith('/')) {
+      // e.g. `/effort high`: no model turn, but a result, as Claude Code 2.1.319 sends one.
+      this.out(
+        msg({
+          type: 'result',
+          subtype: 'success',
+          uuid: randomUUID(),
+          session_id: this.id,
+          is_error: false,
+          duration_ms: 0,
+          total_cost_usd: 0,
+          usage: {},
+          modelUsage: {},
+          num_turns: 0,
+          result: '',
+        }),
+      );
+      return;
+    }
     this.abort = new AbortController();
     const started = Date.now();
     // Threadgarden's first note in a moved chat gets the plain reply: it says "stop and ask".
