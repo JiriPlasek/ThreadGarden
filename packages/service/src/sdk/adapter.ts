@@ -102,7 +102,19 @@ export interface AgentSession {
   /** Single-consumer stream of everything the SDK emits; ends when the session ends. */
   readonly messages: AsyncIterable<SDKMessage>;
   send(m: SDKUserMessage): void;
+  /**
+   * Stops the running turn and cancels every message still queued, as the
+   * terminal's Esc does: each gets a `cancelled` `command_lifecycle` frame.
+   * (A Claude Code without the `interrupt_cancel_queued_v1` capability keeps
+   * them, and they run next.)
+   */
   interrupt(): Promise<void>;
+  /**
+   * Takes back a message Claude has not taken up yet, by the uuid it was sent
+   * under: true when it was still queued (its `cancelled` frame comes before
+   * this resolves), false when a turn already has it.
+   */
+  cancelQueued(uuid: string): Promise<boolean>;
   setModel(m?: string): Promise<void>;
   setPermissionMode(m: PermissionMode): Promise<void>;
   /** Stops one task (SDK `Query.stopTask`); its `stopped` task_notification follows in `messages`. */

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { AwayItem, ImageRef, ScheduledSend } from '@threadgarden/protocol';
+  import type { AwayItem, ImageRef, ReturnedMessage, ScheduledSend } from '@threadgarden/protocol';
   import ArrowRightLeftIcon from '@lucide/svelte/icons/arrow-right-left';
   import CheckIcon from '@lucide/svelte/icons/check';
   import GaugeIcon from '@lucide/svelte/icons/gauge';
@@ -470,6 +470,21 @@
     });
   };
 
+  // ── queued messages: taken back before Claude reads them ────────────────
+
+  /** Up in an empty composer: the last queued message comes back to be edited. */
+  const recallQueued = async (): Promise<ReturnedMessage | null> => {
+    const last = chat?.queuedMessages.at(-1);
+    return last ? chats.withdraw(sessionId, last.id) : null;
+  };
+
+  const removeQueued = (messageId: string): void => {
+    sendError = null;
+    chats.withdraw(sessionId, messageId).catch((err: unknown) => {
+      sendError = err instanceof Error ? err.message : String(err);
+    });
+  };
+
   const onkeydown = (e: KeyboardEvent): void => {
     if (e.key === 'Escape' && !e.defaultPrevented && stoppable) {
       e.preventDefault();
@@ -721,6 +736,8 @@
           <MessageList
             bind:this={list}
             items={chat.items}
+            queued={chat.queuedMessages}
+            onWithdraw={readOnly ? undefined : removeQueued}
             hasMore={chat.hasMore}
             loadingOlder={chat.loadingOlder}
             onLoadOlder={() => void chats.loadOlder(sessionId)}
@@ -974,9 +991,10 @@
                 cwd={chat.summary?.cwd ?? ''}
                 commandScope={{ sessionId }}
                 {working}
-                queued={chat.queuedMessages}
+                queued={chat.queuedMessages.length}
                 onSubmit={submit}
                 onInterrupt={interrupt}
+                onRecall={recallQueued}
                 {onControl}
                 onSchedule={machineAway || heldBack ? undefined : schedule}
                 {resetAt}

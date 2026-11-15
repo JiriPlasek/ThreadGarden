@@ -120,6 +120,7 @@ describe('protocol schemas', () => {
       'chat.create',
       'chat.send',
       'chat.interrupt',
+      'chat.withdraw',
       'chat.end',
       'chat.setModel',
       'chat.setPermissionMode',
@@ -221,6 +222,8 @@ describe('protocol schemas', () => {
         'needsYou',
         // v1.1 T2: "Your turn"
         'chatFinished',
+        // Queued messages Claude never read, given back
+        'messagesReturned',
         // v1.2 B1: buckets
         'chatBackFromHold',
         // v1.3 B: usage limits and scheduled sends

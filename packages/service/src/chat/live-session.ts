@@ -23,6 +23,16 @@
  * `TaskTracker` into the chat's task list, published as `chat.tasks` (the full
  * list) with the same throttle as `chat.items` and only when it changed. The
  * list belongs to the current process: it is emptied when the process ends.
+ *
+ * Messages sent while Claude works (docs/architecture.md, "Messages sent while
+ * Claude works"): Claude Code reads such a message at the running turn's next
+ * step, or when the turn ends, and reports that with a `command_lifecycle`
+ * frame. Until then the message is *queued*: listed in `chat.status`, outside
+ * the transcript; when Claude takes it up it joins the transcript there, as in
+ * the terminal and in the chat's history. Until then the user can take it back
+ * (`withdraw`); one Claude will never read (Stop cancelled it, the process
+ * ended) is given back (`onReturned`, `messagesReturned`), as the terminal puts
+ * queued messages back into its input.
  */
 import { randomUUID } from 'node:crypto';
 import { basename } from 'node:path';
@@ -32,6 +42,8 @@ import type {
   ChatStatus,
   ChatTask,
   EventMsg,
+  QueuedMessage,
+  ReturnedMessage,
 } from '@threadgarden/protocol';
 import type {
   AccountInfo,
@@ -149,6 +161,12 @@ export type LiveSessionDeps = {
    * of a chat no process runs. A throw is reported.
    */
   onContextWindow?: (sessionId: string, model: string | undefined, tokens: number) => void;
+  /**
+   * Queued messages Claude will never read came back (Stop cancelled them, or
+   * the process ended), oldest first; called before `messagesReturned` is
+   * emitted, so they are in the saved draft first. A throw is reported.
+   */
+  onReturned?: (sessionId: string, messages: ReturnedMessage[]) => void;
 };
 
 export const defaultOnError = (err: unknown, context: string): void => {
@@ -174,6 +192,8 @@ export type LiveSnapshot = {
   waitingFor?: string;
   /** Tasks of the running process (empty when there is none). */
   tasks: ChatTask[];
+  /** Messages sent while Claude worked that it has not read yet, oldest first. */
+  queued: QueuedMessage[];
 };
 
 /** Why Claude Code refused to start this session (§6.4); `setup` asks for the setup screen. */
@@ -183,6 +203,7 @@ export const ITEMS_COALESCE_MS = 33;
 export const DEFAULT_DENY_MESSAGE = 'Denied by user in Threadgarden';
 
 type PermissionItem = Extract<ChatItem, { kind: 'permissionRequest' }>;
+type UserItem = Extract<ChatItem, { kind: 'user' }>;
 type Pending = {
   item: PermissionItem;
   suggestions: PermissionUpdate[];
@@ -259,8 +280,30 @@ export class LiveSession {
   private headerValue: ChatHeaderInfo = {};
   private idleSinceValue: number | null = null;
   private lastActivityValue: number | null = null;
-  /** User inputs sent with `priority: 'next'` since the last `result` (Ruling R28). */
-  private queuedInputs = 0;
+  /**
+   * Messages sent while Claude was busy that it has not taken up yet, by the
+   * uuid they were sent under, oldest first (Ruling R28 counts these): the
+   * `user` items they become.
+   */
+  private readonly waiting = new Map<string, UserItem>();
+  /**
+   * A turn ended while a message waited, so the chat stayed working (R28).
+   * Ends at the next `result`, or once every message taken up since then has
+   * completed without one (`heldOpen`).
+   */
+  private holding = false;
+  /** Messages taken up while `holding` that have not completed yet. */
+  private readonly heldOpen = new Set<string>();
+  /** Queued messages the user is taking back (`withdraw`): their `cancelled` frame gives nothing back. */
+  private readonly withdrawing = new Set<string>();
+  /** While a Stop is under way: the queued messages it cancelled, given back once it is done. */
+  private stopping: UserItem[] | null = null;
+  /**
+   * This Claude Code reports when it takes up each message (`command_lifecycle`).
+   * Without that (an older CLI) queued messages join the transcript at the
+   * next `result`, the turn boundary where such a CLI takes them up.
+   */
+  private lifecycleFrames = false;
   /** The user stopped the turn in progress from Threadgarden (Stop, Esc): its result is not a finish. */
   private interruptRequested = false;
   private published = '';
@@ -442,7 +485,18 @@ export class LiveSession {
       header: this.header,
       ...(waitingFor === undefined ? {} : { waitingFor }),
       tasks: this.tracker.list(),
+      queued: this.queued(),
     };
+  }
+
+  /** Messages sent while Claude worked that it has not read yet, oldest first. */
+  queued(): QueuedMessage[] {
+    return [...this.waiting.values()].map((m) => ({
+      id: m.id,
+      text: m.text,
+      ...(m.images?.length ? { imageCount: m.images.length } : {}),
+      ts: m.ts,
+    }));
   }
 
   since(seq: number): ChatEvent[] | 'gap' {
@@ -453,35 +507,61 @@ export class LiveSession {
 
   // ── input and controls ──────────────────────────────────────────────────
 
-  /** Sends user input; while a turn is in progress it is queued (`priority: 'next'`). */
+  /**
+   * Sends user input. While a turn is in progress it is queued: Claude reads
+   * it at the turn's next step, and it joins the transcript then (see the
+   * module doc); otherwise it starts a turn and shows at once.
+   */
   send(input: UserInput, onSubmitted?: () => void): { queued: boolean } {
     const session = this.requireLive();
     const queued = BUSY.has(this.statusValue);
     const uuid = randomUUID();
-    session.send(toUserMessage(input, uuid, queued));
+    session.send(toUserMessage(input, uuid));
     onSubmitted?.(); // the message is with Claude; what follows is only our bookkeeping
-    if (queued) this.queuedInputs++;
     this.firstText ??= input.text;
     const images = (input.images ?? []).map((i) => ({
       mediaType: i.mediaType,
       data: i.dataBase64,
     }));
-    // Shown at once under the uuid sent to the SDK, so an echoed copy upserts instead of duplicating.
-    this.pushItems(
-      [
-        {
-          kind: 'user',
-          id: uuid,
-          text: input.text,
-          ...(images.length > 0 ? { images } : {}),
-          ts: this.deps.now(),
-        },
-      ],
-      false,
-    );
+    // Under the uuid sent to the SDK, the id Claude Code keeps for it in the transcript.
+    const item: UserItem = {
+      kind: 'user',
+      id: uuid,
+      text: input.text,
+      ...(images.length > 0 ? { images } : {}),
+      ts: this.deps.now(),
+    };
     this.noteActivity();
-    if (!queued) this.setStatus('working');
+    if (queued) {
+      this.waiting.set(uuid, item);
+      this.publishStatus();
+    } else {
+      this.pushItems([item], false);
+      this.setStatus('working');
+    }
     return { queued };
+  }
+
+  /**
+   * Takes back a queued message Claude has not read yet (to remove or edit
+   * it), by its `queued` id: its text and images. `NOT_QUEUED` when Claude
+   * has taken it up already (or it came back when the process ended).
+   */
+  async withdraw(id: string): Promise<ReturnedMessage> {
+    const session = this.session;
+    const message = this.waiting.get(id);
+    if (!session || !message) throw notQueued();
+    this.withdrawing.add(id);
+    let cancelled: boolean;
+    try {
+      cancelled = await session.cancelQueued(id);
+    } finally {
+      this.withdrawing.delete(id);
+    }
+    if (!cancelled) throw notQueued();
+    // Claude Code's `cancelled` frame usually came first and dropped it already.
+    this.dropQueued(id);
+    return returned(message);
   }
 
   /**
@@ -489,17 +569,25 @@ export class LiveSession {
    * a finished turn: the user stopped it from Threadgarden, so there is no
    * `chatFinished` and the chat does not become unread. Pressed while nothing
    * runs, or if the SDK refuses, the next turn end counts as usual.
+   *
+   * The queued messages it cancels go back to the user together, in the order
+   * they were sent (Claude Code cancels them before it answers).
    */
   async interrupt(): Promise<void> {
     const session = this.session;
     if (!session) return;
     const turn = BUSY.has(this.statusValue);
     if (turn) this.interruptRequested = true;
+    const cancelled: UserItem[] = [];
+    this.stopping = cancelled;
     try {
       await session.interrupt();
     } catch (err) {
       if (turn) this.interruptRequested = false;
       throw err;
+    } finally {
+      if (this.stopping === cancelled) this.stopping = null;
+      if (cancelled.length > 0) this.giveBack(cancelled);
     }
   }
 
@@ -582,7 +670,7 @@ export class LiveSession {
   /** Effort has no SDK control call; it is set with the `/effort` command, like the CLI. */
   async setEffort(value: string): Promise<void> {
     const session = this.requireLive();
-    session.send(toUserMessage({ text: `/effort ${value}` }, randomUUID(), BUSY.has(this.status)));
+    session.send(toUserMessage({ text: `/effort ${value}` }, randomUUID()));
     this.chosen.effort = value as Effort;
     this.headerValue.effort = value;
     this.publishStatus();
@@ -669,6 +757,7 @@ export class LiveSession {
     this.forgetTasks();
     this.guard('registry.markEnded', () => this.deps.registry.markEnded(this.id));
     if (this.startupFailureValue) {
+      this.abandonQueued();
       this.setStatus('failed'); // already explained by the startup-failure line
       return;
     }
@@ -676,6 +765,7 @@ export class LiveSession {
       ? `Session failed: ${errorText(error)}`
       : 'The session process ended unexpectedly';
     this.pushItems([{ kind: 'system', id: `local:${randomUUID()}`, level: 'error', text }], false);
+    this.abandonQueued();
     this.setStatus('failed');
   }
 
@@ -685,6 +775,7 @@ export class LiveSession {
       this.session = null;
       this.cancelAllPending();
       this.forgetTasks();
+      this.abandonQueued();
       try {
         session.close();
       } catch {
@@ -707,6 +798,8 @@ export class LiveSession {
       if (this.tracker.apply(m)) this.scheduleTasks();
     });
     this.guard('usage limits', () => this.noteLimits(m));
+    // Before the normalizer: a message the `result` lists as read goes before the result item.
+    this.guard('message queue', () => this.noteQueue(m));
     try {
       this.noteActivity();
       this.updateHeader(m);
@@ -767,9 +860,11 @@ export class LiveSession {
   private nextStatus(m: SDKMessage): ChatStatus {
     if (this.pending.size > 0) return 'needsYou'; // an open request wins over stream activity
     const next = deriveStatus(m, this.statusValue);
-    // Output while idle means a turn started (e.g. a queued message picked up after `result`).
+    const type = (m as { type?: unknown }).type;
+    // A turn ended with a message still queued: Claude Code starts on it straight away.
+    if (type === 'result' && this.lifecycleFrames && this.waiting.size > 0) return 'working';
+    // Output while idle means a turn started (e.g. a background task's notification).
     if (next === 'idle' && this.statusValue === 'idle') {
-      const type = (m as { type?: unknown }).type;
       if (type === 'assistant' || type === 'stream_event') return 'working';
     }
     return next;
@@ -931,10 +1026,12 @@ export class LiveSession {
   }
 
   /**
-   * Ruling R28: a `result` while queued user input is pending is not a
-   * finished turn: Claude goes straight on to that input, so the chat is not
-   * waiting for the user. The CLI takes up everything queued at that turn
-   * boundary, so the count restarts there and the next `result` decides.
+   * Ruling R28: a `result` while a queued message is still unread is not a
+   * finished turn: Claude goes straight on to that message, so the chat is not
+   * waiting for the user. A message Claude read during the turn (at a step)
+   * does not count: nothing is left for it to do. A CLI that reports no
+   * lifecycle takes up everything queued at this boundary, so its queued
+   * messages join the transcript here and the next `result` decides.
    *
    * Every `result` also ends the turn's foreground tasks that got no end edge
    * (`TaskTracker.endForeground`), so none shows as running forever.
@@ -946,12 +1043,113 @@ export class LiveSession {
     });
     const interrupted = this.interruptRequested;
     this.interruptRequested = false;
-    if (this.queuedInputs > 0) {
-      this.queuedInputs = 0;
+    this.heldOpen.clear();
+    this.holding = this.lifecycleFrames && this.waiting.size > 0;
+    if (this.waiting.size > 0) {
+      if (!this.lifecycleFrames) this.takeUp(this.waiting.keys());
       return;
     }
     if (interrupted) return;
     this.turnEnded();
+  }
+
+  // ── messages sent while Claude works ────────────────────────────────────
+
+  /**
+   * Follows what Claude Code reports about the messages it was sent: a
+   * `command_lifecycle` frame per message (`started` when a turn takes it up,
+   * then `completed` or `cancelled`), and the lists of messages a turn has read
+   * on `system/status` and `result` frames, which also cover a lost frame.
+   */
+  private noteQueue(m: SDKMessage): void {
+    const x: unknown = m;
+    if (!isRec(x)) return;
+    if (x.type === 'command_lifecycle') {
+      this.lifecycleFrames = true;
+      const id = str(x.command_uuid);
+      if (id === undefined) return;
+      if (x.state === 'started' && this.holding && this.waiting.has(id)) this.heldOpen.add(id);
+      if (x.state === 'started' || x.state === 'completed') this.takeUp([id]);
+      else if (x.state === 'cancelled') this.cancelQueued(id);
+      if (x.state === 'completed' || x.state === 'cancelled') this.closeHeld(id);
+      return;
+    }
+    const listed = x.type === 'result' || (x.type === 'system' && x.subtype === 'status');
+    if (listed && Array.isArray(x.user_message_uuids)) {
+      this.takeUp(x.user_message_uuids.filter((u): u is string => typeof u === 'string'));
+    }
+  }
+
+  /**
+   * A message taken up after a turn ended with it waiting has completed. Each
+   * such message ends with a `result` of its own (with Claude Code 2.1.319,
+   * slash commands too), which ends the hold first; if every one of them
+   * completed without one and nothing waits, the chat is done all the same,
+   * rather than working forever.
+   */
+  private closeHeld(id: string): void {
+    if (this.heldOpen.delete(id)) this.endHoldIfDone();
+  }
+
+  /**
+   * Ends a hold once nothing is queued or in progress any more: every message
+   * taken up since completed, and none waits (one was cancelled or taken back
+   * rather than started, which no `result` follows).
+   */
+  private endHoldIfDone(): void {
+    if (!this.holding || this.heldOpen.size > 0 || this.waiting.size > 0) return;
+    this.holding = false;
+    if (this.statusValue === 'working') this.setStatus('idle');
+    this.resultArrived();
+  }
+
+  /** Queued messages Claude took up join the transcript here, in the order they were sent. */
+  private takeUp(uuids: Iterable<string>): void {
+    const taken = new Set(uuids);
+    const items: ChatItem[] = [];
+    for (const [id, item] of this.waiting) {
+      if (!taken.has(id)) continue;
+      this.waiting.delete(id);
+      items.push(item);
+    }
+    if (items.length === 0) return;
+    this.pushItems(items, false);
+    this.publishStatus();
+  }
+
+  /** Claude Code cancelled a queued message (Stop, or the user took it back). */
+  private cancelQueued(id: string): void {
+    const message = this.waiting.get(id);
+    if (!message) return;
+    this.dropQueued(id);
+    if (this.withdrawing.has(id)) return; // `withdraw` hands it over
+    if (this.stopping) this.stopping.push(message);
+    else this.giveBack([message]);
+  }
+
+  /** A queued message left the queue without Claude reading it. */
+  private dropQueued(id: string): void {
+    if (!this.waiting.delete(id)) return;
+    this.publishStatus();
+    this.endHoldIfDone();
+  }
+
+  /** The process is gone: what Claude never read goes back to the user. */
+  private abandonQueued(): void {
+    this.holding = false;
+    this.heldOpen.clear();
+    if (this.waiting.size === 0) return;
+    const messages = [...this.waiting.values()];
+    this.waiting.clear();
+    this.publishStatus();
+    this.giveBack(messages);
+  }
+
+  /** Messages Claude will never read: into the saved draft, then to the UI's message box. */
+  private giveBack(messages: UserItem[]): void {
+    const back = messages.map(returned);
+    this.guard('onReturned', () => this.deps.onReturned?.(this.id, back));
+    this.out({ event: 'messagesReturned', data: { sessionId: this.id, messages: back } });
   }
 
   /** A turn ended: `onTurnEnded` (Threadgarden's unread state), then `chatFinished` for the UI. */
@@ -999,10 +1197,16 @@ export class LiveSession {
     this.publishStatus();
   }
 
-  /** Emits `chat.status` when status, waitingFor or header changed since the last one. */
+  /** Emits `chat.status` when status, waitingFor, header or the queue changed since the last one. */
   private publishStatus(): void {
     const waitingFor = this.waitingFor();
-    const key = JSON.stringify([this.statusValue, waitingFor, this.headerValue]);
+    // A queued message never changes, so its id stands for it.
+    const key = JSON.stringify([
+      this.statusValue,
+      waitingFor,
+      this.headerValue,
+      [...this.waiting.keys()],
+    ]);
     if (key === this.published) return;
     this.published = key;
     this.flush(); // items emitted before this status stay before it
@@ -1014,6 +1218,7 @@ export class LiveSession {
         status: this.statusValue,
         header: this.header,
         ...(waitingFor === undefined ? {} : { waitingFor }),
+        queued: this.queued(),
       },
     });
   }
@@ -1127,7 +1332,16 @@ export class LiveSession {
   }
 }
 
-const toUserMessage = (input: UserInput, uuid: SDKUserMessage['uuid'], queued: boolean) => {
+/**
+ * Every message goes out with `priority: 'next'`: Claude Code starts on it at
+ * once when idle, and reads it at the running turn's next step otherwise
+ * (verified with CLI 2.1.319). Without a priority a CLI may hold the message
+ * until the whole turn ends (its default is `later` unless a rollout flag is
+ * on), which hurts when Threadgarden sent it believing Claude idle while a
+ * turn was already starting (the next queued message, a background task's
+ * notification).
+ */
+const toUserMessage = (input: UserInput, uuid: SDKUserMessage['uuid']) => {
   const content: unknown[] = [];
   if (input.text.length > 0) content.push({ type: 'text', text: input.text });
   for (const img of input.images ?? []) {
@@ -1142,10 +1356,19 @@ const toUserMessage = (input: UserInput, uuid: SDKUserMessage['uuid'], queued: b
     message: { role: 'user', content } as SDKUserMessage['message'],
     parent_tool_use_id: null,
     uuid,
+    priority: 'next',
   };
-  if (queued) m.priority = 'next';
   return m;
 };
+
+/** A queued message given back whole: its text and images. */
+const returned = (m: UserItem): ReturnedMessage => ({
+  text: m.text,
+  ...(m.images?.length ? { images: m.images } : {}),
+});
+
+const notQueued = (): ServiceError =>
+  new ServiceError('NOT_QUEUED', 'Claude has already read this message');
 
 const describeRequest = (
   variant: PermissionItem['variant'],

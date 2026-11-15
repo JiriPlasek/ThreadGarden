@@ -365,6 +365,7 @@ pub const REFUSED: &[&str] = &[
     "chat.create",
     "chat.send",
     "chat.interrupt",
+    "chat.withdraw",
     "chat.end",
     "chat.setModel",
     "chat.setPermissionMode",

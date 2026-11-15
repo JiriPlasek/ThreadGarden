@@ -150,6 +150,16 @@ export class FakeSession implements AgentSession {
     this.interrupted++;
   }
 
+  /** Uuids `cancelQueued` was asked to take back, in order. */
+  readonly withdrawn: string[] = [];
+  /** What `cancelQueued` answers: true, the message was still queued. */
+  withdrawAnswer = true;
+
+  async cancelQueued(uuid: string): Promise<boolean> {
+    this.withdrawn.push(uuid);
+    return this.withdrawAnswer;
+  }
+
   async setModel(m?: string): Promise<void> {
     this.model = m;
   }
