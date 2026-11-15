@@ -56,6 +56,14 @@ describe('buildQueryOptions', () => {
     );
   });
 
+  it('asks for prompt suggestions only when the setting is on', () => {
+    expect(buildQueryOptions(start())).not.toHaveProperty('promptSuggestions');
+    expect(buildQueryOptions(start({ promptSuggestions: false }))).not.toHaveProperty(
+      'promptSuggestions',
+    );
+    expect(buildQueryOptions(start({ promptSuggestions: true })).promptSuggestions).toBe(true);
+  });
+
   it('declares the per-task stop affordance, so Stop / Esc on a turn spares background tasks', () => {
     // SDK 0.3.314 Options.perTaskStopAffordance: without it, an interrupt on an
     // open-input session kills every background task (the CLI fails closed).

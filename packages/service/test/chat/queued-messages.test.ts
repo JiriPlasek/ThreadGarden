@@ -186,6 +186,45 @@ describe('messages sent while Claude works', () => {
     expect(finished(events)).toHaveLength(1);
   });
 
+  const prediction = (uuid: string) =>
+    sdk({ type: 'prompt_suggestion', uuid, suggestion: 'Run the tests' });
+
+  it('a suggested reply follows a turn whose follow-up Claude read mid-turn', async () => {
+    const { s, fake, firstUuid } = setup();
+    fake.emit(lifecycle(firstUuid, 'started'));
+    s.send({ text: 'second' });
+    const uuid = fake.sent[1]!.uuid!;
+    fake.emit(lifecycle(uuid, 'started'));
+    fake.emit(lifecycle(uuid, 'completed'));
+    fake.emit(result('r1'));
+    fake.emit(prediction('p1'));
+    await settle();
+    expect(s.status).toBe('idle');
+    expect(s.snapshot(10).promptSuggestion).toEqual({ id: 'p1', text: 'Run the tests' });
+  });
+
+  it('no suggested reply while a follow-up still waits; its own turn brings one', async () => {
+    const { s, fake, firstUuid } = setup();
+    fake.emit(lifecycle(firstUuid, 'started'));
+    s.send({ text: 'second' });
+    const uuid = fake.sent[1]!.uuid!;
+    fake.emit(lifecycle(uuid, 'queued'));
+    fake.emit(result('r1'));
+    // Claude goes straight on to "second": a prediction now is nothing to reply to.
+    fake.emit(prediction('p1'));
+    await settle();
+    expect(s.status).toBe('working');
+    expect(s.snapshot(10).promptSuggestion).toBeNull();
+
+    fake.emit(lifecycle(firstUuid, 'completed'));
+    fake.emit(lifecycle(uuid, 'started'));
+    fake.emit(result('r2'));
+    fake.emit(prediction('p2'));
+    await settle();
+    expect(s.status).toBe('idle');
+    expect(s.snapshot(10).promptSuggestion).toEqual({ id: 'p2', text: 'Run the tests' });
+  });
+
   it('a queued message that runs without a result of its own still lets the chat go idle', async () => {
     const { s, fake, events, turns, firstUuid } = setup();
     fake.emit(lifecycle(firstUuid, 'started'));

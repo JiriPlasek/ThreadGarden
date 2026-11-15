@@ -31,7 +31,7 @@ enum Kind {
 }
 
 /// Every setting, in the protocol's order, with its default.
-fn fields() -> [(&'static str, Kind, Value); 15] {
+fn fields() -> [(&'static str, Kind, Value); 16] {
     [
         ("claudePath", Kind::NullableString, Value::Null),
         ("idleReclaimMinutes", Kind::Number, json!(15)),
@@ -43,6 +43,7 @@ fn fields() -> [(&'static str, Kind, Value); 15] {
         ("externalPolling", Kind::Bool, json!(true)),
         ("notifyOnFinish", Kind::Bool, json!(true)),
         ("autoTitles", Kind::Bool, json!(true)),
+        ("promptSuggestions", Kind::Bool, json!(false)),
         ("accent", Kind::OneOf(ACCENTS), json!("graphite")),
         ("darkStyle", Kind::OneOf(DARK_STYLES), json!("default")),
         ("lightStyle", Kind::OneOf(LIGHT_STYLES), json!("default")),

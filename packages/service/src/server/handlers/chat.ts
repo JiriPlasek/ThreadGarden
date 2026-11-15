@@ -22,6 +22,7 @@ import type {
   EventMsg,
   ImageRef,
   MovePeer,
+  PromptSuggestion,
   QueuedMessage,
 } from '@threadgarden/protocol';
 import { MOVE_ERRORS } from '@threadgarden/protocol';
@@ -387,6 +388,7 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
     seq: number;
     header: ChatHeaderInfo;
     tasks: ChatTask[];
+    promptSuggestion?: PromptSuggestion | null;
     queued: QueuedMessage[];
   }> => {
     let history: ChatItem[];
@@ -427,6 +429,7 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
       seq: snap.seq,
       header: { ...fallback, ...snap.header },
       tasks: snap.tasks,
+      promptSuggestion: snap.promptSuggestion,
       queued: snap.queued,
     };
   };
@@ -447,6 +450,7 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
       hasMore: v.items.length > items.length,
       seq: v.seq,
       tasks: v.tasks,
+      promptSuggestion: v.promptSuggestion ?? null,
       queued: v.queued,
       movedTo: deps.awayTo?.(p.sessionId) ?? null,
     };

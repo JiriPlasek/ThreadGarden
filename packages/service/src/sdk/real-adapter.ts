@@ -123,6 +123,8 @@ export const buildQueryOptions = (o: StartOptions): Options => {
   if (o.model !== undefined) opts.model = o.model;
   if (o.effort !== undefined) opts.effort = o.effort;
   if (o.permissionMode !== undefined) opts.permissionMode = o.permissionMode;
+  // Each prediction is an extra model call after every turn: only when the user asked for them.
+  if (o.promptSuggestions === true) opts.promptSuggestions = true;
   return opts;
 };
 

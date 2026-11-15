@@ -13,6 +13,7 @@ import {
   type MovePeer,
   type QueuedMessage,
   type Result,
+  type PromptSuggestion,
   type ReturnedMessage,
 } from '@threadgarden/protocol';
 import { SvelteMap } from 'svelte/reactivity';
@@ -115,6 +116,14 @@ export class ChatState {
    * the list). Empty for chats Threadgarden does not run.
    */
   tasks = $state.raw<ChatTask[]>([]);
+  promptSuggestion = $state.raw<PromptSuggestion | null>(null);
+  /** Kept across composer remounts and replay so a dismissed prediction stays dismissed. */
+  dismissedSuggestionId: string | null = null;
+
+  dismissSuggestion = (): void => {
+    this.dismissedSuggestionId = this.promptSuggestion?.id ?? this.dismissedSuggestionId;
+    this.promptSuggestion = null;
+  };
   /**
    * Where the chat went when it was moved away (protocol 9): this copy is
    * read-only. Null for a chat that is here.
@@ -366,6 +375,8 @@ export class ChatsState {
       chat.hasMore = r.hasMore;
       // An older service has no task tracking: no tasks.
       chat.tasks = Array.isArray(r.tasks) ? r.tasks : [];
+      chat.promptSuggestion =
+        r.promptSuggestion?.id === chat.dismissedSuggestionId ? null : (r.promptSuggestion ?? null);
       // One that predates the queue list shows a queued message in the transcript at once.
       chat.queuedMessages = r.queued ?? [];
       chat.movedTo = r.movedTo ?? null;
@@ -695,6 +706,10 @@ export class ChatsState {
       chat.tasks = e.tasks;
     } else {
       chat.status = e.status;
+      chat.promptSuggestion =
+        e.status === 'idle' && e.promptSuggestion?.id !== chat.dismissedSuggestionId
+          ? (e.promptSuggestion ?? null)
+          : null;
       chat.waitingFor = e.waitingFor;
       const queued = e.queued ?? [];
       // A message leaving the queue joined the items just before this event: show

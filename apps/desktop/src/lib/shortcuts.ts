@@ -234,6 +234,12 @@ export const SHORTCUTS: readonly Shortcut[] = [
     description: 'Mention a file or folder',
   },
   {
+    id: 'composer-accept-suggestion',
+    group: 'Composer',
+    combos: [['Tab']],
+    description: 'Accept the suggested reply',
+  },
+  {
     id: 'composer-command',
     group: 'Composer',
     combos: [['/']],

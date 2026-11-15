@@ -258,6 +258,7 @@ fn settings_and_ui_state_round_trip_across_a_restart() {
             "externalPolling": true,
             "notifyOnFinish": true,
             "autoTitles": true,
+            "promptSuggestions": false,
             "accent": "graphite",
             "darkStyle": "default",
             "lightStyle": "default",

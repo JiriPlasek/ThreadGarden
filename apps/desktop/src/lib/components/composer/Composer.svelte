@@ -1,5 +1,10 @@
 <script lang="ts">
-  import { withReturned, type ImageRef, type ReturnedMessage } from '@threadgarden/protocol';
+  import {
+    withReturned,
+    type ImageRef,
+    type PromptSuggestion,
+    type ReturnedMessage,
+  } from '@threadgarden/protocol';
   import ArrowUpIcon from '@lucide/svelte/icons/arrow-up';
   import CalendarClockIcon from '@lucide/svelte/icons/calendar-clock';
   import ChevronUpIcon from '@lucide/svelte/icons/chevron-up';
@@ -92,6 +97,8 @@
     disabled = false,
     cacheNotice = null,
     editing,
+    suggestion = null,
+    onDismissSuggestion,
     textarea = $bindable(null),
   }: {
     draftKey: string;
@@ -106,6 +113,8 @@
     placeholder?: string;
     label?: string;
     autofocus?: boolean;
+    suggestion?: PromptSuggestion | null;
+    onDismissSuggestion?: () => void;
     /** Sends; resolves true when the message went out (the box clears) or false to keep it. */
     onSubmit: (text: string, images: ImageRef[]) => Promise<boolean>;
     onInterrupt?: () => void;
@@ -159,10 +168,32 @@
   let root = $state<HTMLDivElement | null>(null);
   /** Why the last command was not sent (terminal-only, or no matching control). */
   let notice = $state<string | null>(null);
+  let picker = $state.raw<{ kind: 'mention' | 'slash'; token: Token } | null>(null);
+  const visibleSuggestion = $derived(
+    !text && images.length === 0 && !working && !sending && !disabled && !editing && !picker
+      ? suggestion
+      : null,
+  );
+
+  // Predictions are never drafts until accepted; typing or attaching anything dismisses them.
+  $effect(() => {
+    if (suggestion && (text || images.length > 0)) onDismissSuggestion?.();
+  });
+
+  const acceptSuggestion = async (): Promise<void> => {
+    const value = visibleSuggestion;
+    if (!value) return;
+    text = value.text;
+    onDismissSuggestion?.();
+    interaction.saveDraft(draftKey, text);
+    await tick();
+    textarea?.focus();
+    textarea?.setSelectionRange(text.length, text.length);
+    resize();
+  };
 
   // ── pickers ─────────────────────────────────────────────────────────────
 
-  let picker = $state.raw<{ kind: 'mention' | 'slash'; token: Token } | null>(null);
   let active = $state(0);
   let anchorBottom = $state(0);
   let files = $state.raw<FileSuggestion[]>([]);
@@ -308,6 +339,7 @@
   };
 
   const oninput = (): void => {
+    onDismissSuggestion?.();
     notice = null;
     interaction.saveDraft(draftKey, text);
     resize();
@@ -433,6 +465,7 @@
   };
 
   const onkeydown = (e: KeyboardEvent): void => {
+    if (e.isComposing || e.keyCode === 229) return;
     if (picker) {
       if (e.key === 'Escape') {
         e.preventDefault();
@@ -456,6 +489,19 @@
       }
     }
     const plainKey = !e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey;
+    if (visibleSuggestion) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        onDismissSuggestion?.();
+        return;
+      }
+      if (e.key === 'Tab' && plainKey) {
+        e.preventDefault();
+        void acceptSuggestion();
+        return;
+      }
+    }
     if (e.key === 'ArrowUp' && plainKey && empty && queued > 0 && onRecall && !editing) {
       e.preventDefault();
       void recall();
@@ -642,7 +688,7 @@
   {/if}
   <Attachments {images} onRemove={(i) => (images = images.filter((_, j) => j !== i))} />
 
-  <div class="relative">
+  <div class="relative grid">
     {#if picker}
       <div
         class="bg-popover text-popover-foreground absolute right-2 left-2 z-20 rounded-md border shadow-md"
@@ -669,16 +715,26 @@
         {/if}
       </div>
     {/if}
+    {#if visibleSuggestion}
+      <div
+        class="text-muted-foreground pointer-events-none col-start-1 row-start-1 max-h-60 overflow-hidden px-3 pt-2.5 pb-1 text-sm leading-5 wrap-anywhere whitespace-pre-wrap"
+        aria-hidden="true"
+      >
+        {visibleSuggestion.text}
+      </div>
+    {/if}
     <textarea
       bind:this={textarea}
       bind:value={text}
+      style:min-height={visibleSuggestion ? '100%' : undefined}
       rows="1"
-      class="placeholder:text-muted-foreground block w-full resize-none overflow-hidden bg-transparent px-3 pt-2.5 pb-1 text-sm leading-5 outline-none disabled:cursor-not-allowed disabled:opacity-50"
+      class="placeholder:text-muted-foreground col-start-1 row-start-1 block w-full resize-none overflow-hidden bg-transparent px-3 pt-2.5 pb-1 text-sm leading-5 outline-none disabled:cursor-not-allowed disabled:opacity-50"
       aria-label={label}
       aria-autocomplete="list"
       aria-controls={picker ? listId : undefined}
       aria-activedescendant={activeId}
-      {placeholder}
+      placeholder={visibleSuggestion ? '' : placeholder}
+      aria-describedby={visibleSuggestion ? `${uid}-suggestion` : undefined}
       {disabled}
       {oninput}
       {onkeydown}
@@ -728,6 +784,17 @@
         {#if onRecall && empty && !editing && !isPhone}
           <span class="ml-1">↑ edits the last one</span>
         {/if}
+      {:else if visibleSuggestion}
+        <span id="{uid}-suggestion">
+          <span class="sr-only">Suggested reply: {visibleSuggestion.text}. </span>
+          <!-- The phone has no Tab or Esc: the button is the way in, and typing dismisses. -->
+          <button
+            type="button"
+            class="hover:text-foreground"
+            onclick={() => void acceptSuggestion()}
+            >{isPhone ? 'Use suggestion' : 'Tab to accept suggestion'}</button
+          >{#if !isPhone}{' · Esc to dismiss'}{/if}
+        </span>
       {:else if hint}
         {hint}
       {/if}

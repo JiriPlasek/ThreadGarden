@@ -992,6 +992,8 @@
                 commandScope={{ sessionId }}
                 {working}
                 queued={chat.queuedMessages.length}
+                suggestion={chat.status === 'idle' ? chat.promptSuggestion : null}
+                onDismissSuggestion={chat.dismissSuggestion}
                 onSubmit={submit}
                 onInterrupt={interrupt}
                 onRecall={recallQueued}
