@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { draftWithReturned } from '../src/items.js';
 import { messagePreview, pasteBlocks, pasteLines, unwrapPastes } from '../src/pastes.js';
 
 describe('CLI paste blocks', () => {
@@ -32,5 +33,44 @@ describe('CLI paste blocks', () => {
       text: 'axyb',
       pastes: ['x', 'y'],
     });
+  });
+});
+
+describe('a draft with given-back messages', () => {
+  const img = (data: string, number?: number) => ({
+    mediaType: 'image/png',
+    data,
+    ...(number === undefined ? {} : { number }),
+  });
+
+  it('puts them in front, oldest first, as withReturned does', () => {
+    expect(
+      draftWithReturned({ text: 'mine', images: [] }, [{ text: 'one' }, { text: 'two' }]),
+    ).toEqual({ text: 'one\ntwo\nmine', images: [] });
+    expect(draftWithReturned({ text: '', images: [] }, [{ text: 'one' }])).toEqual({
+      text: 'one',
+      images: [],
+    });
+  });
+
+  it('numbers their images past every tag and image already there', () => {
+    const result = draftWithReturned(
+      { text: 'see [Image #1] and [Image #3]', images: [img('A', 1)] },
+      [
+        { text: 'first [Image #1]', images: [img('B', 1)] },
+        { text: 'second [Image #1] [Image #2]', images: [img('C', 1), img('D', 2)] },
+      ],
+    );
+    expect(result.text).toBe(
+      'first [Image #4]\nsecond [Image #5] [Image #6]\nsee [Image #1] and [Image #3]',
+    );
+    expect(result.images).toEqual([img('B', 4), img('C', 5), img('D', 6), img('A', 1)]);
+  });
+
+  it('leaves a typed tag with no image, and an image with no number, as they are', () => {
+    const result = draftWithReturned({ text: '', images: [] }, [
+      { text: 'typed [Image #7] here', images: [img('X')] },
+    ]);
+    expect(result).toEqual({ text: 'typed [Image #7] here', images: [img('X')] });
   });
 });

@@ -8,6 +8,7 @@ import {
   POWER_CAPABILITY,
   PROTOCOL_VERSION,
   UPDATE_CAPABILITY,
+  draftWithReturned,
   type ChatStatus,
   type EventMsg,
   type MachineInfo,
@@ -905,6 +906,15 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         sentImages: {
           set: (id, uuid, numbers) => opened.setImageNumbers(id, uuid, numbers),
           get: (uuid) => opened.imageNumbers(uuid),
+        },
+        // Queued messages Claude never read go back in front of the chat's draft (its key
+        // is the id), their images with them, renumbered past the draft's own.
+        onReturned: (id, messages) => {
+          const draft = opened.getDraft(id) ?? { text: '', images: [] };
+          const next = draftWithReturned(draft, messages);
+          if (next.text !== draft.text || next.images.length !== draft.images.length) {
+            opened.setDraft(id, next.text, next.images, clock());
+          }
         },
       });
       host = sessionHost;

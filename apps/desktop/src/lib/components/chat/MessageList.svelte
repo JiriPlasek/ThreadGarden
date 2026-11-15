@@ -1,7 +1,8 @@
 <script lang="ts">
-  import type { ChatItem, ChatTask } from '@threadgarden/protocol';
+  import type { ChatItem, ChatTask, QueuedMessage } from '@threadgarden/protocol';
   import ArrowDownIcon from '@lucide/svelte/icons/arrow-down';
   import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
+  import XIcon from '@lucide/svelte/icons/x';
   import { onDestroy, untrack } from 'svelte';
   import type { ListMemory } from '#lib/state/chats.svelte.js';
   import { setChatActions, type RequestActions } from './context';
@@ -10,6 +11,7 @@
   import ItemView from './items/ItemView.svelte';
   import ToolGroup from './items/ToolGroup.svelte';
   import UnknownItem from './items/UnknownItem.svelte';
+  import UserItem from './items/UserItem.svelte';
   import { buildRows, quietTail, type Row } from './rows';
   import { captureAnchor, computeOffsets, restoreAnchor, visibleRange } from './virtual';
 
@@ -20,14 +22,28 @@
    * sticks there (streaming); otherwise the row at the top of the viewport stays
    * put when rows above it are measured or older items are prepended. Near the
    * top it asks for older items. While a turn works with nothing on screen
-   * moving (`quietTail`), a last row says Claude is being waited for.
+   * moving (`quietTail`), a row after the conversation says Claude is being
+   * waited for.
+   *
+   * Messages Claude has not read yet (`queued`) follow the conversation (and
+   * the waiting row), greyed out, as the terminal shows them. Each has its
+   * message's id as its row key, so when Claude reads it and it joins `items`
+   * (last, at that moment) the same row just stops being greyed. With
+   * `onWithdraw` each has a Remove button. They are not transcript items, so
+   * they never decide whether Claude is being waited for.
    */
+  type QueuedRow = { kind: 'queued'; key: string; message: QueuedMessage; itemIds: string[] };
+  type WaitingRow = { kind: 'waiting'; key: string; itemIds: string[] };
+  type ListRow = Row | WaitingRow | QueuedRow;
+
   let {
     items,
+    queued = [],
     hasMore = false,
     loadingOlder = false,
     onLoadOlder,
     onFork,
+    onWithdraw,
     requests,
     requestsDocked = false,
     tasks = [],
@@ -38,10 +54,14 @@
     stickRequests = 0,
   }: {
     items: readonly ChatItem[];
+    /** Messages sent while Claude worked that it has not read yet, oldest first. */
+    queued?: readonly QueuedMessage[];
     hasMore?: boolean;
     loadingOlder?: boolean;
     onLoadOlder?: () => void;
     onFork?: (itemId: string) => void;
+    /** Removes a queued message before Claude reads it (by its id). */
+    onWithdraw?: (messageId: string) => void;
     /** Answers permission requests, questions and plans (cards are read-only without it). */
     requests?: RequestActions;
     /** Waiting requests are answered in the composer's place: the list shows a line for each. */
@@ -100,7 +120,6 @@
 
   /** How long the tail must stay quiet before the row shows: none between back-to-back outputs. */
   const WAITING_DELAY_MS = 400;
-  type WaitingRow = { kind: 'waiting'; key: string; itemIds: string[] };
   const WAITING_ROW: WaitingRow = { kind: 'waiting', key: 'tg:waiting', itemIds: [] };
 
   const quiet = $derived(working && quietTail(items));
@@ -127,9 +146,18 @@
   });
   const waitedFor = $derived(quietSince === null ? 0 : now - quietSince);
 
-  const rows = $derived<(Row | WaitingRow)[]>(
-    waitingShown ? [...buildRows(items), WAITING_ROW] : buildRows(items),
-  );
+  // The waiting row sits between the conversation and the queued messages: it is
+  // about the turn in progress, which they wait behind.
+  const rows: ListRow[] = $derived([
+    ...buildRows(items),
+    ...(waitingShown ? [WAITING_ROW] : []),
+    ...queued.map((message): QueuedRow => ({
+      kind: 'queued',
+      key: message.id,
+      message,
+      itemIds: [message.id],
+    })),
+  ]);
   /** Anchors name a row by its first item id: stable when runs grow or regroup. */
   const anchorKeys = $derived(rows.map((r) => r.itemIds[0] ?? r.key));
   const rowOfItem = $derived.by(() => {
@@ -147,12 +175,16 @@
     return i < 0 ? undefined : i;
   };
 
-  const estimate = (row: Row | WaitingRow): number => {
+  const userHeight = (text: string): number =>
+    44 + 20 * Math.min(20, Math.floor(text.length / 110));
+
+  const estimate = (row: ListRow): number => {
+    if (row.kind === 'queued') return userHeight(row.message.text) + 16;
     if (row.kind !== 'item') return 28;
     const it = row.item;
     switch (it.kind) {
       case 'user':
-        return 44 + 20 * Math.min(20, Math.floor(it.text.length / 110));
+        return userHeight(it.text);
       case 'assistantText':
         return 32 + 21 * Math.min(120, Math.ceil(it.markdown.length / 110));
       case 'todo':
@@ -396,6 +428,38 @@
                 {#if waitedFor >= 1000}
                   <span class="tabular-nums" aria-hidden="true">{elapsed(waitedFor)}</span>
                 {/if}
+              </div>
+            {:else if row.kind === 'queued'}
+              <!-- Sent, not read yet: greyed out, and no fork (the transcript does not have it). -->
+              <div role="group" aria-label="Queued message" data-queued-message>
+                <div class="opacity-50" title="Queued: Claude reads this at its next step">
+                  <UserItem
+                    item={{
+                      kind: 'user',
+                      id: row.message.id,
+                      text: row.message.text,
+                      ts: row.message.ts,
+                      ...(row.message.imageCount ? { imageCount: row.message.imageCount } : {}),
+                    }}
+                    nested
+                  />
+                </div>
+                <div
+                  class="text-muted-foreground mt-0.5 flex items-center justify-end gap-2 text-[0.6875rem]"
+                >
+                  <span class="opacity-50">Queued</span>
+                  {#if onWithdraw}
+                    {@const id = row.message.id}
+                    <button
+                      type="button"
+                      class="hover:bg-muted hover:text-foreground flex items-center gap-0.5 rounded px-1"
+                      title="Remove it before Claude reads it"
+                      onclick={() => onWithdraw(id)}
+                    >
+                      <XIcon class="size-3" aria-hidden="true" /> Remove
+                    </button>
+                  {/if}
+                </div>
               </div>
             {:else if row.kind === 'unknownGroup'}
               <ItemBoundary item={row.items}><UnknownItem items={row.items} /></ItemBoundary>

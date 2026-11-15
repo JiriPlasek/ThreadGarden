@@ -1,4 +1,11 @@
-import type { ChatSummary, ImageRef, MovePeer, Result } from '@threadgarden/protocol';
+import {
+  draftWithReturned,
+  type ChatSummary,
+  type ImageRef,
+  type MovePeer,
+  type Result,
+  type ReturnedMessage,
+} from '@threadgarden/protocol';
 import { quietly, type Api } from './api';
 import { chatKey, type ChatRef } from './refs';
 import type { ComposerDraft } from '#lib/components/composer/tags.js';
@@ -109,10 +116,13 @@ export class InteractionState {
   };
   private readonly draftTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly commandCache = new Map<string, Promise<SlashCommand[]>>();
+  /** Mounted composers, by draft key: each takes the messages given back to its chat. */
+  private readonly takers = new Map<string, (messages: ReturnedMessage[]) => void>();
 
   init = (api: Api): void => {
     this.api = api;
     api.onOpen(() => this.loadStatus());
+    api.on('messagesReturned', (e) => this.returned(e.sessionId, e.messages));
     if (api.status === 'open') quietly(this.loadStatus());
   };
 
@@ -186,6 +196,33 @@ export class InteractionState {
     this.drafts.set(key, EMPTY_DRAFT);
     this.storedImages.set(key, []);
     if (this.api) quietly(this.api.request('drafts.set', { key, text: '', images: [] }));
+  };
+
+  /**
+   * The composer showing draft `key` takes messages given back to its chat
+   * (text and images) while mounted; returns the unregister.
+   */
+  takeReturned = (key: string, take: (messages: ReturnedMessage[]) => void): (() => void) => {
+    this.takers.set(key, take);
+    return () => {
+      if (this.takers.get(key) === take) this.takers.delete(key);
+    };
+  };
+
+  /**
+   * Queued messages Claude never read came back (`messagesReturned`; a chat's
+   * draft key is its id). The service has put them (text and images) in front
+   * of the saved draft already: a draft not loaded here gets them from there;
+   * one loaded gets them the same way, so a later save keeps them, and its
+   * composer state is dropped so the next composer restores from the draft.
+   */
+  private returned = (key: string, messages: ReturnedMessage[]): void => {
+    const take = this.takers.get(key);
+    if (take) return take(messages);
+    const draft = this.cachedDraft(key);
+    if (draft === undefined) return;
+    this.attachments.delete(key);
+    this.saveDraft(key, draftWithReturned(draft, messages));
   };
 
   // ── lookups ─────────────────────────────────────────────────────────────

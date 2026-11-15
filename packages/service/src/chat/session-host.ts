@@ -76,6 +76,8 @@ export type SessionHostDeps = {
   onContextWindow?: LiveSessionDeps['onContextWindow'];
   /** Handed to every session (see `LiveSessionDeps.sentImages`). */
   sentImages?: LiveSessionDeps['sentImages'];
+  /** Handed to every session (see `LiveSessionDeps.onReturned`). */
+  onReturned?: LiveSessionDeps['onReturned'];
 };
 
 export class SessionHost {
@@ -325,6 +327,16 @@ export class SessionHost {
     }
   }
 
+  /** "Suggest my next reply", read at every start; unreadable settings leave it off. */
+  private promptSuggestions(): boolean {
+    try {
+      return this.deps.getSettings().promptSuggestions;
+    } catch (err) {
+      this.report(err, 'settings');
+      return false;
+    }
+  }
+
   private options(extra: Partial<LiveSessionOptions>): LiveSessionOptions {
     const {
       adapter,
@@ -342,12 +354,14 @@ export class SessionHost {
       onTurnResult,
       onContextWindow,
       sentImages,
+      onReturned,
     } = this.deps;
     return {
       adapter,
       registry,
       claudePath: this.deps.claudePath(),
       env: this.deps.env(),
+      promptSuggestions: this.promptSuggestions(),
       emit,
       now,
       timers: this.timers,
@@ -362,6 +376,7 @@ export class SessionHost {
       ...(onTurnResult ? { onTurnResult } : {}),
       ...(onContextWindow ? { onContextWindow } : {}),
       ...(sentImages ? { sentImages } : {}),
+      ...(onReturned ? { onReturned } : {}),
       ...extra,
       log: extra.log ?? new EventLog(undefined, this.seqBase),
     };

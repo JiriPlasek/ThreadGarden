@@ -22,6 +22,8 @@ import type {
   EventMsg,
   ImageRef,
   MovePeer,
+  PromptSuggestion,
+  QueuedMessage,
 } from '@threadgarden/protocol';
 import { MOVE_ERRORS } from '@threadgarden/protocol';
 import {
@@ -387,7 +389,14 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
    */
   const view = async (
     sessionId: string,
-  ): Promise<{ items: ChatItem[]; seq: number; header: ChatHeaderInfo; tasks: ChatTask[] }> => {
+  ): Promise<{
+    items: ChatItem[];
+    seq: number;
+    header: ChatHeaderInfo;
+    tasks: ChatTask[];
+    promptSuggestion?: PromptSuggestion | null;
+    queued: QueuedMessage[];
+  }> => {
     let history: ChatItem[];
     let lastReply: LastReply | undefined;
     try {
@@ -404,15 +413,30 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
       history = history.slice(0, -1);
     }
     const fallback = historyHeader(sessionId, lastReply);
-    if (!s) return { items: history, seq: host.seqOf(sessionId), header: fallback, tasks: [] };
+    if (!s) {
+      return {
+        items: history,
+        seq: host.seqOf(sessionId),
+        header: fallback,
+        tasks: [],
+        queued: [],
+      };
+    }
     const snap = s.snapshot(Number.MAX_SAFE_INTEGER);
     const own = new Set(snap.items.map((i) => i.id));
-    const earlier = history.filter((i) => !own.has(i.id) && !own.has(s.resolveItemId(i.id) ?? ''));
+    // Claude Code may have written a message to the transcript before its `started`
+    // frame reached the session: it stays queued until then, and shows once.
+    const queued = new Set(snap.queued.map((q) => q.id));
+    const earlier = history.filter(
+      (i) => !own.has(i.id) && !queued.has(i.id) && !own.has(s.resolveItemId(i.id) ?? ''),
+    );
     return {
       items: [...earlier, ...snap.items],
       seq: snap.seq,
       header: { ...fallback, ...snap.header },
       tasks: snap.tasks,
+      promptSuggestion: snap.promptSuggestion,
+      queued: snap.queued,
     };
   };
 
@@ -432,6 +456,8 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
       hasMore: v.items.length > items.length,
       seq: v.seq,
       tasks: v.tasks,
+      promptSuggestion: v.promptSuggestion ?? null,
+      queued: v.queued,
       movedTo: deps.awayTo?.(p.sessionId) ?? null,
     };
   });
@@ -578,6 +604,12 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
     const s = host.get(p.sessionId);
     if (s?.live) await s.interrupt();
     return {};
+  });
+
+  router.register('chat.withdraw', async (p) => {
+    const s = host.get(p.sessionId);
+    if (!s) throw new ServiceError('NOT_QUEUED', 'Claude has already read this message');
+    return s.withdraw(p.messageId);
   });
 
   const release = (sessionId: string): void => {

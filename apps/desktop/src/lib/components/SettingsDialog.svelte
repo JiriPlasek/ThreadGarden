@@ -258,6 +258,20 @@
             credentials).
           </p>
         </div>
+        <div class="grid gap-0.5">
+          <label class={checkClass}>
+            <input
+              type="checkbox"
+              bind:checked={form.promptSuggestions}
+              aria-describedby="settings-prompt-suggestions-hint"
+            /> Suggest my next reply
+          </label>
+          <p id="settings-prompt-suggestions-hint" class="text-muted-foreground pl-6 text-xs">
+            An extra model call after every turn, in every chat on this PC: it counts toward your
+            plan's limits, or costs money with an API key. Applies to chats started after the
+            change.
+          </p>
+        </div>
       {/if}
       {#if !isPhone}
         <!-- A hardware keyboard's setting: on the phone it keeps its value, and the composer's button sends. -->

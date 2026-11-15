@@ -18,6 +18,7 @@
     element = $bindable(null),
     label,
     placeholder,
+    describedby,
     disabled,
     controls,
     activeId,
@@ -33,6 +34,8 @@
     element?: HTMLTextAreaElement | null;
     label: string;
     placeholder: string;
+    /** The id of what describes the box now (a suggested reply). */
+    describedby?: string | undefined;
     disabled: boolean;
     controls?: string;
     activeId?: string;
@@ -119,6 +122,7 @@
   aria-autocomplete="list"
   aria-controls={controls}
   aria-activedescendant={activeId}
+  aria-describedby={describedby}
   {placeholder}
   {disabled}
   oninput={(e) => {
