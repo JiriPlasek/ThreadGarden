@@ -53,6 +53,51 @@ describe('message list', () => {
     expect(screen.getAllByText('looking at the parser')).toHaveLength(1);
   });
 
+  it('while a turn works and nothing is moving, says it is waiting for Claude', async () => {
+    const { rerender } = render(MessageList, { items: [user('u1')], working: true });
+    const waiting = await screen.findByRole('status', { name: /waiting for claude/i });
+    expect(waiting.textContent).toContain('Waiting for Claude');
+
+    // Output starts streaming: the indicator goes at once.
+    await rerender({ items: [user('u1'), text('a1', 'Hel', { streaming: true })], working: true });
+    await waitFor(() => expect(screen.queryByRole('status', { name: /waiting/i })).toBeNull());
+  });
+
+  it('the waiting row sits above the queued messages, and they never decide it', async () => {
+    const queued = [{ id: 'q1', text: 'also check the docs', ts: 1 }];
+    const { container, rerender } = render(MessageList, {
+      items: [user('u1')],
+      queued,
+      working: true,
+    });
+    await screen.findByRole('status', { name: /waiting for claude/i });
+    // Conversation, then the waiting row, then the greyed queued message.
+    expect([...rows(container)].map((r) => r.getAttribute('data-row'))).toEqual([
+      'u1',
+      'tg:waiting',
+      'q1',
+    ]);
+
+    // Claude streams output: no waiting row, though a queued message still follows.
+    await rerender({
+      items: [user('u1'), text('a1', 'Hel', { streaming: true })],
+      queued,
+      working: true,
+    });
+    await waitFor(() => expect(screen.queryByRole('status', { name: /waiting/i })).toBeNull());
+    expect(screen.getByRole('group', { name: /queued message/i })).toBeTruthy();
+  });
+
+  it('shows no waiting indicator while output streams or when no turn works', async () => {
+    render(MessageList, {
+      items: [user('u1'), tool('b1', 'Bash', { command: 'ls' }, { status: 'running' })],
+      working: true,
+    });
+    render(MessageList, { items: [user('u2')], working: false });
+    await new Promise((r) => setTimeout(r, 700));
+    expect(screen.queryByRole('status', { name: /waiting/i })).toBeNull();
+  });
+
   it('unknown item shows raw JSON collapsed', async () => {
     const raw = { type: 'future_thing', payload: { answer: 42 } };
     const { container } = render(MessageList, {

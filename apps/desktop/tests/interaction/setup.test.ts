@@ -158,6 +158,7 @@ describe('new chat dialog (spec §5.4)', () => {
     expect(server.calls('drafts.set').at(-1)?.params).toEqual({
       key: 'new:/work/beta',
       text: '',
+      images: [],
     });
   });
 

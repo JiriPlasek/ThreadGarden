@@ -30,7 +30,7 @@ describe('resume safety (spec §4.4)', () => {
     expect(server.calls('chat.resumeCheck')[0]!.params).toEqual({ sessionId: SID });
     expect(server.calls('chat.send')).toHaveLength(0);
     // The message is kept for later.
-    expect(composer().value).toBe('continue please');
+    expect(composer().textContent).toBe('continue please');
 
     await userEvent.click(within(alert).getByRole('button', { name: /copy resume command/i }));
     await waitFor(() => expect(server.calls('chat.resumeCommand')).toHaveLength(1));
@@ -65,7 +65,7 @@ describe('resume safety (spec §4.4)', () => {
     expect(server.calls('external.stop')[0]!.params).toEqual({ sessionId: SID });
     await waitFor(() => expect(screen.queryByRole('alert')).toBeNull());
     // Press Enter again to send it here.
-    expect(composer().value).toBe('continue please');
+    expect(composer().textContent).toBe('continue please');
   });
 
   it('a failed End the process stays in the confirmation dialog', async () => {
@@ -134,7 +134,7 @@ describe('resume safety (spec §4.4)', () => {
     await userEvent.click(within(dialog).getByRole('button', { name: /cancel/i }));
     await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
     expect(server.calls('chat.send')).toHaveLength(0);
-    expect(composer().value).toBe('go on');
+    expect(composer().textContent).toBe('go on');
   });
 
   it('ok resume sends at once; live chats skip the check', async () => {

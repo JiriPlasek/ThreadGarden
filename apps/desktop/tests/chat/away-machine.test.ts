@@ -186,8 +186,8 @@ const openChat = async (env: Awaited<ReturnType<typeof start>>) => {
   env.app.tabs.openTab({ machineId: M1, sessionId: 'r1' });
   render(ChatPane, { context: env.context });
   await waitFor(() => expect(env.app.scopes.get(M1)?.chats.get('r1')?.loaded).toBe(true));
-  const composer = (): HTMLTextAreaElement =>
-    screen.getByRole('textbox', { name: /message/i }) as HTMLTextAreaElement;
+  const composer = (): HTMLDivElement =>
+    screen.getByRole('textbox', { name: /message/i }) as HTMLDivElement;
   return composer;
 };
 
@@ -251,7 +251,7 @@ describe('a machine that is away', () => {
     });
     const line = await screen.findByText(WAITING_OFF);
     expect(screen.getByText('Postgres it is')).toBeTruthy();
-    expect(composer().value).toBe('');
+    expect(composer().textContent).toBe('');
     const row = line.closest('[data-away-item]') as HTMLElement;
     await userEvent.click(within(row).getByRole('button', { name: 'Cancel' }));
     await waitFor(() => expect(screen.queryByText(WAITING_OFF)).toBeNull());
@@ -370,7 +370,7 @@ describe('a machine that is away', () => {
     const env = await start({ capabilities: ['remote', POWER_CAPABILITY] });
     const composer = await openChat(env);
     expect(await screen.findByText("Update Ubuntu PC to send while it's off")).toBeTruthy();
-    expect(composer().disabled).toBe(true);
+    expect(composer().getAttribute('aria-disabled')).toBe('true');
     expect(screen.getByRole('button', { name: /^send/i })).toHaveProperty('disabled', true);
     expect(queued(env)).toHaveLength(0);
   });
@@ -380,7 +380,7 @@ describe('a machine that is away', () => {
     const composer = await openChat(env);
     expect(await screen.findByText("Ubuntu PC hasn't been seen yet")).toBeTruthy();
     expect(screen.queryByText("Update Ubuntu PC to send while it's off")).toBeNull();
-    expect(composer().disabled).toBe(true);
+    expect(composer().getAttribute('aria-disabled')).toBe('true');
     expect(queued(env)).toHaveLength(0);
   });
 
@@ -396,7 +396,7 @@ describe('a machine that is away', () => {
         "Can't send to Ubuntu PC: its address answers as a different machine",
       ),
     ).toBeTruthy();
-    expect(composer().disabled).toBe(true);
+    expect(composer().getAttribute('aria-disabled')).toBe('true');
     expect(queued(env)).toHaveLength(0);
   });
 
@@ -534,7 +534,7 @@ describe('a machine that is away', () => {
     await waitFor(() => expect(env.app.machines.get(M1)?.status).toBe('unreachable'));
     await waitFor(() => expect(env.app.scopes.get(M1)?.copy?.has).toBe(true));
     expect(screen.queryByText("Update Ubuntu PC to send while it's off")).toBeNull();
-    expect(composer().disabled).toBe(false);
+    expect(composer().getAttribute('aria-disabled')).toBe('false');
     await userEvent.type(composer(), 'Postgres it is{Enter}');
     await waitFor(() => expect(queued(env)).toHaveLength(1));
   });

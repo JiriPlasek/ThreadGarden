@@ -108,7 +108,7 @@ test('composer keystroke ≤ 16 ms', async ({ page }) => {
   for (const ch of 'the quick brown fox jumps') {
     times.push(await timeKey(page, () => page.keyboard.press(ch === ' ' ? 'Space' : ch), null));
   }
-  await expect(composer).toHaveValue('warm up the quick brown fox jumps');
+  await expect(composer).toHaveText('warm up the quick brown fox jumps');
   const p90 = [...times].sort((a, b) => a - b)[Math.ceil(times.length * 0.9) - 1]!;
   console.info(
     `composer keystroke: median ${median(times).toFixed(1)} ms, p90 ${p90.toFixed(1)} ms, max ${Math.max(...times).toFixed(1)} ms`,

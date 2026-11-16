@@ -120,6 +120,7 @@ describe('protocol schemas', () => {
       'chat.create',
       'chat.send',
       'chat.interrupt',
+      'chat.withdraw',
       'chat.end',
       'chat.setModel',
       'chat.setPermissionMode',
@@ -221,6 +222,8 @@ describe('protocol schemas', () => {
         'needsYou',
         // v1.1 T2: "Your turn"
         'chatFinished',
+        // Queued messages Claude never read, given back
+        'messagesReturned',
         // v1.2 B1: buckets
         'chatBackFromHold',
         // v1.3 B: usage limits and scheduled sends
@@ -492,6 +495,15 @@ describe('protocol schemas', () => {
       });
       expect(SettingsPatchSchema.safeParse({ autoTitles: 'yes' }).success).toBe(false);
     });
+  });
+
+  it('promptSuggestions is off by default, also for settings stored before it existed', () => {
+    expect(settingsDefaults.promptSuggestions).toBe(false);
+    expect(SettingsSchema.parse({ notifications: false }).promptSuggestions).toBe(false);
+    expect(SettingsPatchSchema.parse({ promptSuggestions: true })).toEqual({
+      promptSuggestions: true,
+    });
+    expect(SettingsPatchSchema.safeParse({ promptSuggestions: 'yes' }).success).toBe(false);
   });
 
   // ── v1.3 E: appearance ────────────────────────────────────────────────────

@@ -221,6 +221,21 @@ const textOf = (m: SDKUserMessage): string => {
     .join('\n');
 };
 
+/** Wraps each of `inline_pastes` where it stands, as CLI 2.1.319 writes it to the transcript. */
+const withPastes = (text: string, pastes: readonly string[] = []): string => {
+  let out = text;
+  let from = 0;
+  for (const paste of pastes) {
+    const at = out.indexOf(paste, from);
+    if (at < 0 || paste.trim() === '') continue;
+    const id = randomUUID().slice(0, 4);
+    const block = `\n\n<pasted_content id="${id}">\n${paste}\n</pasted_content id="${id}">\n\n`;
+    out = out.slice(0, at) + block + out.slice(at + paste.length);
+    from = at + block.length;
+  }
+  return out.endsWith('\n\n') ? out.slice(0, -1) : out;
+};
+
 /** The "agent" subagent's nested subagent: its task, its Agent call, its one tool call. */
 type NestedAgent = { taskId: string; toolUseId: string; parentToolUseId: string; grepId: string };
 
@@ -232,6 +247,8 @@ class ScriptedSession extends FakeSession {
   private readonly shells = new Map<string, string>();
   /** Running "agent" subagent tasks: task id → its stop signal. */
   private readonly agents = new Map<string, AbortController>();
+  /** Messages sent that no turn has started yet. */
+  private readonly waiting = new Set<string>();
 
   constructor(
     options: StartOptions,
@@ -267,14 +284,55 @@ class ScriptedSession extends FakeSession {
     return this.options.resume ?? this.options.sessionId ?? 'mock';
   }
 
+  /**
+   * Like Claude Code, each message runs after the turns before it, with its
+   * `command_lifecycle` frames: queued on arrival, started when its turn
+   * begins, completed when it ends; cancelled if taken back or stopped first.
+   */
   override send(m: SDKUserMessage): void {
     super.send(m);
-    this.turn = this.turn.then(() => this.reply(m)).catch(() => {});
+    const uuid = m.uuid;
+    if (uuid !== undefined) {
+      this.waiting.add(uuid);
+      this.lifecycle(uuid, 'queued');
+    }
+    this.turn = this.turn
+      .then(async () => {
+        if (uuid !== undefined) {
+          if (!this.waiting.delete(uuid)) return; // taken back, or cancelled by Stop
+          this.lifecycle(uuid, 'started');
+        }
+        await this.reply(m);
+        if (uuid !== undefined) this.lifecycle(uuid, 'completed');
+      })
+      .catch(() => {});
   }
 
+  private lifecycle(uuid: string, state: 'queued' | 'started' | 'completed' | 'cancelled'): void {
+    this.out(
+      msg({
+        type: 'command_lifecycle',
+        command_uuid: uuid,
+        state,
+        uuid: randomUUID(),
+        session_id: this.id,
+      }),
+    );
+  }
+
+  /** As Claude Code with `cancelQueued`: the messages still queued are cancelled too. */
   override async interrupt(): Promise<void> {
     await super.interrupt();
+    for (const uuid of this.waiting) this.lifecycle(uuid, 'cancelled');
+    this.waiting.clear();
     this.abort.abort();
+  }
+
+  override async cancelQueued(uuid: string): Promise<boolean> {
+    await super.cancelQueued(uuid);
+    if (!this.waiting.delete(uuid)) return false;
+    this.lifecycle(uuid, 'cancelled');
+    return true;
   }
 
   /** Stops a running "agent" or "server" task, like the CLI: killed, then a stopped notification. */
@@ -326,13 +384,31 @@ class ScriptedSession extends FakeSession {
   }
 
   private async reply(m: SDKUserMessage): Promise<void> {
-    const text = textOf(m);
+    const text = withPastes(textOf(m), m.inline_pastes);
     await this.adapter.record(this, {
       type: 'user',
       uuid: m.uuid ?? randomUUID(),
       message: { role: 'user', content: text },
     });
-    if (text.startsWith('/')) return; // e.g. `/effort high`: no turn
+    if (text.startsWith('/')) {
+      // e.g. `/effort high`: no model turn, but a result, as Claude Code 2.1.319 sends one.
+      this.out(
+        msg({
+          type: 'result',
+          subtype: 'success',
+          uuid: randomUUID(),
+          session_id: this.id,
+          is_error: false,
+          duration_ms: 0,
+          total_cost_usd: 0,
+          usage: {},
+          modelUsage: {},
+          num_turns: 0,
+          result: '',
+        }),
+      );
+      return;
+    }
     this.abort = new AbortController();
     const started = Date.now();
     // Threadgarden's first note in a moved chat gets the plain reply: it says "stop and ask".
@@ -365,6 +441,17 @@ class ScriptedSession extends FakeSession {
         result: '',
       }),
     );
+    // As the SDK: a prediction only for a session started with `promptSuggestions`.
+    if (!interrupted && this.options.promptSuggestions === true && lower.includes('suggest')) {
+      this.out(
+        msg({
+          type: 'prompt_suggestion',
+          uuid: randomUUID(),
+          session_id: this.id,
+          suggestion: 'Run the tests and fix any failures',
+        }),
+      );
+    }
   }
 
   /** A turn the usage limit refuses, as the CLI reports one. */

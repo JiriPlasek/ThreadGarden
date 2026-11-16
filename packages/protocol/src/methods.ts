@@ -13,12 +13,18 @@ import {
   HOLD_NOTE_MAX,
   ChatSummarySchema,
   PlaceSchema,
+  PromptSuggestionSchema,
   ProjectSchema,
   SettingsPatchSchema,
   SettingsSchema,
 } from './chat.js';
 import { ChatItemsEventSchema, ChatStatusEventSchema, ChatTasksEventSchema } from './events.js';
-import { ChatItemSchema, ImageRefSchema } from './items.js';
+import {
+  ChatItemSchema,
+  ImageRefSchema,
+  QueuedMessageSchema,
+  ReturnedMessageSchema,
+} from './items.js';
 import {
   DeviceSchema,
   DeviceTokenSchema,
@@ -235,6 +241,9 @@ export const methods = {
       seq: z.number(),
       /** Tasks of the chat's running process (empty unless Threadgarden runs it). */
       tasks: z.array(ChatTaskSchema),
+      promptSuggestion: PromptSuggestionSchema.nullable().optional(),
+      /** Messages Claude has not read yet (see `chat.status`); absent from older services. */
+      queued: z.array(QueuedMessageSchema).optional(),
       /** Protocol 9: where the chat went when it was moved away; absent or null otherwise. */
       movedTo: MovePeerSchema.nullable().optional(),
     }),
@@ -273,7 +282,17 @@ export const methods = {
     }),
     z.object({ queued: z.boolean() }),
   ),
+  /** Stops the running turn; queued messages Claude has not read come back (`messagesReturned`). */
   'chat.interrupt': def(sessionIdOnly, empty),
+  /**
+   * Takes a queued message back before Claude reads it (by its `queued` id),
+   * to remove or edit it. `NOT_QUEUED` when Claude has already taken it up.
+   * Every service that lists `queued` has it.
+   */
+  'chat.withdraw': def(
+    z.object({ sessionId: z.string(), messageId: z.string() }),
+    ReturnedMessageSchema,
+  ),
   'chat.end': def(sessionIdOnly, empty),
   'chat.setModel': def(setValue, empty),
   'chat.setPermissionMode': def(setValue, empty),
@@ -344,8 +363,19 @@ export const methods = {
     }),
     empty,
   ),
-  'drafts.get': def(z.object({ key: z.string() }), z.object({ text: z.string() })),
-  'drafts.set': def(z.object({ key: z.string(), text: z.string() }), empty),
+  'drafts.get': def(
+    z.object({ key: z.string() }),
+    z.object({ text: z.string(), images: z.array(ImageRefSchema).optional() }),
+  ),
+  /**
+   * `text` as the message would send it (pastes expanded); `images` each with
+   * its tag's number. Without `images` the draft keeps its own, unless `text`
+   * is empty: then the draft is cleared.
+   */
+  'drafts.set': def(
+    z.object({ key: z.string(), text: z.string(), images: z.array(ImageRefSchema).optional() }),
+    empty,
+  ),
   'uiState.get': def(z.object({ key: z.string() }), z.object({ value: z.unknown() })),
   'uiState.set': def(z.object({ key: z.string(), value: z.unknown() }), empty),
   'settings.get': def(empty, SettingsSchema),
