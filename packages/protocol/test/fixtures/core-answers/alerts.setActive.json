@@ -1,0 +1,16 @@
+{
+  "cases": [
+    {
+      "params": {
+        "machineId": "m1",
+        "sessionId": "s1"
+      },
+      "result": {}
+    },
+    {
+      "params": null,
+      "result": {}
+    }
+  ],
+  "method": "alerts.setActive"
+}

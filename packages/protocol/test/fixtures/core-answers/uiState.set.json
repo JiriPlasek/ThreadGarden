@@ -1,0 +1,17 @@
+{
+  "cases": [
+    {
+      "params": {
+        "key": "tabs",
+        "value": {
+          "active": "m1:s1",
+          "open": [
+            "m1:s1"
+          ]
+        }
+      },
+      "result": {}
+    }
+  ],
+  "method": "uiState.set"
+}

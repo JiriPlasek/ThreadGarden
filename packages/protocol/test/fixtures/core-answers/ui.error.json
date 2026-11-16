@@ -1,0 +1,12 @@
+{
+  "cases": [
+    {
+      "params": {
+        "message": "Something broke",
+        "where": "test"
+      },
+      "result": {}
+    }
+  ],
+  "method": "ui.error"
+}

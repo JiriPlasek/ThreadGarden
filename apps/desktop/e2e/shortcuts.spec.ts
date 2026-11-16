@@ -45,7 +45,8 @@ test('shortcut hints appear in tooltips and menus, and F2 renames the active cha
     await expect(page.getByRole('heading', { level: 1 })).toHaveText('Renamed using F2');
     await expect(page.getByRole('tab', { selected: true })).toHaveText('Renamed using F2');
     await expect(row).toContainText('Renamed using F2');
-    await expect(composer).toHaveValue('A draft that survives renaming');
+    // The badge editor is a contenteditable: its text, not a value.
+    await expect(composer).toHaveText('A draft that survives renaming');
     await page.getByRole('button', { name: 'Chat state', exact: true }).click();
     await expect(
       page.getByRole('menuitem', { name: 'Rename…', exact: true }).locator('[data-shortcut-hint]'),

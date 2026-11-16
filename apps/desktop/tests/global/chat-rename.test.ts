@@ -54,7 +54,8 @@ describe('F2 renames chats', () => {
         customTitle: 'New title',
       }),
     );
-    expect(composer().value).toBe('draft in progress');
+    // The badge editor is a contenteditable: its text, not a value.
+    expect(composer().textContent).toBe('draft in progress');
     expect(server.calls('chat.send')).toHaveLength(0);
     expect(server.calls('chat.end')).toHaveLength(0);
   });

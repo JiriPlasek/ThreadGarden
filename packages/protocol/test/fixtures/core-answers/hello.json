@@ -1,0 +1,23 @@
+{
+  "cases": [
+    {
+      "params": {
+        "client": "threadgarden-desktop",
+        "protocolVersion": 11
+      },
+      "result": {
+        "machine": {
+          "capabilities": [],
+          "headless": false,
+          "home": "",
+          "id": "00000000-0000-4000-8000-000000000000",
+          "name": "Phone",
+          "platform": "linux"
+        },
+        "protocolVersion": 11,
+        "serviceVersion": "0.0.0"
+      }
+    }
+  ],
+  "method": "hello"
+}

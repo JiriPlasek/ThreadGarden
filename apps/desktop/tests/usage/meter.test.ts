@@ -204,11 +204,35 @@ describe('usage chips', () => {
     expect(screen.queryByLabelText(/^usage/i)).toBeNull();
   });
 
-  it('no chip for an API-key entry or an entry without a 5-hour window', () => {
-    renderMeter([
-      machine('pc', { kind: 'apiKey' }, [win('five_hour', 5)]),
-      machine('m1', login('a@x.cz'), [win('seven_day', 5)]),
-    ]);
+  it('no chip for an API-key entry', () => {
+    renderMeter([machine('pc', { kind: 'apiKey' }, [win('five_hour', 5)])]);
     expect(screen.queryAllByRole('button', { name: /^usage/i })).toHaveLength(0);
+  });
+
+  it('no chip for an entry with nothing a chip shows (only overage)', () => {
+    renderMeter([machine('m1', login('a@x.cz'), [win('overage', 0, { status: 'rejected' })])]);
+    expect(screen.queryAllByRole('button', { name: /^usage/i })).toHaveLength(0);
+  });
+
+  it('a plan without a 5-hour limit still gets a chip, led by its weekly figure', () => {
+    const ultra = [win('seven_day', 40), win('model:fable', 0, { label: 'Fable' })];
+    renderMeter(
+      [machine('pc', login('me@x.cz'), mine), machine('m1', login('ultra@x.cz'), ultra)],
+      true,
+    );
+    const chips = screen.getAllByRole('button', { name: /^usage/i });
+    expect(chips.map(text)).toEqual([
+      'This PC · 5h 42% · Week 18% · Fable 30%',
+      'm1 · Week 40% · Fable 0%',
+    ]);
+  });
+
+  it('compact shows the weekly figure when the plan has no 5-hour limit', () => {
+    renderMeter(
+      [machine('m1', login('ultra@x.cz'), [win('seven_day', 40), win('model:fable', 0)])],
+      true,
+      true,
+    );
+    expect(text(screen.getByRole('button', { name: /^usage/i }))).toBe('m1 · Week 40%');
   });
 });

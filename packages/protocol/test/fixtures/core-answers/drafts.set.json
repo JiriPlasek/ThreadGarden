@@ -1,0 +1,12 @@
+{
+  "cases": [
+    {
+      "params": {
+        "key": "new:m1",
+        "text": "Half a thought"
+      },
+      "result": {}
+    }
+  ],
+  "method": "drafts.set"
+}

@@ -1,3 +1,4 @@
+import { setEditorSelection } from '../../src/lib/components/composer/editor';
 import type { ChatItem, ChatStatus, ChatSummary } from '@threadgarden/protocol';
 import { fireEvent, render, screen, waitFor } from '@testing-library/svelte';
 import { expect } from 'vitest';
@@ -72,8 +73,8 @@ export const renderChat = async (o: ChatOptions = {}) => {
     context: env.context,
   });
   await waitFor(() => expect(env.app.chats.get(SID)?.loaded).toBe(true));
-  const composer = (): HTMLTextAreaElement =>
-    screen.getByRole('textbox', { name: /message/i }) as HTMLTextAreaElement;
+  const composer = (): HTMLDivElement =>
+    screen.getByRole('textbox', { name: /message/i }) as HTMLDivElement;
   return { ...env, view, composer };
 };
 
@@ -90,9 +91,9 @@ export const pushStatus = (server: FakeServer, seq: number, status: ChatStatus):
  * the chat on every key; under a loaded parallel test run that made tests
  * with long chats time out now and then.
  */
-export const fill = async (field: HTMLTextAreaElement, text: string): Promise<void> => {
+export const fill = async (field: HTMLDivElement, text: string): Promise<void> => {
   field.focus();
-  field.value = text;
-  field.setSelectionRange(text.length, text.length);
+  field.textContent = text;
+  setEditorSelection(field, text.length);
   await fireEvent.input(field);
 };

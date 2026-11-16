@@ -19,6 +19,7 @@
   import ShortcutHint from '#lib/components/ShortcutHint.svelte';
   import PickerKeyHints from '#lib/components/PickerKeyHints.svelte';
   import * as Dialog from '#lib/components/ui/dialog/index.js';
+  import { isPhone } from '#lib/native.js';
   import { supportsMove } from '#lib/projects.js';
   import { useApp } from '#lib/state/context.js';
   import { shortcut, type Combo } from '#lib/shortcuts.js';
@@ -101,7 +102,17 @@
       run: () => (lifecycle.dialog = 'stopAll'),
     },
     { id: 'usage', label: 'Usage', icon: GaugeIcon, run: () => usageAccounts.open() },
-    { id: 'analytics', label: 'Analytics', icon: ChartColumnIcon, run: () => tabs.showAnalytics() },
+    // Analytics is This PC's history: the phone has none.
+    ...(isPhone
+      ? []
+      : [
+          {
+            id: 'analytics',
+            label: 'Analytics',
+            icon: ChartColumnIcon,
+            run: () => tabs.showAnalytics(),
+          },
+        ]),
     {
       id: 'settings',
       label: 'Settings',

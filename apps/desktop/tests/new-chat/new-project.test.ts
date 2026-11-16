@@ -189,7 +189,7 @@ describe('New chat tabs', () => {
     expect(within(dialog).getByText("A name can't end with '.'")).toBeTruthy();
     await userEvent.type(message(dialog), '{Enter}');
     expect(env.remote.calls('projects.create')).toHaveLength(0);
-    expect((message(dialog) as HTMLTextAreaElement).value).toBe('hi');
+    expect((message(dialog) as HTMLDivElement).textContent).toBe('hi');
 
     await userEvent.clear(name);
     await userEvent.type(name, 'plant');
@@ -230,7 +230,7 @@ describe('New chat tabs', () => {
     await userEvent.type(message(dialog), 'hi{Enter}');
     await waitFor(() => expect(within(dialog).getByRole('alert').textContent?.trim()).toBe(said));
     expect(name.value).toBe('plant-logger');
-    expect((message(dialog) as HTMLTextAreaElement).value).toBe('hi');
+    expect((message(dialog) as HTMLDivElement).textContent).toBe('hi');
     expect(env.remote.calls('chat.create')).toHaveLength(0);
   });
 
@@ -258,7 +258,9 @@ describe('New chat tabs', () => {
     expect(existing.getAttribute('aria-selected')).toBe('true');
     const folder = within(dialog).getByRole('combobox', { name: /folder/i }) as HTMLSelectElement;
     expect(folder.value).toBe('/home/jiri/threadgarden/projects/plant-logger');
-    await waitFor(() => expect((message(dialog) as HTMLTextAreaElement).value).toBe('scaffold it'));
+    await waitFor(() =>
+      expect((message(dialog) as HTMLDivElement).textContent).toBe('scaffold it'),
+    );
   });
 
   it('a project made without its repo offers Start there with the reason', async () => {
@@ -360,7 +362,9 @@ describe('New chat tabs', () => {
     expect(machine.value).toBe(M1);
     const folder = within(dialog).getByRole('combobox', { name: /folder/i }) as HTMLSelectElement;
     expect(folder.value).toBe(made);
-    await waitFor(() => expect((message(dialog) as HTMLTextAreaElement).value).toBe('scaffold it'));
+    await waitFor(() =>
+      expect((message(dialog) as HTMLDivElement).textContent).toBe('scaffold it'),
+    );
     expect(env.server.calls('chat.create')).toHaveLength(0);
   });
 

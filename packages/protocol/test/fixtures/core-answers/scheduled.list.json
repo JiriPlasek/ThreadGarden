@@ -1,0 +1,11 @@
+{
+  "cases": [
+    {
+      "params": {},
+      "result": {
+        "items": []
+      }
+    }
+  ],
+  "method": "scheduled.list"
+}

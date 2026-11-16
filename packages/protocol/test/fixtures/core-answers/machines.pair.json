@@ -1,0 +1,16 @@
+{
+  "cases": [
+    {
+      "error": {
+        "code": "PAIRING_UNREACHABLE"
+      },
+      "params": {
+        "address": "127.0.0.1",
+        "code": "ABCD-EFGH-JKMN",
+        "deviceName": "Phone",
+        "port": 1
+      }
+    }
+  ],
+  "method": "machines.pair"
+}

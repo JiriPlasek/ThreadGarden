@@ -250,10 +250,10 @@
                 aria-selected={active}
                 aria-controls="chat-panel"
                 tabindex={active ? 0 : -1}
-                title="{t.title} ? {formatCombos(shortcut('tab-close-click').combos).join(
+                title="{t.title} · {formatCombos(shortcut('tab-close-click').combos).join(
                   ' or ',
                 )} to close{active
-                  ? ` ? ${formatCombos(shortcut('chat-rename').combos).join(' or ')} to rename`
+                  ? ` · ${formatCombos(shortcut('chat-rename').combos).join(' or ')} to rename`
                   : ''}"
                 class="focus-visible:ring-ring/50 flex h-full min-w-0 flex-1 items-center gap-1.5 pr-1 pl-3 text-xs outline-none focus-visible:ring-2 focus-visible:ring-inset"
                 onclick={() => tabs.activate(key)}

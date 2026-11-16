@@ -9,7 +9,15 @@ import type { Logger } from '../../src/logger.js';
 import { startService, type ServiceHandle, type StartOptions } from '../../src/main.js';
 import type { PermissionUpdate, SessionMessage } from '../../src/sdk/adapter.js';
 import { FakeAdapter } from '../../src/testing/fake-adapter.js';
-import { notification, result, sdk, settle, started, streamEvent } from '../chat/live-helpers.js';
+import {
+  lifecycle,
+  notification,
+  result,
+  sdk,
+  settle,
+  started,
+  streamEvent,
+} from '../chat/live-helpers.js';
 import { eventually } from '../e2e/ws-client.js';
 
 let dir: string;
@@ -100,6 +108,33 @@ const code = async (method: string, params: unknown) => (await call(method, para
 type Opened = { items: ChatItem[]; hasMore: boolean; seq: number; summary: { live: boolean } };
 const ids = (items: ChatItem[]) => items.map((i) => i.id);
 
+it('chat.open and chat.since expose transient prompt predictions without adding history items', async () => {
+  const adapter = new FakeAdapter();
+  await start(adapter);
+  const { sessionId } = await ok<{ sessionId: string }>('chat.create', { cwd: dir, text: 'hello' });
+  const fake = adapter.lastSession();
+  fake.emit(result('r1'));
+  await settle();
+  const before = await ok<Opened>('chat.open', { sessionId, tail: 100 });
+  fake.emit(
+    sdk({ type: 'prompt_suggestion', uuid: 'p1', session_id: sessionId, suggestion: 'Run tests' }),
+  );
+  await settle();
+  const opened = await ok<Opened & { promptSuggestion: unknown }>('chat.open', {
+    sessionId,
+    tail: 100,
+  });
+  expect(opened.promptSuggestion).toEqual({ id: 'p1', text: 'Run tests' });
+  expect(ids(opened.items)).not.toContain('p1');
+  const replay = await ok<{ events: unknown[] }>('chat.since', { sessionId, seq: before.seq });
+  expect(replay.events).toContainEqual(
+    expect.objectContaining({ promptSuggestion: opened.promptSuggestion }),
+  );
+  await ok('chat.send', { sessionId, text: 'my reply' });
+  const next = await ok<{ promptSuggestion: unknown }>('chat.open', { sessionId, tail: 0 });
+  expect(next.promptSuggestion).toBeNull();
+});
+
 /** Streams one assistant text block (stream-start uuid `sb`, final message `fin`) and a result. */
 const streamedReply = (adapter: FakeAdapter, text: string) => {
   const fake = adapter.lastSession();
@@ -124,6 +159,94 @@ const streamedReply = (adapter: FakeAdapter, text: string) => {
 };
 
 describe('chat handlers', () => {
+  it('uses the saved new-chat default and allows an explicit ask-before-acting override', async () => {
+    const adapter = new FakeAdapter();
+    await start(adapter);
+    expect(await code('settings.set', { defaultPermissionMode: 'yolo' })).toBe('INVALID_PARAMS');
+    await ok('settings.set', { defaultPermissionMode: 'bypassPermissions' });
+    await ok('chat.create', { cwd: dir, text: 'use my default' });
+    expect(adapter.lastSession().permissionMode).toBe('bypassPermissions');
+    await ok('chat.create', { cwd: dir, text: 'ask this time', permissionMode: 'default' });
+    expect(adapter.lastSession().permissionMode).toBe('default');
+  });
+
+  it.each(['chosen', 'picker', 'sdk-init', 'sdk-status'] as const)(
+    'preserves a chat mode from %s across ending and a service restart, independently of the default',
+    async (source) => {
+      const adapter = new FakeAdapter();
+      await start(adapter);
+      const mode = source === 'chosen' ? 'bypassPermissions' : 'auto';
+      const { sessionId } = await ok<{ sessionId: string }>('chat.create', {
+        cwd: dir,
+        text: 'start',
+        permissionMode: source === 'chosen' ? mode : 'default',
+      });
+      addHistory(adapter, sessionId, 1);
+      if (source === 'picker') await ok('chat.setPermissionMode', { sessionId, value: mode });
+      if (source.startsWith('sdk-')) {
+        adapter.lastSession().emit(
+          sdk({
+            type: 'system',
+            subtype: source === 'sdk-init' ? 'init' : 'status',
+            status: null,
+            permissionMode: mode,
+            uuid: 'mode-change',
+            session_id: sessionId,
+          }),
+        );
+        await settle();
+      }
+      await ok('settings.set', { defaultPermissionMode: 'plan' });
+      await ok('chat.end', { sessionId });
+      expect(await ok('chat.open', { sessionId, tail: 1 })).toMatchObject({
+        header: { permissionMode: mode },
+      });
+      await ok('chat.send', { sessionId, text: 'continue after end' });
+      expect(adapter.lastSession().permissionMode).toBe(mode);
+      await svc!.close();
+      svc = undefined;
+
+      const again = new FakeAdapter();
+      addHistory(again, sessionId, 1);
+      await start(again);
+      expect(await ok('settings.get', {})).toMatchObject({ defaultPermissionMode: 'plan' });
+      expect(await ok('chat.open', { sessionId, tail: 1 })).toMatchObject({
+        header: { permissionMode: mode },
+      });
+      await ok('chat.send', { sessionId, text: 'continue after reboot' });
+      expect(again.lastSession().options).toMatchObject({
+        resume: sessionId,
+        permissionMode: mode,
+      });
+    },
+  );
+
+  it('does not apply the new-chat default to history with no remembered mode', async () => {
+    const adapter = new FakeAdapter();
+    addHistory(adapter, 'old', 1);
+    await start(adapter);
+    await ok('settings.set', { defaultPermissionMode: 'bypassPermissions' });
+    await ok('chat.send', { sessionId: 'old', text: 'continue' });
+    expect(adapter.lastSession().options.permissionMode).toBeUndefined();
+  });
+
+  it('forks inherit the source chat permission mode', async () => {
+    const adapter = new FakeAdapter();
+    addHistory(adapter, 'source', 1);
+    await start(adapter);
+    await ok('chat.send', { sessionId: 'source', text: 'start' });
+    await ok('chat.setPermissionMode', { sessionId: 'source', value: 'auto' });
+    const { sessionId } = await ok<{ sessionId: string }>('chat.fork', {
+      sessionId: 'source',
+      upToItemId: 'source-u0',
+    });
+    expect(await ok('chat.open', { sessionId, tail: 1 })).toMatchObject({
+      header: { permissionMode: 'auto' },
+    });
+    await ok('chat.send', { sessionId, text: 'continue fork' });
+    expect(adapter.lastSession().options.permissionMode).toBe('auto');
+  });
+
   it('chat.open pages a history chat from the SDK and chat.older pages backwards', async () => {
     const adapter = new FakeAdapter();
     addHistory(adapter, 'h1', 3);
@@ -508,6 +631,67 @@ describe('chat handlers', () => {
     );
     const taskEvents = since.events.filter((e) => e.tasks !== undefined);
     expect(taskEvents.at(-1)?.tasks).toEqual([expect.objectContaining({ status: 'stopped' })]);
+  });
+
+  it('chat.open lists a message Claude has not read yet apart from the transcript', async () => {
+    const adapter = new FakeAdapter();
+    await start(adapter);
+    const { sessionId } = await ok<{ sessionId: string }>('chat.create', {
+      cwd: dir,
+      text: 'first',
+    });
+    const fake = adapter.lastSession();
+    fake.emit(lifecycle(fake.sent[0]!.uuid!, 'started'));
+    await settle();
+    expect(await ok('chat.send', { sessionId, text: 'also this' })).toEqual({ queued: true });
+    const queuedId = fake.sent[1]!.uuid!;
+
+    type WithQueue = Opened & { queued: { id: string; text: string }[] };
+    const before = await ok<WithQueue>('chat.open', { sessionId, tail: 50 });
+    expect(before.queued).toEqual([{ id: queuedId, text: 'also this', ts: expect.any(Number) }]);
+    expect(ids(before.items)).not.toContain(queuedId);
+
+    fake.emit(lifecycle(queuedId, 'started'));
+    await settle();
+    const after = await ok<WithQueue>('chat.open', { sessionId, tail: 50 });
+    expect(after.queued).toEqual([]);
+    expect(after.items.at(-1)).toMatchObject({ id: queuedId, kind: 'user', text: 'also this' });
+  });
+
+  it('chat.withdraw takes a queued message back; one Claude never reads goes into the draft', async () => {
+    const adapter = new FakeAdapter();
+    await start(adapter);
+    const { sessionId } = await ok<{ sessionId: string }>('chat.create', {
+      cwd: dir,
+      text: 'first',
+    });
+    const fake = adapter.lastSession();
+    fake.emit(lifecycle(fake.sent[0]!.uuid!, 'started'));
+    await settle();
+    await ok('chat.send', { sessionId, text: 'oops' });
+    await ok('chat.send', { sessionId, text: 'second' });
+    await ok('chat.send', { sessionId, text: 'third' });
+    const [oops, second, third] = [fake.sent[1]!.uuid!, fake.sent[2]!.uuid!, fake.sent[3]!.uuid!];
+
+    expect(await ok('chat.withdraw', { sessionId, messageId: oops })).toEqual({ text: 'oops' });
+    expect(fake.withdrawn).toEqual([oops]);
+    fake.withdrawAnswer = false;
+    expect(await code('chat.withdraw', { sessionId, messageId: second })).toBe('NOT_QUEUED');
+    expect(await code('chat.withdraw', { sessionId: 'nope', messageId: second })).toBe(
+      'NOT_QUEUED',
+    );
+
+    // Stop cancels what is still queued: it goes in front of the saved draft.
+    await ok('drafts.set', { key: sessionId, text: 'half-typed' });
+    fake.interrupt = async () => {
+      fake.emit(lifecycle(second, 'cancelled'));
+      fake.emit(lifecycle(third, 'cancelled'));
+      await settle();
+    };
+    await ok('chat.interrupt', { sessionId });
+    expect(await ok('drafts.get', { key: sessionId })).toEqual({
+      text: 'second\nthird\nhalf-typed',
+    });
   });
 
   it('chat.since for a seq this service never issued is a GAP', async () => {

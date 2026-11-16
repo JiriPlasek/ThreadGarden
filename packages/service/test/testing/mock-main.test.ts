@@ -14,7 +14,9 @@ import { pairWithMachine } from '../../src/machine/pairing-client.js';
 import { createSwitch } from '../../src/power/switch.js';
 import {
   MOCK_FORGET_MOVES,
+  PHONE_NAME,
   REMOTE_MACHINE_NAME,
+  refusedByThePhone,
   REMOTE_PROJECT_PATH,
   startMockService,
   type MockService,
@@ -740,5 +742,75 @@ describe('mock service: moving a chat (protocol 9)', () => {
       { clientId: 't', origin: 'remote', deviceId: 'd' },
     );
     expect(remote).toMatchObject({ error: { code: 'METHOD_NOT_FOUND' } });
+  }, 30_000);
+});
+
+describe('mock service MOCK_PHONE (phone plan, Task 11)', () => {
+  it("answers like the phone's core, with the remote mock paired", async () => {
+    const remoteMock = await startMockService({
+      remote: { port: 0, pairingCode: 'TEST-TEST-TEST' },
+      installSignalHandlers: false,
+    });
+    try {
+      mock = await startMockService({
+        phone: { pairWith: { port: remoteMock.svc.remote!.port, pairingCode: 'TEST-TEST-TEST' } },
+        installSignalHandlers: false,
+      });
+      const c = (client = await TestClient.connect(mock.svc.port, mock.svc.token));
+      // As the core says: an empty machine that isn't headless and can do nothing itself.
+      const hello = await c.call<{ machine: Record<string, unknown> }>('hello', HELLO);
+      expect(hello.machine).toEqual({
+        id: expect.any(String),
+        name: PHONE_NAME,
+        platform: 'linux',
+        headless: false,
+        home: '',
+        capabilities: [],
+      });
+      // Nothing of its own: no chats, no projects, no usage, no Claude Code.
+      expect(await c.call('projects.list', {})).toEqual([]);
+      expect(
+        await c.call<{ items: unknown[] }>('sessions.list', {
+          place: { kind: 'active' },
+          limit: 50,
+        }),
+      ).toMatchObject({ items: [] });
+      expect(await c.call('places.counts', {})).toMatchObject({ needsYou: 0, running: 0, all: 0 });
+      expect(await c.call<{ windows: unknown[] }>('usage.get', {})).toMatchObject({ windows: [] });
+      expect(await c.call('system.status', {})).toMatchObject({ claude: { found: false } });
+      // The update check, with the release's APK as the core gives it.
+      const latest = await c.call<{ version: string; url: string }>('update.latest', {});
+      expect(latest.url).toBe(
+        `https://github.com/JiriPlasek/ThreadGarden/releases/download/v${latest.version}/threadgarden-${latest.version}.apk`,
+      );
+
+      // What the core refuses, the mock refuses: every method of the core's contract table
+      // (it changes as the core learns more, so the test reads it too, never a copy).
+      const refused = refusedByThePhone();
+      expect(refused).toEqual(expect.arrayContaining(['chat.create', 'analytics.get']));
+      expect(refused).not.toContain('machines.list');
+      for (const method of refused) {
+        await expect(c.call(method, {}), method).rejects.toMatchObject({
+          code: 'METHOD_NOT_FOUND',
+        });
+      }
+
+      // The remote mock, paired and unlocked by the mock itself (the core holds the token).
+      await mock.paired;
+      const list = await c.call<{ name: string; unlocked: boolean }[]>('machines.list', {});
+      expect(list).toEqual([
+        expect.objectContaining({ name: REMOTE_MACHINE_NAME, unlocked: true }),
+      ]);
+      const r = await TestClient.connect(remoteMock.svc.port, remoteMock.svc.token);
+      try {
+        const devices = await r.call<{ name: string }[]>('devices.list', {});
+        expect(devices.map((d) => d.name)).toEqual([PHONE_NAME]);
+      } finally {
+        await r.close();
+      }
+    } finally {
+      await remoteMock.svc.close();
+      await remoteMock.removed;
+    }
   }, 30_000);
 });

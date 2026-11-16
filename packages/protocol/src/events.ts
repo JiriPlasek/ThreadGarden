@@ -1,8 +1,8 @@
 import { z } from 'zod';
 import { AwayItemSchema, AwayStateSchema } from './away.js';
-import { ChatHeaderInfoSchema, ChatStatusSchema } from './chat.js';
-import { ChatItemSchema } from './items.js';
-import { PairedMachineSchema } from './machines.js';
+import { ChatHeaderInfoSchema, ChatStatusSchema, PromptSuggestionSchema } from './chat.js';
+import { ChatItemSchema, QueuedMessageSchema, ReturnedMessageSchema } from './items.js';
+import { PairedMachineSchema, PhoneAccessSchema } from './machines.js';
 import { MachinePowerStatusSchema } from './power.js';
 import { ChatTaskSchema } from './tasks.js';
 import { UpdateStatusSchema } from './update.js';
@@ -22,6 +22,14 @@ export const ChatStatusEventSchema = z.object({
   status: ChatStatusSchema,
   header: ChatHeaderInfoSchema.optional(),
   waitingFor: z.string().optional(),
+  /** Current prediction; null clears it. Optional for older services. */
+  promptSuggestion: PromptSuggestionSchema.nullable().optional(),
+  /**
+   * Messages sent while Claude was working that it has not read yet, oldest
+   * first (the whole list, replacing the last one). Absent from services that
+   * predate it; empty when nothing waits.
+   */
+  queued: z.array(QueuedMessageSchema).optional(),
 });
 export type ChatStatusEvent = z.infer<typeof ChatStatusEventSchema>;
 
@@ -58,6 +66,17 @@ export const events = {
     title: z.string(),
     projectName: z.string(),
   }),
+  /**
+   * Queued messages Claude will never read came back (Stop cancelled them, or
+   * the process ended), oldest first: the UI puts them back into the chat's
+   * message box, as the terminal does. The service has already put their text
+   * in front of the chat's saved draft (`withReturned`), so a UI that has not
+   * loaded that draft has nothing to do.
+   */
+  messagesReturned: z.object({
+    sessionId: z.string(),
+    messages: z.array(ReturnedMessageSchema),
+  }),
   // ── v1.2 B1: buckets ──────────────────────────────────────────────────────
   /**
    * An on-hold chat's time ran out: it is back in Active and under Needs you
@@ -85,6 +104,8 @@ export const events = {
   // ── v1.4: machines ─────────────────────────────────────────────────────────
   /** Every paired machine (as `machines.list`), after any change; local clients only. */
   'machines.changed': z.array(PairedMachineSchema),
+  /** Let my phone connect changed (as `phoneAccess.get`); local clients only. */
+  'phoneAccess.changed': PhoneAccessSchema,
   /** Power: this machine's power status changed (machines that advertise `power`). */
   'power.changed': MachinePowerStatusSchema,
   /** Protocol 10: this machine's update changed stage or ended. */

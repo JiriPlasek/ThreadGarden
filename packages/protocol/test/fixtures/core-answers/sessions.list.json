@@ -1,0 +1,16 @@
+{
+  "cases": [
+    {
+      "params": {
+        "limit": 50,
+        "place": {
+          "kind": "active"
+        }
+      },
+      "result": {
+        "items": []
+      }
+    }
+  ],
+  "method": "sessions.list"
+}

@@ -63,7 +63,7 @@ describe('keyboard shortcuts dialog', () => {
     const composer = env.composer();
     await userEvent.click(composer);
     await userEvent.keyboard('why?');
-    expect(composer.value).toBe('why?');
+    expect(composer.textContent).toBe('why?');
     await new Promise((r) => setTimeout(r, 20));
     noDialog();
     expect(env.app.interaction.shortcutsOpen).toBe(false);

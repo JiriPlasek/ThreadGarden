@@ -68,6 +68,19 @@ export const MachinePortSchema = z.number().int().min(1).max(65535);
 export const DeviceTokenSchema = z.string().regex(/^[0-9a-f]{64}$/);
 
 /**
+ * Let my phone connect: whether this desktop listens for paired devices, as a
+ * headless machine always does, and where (`addresses` and `port` are where
+ * it listens now; none while it doesn't). Local only: kept in a table of its
+ * own, never in the settings a paired device may change.
+ */
+export const PhoneAccessSchema = z.object({
+  enabled: z.boolean(),
+  addresses: z.array(z.string()),
+  port: z.number(),
+});
+export type PhoneAccess = z.infer<typeof PhoneAccessSchema>;
+
+/**
  * How the local relay (`/relay?machine=<id>`) closes the UI's socket:
  * `locked` the machine is unknown or its token was not handed over;
  * `mismatch` a different certificate answered at the address (nothing was

@@ -78,8 +78,8 @@ const renderChat = async (
   render(ChatPane, { context: env.context });
   const scope = env.app.scopes.get(machineId)!;
   await waitFor(() => expect(scope.chats.get('s1')?.loaded).toBe(true));
-  const composer = (): HTMLTextAreaElement =>
-    screen.getByRole('textbox', { name: /message/i }) as HTMLTextAreaElement;
+  const composer = (): HTMLDivElement =>
+    screen.getByRole('textbox', { name: /message/i }) as HTMLDivElement;
   return { ...env, composer };
 };
 
@@ -127,7 +127,7 @@ describe('chats on another machine', () => {
         "Files from This PC can't be attached to chats on Ubuntu PC.",
       ),
     );
-    expect(composer().value).toBe('');
+    await waitFor(() => expect(composer().textContent).toBe('[Image #1]'));
     const thumbs = await screen.findByRole('list', { name: /attached images/i });
     expect(within(thumbs).getAllByRole('listitem')).toHaveLength(1);
   });
@@ -145,7 +145,7 @@ describe('chats on another machine', () => {
         "Files from This PC can't be attached to chats on Ubuntu PC.",
       ),
     );
-    expect(composer().value).toBe('');
+    expect(composer().textContent).toBe('/home/jiri/tg-cli/src/a.ts');
   });
 
   it('a pasted file path is still mentioned in This PC’s chat', async () => {
@@ -154,7 +154,7 @@ describe('chats on another machine', () => {
     await fireEvent.paste(composer(), {
       clipboardData: { files: [], items: [], getData: () => 'C:\\work\\alpha\\a.ts' },
     });
-    await waitFor(() => expect(composer().value).toBe('@a.ts '));
+    await waitFor(() => expect(composer().textContent).toBe('@a.ts '));
     expect(screen.queryByRole('status', { name: /notice/i })).toBeNull();
   });
 
@@ -163,7 +163,7 @@ describe('chats on another machine', () => {
     await waitFor(() => expect(composer()).toBeTruthy());
     pointAt(composer());
     await routeFileDrop(['C:\\work\\alpha\\a.txt'], { x: 1, y: 1 });
-    await waitFor(() => expect(composer().value).toBe('@a.txt '));
+    await waitFor(() => expect(composer().textContent).toBe('@a.txt '));
     expect(screen.queryByRole('status', { name: /notice/i })).toBeNull();
   });
 });

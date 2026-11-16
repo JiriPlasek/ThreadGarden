@@ -270,6 +270,8 @@ export const setupTwoMachines = async (
     m1Host?: 'wsl';
     /** Power switch passwords in the fake keychain, by machine id. */
     powerPasswords?: Record<string, string>;
+    /** More paired machines after M1, each with a fake service of its own (in `others`). */
+    more?: { id: string; name: string }[];
   } = {},
 ) => {
   const server = new FakeServer();
@@ -279,15 +281,31 @@ export const setupTwoMachines = async (
     ...machineInfo(M1, 'ubuntu-pc', o.m1Capabilities),
     ...(o.m1Host ? { host: o.m1Host } : {}),
   });
-  server.handlers['machines.list'] = () => [pairedMachine(M1, 'Ubuntu PC')];
+  const more = o.more ?? [];
+  const others: Record<string, FakeServer> = {};
+  for (const m of more) {
+    others[m.id] = new FakeServer();
+    serve(others[m.id]!, machineInfo(m.id, m.name.toLowerCase()));
+  }
+  server.handlers['machines.list'] = () => [
+    pairedMachine(M1, 'Ubuntu PC'),
+    ...more.map((m) => pairedMachine(m.id, m.name)),
+  ];
   o.configure?.(server);
   o.configureRemote?.(remote);
-  const impl = routedImpl((url) => (url.includes('/relay?machine=') ? remote : server));
+  const impl = routedImpl((url) => {
+    const id = /\/relay\?machine=([^&]+)/.exec(url)?.[1];
+    if (id === undefined) return server;
+    return others[decodeURIComponent(id)] ?? remote;
+  });
   const client = new ServiceClient({ WebSocketImpl: impl });
   await client.connect('ws://fake:1', 't');
   // The fake keychain's power switch passwords (a test can read what is stored).
   const passwords = memoryTokens(o.powerPasswords ?? {});
-  const app = wire(client, impl, { [M1]: 'device-token' }, passwords);
+  const tokens = Object.fromEntries(
+    [M1, ...more.map((m) => m.id)].map((id) => [id, 'device-token']),
+  );
+  const app = wire(client, impl, tokens, passwords);
   if (o.waitForOn !== false)
     await vi.waitFor(() => expect(app.machines.get(M1)?.status).toBe('on'));
   const status = o.m1Status ?? 'on';
@@ -296,5 +314,5 @@ export const setupTwoMachines = async (
     await vi.waitFor(() => expect(app.machines.get(M1)?.status).toBe(status));
   }
   const context = new Map<unknown, unknown>([[APP_CONTEXT, app]]);
-  return { server, remote, client, app, context, passwords };
+  return { server, remote, others, client, app, context, passwords };
 };

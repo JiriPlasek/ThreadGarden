@@ -1,0 +1,13 @@
+{
+  "cases": [
+    {
+      "params": {
+        "cwd": "/home/someone/project",
+        "limit": 20,
+        "query": "src"
+      },
+      "result": []
+    }
+  ],
+  "method": "files.suggest"
+}
