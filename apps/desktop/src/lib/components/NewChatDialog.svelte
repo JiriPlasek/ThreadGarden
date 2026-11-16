@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { ImageRef, Project, Result } from '@threadgarden/protocol';
+  import { PERMISSION_MODE_OPTIONS as PERMISSION_MODES } from '@threadgarden/protocol';
   import { untrack } from 'svelte';
   import { buildFlags } from '#lib/build-flags.js';
   import Composer from '#lib/components/composer/Composer.svelte';
@@ -57,14 +58,6 @@
    * started on (while it can take one), else the first that can.
    */
   const { interaction, places, tabs, settings, scopes, machines, power } = useApp();
-
-  const PERMISSION_MODES = [
-    { value: 'default', label: 'Default (ask before acting)' },
-    { value: 'acceptEdits', label: 'Accept edits' },
-    { value: 'plan', label: 'Plan' },
-    { value: 'auto', label: 'Auto' },
-    { value: 'bypassPermissions', label: 'Bypass permissions' },
-  ];
 
   const byPinnedThenRecent = (a: Project, b: Project): number =>
     Number(b.pinned) - Number(a.pinned) ||
@@ -249,6 +242,7 @@
     if (open && !wasOpen) {
       untrack(() => {
         const next = startMachine();
+        mode = settings.value.defaultPermissionMode;
         // A model kept from the last time is only kept on the same machine.
         if (next !== machineId) model = '';
         machineId = next;

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { PERMISSION_MODE_OPTIONS as PERMISSION_MODES } from '@threadgarden/protocol';
   import ActivityIcon from '@lucide/svelte/icons/activity';
   import ArrowRightLeftIcon from '@lucide/svelte/icons/arrow-right-left';
   import ArchiveIcon from '@lucide/svelte/icons/archive';
@@ -67,14 +68,6 @@
   const { chats, places, buckets, machineId } = useScope();
   /** With more than one machine, the header names the chat's machine. */
   const machineName = $derived(machines.several ? machineNameOf(machines, machineId) : null);
-
-  const PERMISSION_MODES = [
-    { value: 'default', label: 'Default' },
-    { value: 'acceptEdits', label: 'Accept edits' },
-    { value: 'plan', label: 'Plan' },
-    { value: 'auto', label: 'Auto' },
-    { value: 'bypassPermissions', label: 'Bypass permissions' },
-  ];
 
   const sessionId = $derived(chat.sessionId);
   const header = $derived(chat.header);

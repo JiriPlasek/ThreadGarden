@@ -86,6 +86,9 @@ export const buildSessionEnv = (
   return env;
 };
 
+/** Claude Code refuses Bypass permissions (and its opt-in) when it runs as root. */
+export const canBypassPermissions = (): boolean => process.getuid?.() !== 0;
+
 /**
  * SDK options for a session started by Threadgarden (Global Constraints). User text
  * is never `client_composed` / `verbatimPrompts`, so `@path` mentions and
@@ -115,7 +118,7 @@ export const buildQueryOptions = (o: StartOptions): Options => {
     canUseTool: o.canUseTool,
     env: { ...o.env, CLAUDE_CODE_STARTUP_FAILURE_RESULTS: '1' },
   };
-  if (process.getuid?.() !== 0) opts.allowDangerouslySkipPermissions = true;
+  if (canBypassPermissions()) opts.allowDangerouslySkipPermissions = true;
   if (o.resume !== undefined) {
     opts.resume = o.resume;
     if (o.sessionStore !== undefined) opts.sessionStore = o.sessionStore;

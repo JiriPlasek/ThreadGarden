@@ -248,6 +248,7 @@ fn settings_and_ui_state_round_trip_across_a_restart() {
     assert_eq!(
         defaults,
         json!({
+            "defaultPermissionMode": "default",
             "claudePath": null,
             "idleReclaimMinutes": 15,
             "idleShutdownMinutes": 60,

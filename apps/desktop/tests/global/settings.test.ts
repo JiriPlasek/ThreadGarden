@@ -35,6 +35,38 @@ const openDialog = async (env: Awaited<ReturnType<typeof withSettings>>) => {
 };
 
 describe('settings dialog', () => {
+  it('saves bypass as the new-chat default only after its confirmation is accepted', async () => {
+    const env = await withSettings({ defaultPermissionMode: 'auto' });
+    const dialog = await openDialog(env);
+    const picker = within(dialog).getByLabelText(
+      'Default permission mode for new chats',
+    ) as HTMLSelectElement;
+    expect(picker.value).toBe('auto');
+    // It promises only what this app sends: a chat.create without a mode uses that machine's own.
+    const hint = document.getElementById(picker.getAttribute('aria-describedby') ?? '');
+    expect(hint?.textContent).toMatch(/Chats you start in this app begin in this mode/);
+    await userEvent.selectOptions(picker, 'bypassPermissions');
+    const cancelled = await screen.findByRole('alertdialog', {
+      name: 'Enable bypass permissions?',
+    });
+    await userEvent.click(within(cancelled).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(picker.value).toBe('auto');
+    await userEvent.selectOptions(picker, 'bypassPermissions');
+    const confirmation = await screen.findByRole('alertdialog', {
+      name: 'Enable bypass permissions?',
+    });
+    await userEvent.click(
+      within(confirmation).getByRole('button', { name: 'Enable bypass permissions' }),
+    );
+    await waitFor(() => expect(picker.value).toBe('bypassPermissions'));
+    await userEvent.click(within(dialog).getByRole('button', { name: /^save$/i }));
+    await waitFor(() => expect(env.current().defaultPermissionMode).toBe('bypassPermissions'));
+    expect(env.server.calls('settings.set')[0]!.params).toEqual({
+      defaultPermissionMode: 'bypassPermissions',
+    });
+  });
+
   afterEach(async () => {
     await apiKey.clear();
     setAutostart.mockClear();

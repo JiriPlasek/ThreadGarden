@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { PermissionModeSchema } from './permissions.js';
 
 export const ChatStatusSchema = z.enum([
   'needsYou',
@@ -179,6 +180,7 @@ export const sanitizeFontFamily = (raw: string): string | null => {
 };
 
 const settingsFields = {
+  defaultPermissionMode: PermissionModeSchema,
   claudePath: z.string().nullable(),
   idleReclaimMinutes: z.number(),
   /** v1.4 power: a headless machine shuts down after this many idle minutes; null is never. */
@@ -222,6 +224,7 @@ const settingsFields = {
 };
 
 export const SettingsSchema = z.object({
+  defaultPermissionMode: settingsFields.defaultPermissionMode.catch('default'),
   claudePath: settingsFields.claudePath.default(null),
   idleReclaimMinutes: settingsFields.idleReclaimMinutes.default(15),
   idleShutdownMinutes: settingsFields.idleShutdownMinutes.default(60),
