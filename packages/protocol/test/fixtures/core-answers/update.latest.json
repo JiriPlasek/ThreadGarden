@@ -1,0 +1,11 @@
+{
+  "cases": [
+    {
+      "error": {
+        "code": "UNREACHABLE"
+      },
+      "params": {}
+    }
+  ],
+  "method": "update.latest"
+}

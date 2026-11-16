@@ -35,8 +35,11 @@ export const registerMachineHandlers = (
     devices: DeviceRegistry;
     /** This machine as it is now (its name changes on rename). */
     identity: () => MachineInfo;
-    /** The remote listener's certificate; without it there is nothing to prove. */
-    tls?: TlsIdentity;
+    /**
+     * The remote listener's certificate; without it there is nothing to prove.
+     * A function for a desktop, which makes one only when Let my phone connect is first on.
+     */
+    tls?: TlsIdentity | (() => TlsIdentity | undefined);
     onRenamed?: (machine: MachineInfo) => void;
     /** Machines this one connects to (`machines.*`); none without it. */
     paired?: PairedMachines;
@@ -79,9 +82,10 @@ export const registerMachineHandlers = (
   });
 
   router.register('pair.proof', async ({ nonce }, ctx) => {
-    if (!deps.tls) throw new ServiceError('NOT_LISTENING', 'This machine does not accept devices');
+    const tls = typeof deps.tls === 'function' ? deps.tls() : deps.tls;
+    if (!tls) throw new ServiceError('NOT_LISTENING', 'This machine does not accept devices');
     return {
-      proof: devices.proof(deps.tls.fingerprint256, nonce),
+      proof: devices.proof(tls.fingerprint256, nonce),
       machine: machineFor(ctx, identity()),
     };
   });

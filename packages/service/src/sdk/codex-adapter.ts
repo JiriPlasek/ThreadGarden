@@ -245,6 +245,7 @@ export class CodexSession implements AgentSession {
             });
           } else throw new Error(`Unsupported Codex input: ${str(b.type)}`);
         }
+        if (message.uuid) this.lifecycle(message.uuid, 'started');
         this.emit({ ...message, timestamp: new Date().toISOString() }, true);
       }
       const policy = codexPermissions(this.record.permissionMode);
@@ -292,8 +293,10 @@ export class CodexSession implements AgentSession {
     }
   }
 
+  /** As Claude Code's Esc: messages still waiting for a turn are cancelled with the turn. */
   async interrupt(): Promise<void> {
-    this.inputs = [];
+    for (const message of this.inputs.splice(0))
+      if (message.uuid) this.lifecycle(message.uuid, 'cancelled');
     await this.ready;
     // A click while turn/start is pending still interrupts the turn it creates.
     while (this.starting && !this.closed) await new Promise((resolve) => setTimeout(resolve, 10));
@@ -302,6 +305,14 @@ export class CodexSession implements AgentSession {
         threadId: this.record.threadId,
         turnId: this.activeTurn,
       });
+  }
+
+  async cancelQueued(uuid: string): Promise<boolean> {
+    const i = this.inputs.findIndex((message) => message.uuid === uuid);
+    if (i < 0) return false;
+    this.inputs.splice(i, 1);
+    this.lifecycle(uuid, 'cancelled');
+    return true;
   }
 
   async setModel(model?: string): Promise<void> {
@@ -389,6 +400,14 @@ export class CodexSession implements AgentSession {
     if (this.closed) return;
     this.messages.end(error instanceof Error ? error : new Error(String(error)));
     this.close();
+  }
+
+  /**
+   * Claude Code's frame for a message sent while it works, which LiveSession
+   * follows to show the message as queued: a turn took it up, or it was dropped.
+   */
+  private lifecycle(uuid: string, state: 'started' | 'cancelled'): void {
+    this.emit({ type: 'command_lifecycle', command_uuid: uuid, state });
   }
 
   /** These compatibility envelopes are private to the adapter/normalizer boundary. */

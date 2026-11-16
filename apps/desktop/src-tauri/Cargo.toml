@@ -1,6 +1,6 @@
 [package]
 name = "threadgarden"
-version = "0.9.0"
+version = "0.10.0"
 description = "Threadgarden desktop shell"
 edition = "2024"
 rust-version = "1.90"
@@ -14,14 +14,22 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2.7.4", features = [] }
 
 [dependencies]
-tauri = { version = "2.12.5", features = ["tray-icon"] }
-tauri-plugin-autostart = "2.7.0"
+tauri = { version = "2.12.5", features = [] }
 tauri-plugin-clipboard-manager = "2.5.0"
 tauri-plugin-dialog = "2.8.4"
 tauri-plugin-notification = "2.8.0"
-tauri-plugin-single-instance = "2.5.5"
+tauri-plugin-opener = "2.7.2"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+
+# The desktop shell only: the tray, autostart, one instance, self-update, the
+# keychain, and finding or starting the Node service. The phone has none of these.
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri = { version = "2.12.5", features = ["tray-icon"] }
+tauri-plugin-autostart = "2.7.0"
+tauri-plugin-single-instance = "2.5.5"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 base64 = "0.22"
 # Plain (non-verbatim) Windows paths for the Node sidecar (see `service::release_target`).
 dunce = "1"
@@ -31,9 +39,12 @@ keyring = "4.2"
 tokio = { version = "1", features = ["net", "sync", "time"] }
 tokio-tungstenite = "0.30"
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
-tauri-plugin-opener = "2.7.2"
-tauri-plugin-updater = "2"
-tauri-plugin-process = "2"
+
+# The phone: its own core in the service's place, and JNI to the Kotlin
+# foreground service that keeps it running (jni as Tauri's own).
+[target.'cfg(target_os = "android")'.dependencies]
+threadgarden-core = { path = "core" }
+jni = "0.21"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = [
@@ -48,3 +59,5 @@ libc = "0.2"
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 tempfile = "3"
+# The Android shell's host-testable part (`android.rs`) runs against the real core.
+threadgarden-core = { path = "core" }

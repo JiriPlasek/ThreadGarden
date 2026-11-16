@@ -1,0 +1,32 @@
+{
+  "cases": [
+    {
+      "params": {
+        "accent": "teal",
+        "codeFont": "Fira Code; x",
+        "idleShutdownMinutes": null,
+        "theme": "dark"
+      },
+      "result": {
+        "accent": "teal",
+        "autoTitles": true,
+        "claudePath": null,
+        "codeFont": "Fira Code x",
+        "darkStyle": "default",
+        "defaultPermissionMode": "default",
+        "enterToSend": true,
+        "externalPolling": true,
+        "idleReclaimMinutes": 15,
+        "idleShutdownMinutes": null,
+        "lightStyle": "default",
+        "notifications": true,
+        "notifyOnFinish": true,
+        "promptSuggestions": false,
+        "startOnLogin": false,
+        "theme": "dark",
+        "uiFont": "inter"
+      }
+    }
+  ],
+  "method": "settings.set"
+}

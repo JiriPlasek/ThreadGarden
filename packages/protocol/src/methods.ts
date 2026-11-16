@@ -13,12 +13,18 @@ import {
   HOLD_NOTE_MAX,
   ChatSummarySchema,
   PlaceSchema,
+  PromptSuggestionSchema,
   ProjectSchema,
   SettingsPatchSchema,
   SettingsSchema,
 } from './chat.js';
 import { ChatItemsEventSchema, ChatStatusEventSchema, ChatTasksEventSchema } from './events.js';
-import { ChatItemSchema, ImageRefSchema } from './items.js';
+import {
+  ChatItemSchema,
+  ImageRefSchema,
+  QueuedMessageSchema,
+  ReturnedMessageSchema,
+} from './items.js';
 import {
   DeviceSchema,
   DeviceTokenSchema,
@@ -26,6 +32,7 @@ import {
   MachineInfoSchema,
   MachinePortSchema,
   PairedMachineSchema,
+  PhoneAccessSchema,
 } from './machines.js';
 import { GitStateSchema, MoveBusySchema, MoveKeySchema, MovePeerSchema } from './move.js';
 import {
@@ -149,6 +156,15 @@ export const methods = {
     z.object({ machineId: z.string(), revoke: z.boolean() }),
     z.object({ revoked: z.boolean() }),
   ),
+  // ── Let my phone connect (local only, no protocol bump) ────────────────────
+  /** Whether this desktop listens for paired devices, and where. */
+  'phoneAccess.get': def(empty, PhoneAccessSchema),
+  /**
+   * Turns listening on (a certificate is made the first time) or off (every
+   * device socket closes at once; pairings stay). `HEADLESS` on a headless
+   * machine, which always listens.
+   */
+  'phoneAccess.set': def(z.object({ enabled: z.boolean() }), PhoneAccessSchema),
   /** v1.2: `active`, `onHold`, `archived` per bucket; `all` (= `active`) stays for older UIs. */
   'places.counts': def(
     empty,
@@ -225,6 +241,9 @@ export const methods = {
       seq: z.number(),
       /** Tasks of the chat's running process (empty unless Threadgarden runs it). */
       tasks: z.array(ChatTaskSchema),
+      promptSuggestion: PromptSuggestionSchema.nullable().optional(),
+      /** Messages Claude has not read yet (see `chat.status`); absent from older services. */
+      queued: z.array(QueuedMessageSchema).optional(),
       /** Protocol 9: where the chat went when it was moved away; absent or null otherwise. */
       movedTo: MovePeerSchema.nullable().optional(),
     }),
@@ -271,7 +290,17 @@ export const methods = {
     }),
     z.object({ queued: z.boolean() }),
   ),
+  /** Stops the running turn; queued messages Claude has not read come back (`messagesReturned`). */
   'chat.interrupt': def(sessionIdOnly, empty),
+  /**
+   * Takes a queued message back before Claude reads it (by its `queued` id),
+   * to remove or edit it. `NOT_QUEUED` when Claude has already taken it up.
+   * Every service that lists `queued` has it.
+   */
+  'chat.withdraw': def(
+    z.object({ sessionId: z.string(), messageId: z.string() }),
+    ReturnedMessageSchema,
+  ),
   'chat.end': def(sessionIdOnly, empty),
   'chat.setModel': def(setValue, empty),
   'chat.setPermissionMode': def(setValue, empty),
@@ -342,8 +371,19 @@ export const methods = {
     }),
     empty,
   ),
-  'drafts.get': def(z.object({ key: z.string() }), z.object({ text: z.string() })),
-  'drafts.set': def(z.object({ key: z.string(), text: z.string() }), empty),
+  'drafts.get': def(
+    z.object({ key: z.string() }),
+    z.object({ text: z.string(), images: z.array(ImageRefSchema).optional() }),
+  ),
+  /**
+   * `text` as the message would send it (pastes expanded); `images` each with
+   * its tag's number. Without `images` the draft keeps its own, unless `text`
+   * is empty: then the draft is cleared.
+   */
+  'drafts.set': def(
+    z.object({ key: z.string(), text: z.string(), images: z.array(ImageRefSchema).optional() }),
+    empty,
+  ),
   'uiState.get': def(z.object({ key: z.string() }), z.object({ value: z.unknown() })),
   'uiState.set': def(z.object({ key: z.string(), value: z.unknown() }), empty),
   'settings.get': def(empty, SettingsSchema),
@@ -664,8 +704,11 @@ export const methods = {
   ),
   // ── update (protocol 10) ── frozen: only optional additions ───────────────
   // Errors: `UPDATE_ERRORS`. All that is frozen with these: the comment in `update.ts`.
-  /** Local only: the latest release version, asked of GitHub by this machine's service. */
-  'update.latest': def(empty, z.object({ version: z.string() })),
+  /**
+   * Local only: the latest release version, asked of GitHub by this machine's
+   * service. The phone's core adds `url`: the release's APK, when it has one.
+   */
+  'update.latest': def(empty, z.object({ version: z.string(), url: z.string().optional() })),
   /** Updates this machine to `version`; `force` goes on although chats run (`busy` says how many). */
   'update.start': def(
     z.object({ version: z.string(), force: z.boolean() }),
@@ -725,6 +768,15 @@ export const methods = {
   'away.cancel': def(z.object({ id: z.string() }), empty),
   /** Tries the machine's failed messages again. */
   'away.retry': def(machineIdOnly, empty),
+  // ── the phone (no protocol bump: local to the phone's core only) ──────────
+  /**
+   * The chat on the phone's screen, which the core's alert links leave out;
+   * null (or a null in it) when none is (the app is in the background).
+   */
+  'alerts.setActive': def(
+    z.object({ machineId: z.string().nullable(), sessionId: z.string().nullable() }).nullable(),
+    empty,
+  ),
 } as const;
 
 export type MethodName = keyof typeof methods;

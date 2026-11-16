@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ChatItem } from '@threadgarden/protocol';
-import { LiveSession } from '../../src/chat/live-session.js';
+import { LiveSession, type LiveSessionDeps } from '../../src/chat/live-session.js';
 import { Normalizer } from '../../src/chat/normalize.js';
 import { CodexAdapter, codexPermissions } from '../../src/sdk/codex-adapter.js';
 import type { CodexConnection, ConnectCodex } from '../../src/sdk/codex-client.js';
@@ -84,6 +84,7 @@ const harness = (responses: Record<string, Rec> = {}) => {
   const adapter = new MultiAdapter(claude, codex);
   const create = (
     permissionMode: 'default' | 'acceptEdits' | 'bypassPermissions' | 'plan' | 'auto' = 'default',
+    deps: Partial<LiveSessionDeps> = {},
   ) => {
     const session = LiveSession.create(
       dir,
@@ -98,6 +99,7 @@ const harness = (responses: Record<string, Rec> = {}) => {
         model: 'codex:test-model',
         permissionMode,
         onError: () => {},
+        ...deps,
       },
     );
     sessions.push(session);
@@ -399,6 +401,37 @@ describe('Codex provider', () => {
     connection.event('turn/completed', { turn: { id: 'turn-2', status: 'completed' } });
     await vi.waitFor(() => expect(session.status).toBe('idle'));
     await expect(session.setEffort('max')).rejects.toThrow('does not support');
+  });
+
+  it('shows mid-turn messages as queued until their turn, and gives back what Stop cancels', async () => {
+    const returned: string[] = [];
+    const h = harness();
+    const session = h.create('default', {
+      onReturned: (_id, messages) => returned.push(...messages.map((m) => m.text)),
+    });
+    const connection = await h.running();
+    session.send({ text: 'second' });
+    session.send({ text: 'third' });
+    session.send({ text: 'fourth' });
+    expect(session.queued().map((m) => m.text)).toEqual(['second', 'third', 'fourth']);
+    await expect(session.withdraw(session.queued()[1]!.id)).resolves.toMatchObject({
+      text: 'third',
+    });
+    connection.event('turn/completed', { turn: { id: 'turn-1', status: 'completed' } });
+    await vi.waitFor(() => expect(session.queued()).toEqual([]));
+    // Codex goes straight on to the queued messages: the chat never stops working in between.
+    expect(session.status).toBe('working');
+    expect(connection.calls.filter((c) => c.method === 'turn/start')[1]!.params.input).toEqual([
+      { type: 'text', text: 'second', text_elements: [] },
+      { type: 'text', text: 'fourth', text_elements: [] },
+    ]);
+    session.send({ text: 'never read' });
+    await session.interrupt();
+    await vi.waitFor(() => expect(returned).toEqual(['never read']));
+    expect(session.queued()).toEqual([]);
+    connection.event('turn/completed', { turn: { id: 'turn-2', status: 'interrupted' } });
+    await vi.waitFor(() => expect(session.status).toBe('idle'));
+    expect(connection.calls.filter((c) => c.method === 'turn/start')).toHaveLength(2);
   });
 
   it('keeps messages sent during initialization queued behind the first turn', async () => {

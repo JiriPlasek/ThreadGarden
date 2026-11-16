@@ -20,6 +20,12 @@ import type { OneShotOptions } from '../../src/sdk/adapter.js';
 import { ManualTimers } from './live-helpers.js';
 
 describe('provisionalTitle', () => {
+  it('uses a readable paste label for provisional and history fallback titles', () => {
+    const text =
+      '\n\n<pasted_content id="abcd">\na log\nanother line\n</pasted_content id="abcd">\n\n';
+    expect(provisionalTitle(text)).toBe('[Pasted text #1 +2 lines]');
+    expect(titleFor({ firstPrompt: text })).toBe('[Pasted text #1 +2 lines]');
+  });
   it('is the first sentence of the first line, whitespace collapsed', () => {
     expect(provisionalTitle('Fix the login bug on Safari. It fails after the redirect.')).toBe(
       'Fix the login bug on Safari.',

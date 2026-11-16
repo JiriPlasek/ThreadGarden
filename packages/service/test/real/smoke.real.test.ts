@@ -50,6 +50,7 @@ class TapAdapter extends RealAdapter implements AgentAdapter {
       messages,
       send: (m) => inner.send(m),
       interrupt: () => inner.interrupt(),
+      cancelQueued: (uuid) => inner.cancelQueued(uuid),
       setModel: (m) => inner.setModel(m),
       setPermissionMode: (m) => inner.setPermissionMode(m),
       stopTask: (id) => inner.stopTask(id),

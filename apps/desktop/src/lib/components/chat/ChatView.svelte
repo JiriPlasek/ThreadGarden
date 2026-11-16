@@ -1,5 +1,11 @@
 <script lang="ts">
-  import type { AwayItem, ImageRef, ScheduledSend } from '@threadgarden/protocol';
+  import {
+    messagePreview,
+    type AwayItem,
+    type ImageRef,
+    type ReturnedMessage,
+    type ScheduledSend,
+  } from '@threadgarden/protocol';
   import ArrowRightLeftIcon from '@lucide/svelte/icons/arrow-right-left';
   import CheckIcon from '@lucide/svelte/icons/check';
   import GaugeIcon from '@lucide/svelte/icons/gauge';
@@ -225,7 +231,7 @@
   };
 
   let root = $state<HTMLDivElement | null>(null);
-  let composerBox = $state<HTMLTextAreaElement | null>(null);
+  let composerBox = $state<HTMLDivElement | HTMLTextAreaElement | null>(null);
   let list = $state<ReturnType<typeof MessageList> | null>(null);
   let composer = $state<ReturnType<typeof Composer> | null>(null);
 
@@ -488,6 +494,21 @@
     });
   };
 
+  // ── queued messages: taken back before Claude reads them ────────────────
+
+  /** Up in an empty composer: the last queued message comes back to be edited. */
+  const recallQueued = async (): Promise<ReturnedMessage | null> => {
+    const last = chat?.queuedMessages.at(-1);
+    return last ? chats.withdraw(sessionId, last.id) : null;
+  };
+
+  const removeQueued = (messageId: string): void => {
+    sendError = null;
+    chats.withdraw(sessionId, messageId).catch((err: unknown) => {
+      sendError = err instanceof Error ? err.message : String(err);
+    });
+  };
+
   const onkeydown = (e: KeyboardEvent): void => {
     if (e.key === 'Escape' && !e.defaultPrevented && stoppable) {
       e.preventDefault();
@@ -506,7 +527,10 @@
     const a = document.activeElement;
     if (!a || a === document.body) return false;
     if (!root?.contains(a)) return true;
-    if (a === composerBox) return composerBox.value.trim() !== '';
+    if (a === composerBox) {
+      const typed = a instanceof HTMLTextAreaElement ? a.value : a.textContent;
+      return (typed ?? '').trim() !== '';
+    }
     return (
       a instanceof HTMLInputElement ||
       a instanceof HTMLTextAreaElement ||
@@ -740,12 +764,16 @@
             bind:this={list}
             items={chat.items}
             {agentName}
+            queued={chat.queuedMessages}
+            onWithdraw={readOnly ? undefined : removeQueued}
             hasMore={chat.hasMore}
             loadingOlder={chat.loadingOlder}
             onLoadOlder={() => void chats.loadOlder(sessionId)}
             onFork={readOnly || sessionId.startsWith('codex-') ? undefined : fork}
             requests={readOnly ? undefined : requests}
             requestsDocked={!readOnly}
+            tasks={machineAway ? [] : chat.tasks}
+            {working}
             memory={chat.view}
             stickRequests={chat.stickRequests}
           />
@@ -930,7 +958,7 @@
                 data-away-item
               >
                 {#if w.text}
-                  <p class="text-sm break-words whitespace-pre-wrap">{w.text}</p>
+                  <p class="text-sm break-words whitespace-pre-wrap">{messagePreview(w.text)}</p>
                 {/if}
                 {#if w.imageCount > 0}
                   <p class="text-muted-foreground">{imageCountText(w.imageCount)}</p>
@@ -1002,16 +1030,19 @@
             <div class="contents" hidden={docked !== undefined}>
               <Composer
                 bind:this={composer}
-                bind:textarea={composerBox}
+                bind:editorElement={composerBox}
                 draftKey={sessionId}
                 cwd={chat.summary?.cwd ?? ''}
                 commandScope={{ sessionId }}
                 {agentName}
                 placeholder={`Message ${agentName}...`}
                 {working}
-                queued={chat.queuedMessages}
+                queued={chat.queuedMessages.length}
+                suggestion={chat.status === 'idle' ? chat.promptSuggestion : null}
+                onDismissSuggestion={chat.dismissSuggestion}
                 onSubmit={submit}
                 onInterrupt={interrupt}
+                onRecall={recallQueued}
                 {onControl}
                 onSchedule={machineAway || heldBack ? undefined : schedule}
                 {resetAt}

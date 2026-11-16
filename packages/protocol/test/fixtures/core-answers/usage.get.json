@@ -1,0 +1,14 @@
+{
+  "cases": [
+    {
+      "params": {
+        "refresh": true
+      },
+      "result": {
+        "refused": [],
+        "windows": []
+      }
+    }
+  ],
+  "method": "usage.get"
+}

@@ -1,0 +1,14 @@
+{
+  "cases": [
+    {
+      "error": {
+        "code": "POWER_NOT_CONFIGURED"
+      },
+      "params": {
+        "machineId": "m1",
+        "password": "p"
+      }
+    }
+  ],
+  "method": "power.unlock"
+}

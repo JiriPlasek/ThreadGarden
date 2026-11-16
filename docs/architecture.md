@@ -176,7 +176,12 @@ arrive around the task frames in either order. The prompt, spawn depth and
 workflow name come from `task_started`. The UI orders each section (not
 ended first, then by end time), nests tasks under their `parentTaskId` and
 shows the panel on every chat while the one global `activity.open` setting
-is on; a narrow chat pane opens it as a drawer on request instead.
+is on; a narrow chat pane opens it as a drawer on request instead. A
+subagent's row in the messages takes its status from the same list, by the
+task's `toolUseId`: a background agent's Agent call returns as soon as the
+agent starts, so the row reads Running (with the elapsed time) until the task
+ends; without a task (an old chat) a background launch reads "Started in
+background", never Done.
 
 ## Protocol
 
@@ -390,8 +395,45 @@ skipped when it equals the first prompt or the chat has a provisional title
 (without a title of its own, the SDK's summary is just the latest prompt). All
 but a custom title are cut to 80 characters.
 
+**Messages sent while Claude works.** Every message goes to Claude Code with
+`priority: 'next'`: an idle process starts on it at once, and a working one
+reads it at the turn's next step, between two tool calls, as the terminal does
+with a message typed while Claude works. (A message with no priority may be
+held until the whole turn ends, which is why none goes without one.) Claude
+Code reports what happens to each message with `command_lifecycle` frames
+(`queued`, `started` when a turn takes it up, then `completed` or
+`cancelled`), and `system/status` and `result` frames list the messages a
+turn has read. Until a message sent while Claude works is `started`, the
+service keeps it out of the transcript and lists it as *queued* in
+`chat.status` and `chat.open` (`queued`); then it joins the transcript where
+Claude read it, which is also where history has it. The UI shows queued
+messages after the conversation, greyed out, as the terminal does (the queue
+says how many images a message has, not the images); when Claude reads one it
+stays where it is and is no longer greyed. As in the terminal, a turn blocked
+on one long tool call (a ten-minute build, a foreground subagent) reads a
+queued message only when that call ends. A turn that ends while a message is
+still queued is not finished (Claude goes straight on to it, so the chat stays
+working until that message's own `result`, or, should one ever come without a
+result, until every message taken up since has completed, or until a message
+it waited for is cancelled or taken back instead, which no `result` follows); a
+message Claude read during the turn does not hold the turn's end back. With a
+Claude Code that sends no lifecycle frames, queued messages join the transcript
+at the next `result`, where such a CLI takes them up.
+
+As in the terminal, a queued message can be taken back before Claude reads it:
+each greyed row has Remove, and Up in an empty message box brings the last one
+back into the box to edit (`chat.withdraw`, which sends Claude Code's
+`cancel_async_message`; `NOT_QUEUED` once a turn has it). Stop interrupts with
+`cancel_queued`, so Claude Code cancels what is still queued rather than
+running it next, and those messages, like the ones a process that ended never
+read, come back: the service puts their text in front of the chat's saved
+draft, one per line (`withReturned`), and emits `messagesReturned` with their
+text and images, which the chat's composer, if one is on screen, puts in front
+of what it holds. A UI that has not loaded the draft gets the text from the
+service; with no composer on screen the images are not kept.
+
 **Your turn.** When a Threadgarden chat's turn ends (a `result` that leaves it
-waiting for the user, not one followed by queued input, and not one of a turn
+waiting for the user, not one with a message still queued, and not one of a turn
 the user stopped from Threadgarden with Stop or Esc), the service stores
 the time in `threadgarden.db` (`turn_state`, Threadgarden's own table) and emits
 `chatFinished`. A chat is `unread` while its last turn ended after it was last
@@ -508,7 +550,51 @@ with the live session's items (the live version wins for anything both have),
 plus the current seq. The normalized history of a chat is cached (bounded at
 about 32 Mi characters across chats) while the chat's indexed size and mtime
 are unchanged, or for the life of the session object while Threadgarden holds the
-chat. Older items page in with `chat.older`.
+chat. Older items page in with `chat.older`. While a turn of a chat
+Threadgarden runs is working and nothing since the latest user message streams,
+runs a tool or waits on the user (`quietTail` in `chat/rows.ts`), the list
+ends with a "Waiting for Claude…" row and the seconds waited; it appears after
+400 ms of quiet, so back-to-back outputs never make it flicker.
+
+**Attachment tags.** The plain-text contenteditable editor renders `[Image #N]`
+and `[Pasted text #N +K lines]` as non-editable, atomic attachment chips. On
+the phone the box is a plain textarea (`PlainEditor`) where the tags stay text:
+checked on Android 15 with Gboard, the chip editor lost an autocorrected word
+typed after a chip (it re-renders under the keyboard's edit) and could not
+delete a chip, since Gboard sends no Backspace key, only a
+`deleteContentBackward` input, by then with the deleted character already
+selected. Both editors delete a tag whole on that input too.
+Image attachment inserts a tag at the caret; text pasted over 8 lines or 800
+characters collapses. Badges preview on hover or keyboard focus; clicking pins
+the preview until an outside click or Escape. Scrolling over a pasted-text
+badge scrolls its preview without a click. This also works in sent messages.
+Previews render in the document body, outside the virtual list's transformed
+and clipped rows. Their measured bounds determine above/below placement;
+scrolling and resizing update the badge anchor and keep the popup in the viewport.
+Caret movement and deletion treat a chip as one unit. Copy/cut carries the
+actual attachments, renumbered on paste, alongside a plain-text representation.
+The editor maintains text/selection history for undo, including IME edits.
+Removed tags exclude their attachments from send,
+while registries remain in memory for undo. Those registries live by draft key
+in `InteractionState`, so tab switches keep them. Draft writes, scheduling and
+the away queue carry expanded CLI-style `<pasted_content>` blocks, parsed back
+on load, and the images with their tags' numbers. A draft's images are stored
+beside its text (`draft_images`) and written only when they change: `drafts.set`
+without `images` keeps the stored ones, unless the text is empty, which (as
+from a client that knows no draft images) clears the draft. The phone's own
+store keeps text only: its This PC has no chats. Claude gets
+what the terminal sends: the service unwraps the blocks back to the text as
+typed and lists the pastes in the SDK's `inline_pastes`, and the CLI wraps them
+(CLI 2.1.319 does, in the same `<pasted_content>` form, which is what the
+transcript then shows) or sends them plain. Each sent image carries the number
+of its tag (`ImageRef.number`); the transcript keeps the images but not their
+numbers (the SDK drops the CLI's own `imagePasteIds`, and those it gives a
+message sent through the SDK are its own), so the service keeps them by message
+uuid (`sent_images`) and the normalizer puts them back, live and in history. A
+terminal message's images get numbers only when its text has exactly one tag
+per image, in order; otherwise, like images with no tag in the text, they show
+as thumbnails rather than on a guessed badge. Parsing and readable summary
+helpers live in the protocol package.
 
 **External sessions and resume safety** (§4.4, §6.3). The poller runs
 `claude agents --json --all` every 2 s while the window is visible and every
@@ -651,8 +737,8 @@ certificate valid from a day ago, so a device whose clock is behind still
 accepts it, for 20 years) lives in `<data dir>/tls/` with mode 0600; an
 unusable one (unparsable, a key that does not match, a file missing) is
 replaced and the log says so; paired devices then see another certificate
-and must pair again. A desktop service never listens beyond loopback ("Allow
-other devices" is for a later release).
+and must pair again. A desktop service opens the same listener only while
+the owner has **Let my phone connect** on ([The phone](#the-phone)).
 
 **Packaging.** `pnpm build:headless` (`scripts/build-headless.mjs`) writes
 `dist-headless/threadgarden-headless-<version>-linux-<x64|arm64>.tar.gz` and
@@ -1065,14 +1151,62 @@ chat. Its only filesystem write besides its data dir is the chat's empty
 folder in step 3. Tests and the mock service inject the git reads (`moveGit` in
 `startService`) and the folder check (`folderStat`).
 
+## The phone
+
+The Android app ([phone.md](phone.md)) is the same SvelteKit UI in Tauri's
+Android webview, with a one-column layout (`components/phone/`) picked by
+platform (`native.isPhone`), never by width. It has no local machine and runs
+no Claude Code, and the app contains no Node.
+
+- **The core** (`apps/desktop/src-tauri/core`, a plain Rust crate) takes the
+  local service's place. It listens on `127.0.0.1` on a random port with a
+  random bearer token per process, so the UI's loopback contract is unchanged.
+  It answers the local methods the screens call: `hello` (an empty, non-headless
+  `linux` machine), settings, `uiState`, drafts, empty chat lists for the local
+  scope, and `machines.*` with pairing (proof before code, as
+  `machine/pairing-client.ts`). Everything else is a deliberate
+  `METHOD_NOT_FOUND`. `core-contract.test.ts` parses every answer with the
+  protocol's schemas, from fixtures the core writes (`core-answers/`), so the
+  two can't drift. It also serves `/relay?machine=<id>` as the service does,
+  over a pinned TLS link that checks the certificate before the token is
+  sent.
+- **Alert links:** one more link per machine, apart from the screens', that
+  alerts on `needsYou` and `chatFinished` ("‹machine›: ‹chat› needs you", or
+  "finished") unless that chat is on screen (`alerts.setActive`). It never sends
+  `ui.visibility` or `power.adopt`, which would change state for the machine's
+  other clients. It pings every 15 s, and a dropped link retries from 2 s,
+  doubling to 60 s, sooner on a network change. These links receive every
+  chat's streamed output and drop what isn't an alert: about 180 MB in a busy
+  hour.
+- **The plug:** the core talks to the Tasmota switch itself, with the hub's
+  rules: a fresh reading, the minimum off time, one operation at a time, a
+  standby cycle only through the desktop's own rule for that plug. It never
+  writes anything else to the bridge.
+- **The Android service** (`CoreService`, a `specialUse` foreground service)
+  hosts the core with the permanent notification, so it outlives the screens.
+  It restarts at boot only if it was connected, and Disconnect stops it.
+- **Secrets:** device tokens and plug passwords live in one file encrypted with
+  an AES-GCM key from Android's Keystore (`KeystoreSecrets`), excluded from
+  backup. A Keystore key that's gone (a restored phone) means pairing again.
+- **The main PC's listener:** Let my phone connect turns on the headless
+  service's remote listener on a desktop: the same private addresses,
+  port and pairing, its TLS identity made the first time and kept, the choice in
+  its own table (not in `settings`, which paired devices can change). While it's
+  on the desktop never exits when idle; off, every device socket closes at once.
+- **Updates:** the core asks GitHub's API for the latest release (the webview's
+  CSP allows loopback only) and the screens offer its
+  `threadgarden-<version>.apk` through the browser. The release workflow signs
+  the APK with the owner's Android key.
+
 ## Security model
 
 - **Loopback and token.** The service binds `127.0.0.1` only, on a random port.
   The token is 32 random bytes (hex), regenerated at every service start, and
   stored only in `service.json`, written atomically with mode `0600` in the
   user's data dir. Every connection must present it.
-- **Remote listener** (v1.4, [Machines](#machines)). Off by default: only a
-  headless service opens it, and a desktop install never does. It binds the
+- **Remote listener** (v1.4, [Machines](#machines)). A headless service
+  always opens it; a desktop only while Let my phone connect is on
+  (`phoneAccess.set`, local only: a paired device gets `FORBIDDEN`). It binds the
   machine's private IPv4 addresses only (10/8, 172.16/12, 192.168/16,
   100.64/10), never a wildcard or public address, and speaks TLS with a
   self-signed certificate. Nothing goes through a cloud service: the desktop
@@ -1146,12 +1280,29 @@ folder in step 3. Tests and the mock service inject the git reads (`moveGit` in
   desktop: over loopback for This PC's service, over the pinned TLS link for
   a paired machine.
 - **Permissions.** Threadgarden offers the default, acceptEdits, plan, auto
-  and bypassPermissions permission modes. Selecting bypass in either mode picker
+  and bypassPermissions permission modes. The SDK's `default` mode is labelled
+  "Ask before acting". Settings has a saved `defaultPermissionMode` for new
+  chats, initially `default`; the New chat picker starts with that preference
+  each time it opens and sends the selected mode explicitly, including to
+  another machine. Calls to `chat.create` without a mode use the service's
+  preference. Selecting bypass in a chat picker or as the saved default
   requires confirmation; cancelling keeps the previous mode. Non-root sessions
   start with the SDK's `allowDangerouslySkipPermissions`, so a running chat can
   switch to bypass. Root sessions omit this flag because the CLI refuses to start
-  with it; explicitly selecting bypass as root remains unsupported by the CLI.
-  Bypass is only ever chosen in the mode picker, and "always allow"
+  with it, and refuses bypass itself: on a root service a new chat asking for
+  bypass (the saved default or an explicit choice) starts in `default`
+  instead, with a warning line in the chat saying why.
+  The default preference applies only to new chats. The `chat_permissions`
+  table records each chat's mode when its process starts, its picker changes,
+  or the SDK reports a different mode in `system/init` or `system/status` (a
+  repeated one is not written again). Resume, crash recovery, and history
+  headers use that record; a fork inherits it. A chat's row goes when the chat
+  is deleted (its transcript vanished) or moved away; Move to… does not carry
+  the mode over. No mode
+  is inferred for old chats without a record: they continue with Claude Code's
+  own settings until a mode is chosen or reported. Modes from before this
+  change cannot be recovered through the SDK's history API. Bypass is chosen
+  in a picker or inherited from a saved choice, and "always allow"
   suggestions that would switch a session to bypass are filtered out.
 - **Capabilities.** The window gets only the Tauri permissions it uses: core
   defaults, notifications, the open-folder dialog, clipboard write, autostart
@@ -1350,6 +1501,16 @@ Windows 11, signed in with a subscription. What it established:
   or "Report from a subagent", …) and the full text on demand; the
   `<local-command-caveat>` entry is hidden, as in the terminal. The list is
   closed: any other tag still renders as the user's text.
+- **Loaded skills** (checked 2026-11-06 with Claude Code 2.1.319). When the
+  model calls the Skill tool, the live stream carries the skill's
+  instructions as a user message flagged `isSynthetic`, whose text starts
+  `Base directory for this skill: <dir>` followed by the SKILL.md body; the
+  transcript flags it `isMeta`, and `getSessionMessages` leaves it out. A
+  `/skill` typed as a message emits no user message live at all. The
+  normalizer turns a synthetic or meta message of that shape into one
+  collapsed system notice, "Skill: <folder name>", with the instructions on
+  demand, nested under the subagent that loaded it; the same text without
+  either flag (typed by the user) stays the user's message.
 - **Read-only.** All 1,794 files under the real `projects/` dir (except the
   temp repo's own project dir) and `settings.json` were hashed before the
   service started and after it shut down, around indexing the whole history,
@@ -1374,6 +1535,43 @@ Windows 11, signed in with a subscription. What it established:
 - `claude agents --json --all` listed the query's session id as busy while it
   ran, and no longer listed it at the first poll after it ended (under 0.4 s),
   well within the 15 s grace.
+
+**Messages sent while Claude works.** Probed on 2026-11-06 with Claude Code
+2.1.319 and SDK 0.3.314 on Windows 11 (a subscription login, `haiku`), one
+streaming-input `query` per case, the follow-up sent with `priority: 'next'`
+unless said otherwise:
+
+- Every message gets `command_lifecycle` frames keyed by the uuid it was sent
+  under (`queued`, `started`, `completed`; `cancelled` for one a turn ran when
+  that turn was aborted), with or without `--replay-user-messages`; `system/init`
+  lists the `msg_lifecycle_v1` capability. `system/status` (`requesting`) and
+  `result` carry `user_message_uuids`, the messages the turn has read.
+- A follow-up sent 1 s after a new chat's first message ran as a turn of its
+  own after the first one; sent while the first turn was making tool calls,
+  it was `started` right after the next tool result and answered in the same
+  turn, whose `result` listed both messages. History
+  (`getSessionMessages`) has it there, as a user message with the uuid it was
+  sent under.
+- `priority: 'next'` to an idle process starts a turn at once.
+- A slash command (`/effort low`), idle or queued behind a turn, runs with no
+  model turn but still ends with a `result` (`num_turns: 0`) after its output.
+- Probed again on 2026-11-12 (same versions), a follow-up queued while a 15 s
+  `sleep` ran: `interrupt` with `cancel_queued` (the SDK's undeclared
+  `interrupt({ cancelQueued: true })`; `interrupt_cancel_queued_v1` on init)
+  sent the follow-up's `cancelled` frame, then answered with it under
+  `cancelled`, then the turn's `result`; it never ran. A plain `interrupt`
+  answered with it under `still_queued`, and it ran as the next turn.
+  `cancel_async_message` (the SDK's undeclared `cancelAsyncMessage(uuid)`)
+  answered `true` after the follow-up's `cancelled` frame, and the turn went on
+  without it.
+- A follow-up sent while a 30 s foreground command ran was read only when the
+  command ended. `priority: 'now'` did not help: it waited for the command too,
+  then cancelled the turn. `backgroundTasks()` once the command was running
+  returned the tool call at once ("Command was manually backgrounded by
+  user"), the follow-up was answered within 4 s, and the command's end came
+  later as a task notification that started a new turn. Called before the
+  command's `task_started` (the shell takes a few seconds to start on
+  Windows), it moved nothing.
 
 `test/real/smoke.real.test.ts` covers the lower-level facts recorded under
 [Authentication](#authentication) (session id, no echo of sent messages,
@@ -1430,8 +1628,11 @@ Decisions made during the build that change behaviour described in the design:
   archived are left out) plus external sessions that need you or are working.
 - **Messages that produce no item.** SDK messages that carry no content for
   the reader (progress, status, rate-limit and init events, the CLI's
-  `command_lifecycle` telemetry, successful hook output, which the terminal
-  does not show either) produce no chat item. Failed hooks and other
+  `command_lifecycle` frames, which only move queued messages into the
+  transcript, successful hook output, which the terminal does not show
+  either) produce no chat item. `system/permission_check_status`
+  updates the existing running tool row with "Checking permission…" until
+  `done` or the tool result; it never adds a separate chat item. Failed hooks and other
   content-bearing system messages appear as system lines. Truly unknown types
   still render raw, and consecutive unknown items are collapsed into one
   expandable "N unrecognised items" row.

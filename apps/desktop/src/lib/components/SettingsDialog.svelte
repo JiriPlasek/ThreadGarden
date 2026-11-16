@@ -2,6 +2,7 @@
   import {
     ACCENTS,
     CODE_FONT_MAX,
+    PERMISSION_MODE_OPTIONS,
     sanitizeFontFamily,
     type Settings,
     type SettingsPatch,
@@ -11,13 +12,16 @@
   import { buildFlags } from '#lib/build-flags.js';
   import { Button } from '#lib/components/ui/button/index.js';
   import * as Dialog from '#lib/components/ui/dialog/index.js';
-  import { isTauri, pickFile, setAutostart } from '#lib/native.js';
+  import { isPhone, isTauri, pickFile, setAutostart } from '#lib/native.js';
   import { useApp } from '#lib/state/context.js';
   import { SCALES } from '#lib/interface-scale.js';
   import { formatShortcut, shortcut } from '#lib/shortcuts.js';
+  import ShortcutHint from './ShortcutHint.svelte';
   import { IDLE_MINUTES_MAX } from '#lib/state/settings.svelte.js';
   import AppearancePreview from './AppearancePreview.svelte';
+  import BypassPermissionsDialog from './BypassPermissionsDialog.svelte';
   import MachinesSettings from './MachinesSettings.svelte';
+  import PhoneSettings from './phone/PhoneSettings.svelte';
   import UpdatesSettings from './UpdatesSettings.svelte';
 
   type Accent = Settings['accent'];
@@ -27,6 +31,11 @@
    * excepted: it lives in the OS credential store, spec §5.5), plus read-only
    * facts: where Claude Code was found, whether external sessions are
    * available (spec §6.3) and the history indexing progress.
+   *
+   * The phone (`isPhone`) shows what concerns it: notifications, Enter to send,
+   * appearance and the machines. What only This PC has (Claude Code, idle
+   * chats, external sessions, the API key, the System facts), Start on login
+   * and the desktop's updates are not there.
    */
   const { settings, interaction, connection, machineUpdates } = useApp();
 
@@ -66,6 +75,13 @@
   let keyInput = $state('');
   let keyBusy = $state(false);
   let keyError = $state<string | null>(null);
+  let confirmBypass = $state(false);
+  const choosePermissionDefault = (event: Event & { currentTarget: HTMLSelectElement }): void => {
+    const value = event.currentTarget.value as Settings['defaultPermissionMode'];
+    event.currentTarget.value = form.defaultPermissionMode;
+    if (value === 'bypassPermissions' && value !== form.defaultPermissionMode) confirmBypass = true;
+    else form.defaultPermissionMode = value;
+  };
 
   /** Scrolls to and focuses the section the opener asked for (e.g. "Open settings" on a machine that needs attention). */
   const showSection = (): void => {
@@ -88,13 +104,17 @@
       error = null;
       keyInput = '';
       keyError = null;
-      interaction.loadStatus().catch(() => {});
+      // The phone's core has no Claude Code and no API key to check.
+      if (!isPhone) {
+        interaction.loadStatus().catch(() => {});
+        settings.checkApiKey().catch(() => {});
+      }
       void machineUpdates.refresh();
-      settings.checkApiKey().catch(() => {});
       showSection();
     }
     // The Add machine dialog never outlives Settings, whichever way Settings closed.
     if (!open && interaction.addMachineOpen) interaction.addMachineOpen = false;
+    if (!open) confirmBypass = false;
     wasOpen = open;
   });
 
@@ -116,6 +136,7 @@
 
   const scaleUp = formatShortcut(shortcut('scale-up').combos[0]!);
   const scaleDown = formatShortcut(shortcut('scale-down').combos[0]!);
+  const scaleReset = formatShortcut(shortcut('scale-reset').combos[0]!);
 
   const save = async (): Promise<void> => {
     if (idle === null) return;
@@ -136,7 +157,7 @@
     saving = true;
     error = null;
     try {
-      if (patch.startOnLogin !== undefined) await setAutostart(patch.startOnLogin);
+      if (patch.startOnLogin !== undefined && !isPhone) await setAutostart(patch.startOnLogin);
       if (Object.keys(patch).length > 0) await settings.update(patch);
       // The service looks for Claude Code again at the new path.
       if ('claudePath' in patch || 'codexPath' in patch || 'codexHome' in patch)
@@ -193,89 +214,111 @@
 
     <section class="grid gap-3" aria-label="General">
       <div class="grid gap-1">
-        <label for="settings-claude-path" class="text-muted-foreground text-xs"
-          >Claude Code executable</label
+        <label for="settings-permission-mode" class="text-muted-foreground text-xs"
+          >Default permission mode for new chats</label
         >
-        <div class="flex gap-1.5">
-          <input
-            id="settings-claude-path"
-            class="{fieldClass} font-mono text-xs"
-            placeholder="Found automatically"
-            spellcheck="false"
-            autocomplete="off"
-            bind:value={form.claudePath}
-          />
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={!isTauri}
-            title={isTauri
-              ? 'Choose the claude executable'
-              : 'The file picker needs the desktop app'}
-            onclick={() => void browse()}
-          >
-            <FileSearchIcon aria-hidden="true" /> Browse…
-          </Button>
-        </div>
-      </div>
-
-      <div class="grid gap-1">
-        <label for="settings-codex-path" class="text-muted-foreground text-xs"
-          >Codex executable</label
+        <select
+          id="settings-permission-mode"
+          class={fieldClass}
+          value={form.defaultPermissionMode}
+          onchange={choosePermissionDefault}
+          aria-describedby="settings-permission-hint"
         >
-        <div class="flex gap-1.5">
-          <input
-            id="settings-codex-path"
-            class="{fieldClass} font-mono text-xs"
-            placeholder="Found automatically"
-            spellcheck="false"
-            autocomplete="off"
-            bind:value={form.codexPath}
-          />
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={!isTauri}
-            onclick={async () => {
-              const path = await pickFile();
-              if (path) form.codexPath = path;
-            }}><FileSearchIcon aria-hidden="true" /> Browse…</Button
-          >
-        </div>
-        <label for="settings-codex-home" class="text-muted-foreground text-xs"
-          >Codex data folder</label
-        >
-        <input
-          id="settings-codex-home"
-          class="{fieldClass} font-mono text-xs"
-          placeholder="CODEX_HOME or ~/.codex"
-          spellcheck="false"
-          autocomplete="off"
-          bind:value={form.codexHome}
-        />
-        <p class="text-muted-foreground text-xs">
-          Codex uses its own configuration and login. Run <code>codex login</code> to sign in. Path changes
-          apply to new or resumed chats.
+          {#each PERMISSION_MODE_OPTIONS as mode (mode.value)}
+            <option value={mode.value}>{mode.label}</option>
+          {/each}
+        </select>
+        <p id="settings-permission-hint" class="text-muted-foreground text-xs">
+          Chats you start in this app begin in this mode, whichever machine runs them. Existing
+          chats keep their own mode when continued, even after a restart.
         </p>
       </div>
-      <div class="grid gap-1">
-        <label for="settings-idle" class="text-muted-foreground text-xs"
-          >Close idle chats after (minutes; 0 keeps them open)</label
-        >
-        <input
-          id="settings-idle"
-          class="{fieldClass} w-28"
-          inputmode="numeric"
-          aria-invalid={idle === null}
-          aria-describedby={idle === null ? 'settings-idle-error' : undefined}
-          bind:value={form.idleReclaimMinutes}
-        />
-        {#if idle === null}
-          <p id="settings-idle-error" class="text-destructive text-xs">
-            Enter a whole number from 0 to {IDLE_MINUTES_MAX}.
+      {#if !isPhone}
+        <div class="grid gap-1">
+          <label for="settings-claude-path" class="text-muted-foreground text-xs"
+            >Claude Code executable</label
+          >
+          <div class="flex gap-1.5">
+            <input
+              id="settings-claude-path"
+              class="{fieldClass} font-mono text-xs"
+              placeholder="Found automatically"
+              spellcheck="false"
+              autocomplete="off"
+              bind:value={form.claudePath}
+            />
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={!isTauri}
+              title={isTauri
+                ? 'Choose the claude executable'
+                : 'The file picker needs the desktop app'}
+              onclick={() => void browse()}
+            >
+              <FileSearchIcon aria-hidden="true" /> Browse…
+            </Button>
+          </div>
+        </div>
+
+        <div class="grid gap-1">
+          <label for="settings-codex-path" class="text-muted-foreground text-xs"
+            >Codex executable</label
+          >
+          <div class="flex gap-1.5">
+            <input
+              id="settings-codex-path"
+              class="{fieldClass} font-mono text-xs"
+              placeholder="Found automatically"
+              spellcheck="false"
+              autocomplete="off"
+              bind:value={form.codexPath}
+            />
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={!isTauri}
+              onclick={async () => {
+                const path = await pickFile();
+                if (path) form.codexPath = path;
+              }}><FileSearchIcon aria-hidden="true" /> Browse…</Button
+            >
+          </div>
+          <label for="settings-codex-home" class="text-muted-foreground text-xs"
+            >Codex data folder</label
+          >
+          <input
+            id="settings-codex-home"
+            class="{fieldClass} font-mono text-xs"
+            placeholder="CODEX_HOME or ~/.codex"
+            spellcheck="false"
+            autocomplete="off"
+            bind:value={form.codexHome}
+          />
+          <p class="text-muted-foreground text-xs">
+            Codex uses its own configuration and login. Run <code>codex login</code> to sign in. Path
+            changes apply to new or resumed chats.
           </p>
-        {/if}
-      </div>
+        </div>
+        <div class="grid gap-1">
+          <label for="settings-idle" class="text-muted-foreground text-xs"
+            >Close idle chats after (minutes; 0 keeps them open)</label
+          >
+          <input
+            id="settings-idle"
+            class="{fieldClass} w-28"
+            inputmode="numeric"
+            aria-invalid={idle === null}
+            aria-describedby={idle === null ? 'settings-idle-error' : undefined}
+            bind:value={form.idleReclaimMinutes}
+          />
+          {#if idle === null}
+            <p id="settings-idle-error" class="text-destructive text-xs">
+              Enter a whole number from 0 to {IDLE_MINUTES_MAX}.
+            </p>
+          {/if}
+        </div>
+      {/if}
 
       <label class={checkClass}>
         <input type="checkbox" bind:checked={form.notifications} /> Notifications when a chat needs you
@@ -283,30 +326,50 @@
       <label class={checkClass}>
         <input type="checkbox" bind:checked={form.notifyOnFinish} /> Notify when a chat finishes
       </label>
-      <div class="grid gap-0.5">
+      {#if !isPhone}
+        <div class="grid gap-0.5">
+          <label class={checkClass}>
+            <input
+              type="checkbox"
+              bind:checked={form.autoTitles}
+              aria-describedby="settings-auto-titles-hint"
+            /> Name new chats automatically (Claude only; uses a small model)
+          </label>
+          <!-- Ruling R33: titles never go around the provider the user's settings choose. -->
+          <p id="settings-auto-titles-hint" class="text-muted-foreground pl-6 text-xs">
+            Skipped when your Claude settings route requests elsewhere (env, apiKeyHelper, cloud
+            credentials).
+          </p>
+        </div>
+        <div class="grid gap-0.5">
+          <label class={checkClass}>
+            <input
+              type="checkbox"
+              bind:checked={form.promptSuggestions}
+              aria-describedby="settings-prompt-suggestions-hint"
+            /> Suggest my next reply
+          </label>
+          <p id="settings-prompt-suggestions-hint" class="text-muted-foreground pl-6 text-xs">
+            An extra model call after every turn, in every chat on this PC: it counts toward your
+            plan's limits, or costs money with an API key. Applies to chats started after the
+            change.
+          </p>
+        </div>
+      {/if}
+      {#if !isPhone}
+        <!-- A hardware keyboard's setting: on the phone it keeps its value, and the composer's button sends. -->
         <label class={checkClass}>
-          <input
-            type="checkbox"
-            bind:checked={form.autoTitles}
-            aria-describedby="settings-auto-titles-hint"
-          /> Name new chats automatically (Claude only; uses a small model)
+          <input type="checkbox" bind:checked={form.enterToSend} /> Enter sends the message (Shift+Enter
+          for a new line)
         </label>
-        <!-- Ruling R33: titles never go around the provider the user's settings choose. -->
-        <p id="settings-auto-titles-hint" class="text-muted-foreground pl-6 text-xs">
-          Skipped when your Claude settings route requests elsewhere (env, apiKeyHelper, cloud
-          credentials).
-        </p>
-      </div>
-      <label class={checkClass}>
-        <input type="checkbox" bind:checked={form.enterToSend} /> Enter sends the message (Shift+Enter
-        for a new line)
-      </label>
-      <label class={checkClass}>
-        <input type="checkbox" bind:checked={form.externalPolling} /> Show sessions running outside Threadgarden
-      </label>
-      <label class={checkClass}>
-        <input type="checkbox" bind:checked={form.startOnLogin} /> Start on login
-      </label>
+        <label class={checkClass}>
+          <input type="checkbox" bind:checked={form.externalPolling} /> Show sessions running outside
+          Threadgarden
+        </label>
+        <label class={checkClass}>
+          <input type="checkbox" bind:checked={form.startOnLogin} /> Start on login
+        </label>
+      {/if}
     </section>
 
     <section class="grid gap-3 border-t pt-3" aria-labelledby="settings-appearance">
@@ -323,12 +386,12 @@
 
         <div class="grid gap-1">
           <label for="settings-scale" class="text-muted-foreground text-xs"
-            >Interface size ({scaleUp} / {scaleDown})</label
+            >{isPhone ? 'Interface size' : `Interface size (${scaleUp} / ${scaleDown})`}</label
           >
           <select
             id="settings-scale"
             class={fieldClass}
-            title="Applies at once"
+            title="Applies at once · {scaleUp} / {scaleDown} · {scaleReset} resets to default"
             value={String(settings.scale)}
             onchange={(e) => settings.setScale(Number(e.currentTarget.value))}
           >
@@ -418,110 +481,125 @@
       />
     </section>
 
-    <MachinesSettings />
+    <MachinesSettings
+      onStartAtSignIn={() => (form.startOnLogin = true)}
+      startOnLogin={form.startOnLogin}
+    />
 
-    <section class="grid gap-1 border-t pt-3" aria-label="Authentication">
-      <label for="settings-api-key" class="text-muted-foreground text-xs">Anthropic API key</label>
-      <div class="flex gap-1.5">
-        <input
-          id="settings-api-key"
-          type="password"
-          class="{fieldClass} font-mono text-xs"
-          autocomplete="off"
-          spellcheck="false"
-          placeholder={settings.hasApiKey ? 'Stored — enter a new key to replace it' : 'sk-ant-…'}
-          bind:value={keyInput}
-        />
-        <Button
-          size="sm"
-          disabled={keyBusy || !keyInput.trim()}
-          onclick={() => void keyAction(() => settings.saveApiKey(keyInput))}>Save key</Button
+    {#if isPhone}
+      <PhoneSettings />
+    {/if}
+
+    {#if !isPhone}
+      <section class="grid gap-1 border-t pt-3" aria-label="Authentication">
+        <label for="settings-api-key" class="text-muted-foreground text-xs">Anthropic API key</label
         >
-        {#if settings.hasApiKey}
+        <div class="flex gap-1.5">
+          <input
+            id="settings-api-key"
+            type="password"
+            class="{fieldClass} font-mono text-xs"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder={settings.hasApiKey ? 'Stored — enter a new key to replace it' : 'sk-ant-…'}
+            bind:value={keyInput}
+          />
           <Button
-            variant="outline"
             size="sm"
-            disabled={keyBusy}
-            onclick={() => void keyAction(settings.removeApiKey)}>Remove key</Button
+            disabled={keyBusy || !keyInput.trim()}
+            onclick={() => void keyAction(() => settings.saveApiKey(keyInput))}>Save key</Button
           >
-        {/if}
-      </div>
-      <p class="text-muted-foreground text-xs">
-        {#if settings.hasApiKey}
-          A key is stored in the OS credential store; chats Threadgarden starts use API billing.
-        {:else if buildFlags.apiKeyOnly}
-          This build of Threadgarden runs chats only on an Anthropic API key (API billing). Add your
-          key to start or continue chats; history stays browsable without one.
-        {:else}
-          No key: chats use the sign-in of your Claude Code installation.
-        {/if}
-      </p>
-      {#if keyError}
-        <p class="text-destructive text-xs" role="alert">{keyError}</p>
-      {/if}
-    </section>
-
-    <section class="grid gap-1 border-t pt-3 text-xs" aria-label="System">
-      <h3 class="text-muted-foreground font-medium">System</h3>
-      {#if !status}
-        <p class="text-muted-foreground">Checking…</p>
-      {:else}
-        {#if status.claude.found}
-          <p>
-            Claude Code: <span class="font-mono">{status.claude.path ?? 'found'}</span>
-            {#if status.claude.version}<span class="text-muted-foreground"
-                >version {status.claude.version}</span
-              >{/if}
-          </p>
-        {:else}
-          <p class="text-destructive">
-            Claude Code was not found{status.claude.problem ? `: ${status.claude.problem}` : '.'}
-          </p>
-        {/if}
-        {#if status.codex}
-          <p class={status.codex.found ? '' : 'text-muted-foreground'}>
-            Codex: {status.codex.found
-              ? (status.codex.path ?? 'found')
-              : (status.codex.problem ?? 'not found')}
-          </p>
-          {#if status.codex.historyProblem}<p class="text-warning">
-              Codex history refresh failed: {status.codex.historyProblem}. Previously imported chats
-              remain available.
-            </p>{/if}
-          {#if status.codex.home}<p class="text-muted-foreground">
-              Codex history: <span class="font-mono">{status.codex.home}</span>
-            </p>{/if}
-          <p class="text-muted-foreground">
-            {status.codex.externalAvailable
-              ? 'Codex sessions in the shared runtime are shown.'
-              : 'Shared Codex live status is unavailable. Saved history still imports; continuing a session requires confirming it is not running elsewhere.'}
-          </p>
-        {/if}
-        <p class={status.externalAvailable ? '' : 'text-muted-foreground'}>
-          {status.externalAvailable
-            ? 'External sessions (terminal, background) are shown.'
-            : 'External sessions are unavailable or disabled. Saved history is still indexed.'}
-        </p>
-        <p class="text-muted-foreground">
-          {#if indexing && indexing.done < indexing.total}
-            Indexing history: {indexing.done} of {indexing.total} sessions
+          {#if settings.hasApiKey}
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={keyBusy}
+              onclick={() => void keyAction(settings.removeApiKey)}>Remove key</Button
+            >
+          {/if}
+        </div>
+        <p class="text-muted-foreground text-xs">
+          {#if settings.hasApiKey}
+            A key is stored in the OS credential store; chats Threadgarden starts use API billing.
+          {:else if buildFlags.apiKeyOnly}
+            This build of Threadgarden runs chats only on an Anthropic API key (API billing). Add
+            your key to start or continue chats; history stays browsable without one.
           {:else}
-            History index is up to date.
+            No key: chats use the sign-in of your Claude Code installation.
           {/if}
         </p>
-      {/if}
-    </section>
+        {#if keyError}
+          <p class="text-destructive text-xs" role="alert">{keyError}</p>
+        {/if}
+      </section>
 
-    <UpdatesSettings />
+      <section class="grid gap-1 border-t pt-3 text-xs" aria-label="System">
+        <h3 class="text-muted-foreground font-medium">System</h3>
+        {#if !status}
+          <p class="text-muted-foreground">Checking…</p>
+        {:else}
+          {#if status.claude.found}
+            <p>
+              Claude Code: <span class="font-mono">{status.claude.path ?? 'found'}</span>
+              {#if status.claude.version}<span class="text-muted-foreground"
+                  >version {status.claude.version}</span
+                >{/if}
+            </p>
+          {:else}
+            <p class="text-destructive">
+              Claude Code was not found{status.claude.problem ? `: ${status.claude.problem}` : '.'}
+            </p>
+          {/if}
+          {#if status.codex}
+            <p class={status.codex.found ? '' : 'text-muted-foreground'}>
+              Codex: {status.codex.found
+                ? (status.codex.path ?? 'found')
+                : (status.codex.problem ?? 'not found')}
+            </p>
+            {#if status.codex.historyProblem}<p class="text-warning">
+                Codex history refresh failed: {status.codex.historyProblem}. Previously imported
+                chats remain available.
+              </p>{/if}
+            {#if status.codex.home}<p class="text-muted-foreground">
+                Codex history: <span class="font-mono">{status.codex.home}</span>
+              </p>{/if}
+            <p class="text-muted-foreground">
+              {status.codex.externalAvailable
+                ? 'Codex sessions in the shared runtime are shown.'
+                : 'Shared Codex live status is unavailable. Saved history still imports; continuing a session requires confirming it is not running elsewhere.'}
+            </p>
+          {/if}
+          <p class={status.externalAvailable ? '' : 'text-muted-foreground'}>
+            {status.externalAvailable
+              ? 'External sessions (terminal, background) are shown.'
+              : 'External sessions are unavailable or disabled. Saved history is still indexed.'}
+          </p>
+          <p class="text-muted-foreground">
+            {#if indexing && indexing.done < indexing.total}
+              Indexing history: {indexing.done} of {indexing.total} sessions
+            {:else}
+              History index is up to date.
+            {/if}
+          </p>
+        {/if}
+      </section>
+
+      <UpdatesSettings />
+    {/if}
 
     {#if error}
       <p class="text-destructive text-xs" role="alert">{error}</p>
     {/if}
 
     <Dialog.Footer class="sm:justify-between">
-      <Button variant="ghost" size="sm" class="text-muted-foreground" onclick={showShortcuts}>
-        <KeyboardIcon aria-hidden="true" /> Keyboard shortcuts…
-      </Button>
+      {#if isPhone}
+        <span></span>
+      {:else}
+        <Button variant="ghost" size="sm" class="text-muted-foreground" onclick={showShortcuts}>
+          <KeyboardIcon aria-hidden="true" /> Keyboard shortcuts…
+          <ShortcutHint combos={shortcut('shortcuts').combos} />
+        </Button>
+      {/if}
       <div class="flex flex-col-reverse gap-2 sm:flex-row">
         <Button variant="outline" size="sm" onclick={close}>Cancel</Button>
         <Button size="sm" disabled={saving || idle === null} onclick={() => void save()}
@@ -531,3 +609,10 @@
     </Dialog.Footer>
   </Dialog.Content>
 </Dialog.Root>
+
+<BypassPermissionsDialog
+  bind:open={confirmBypass}
+  onConfirm={() => {
+    form.defaultPermissionMode = 'bypassPermissions';
+  }}
+/>

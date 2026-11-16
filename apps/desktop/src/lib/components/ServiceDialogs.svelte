@@ -1,6 +1,6 @@
 <script lang="ts">
   import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
-  import { onTray, type TrayEvent } from '#lib/native.js';
+  import { isPhone, onTray, type TrayEvent } from '#lib/native.js';
   import { useApp } from '#lib/state/context.js';
   import { stopAllDescription, type ServiceAction } from '#lib/state/lifecycle.svelte.js';
   import { onMachineNames } from '#lib/state/machines.svelte.js';
@@ -26,6 +26,8 @@
   ];
 
   $effect(() => {
+    // The phone has no tray.
+    if (isPhone) return;
     let stopped = false;
     const offs: (() => void)[] = [];
     for (const [event, action] of TRAY) {

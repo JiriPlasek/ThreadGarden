@@ -3,7 +3,7 @@ import type { ChatItem, ChatTask, EventMsg } from '@threadgarden/protocol';
 import { LiveSession, authLabel, type LiveSessionOptions } from '../../src/chat/live-session.js';
 import { Normalizer } from '../../src/chat/normalize.js';
 import { ServiceError } from '../../src/server/router.js';
-import type { PermissionUpdate } from '../../src/sdk/adapter.js';
+import type { PermissionUpdate, SDKMessage } from '../../src/sdk/adapter.js';
 import { FakeAdapter } from '../../src/testing/fake-adapter.js';
 import {
   ManualTimers,
@@ -72,6 +72,64 @@ const suggestion = (toolName: string): PermissionUpdate => ({
 });
 
 describe('LiveSession', () => {
+  const prediction = (text: unknown = 'Run the tests') =>
+    sdk({ type: 'prompt_suggestion', uuid: 'prediction-1', suggestion: text });
+
+  it('publishes a post-result prediction in status, snapshot and replay, outside the transcript', async () => {
+    const { adapter, events, opts } = setup();
+    const s = LiveSession.create('/p', { text: 'hello' }, opts);
+    const fake = adapter.lastSession();
+    fake.emit(result('r1'));
+    await settle();
+    const seq = s.snapshot(100).seq;
+    fake.emit(prediction());
+    await settle();
+    const expected = { id: 'prediction-1', text: 'Run the tests' };
+    expect(s.snapshot(100).promptSuggestion).toEqual(expected);
+    expect(s.since(seq)).toEqual([
+      expect.objectContaining({
+        event: 'chat.status',
+        data: expect.objectContaining({ status: 'idle', promptSuggestion: expected }),
+      }),
+    ]);
+    expect(itemsOf(events).some((i) => i.id === 'prediction-1')).toBe(false);
+    s.send({ text: 'something else' });
+    expect(s.snapshot(100).promptSuggestion).toBeNull();
+    fake.emit(prediction('stale'));
+    await settle();
+    expect(s.snapshot(100).promptSuggestion).toBeNull();
+  });
+
+  it.each(['working', 'queued', 'interrupted', 'error'] as const)(
+    'ignores predictions for a %s turn',
+    async (state) => {
+      const { adapter, opts } = setup();
+      const s = LiveSession.create('/p', { text: 'hello' }, opts);
+      const fake = adapter.lastSession();
+      if (state === 'queued') s.send({ text: 'next' });
+      if (state === 'interrupted') await s.interrupt();
+      if (state !== 'working') fake.emit(result('r1', { is_error: state === 'error' }));
+      fake.emit(prediction());
+      await settle();
+      expect(s.snapshot(100).promptSuggestion).toBeNull();
+    },
+  );
+
+  it('ignores malformed and empty predictions and clears a valid one when the session ends', async () => {
+    const { adapter, opts } = setup();
+    const s = LiveSession.create('/p', { text: 'hello' }, opts);
+    const fake = adapter.lastSession();
+    fake.emit(result('r1'));
+    for (const text of [null, {}, 42, '   ']) fake.emit(prediction(text));
+    await settle();
+    expect(s.snapshot(100).promptSuggestion).toBeNull();
+    fake.emit(prediction());
+    await settle();
+    expect(s.snapshot(100).promptSuggestion).not.toBeNull();
+    s.end();
+    expect(s.snapshot(100).promptSuggestion).toBeNull();
+  });
+
   it('create sends first message and emits working then idle', async () => {
     const { adapter, registry, timers, events, opts } = setup();
     const s = LiveSession.create(
@@ -98,7 +156,8 @@ describe('LiveSession', () => {
     expect(fake.sent).toHaveLength(1);
     const sent = fake.sent[0]!;
     expect(sent).not.toHaveProperty('client_composed');
-    expect(sent.priority).toBeUndefined();
+    // Starts at once on an idle process; see queued-messages.test.ts for why every message has it.
+    expect(sent.priority).toBe('next');
     expect(sent.message).toEqual({
       role: 'user',
       content: [
@@ -149,6 +208,60 @@ describe('LiveSession', () => {
     ]);
   });
 
+  it('sends pastes as typed and lists them, so the CLI wraps them as in the terminal', () => {
+    const { adapter, events, opts } = setup();
+    const text = 'see \n\n<pasted_content id="abcd">\na\nb\n</pasted_content id="abcd">\n\n please';
+    const s = LiveSession.create('/p', { text }, opts);
+    const sent = adapter.lastSession().sent[0]!;
+    expect(sent.message.content).toEqual([{ type: 'text', text: 'see a\nb please' }]);
+    expect(sent.inline_pastes).toEqual(['a\nb']);
+    // Shown as the CLI echoes it back when it wraps, so the paste shows as a badge at once.
+    expect(latest(events, sent.uuid!)).toMatchObject({ kind: 'user', text });
+    expect(s.sessionId).toBeTruthy();
+
+    LiveSession.create('/p', { text: 'no paste' }, opts);
+    expect(adapter.lastSession().sent[0]).not.toHaveProperty('inline_pastes');
+  });
+
+  it("keeps each image's tag number, for the echo and for history", async () => {
+    const kept = new Map<string, readonly number[]>();
+    const { adapter, events, opts } = setup({
+      sentImages: {
+        set: (_sessionId, uuid, numbers) => kept.set(uuid, numbers),
+        get: (uuid) => kept.get(uuid),
+      },
+    });
+    const text = '[Image #2] [Image #5] by hand';
+    const s = LiveSession.create(
+      '/p',
+      { text, images: [{ mediaType: 'image/png', dataBase64: 'A', number: 2 }] },
+      opts,
+    );
+    const fake = adapter.lastSession();
+    const uuid = fake.sent[0]!.uuid!;
+    expect(kept.get(uuid)).toEqual([2]);
+    const image = { mediaType: 'image/png', data: 'A', number: 2 };
+    expect(latest(events, uuid)).toMatchObject({ kind: 'user', images: [image] });
+
+    // The echo has no numbers of its own; the image keeps its tag.
+    fake.emit(init(s.sessionId));
+    fake.emit({
+      type: 'user',
+      uuid,
+      session_id: s.sessionId,
+      parent_tool_use_id: null,
+      message: {
+        role: 'user',
+        content: [
+          { type: 'text', text },
+          { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'A' } },
+        ],
+      },
+    } as unknown as SDKMessage);
+    await settle();
+    expect(latest(events, uuid)).toMatchObject({ kind: 'user', images: [image] });
+  });
+
   it('send while working queues with priority next', async () => {
     const { adapter, opts } = setup();
     const s = LiveSession.create('/p', { text: 'first' }, opts);
@@ -164,7 +277,7 @@ describe('LiveSession', () => {
     expect(s.status).toBe('idle');
 
     expect(s.send({ text: 'third' })).toEqual({ queued: false });
-    expect(fake.sent[2]!.priority).toBeUndefined();
+    expect(fake.sent[2]!.priority).toBe('next');
     expect(s.status).toBe('working');
   });
 

@@ -173,6 +173,19 @@ describe('agents strip', () => {
 });
 
 describe('tabs', () => {
+  it('a tab’s tooltip names how to close it, and F2 on the active one', async () => {
+    const { app, context } = await setup();
+    app.tabs.openTab('s1');
+    app.tabs.openTab('s2');
+    render(TabsBar, { context });
+    const tablist = screen.getByRole('tablist');
+    await waitFor(() => expect(within(tablist).getAllByRole('tab')).toHaveLength(2));
+    const [other, active] = within(tablist).getAllByRole('tab') as [HTMLElement, HTMLElement];
+    expect(active.title).toMatch(/ · .+ to close · F2 to rename$/);
+    expect(other.title).toMatch(/ · .+ to close$/);
+    expect(other.title).not.toContain(' ? ');
+  });
+
   it('closing a tab does not call chat.end', async () => {
     const { server, app, context } = await setup();
     app.tabs.openTab('s1');
@@ -219,7 +232,7 @@ describe('tabs', () => {
       within(menu)
         .getAllByRole('menuitem')
         .map((m) => m.textContent?.trim()),
-    ).toEqual(['Close', 'Close others', 'Close to the right', 'Close all']);
+    ).toEqual(['Close Ctrl+W', 'Close others', 'Close to the right', 'Close all']);
     // Nothing is to the right of the last tab.
     expect(
       within(menu).getByRole('menuitem', { name: 'Close to the right' }).dataset.disabled,

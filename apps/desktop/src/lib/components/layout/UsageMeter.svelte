@@ -12,8 +12,9 @@
    * design §4) with its 5-hour, weekly and per-model figures; amber at a
    * warning, red while the limit refuses. Hovering lists the email and every
    * window with its reset. No chip for an API key, a provider, or an account
-   * without a 5-hour reading. A narrow bar shows each chip's 5-hour figure
-   * alone. Any chip opens the Usage dialog.
+   * with none of those figures. A plan without a 5-hour limit (Ultra) leads
+   * with its weekly figure. A narrow bar shows each chip's first figure alone.
+   * Any chip opens the Usage dialog.
    */
   type Props = {
     /** Only the 5-hour figures; measured from the bar when not given. */
@@ -22,7 +23,7 @@
   const { compact }: Props = $props();
   const { usageAccounts, machines } = useApp();
 
-  /** Below this bar width the chips shrink to their 5-hour figure. */
+  /** Below this bar width the chips shrink to their first figure. */
   const NARROW = 960;
 
   let root = $state<HTMLElement>();
@@ -90,13 +91,13 @@
     label: string;
   };
 
-  /** The chips: an entry shows when it is a login with a 5-hour reading. */
+  /** The chips: an entry shows when it is a login with any figure a chip shows. */
   const chips = $derived.by((): Chip[] => {
     const out: Chip[] = [];
     for (const e of usageAccounts.entries) {
       if (e.account && e.account.kind !== 'login') continue;
       const windows = chipWindows(e);
-      if (!windows.some(isFiveHour)) continue;
+      if (windows.length === 0) continue;
       const asOf = e.asOf === undefined ? undefined : clockTime(e.asOf);
       const names = e.machines.map((m) => m.name).join(', ');
       const lines = [
@@ -125,7 +126,7 @@
 {#if chips.length > 0}
   <div bind:this={root} class="flex shrink-0 items-center gap-1 whitespace-nowrap">
     {#each chips as chip (chip.key)}
-      {@const shown = isCompact ? chip.windows.filter(isFiveHour).slice(0, 1) : chip.windows}
+      {@const shown = isCompact ? chip.windows.slice(0, 1) : chip.windows}
       <button
         type="button"
         class="hover:bg-accent focus-visible:ring-ring/50 text-muted-foreground flex h-6 shrink-0 items-center gap-1 rounded px-1.5 tabular-nums outline-none focus-visible:ring-2"
