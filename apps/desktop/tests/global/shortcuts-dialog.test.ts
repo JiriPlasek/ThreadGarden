@@ -115,10 +115,11 @@ describe('shortcut tooltips', () => {
     expect(button.getAttribute('aria-label')).toBe('New chat');
     await userEvent.hover(button);
     await waitFor(
-      () =>
-        expect(document.querySelector('[data-tooltip-content]')?.textContent).toContain(
-          'New chat · Ctrl+N',
-        ),
+      () => {
+        const tooltip = document.querySelector('[data-tooltip-content]');
+        expect(tooltip?.textContent).toContain('New chat');
+        expect(tooltip?.querySelector('[data-shortcut-hint]')?.textContent).toBe('Ctrl+N');
+      },
       { timeout: 2000 },
     );
   });

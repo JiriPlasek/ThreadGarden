@@ -218,8 +218,8 @@ describe('chat row context menu', () => {
 
     await fireEvent.contextMenu(row('a'));
     const items = (await screen.findAllByRole('menuitem')).map((m) => m.textContent?.trim());
-    expect(items).toContain('Put on hold…');
-    expect(items).toContain('Archive');
+    expect(items).toContain('Put on hold… H');
+    expect(items).toContain('Archive E');
     expect(items).not.toContain('Make active');
     await userEvent.click(screen.getByRole('menuitem', { name: 'Archive' }));
     await waitFor(() =>
@@ -571,7 +571,12 @@ describe('chat header: state menu and hold details', () => {
     expect(banner.textContent).toContain('On hold until tomorrow 09:00');
     expect(within(banner).getByText('waiting for review')).toBeTruthy();
 
-    expect(await openStateMenu()).toEqual(['Make active', 'Put on hold…', 'Archive']);
+    expect(await openStateMenu()).toEqual([
+      'Rename… F2',
+      'Make active A (chat list)',
+      'Put on hold… H (chat list)',
+      'Archive E (chat list)',
+    ]);
     await userEvent.click(screen.getByRole('menuitem', { name: 'Make active' }));
     await waitFor(() =>
       expect(setCalls(server)).toEqual([{ sessionIds: ['h'], bucket: 'active' }]),
@@ -593,7 +598,11 @@ describe('chat header: state menu and hold details', () => {
     });
     await app.chats.open('s');
     render(BucketsHarness, { context, props: { chat: app.chats.get('s')! } });
-    expect(await openStateMenu()).toEqual(['Put on hold…', 'Archive']);
+    expect(await openStateMenu()).toEqual([
+      'Rename… F2',
+      'Put on hold… H (chat list)',
+      'Archive E (chat list)',
+    ]);
     await userEvent.click(screen.getByRole('menuitem', { name: 'Archive' }));
     const dialog = await screen.findByRole('alertdialog');
     await userEvent.click(within(dialog).getByRole('button', { name: 'End and archive' }));

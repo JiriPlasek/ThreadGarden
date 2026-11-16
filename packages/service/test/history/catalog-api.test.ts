@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { ChatStatus } from '@threadgarden/protocol';
+import type { ChatStatus, EventMsg } from '@threadgarden/protocol';
 import { Catalog, type LiveChat } from '../../src/history/catalog.js';
 import { openDb } from '../../src/history/db.js';
 import { Indexer } from '../../src/history/indexer.js';
@@ -26,7 +26,13 @@ const setup = async (sessions = 12, projects = 3) => {
     ...opts,
   });
   const router = new Router();
-  registerHistoryHandlers(router, { db, catalog, quickSearch: createQuickSearch(db, catalog) });
+  const events: EventMsg[] = [];
+  registerHistoryHandlers(router, {
+    db,
+    catalog,
+    quickSearch: createQuickSearch(db, catalog),
+    emit: (e) => events.push(e),
+  });
   const call = async (method: string, params: unknown = {}): Promise<Any> => {
     const r = await router.dispatch({ id: 1, method, params } as never, {
       clientId: 'c',
@@ -40,6 +46,7 @@ const setup = async (sessions = 12, projects = 3) => {
     db,
     catalog,
     call,
+    events,
     setLive: (l: LiveChat[]) => (live = l),
     setExternals: (e: unknown[]) => (externals = e),
   };
@@ -109,6 +116,7 @@ describe('catalog and places API', () => {
     const names = Object.getOwnPropertyNames(Object.getPrototypeOf(t.adapter));
     expect(names.some((k) => /rename|tag/i.test(k))).toBe(false);
     await t.call('meta.update', { sessionId: 'session-0', customTitle: 'My Title', pinned: true });
+    expect(t.events).toEqual([{ event: 'sessions.changed', data: { sessionIds: ['session-0'] } }]);
     const r = await t.call('sessions.list', { place: { kind: 'all' }, limit: 50 });
     expect(r.items.find((i: Any) => i.sessionId === 'session-0')).toMatchObject({
       title: 'My Title',
@@ -116,8 +124,18 @@ describe('catalog and places API', () => {
     });
     expect(spy).not.toHaveBeenCalled();
     await t.call('meta.update', { sessionId: 'session-0', customTitle: null });
+    expect(t.events).toHaveLength(2);
+    expect(t.events[1]).toEqual({ event: 'sessions.changed', data: { sessionIds: ['session-0'] } });
     const r2 = await t.call('sessions.list', { place: { kind: 'all' }, limit: 50 });
     expect(r2.items.find((i: Any) => i.sessionId === 'session-0').title).not.toBe('My Title');
+  });
+
+  it('notifies clients when a pin changes, but not for an empty metadata patch', async () => {
+    const t = await setup();
+    await t.call('meta.update', { sessionId: 'session-0', pinned: true });
+    expect(t.events).toEqual([{ event: 'sessions.changed', data: { sessionIds: ['session-0'] } }]);
+    await t.call('meta.update', { sessionId: 'session-0' });
+    expect(t.events).toHaveLength(1);
   });
 
   it('paginates with a cursor and filters by query', async () => {

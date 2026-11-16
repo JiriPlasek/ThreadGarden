@@ -2,6 +2,7 @@
   import { Dialog as DialogPrimitive } from 'bits-ui';
   import XIcon from '@lucide/svelte/icons/x';
   import { Button } from '#lib/components/ui/button/index.js';
+  import { ariaKeyShortcuts, formatCombos, shortcut } from '#lib/shortcuts.js';
   import { cn, type WithoutChildrenOrChild } from '#lib/utils.js';
   import DialogOverlay from './dialog-overlay.svelte';
   import DialogPortal from './dialog-portal.svelte';
@@ -37,7 +38,14 @@
     {#if showCloseButton}
       <DialogPrimitive.Close data-slot="dialog-close">
         {#snippet child({ props })}
-          <Button variant="ghost" class="absolute top-4 right-4" size="icon-sm" {...props}>
+          <Button
+            variant="ghost"
+            class="absolute top-4 right-4"
+            size="icon-sm"
+            {...props}
+            title="Close · {formatCombos(shortcut('close-dialog').combos).join(' or ')}"
+            aria-keyshortcuts={ariaKeyShortcuts(shortcut('close-dialog').combos)}
+          >
             <XIcon />
             <span class="sr-only">Close</span>
           </Button>
