@@ -51,7 +51,23 @@ const ruleCommand = (nodeExe: string) =>
   "New-NetFirewallRule -Name 'Threadgarden-headless' -DisplayName 'Threadgarden headless' " +
   '-Direction Inbound -Action Allow -Protocol TCP -LocalPort 47380 ' +
   `-Program '${nodeExe.replace(/'/g, "''")}' ` +
-  '-RemoteAddress 10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10 -Profile Any';
+  '-RemoteAddress 10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10 -Profile Private,Domain';
+
+/** A registry value, through PowerShell; null when it isn't there. */
+const registryValue = (key: string, name: string): string | null => {
+  const out = execFileSync(
+    'powershell.exe',
+    [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      // A missing key or value still fails the command (exit 1), quiet or not.
+      `$v = Get-ItemProperty -LiteralPath '${key}' -Name '${name}' -ErrorAction SilentlyContinue; if ($v) { $v.'${name}' }; exit 0`,
+    ],
+    { encoding: 'utf8' },
+  ).trim();
+  return out === '' ? null : out;
+};
 
 describe.skipIf(process.platform !== 'win32')('headless install.ps1', { timeout: 60_000 }, () => {
   let root: string;
@@ -60,6 +76,8 @@ describe.skipIf(process.platform !== 'win32')('headless install.ps1', { timeout:
   let log: string;
   let cli: string;
   let elevate: string;
+  /** Where install.ps1 writes its start at sign-in here: a throwaway key, never the real Run key. */
+  let startupKey: string;
 
   /** A release folder for `version`, with a stand-in node.exe whose text names its version. */
   const release = async (version: string, versionText = `${version}\n`) => {
@@ -91,6 +109,7 @@ describe.skipIf(process.platform !== 'win32')('headless install.ps1', { timeout:
         THREADGARDEN_ALLOW_ELEVATED: '1',
         THREADGARDEN_CLI: cli,
         THREADGARDEN_ELEVATE: elevate,
+        THREADGARDEN_STARTUP_KEY: startupKey,
         CALLS: log,
         ...extra,
       },
@@ -111,6 +130,7 @@ describe.skipIf(process.platform !== 'win32')('headless install.ps1', { timeout:
     local = join(root, 'local');
     base = join(local, 'threadgarden-headless');
     log = join(root, 'calls.log');
+    startupKey = `HKCU:\\Software\\Threadgarden-test\\${process.pid}-${Date.now()}`;
     await mkdir(local, { recursive: true });
     await writeFile(log, '');
     // The CLI stand-in logs each call with the first line of the stable node.exe at that moment.
@@ -130,7 +150,31 @@ describe.skipIf(process.platform !== 'win32')('headless install.ps1', { timeout:
     await writeFile(elevate, '@echo off\r\n>>"%CALLS%" echo elevate:%*\r\nexit /b 0\r\n');
   });
 
-  afterEach(() => rm(resolve(root, '..'), { recursive: true, force: true }));
+  afterEach(async () => {
+    execFileSync('powershell.exe', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      `Remove-Item -LiteralPath '${startupKey}' -Recurse -Force -ErrorAction SilentlyContinue; exit 0`,
+    ]);
+    await rm(resolve(root, '..'), { recursive: true, force: true });
+  });
+
+  it('starts at sign-in: a startup entry that runs the stable launcher hidden', async () => {
+    const real = 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run';
+    const before = registryValue(real, 'Threadgarden headless');
+    const r = await install(await release('9.9.9'));
+    expect(r.code).toBe(0);
+    const entry = registryValue(startupKey, 'Threadgarden headless');
+    expect(entry).toContain('-WindowStyle Hidden');
+    expect(entry).toContain(`& '${cli.replace(/'/g, "''")}' start`);
+    expect(r.stdout).toContain('Threadgarden starts by itself when you sign in to Windows');
+    // The real one is left alone by tests.
+    expect(registryValue(real, 'Threadgarden headless')).toBe(before);
+    // An update writes the same entry again, unattended.
+    expect((await install(await release('9.9.10'), { THREADGARDEN_UNATTENDED: '1' })).code).toBe(0);
+    expect(registryValue(startupKey, 'Threadgarden headless')).toBe(entry);
+  });
 
   it('installs the release, points current at it, copies the launcher and node.exe', async () => {
     const r = await install(await release('9.9.9'));

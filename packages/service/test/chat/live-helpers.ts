@@ -52,6 +52,26 @@ export const result = (uuid: string, extra: Record<string, unknown> = {}): SDKMe
     ...extra,
   });
 
+let lifecycleCounter = 0;
+
+/**
+ * Claude Code's frame about one user message it was sent (CLI 2.1.319, its
+ * `msg_lifecycle_v1` capability): `queued` on arrival, `started` when a turn
+ * takes it up (a new turn, or folded into the running one at its next step),
+ * then `completed` or `cancelled`.
+ */
+export const lifecycle = (
+  commandUuid: string,
+  state: 'queued' | 'started' | 'completed' | 'cancelled',
+): SDKMessage =>
+  sdk({
+    type: 'command_lifecycle',
+    command_uuid: commandUuid,
+    state,
+    uuid: `lifecycle-${++lifecycleCounter}`,
+    session_id: 's',
+  });
+
 export const streamEvent = (uuid: string, event: Record<string, unknown>): SDKMessage =>
   sdk({ type: 'stream_event', uuid, session_id: 's', parent_tool_use_id: null, event });
 

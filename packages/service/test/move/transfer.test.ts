@@ -448,6 +448,26 @@ describe('a move between two services', () => {
     expect(laptop.adapter.lastSession().options.sessionStore).toBeDefined();
   });
 
+  it('a chat moved away leaves no permission mode behind: back here, it starts afresh', async () => {
+    const laptop = await machine('laptop', LAPTOP, (a, f) => addLocal(a, 's1', f));
+    const ubuntu = await machine('ubuntu', UBUNTU);
+    await idleLive(laptop, 's1');
+    await laptop.ok('chat.setPermissionMode', { sessionId: 's1', value: 'auto' });
+    await move(laptop, ubuntu, 's1', ubuntu.folder);
+    // Move to… doesn't carry the mode over.
+    const there = await idleLive(ubuntu, 's1');
+    expect(there.options.permissionMode).toBeUndefined();
+
+    await move(ubuntu, laptop, 's1', laptop.folder);
+    const open = await laptop.ok<{ header: { permissionMode?: string } }>('chat.open', {
+      sessionId: 's1',
+      tail: 1,
+    });
+    expect(open.header.permissionMode).toBeUndefined();
+    await laptop.ok('chat.send', { sessionId: 's1', text: 'back home' });
+    expect(laptop.adapter.lastSession().options.permissionMode).toBeUndefined();
+  });
+
   it('moving onto an old copy replaces it (entries without a uuid are not doubled)', async () => {
     const laptop = await machine('laptop', LAPTOP, (a, f) => addLocal(a, 's1', f));
     const ubuntu = await machine('ubuntu', UBUNTU);

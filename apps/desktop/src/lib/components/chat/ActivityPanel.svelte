@@ -6,6 +6,7 @@
   import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
   import IconButton from '#lib/components/layout/IconButton.svelte';
   import { fullTime } from '#lib/format/time.js';
+  import { shortcut } from '#lib/shortcuts.js';
   import { taskEnded, type ChatState } from '#lib/state/chats.svelte.js';
   import { useApp, useScope } from '#lib/state/context.js';
   import { machineAway } from '#lib/state/machines.svelte.js';
@@ -316,7 +317,13 @@
         >{running} running</span
       >
     {/if}
-    <IconButton label="Hide activity" class="ml-auto shrink-0" side="left" onclick={onClose}>
+    <IconButton
+      label="Hide activity"
+      shortcut={shortcut('activity-toggle').combos[0]}
+      class="ml-auto shrink-0"
+      side="left"
+      onclick={onClose}
+    >
       <XIcon />
     </IconButton>
   </div>

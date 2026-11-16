@@ -47,6 +47,7 @@
   import * as DropdownMenu from '#lib/components/ui/dropdown-menu/index.js';
   import * as Tooltip from '#lib/components/ui/tooltip/index.js';
   import { agoText, clockTime, spanText } from '#lib/format/usage.js';
+  import { isPhone } from '#lib/native.js';
   import { useApp } from '#lib/state/context.js';
   import { hostSuffix, machineLabel } from '#lib/state/machines.svelte.js';
   import { cn } from '#lib/utils.js';
@@ -68,6 +69,12 @@
    *
    * A machine that is away, whose chats show from this device's copy, says
    * when that copy was made: "last seen 2 h ago".
+   *
+   * The phone turns a machine on with plug details of its own (its core keeps
+   * them), also the main PC, a desktop without power control. So every paired
+   * machine has the ⏻ menu there: without details it says what to enter;
+   * Shut down and Keep awake stay the machine's own, for one with power
+   * control. Nothing on the phone ever cuts a machine's power.
    */
   let {
     machine,
@@ -87,6 +94,11 @@
       power.config(machine.id) !== null &&
       (!machine.info || machine.info.capabilities.includes(POWER_CAPABILITY)),
   );
+  /** The machine's own power control (shutdown, keep awake): its hello says so. */
+  const machinePower = $derived(!!machine.info?.capabilities.includes(POWER_CAPABILITY));
+  /** The phone: its plug details for this machine, or none yet. */
+  const plugged = $derived(power.config(machine.id) !== null);
+  const PLUG_HINT = "Enter this machine's plug details to turn it on from here";
   const awake = $derived(power.machine(machine.id)?.keepAwake);
   const starting = $derived(power.turningOn(machine.id));
   // What failed when asked (turning on, shutting down), else why the machine stopped a shutdown.
@@ -210,7 +222,7 @@
         {/if}
       </span>
     </h3>
-    {#if hasPower}
+    {#if hasPower || (isPhone && !machine.local)}
       <DropdownMenu.Root>
         <DropdownMenu.Trigger>
           {#snippet child({ props })}
@@ -226,7 +238,9 @@
           {/snippet}
         </DropdownMenu.Trigger>
         <DropdownMenu.Content align="end" class="min-w-40">
-          {#if starting}
+          {#if isPhone && !plugged}
+            <p class="text-muted-foreground max-w-56 px-2 py-1 text-xs">{PLUG_HINT}</p>
+          {:else if starting}
             <DropdownMenu.Item class="py-1 text-xs" disabled>Starting…</DropdownMenu.Item>
           {:else if status === 'shuttingDown'}
             <DropdownMenu.Item class="py-1 text-xs" disabled>Shutting down…</DropdownMenu.Item>
@@ -240,7 +254,7 @@
           {:else if status !== 'on'}
             <DropdownMenu.Item class="py-1 text-xs" disabled>{shown.label}</DropdownMenu.Item>
           {/if}
-          {#if status === 'on'}
+          {#if status === 'on' && (!isPhone || machinePower)}
             <DropdownMenu.Item class="py-1 text-xs" onSelect={shutDown}>
               Shut down now
             </DropdownMenu.Item>
@@ -266,6 +280,14 @@
                 {/if}
               </DropdownMenu.SubContent>
             </DropdownMenu.Sub>
+          {/if}
+          {#if isPhone}
+            <DropdownMenu.Item
+              class="py-1 text-xs"
+              onSelect={() => (interaction.plugFor = machine.id)}
+            >
+              Plug details…
+            </DropdownMenu.Item>
           {/if}
         </DropdownMenu.Content>
       </DropdownMenu.Root>

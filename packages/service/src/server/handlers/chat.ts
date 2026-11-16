@@ -22,8 +22,10 @@ import type {
   EventMsg,
   ImageRef,
   MovePeer,
+  PromptSuggestion,
+  QueuedMessage,
 } from '@threadgarden/protocol';
-import { MOVE_ERRORS } from '@threadgarden/protocol';
+import { MOVE_ERRORS, PERMISSION_MODES } from '@threadgarden/protocol';
 import {
   realTimers,
   type LiveSession,
@@ -48,13 +50,7 @@ import type { ClaudeFound, ClaudeProblem } from '../../sdk/claude-path.js';
 import { ServiceError, type Router } from '../router.js';
 
 /** Permission modes Threadgarden offers. */
-export const PERMISSION_MODES: readonly PermissionMode[] = [
-  'default',
-  'acceptEdits',
-  'plan',
-  'auto',
-  'bypassPermissions',
-];
+export { PERMISSION_MODES } from '@threadgarden/protocol';
 export const EFFORT_LEVELS: readonly Effort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 
 /**
@@ -184,7 +180,13 @@ const model = (v: string | undefined): string | undefined => {
 const toInput = (p: { text: string; images?: ImageRef[] | undefined }): UserInput => ({
   text: p.text,
   ...(p.images?.length
-    ? { images: p.images.map((i) => ({ mediaType: i.mediaType, dataBase64: i.data })) }
+    ? {
+        images: p.images.map((i) => ({
+          mediaType: i.mediaType,
+          dataBase64: i.data,
+          ...(i.number === undefined ? {} : { number: i.number }),
+        })),
+      }
     : {}),
 });
 
@@ -323,7 +325,7 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
       return hit;
     }
     const messages = await adapter.getSessionMessages(sessionId, historyOf(sessionId));
-    const normalizer = new Normalizer({ turnEnds: true });
+    const normalizer = new Normalizer({ turnEnds: true, imageNumbers: (u) => db.imageNumbers(u) });
     const byId = new Map<string, ChatItem>();
     for (const m of messages) for (const item of normalizer.push(m).items) byId.set(item.id, item);
     for (const item of normalizer.finish().items) byId.set(item.id, item);
@@ -351,10 +353,13 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
    * there is one that fits.
    */
   const historyHeader = (sessionId: string, last: LastReply | undefined): ChatHeaderInfo => {
-    if (!last) return {};
+    const mode = db.getPermissionMode(sessionId);
+    const permissions = mode === undefined ? {} : { permissionMode: mode };
+    if (!last) return permissions;
     const max = db.contextWindow(sessionId, last.model);
     const used = last.contextTokens;
     return {
+      ...permissions,
       ...(last.at === undefined
         ? {}
         : {
@@ -381,7 +386,14 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
    */
   const view = async (
     sessionId: string,
-  ): Promise<{ items: ChatItem[]; seq: number; header: ChatHeaderInfo; tasks: ChatTask[] }> => {
+  ): Promise<{
+    items: ChatItem[];
+    seq: number;
+    header: ChatHeaderInfo;
+    tasks: ChatTask[];
+    promptSuggestion?: PromptSuggestion | null;
+    queued: QueuedMessage[];
+  }> => {
     let history: ChatItem[];
     let lastReply: LastReply | undefined;
     try {
@@ -398,15 +410,30 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
       history = history.slice(0, -1);
     }
     const fallback = historyHeader(sessionId, lastReply);
-    if (!s) return { items: history, seq: host.seqOf(sessionId), header: fallback, tasks: [] };
+    if (!s) {
+      return {
+        items: history,
+        seq: host.seqOf(sessionId),
+        header: fallback,
+        tasks: [],
+        queued: [],
+      };
+    }
     const snap = s.snapshot(Number.MAX_SAFE_INTEGER);
     const own = new Set(snap.items.map((i) => i.id));
-    const earlier = history.filter((i) => !own.has(i.id) && !own.has(s.resolveItemId(i.id) ?? ''));
+    // Claude Code may have written a message to the transcript before its `started`
+    // frame reached the session: it stays queued until then, and shows once.
+    const queued = new Set(snap.queued.map((q) => q.id));
+    const earlier = history.filter(
+      (i) => !own.has(i.id) && !queued.has(i.id) && !own.has(s.resolveItemId(i.id) ?? ''),
+    );
     return {
       items: [...earlier, ...snap.items],
       seq: snap.seq,
       header: { ...fallback, ...snap.header },
       tasks: snap.tasks,
+      promptSuggestion: snap.promptSuggestion,
+      queued: snap.queued,
     };
   };
 
@@ -426,6 +453,8 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
       hasMore: v.items.length > items.length,
       seq: v.seq,
       tasks: v.tasks,
+      promptSuggestion: v.promptSuggestion ?? null,
+      queued: v.queued,
       movedTo: deps.awayTo?.(p.sessionId) ?? null,
     };
   });
@@ -574,6 +603,12 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
     return {};
   });
 
+  router.register('chat.withdraw', async (p) => {
+    const s = host.get(p.sessionId);
+    if (!s) throw new ServiceError('NOT_QUEUED', 'Claude has already read this message');
+    return s.withdraw(p.messageId);
+  });
+
   const release = (sessionId: string): void => {
     forget(sessionId); // the next read sees the live turns, or the chat's new history
     if (!host.get(sessionId)) return;
@@ -667,6 +702,8 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
     await deps.indexNow([forked.sessionId]).catch((err: unknown) => {
       deps.onError(err, `index fork ${forked.sessionId}`);
     });
+    const mode = db.getPermissionMode(p.sessionId);
+    if (mode !== undefined) db.setPermissionMode(forked.sessionId, mode);
     return { sessionId: forked.sessionId };
   });
 

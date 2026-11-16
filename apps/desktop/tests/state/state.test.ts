@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ServiceClient } from '../../src/lib/service/client';
 import { ChatsState } from '../../src/lib/state/chats.svelte';
 import { ConnectionState } from '../../src/lib/state/connection.svelte';
+import { InteractionState } from '../../src/lib/state/interaction.svelte';
 import { PlacesState } from '../../src/lib/state/places.svelte';
 import { SessionsState } from '../../src/lib/state/sessions.svelte';
 import { COLUMNS_SAVE_DELAY_MS, SettingsState } from '../../src/lib/state/settings.svelte';
@@ -62,6 +63,45 @@ describe('chats', () => {
     });
     return { chats, frames, runFrame: () => frames.splice(0).forEach((f) => f()) };
   };
+
+  it('loads a prediction from chat.open and recovers a newer one through chat.since', async () => {
+    const { chats } = setup();
+    const open = server.handlers['chat.open']!;
+    server.handlers['chat.open'] = (p) => ({
+      ...(open(p) as object),
+      promptSuggestion: { id: 'p1', text: 'Run tests' },
+    });
+    await chats.open('s1');
+    const chat = chats.get('s1')!;
+    expect(chat.promptSuggestion).toEqual({ id: 'p1', text: 'Run tests' });
+    chat.dismissSuggestion();
+    server.handlers['chat.since'] = () => ({
+      events: [
+        {
+          sessionId: 's1',
+          seq: 11,
+          status: 'idle',
+          promptSuggestion: { id: 'p1', text: 'Run tests' },
+        },
+      ],
+      seq: 11,
+    });
+    await chats.resync();
+    expect(chat.promptSuggestion).toBeNull();
+    server.handlers['chat.since'] = () => ({
+      events: [
+        {
+          sessionId: 's1',
+          seq: 12,
+          status: 'idle',
+          promptSuggestion: { id: 'p2', text: 'Review changes' },
+        },
+      ],
+      seq: 12,
+    });
+    await chats.resync();
+    expect(chat.promptSuggestion).toEqual({ id: 'p2', text: 'Review changes' });
+  });
 
   it('chats batches streaming updates per frame', async () => {
     const { chats, frames, runFrame } = setup();
@@ -131,6 +171,22 @@ describe('chats', () => {
     expect(chat.status).toBe('needsYou');
     expect(chat.waitingFor).toBe('permission');
     expect(chat.header).toEqual({ model: 'm', effort: 'high' });
+  });
+
+  it('a message leaving the queue is in the items the moment it leaves', async () => {
+    const { chats } = setup();
+    await chats.open('s1');
+    const chat = chats.get('s1')!;
+    const queued = [{ id: 'q1', text: 'also this', ts: 1 }];
+    server.push('chat.status', { sessionId: 's1', seq: 11, status: 'working', queued });
+    expect(chat.queuedMessages).toEqual(queued);
+    // Claude reads it: the service sends its item, then a status without it.
+    const user: ChatItem = { kind: 'user', id: 'q1', text: 'also this', ts: 1 };
+    server.push('chat.items', { sessionId: 's1', seq: 12, items: [user] });
+    server.push('chat.status', { sessionId: 's1', seq: 13, status: 'working', queued: [] });
+    // No frame has run: it would otherwise be in neither place until the next one.
+    expect(chat.queuedMessages).toEqual([]);
+    expect(chat.items.map((i) => i.id)).toEqual(['a', 'q1']);
   });
 
   it('keeps events that arrive while chat.open is in flight', async () => {
@@ -235,6 +291,50 @@ describe('chats', () => {
     await chats.loadOlder('s1');
     expect(chats.get('s1')!.items.map((i) => i.id)).toEqual(['o1', 'a']);
     expect(chats.get('s1')!.hasMore).toBe(false);
+  });
+});
+
+describe('interaction', () => {
+  it('queued messages given back go in front of a loaded draft, with no composer on screen', async () => {
+    const saved: { key: string; text: string; images?: unknown[] }[] = [];
+    server.handlers['drafts.set'] = (p) => {
+      saved.push(p as { key: string; text: string; images?: unknown[] });
+      return {};
+    };
+    const interaction = new InteractionState();
+    interaction.init(client);
+    interaction.saveDraft('s1', { text: 'mine', images: [] });
+    server.push('messagesReturned', { sessionId: 's1', messages: [{ text: 'one' }] });
+    // A draft not loaded here: the service put the text into the saved one already.
+    server.push('messagesReturned', { sessionId: 's2', messages: [{ text: 'two' }] });
+    await flushAsync();
+    expect(interaction.cachedDraft('s1')).toEqual({ text: 'one\nmine', images: [] });
+    expect(interaction.cachedDraft('s2')).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(saved).toEqual([{ key: 's1', text: 'one\nmine', images: [] }]);
+  });
+
+  it('a given-back message keeps its images, numbered past the draft’s own', async () => {
+    const interaction = new InteractionState();
+    interaction.init(client);
+    const mine = { mediaType: 'image/png', data: 'MINE', number: 1 };
+    const theirs = { mediaType: 'image/png', data: 'THEIRS', number: 1 };
+    interaction.saveDraft('s1', { text: 'see [Image #1]', images: [mine] });
+    interaction.saveAttachments('s1', {
+      text: 'stale',
+      attachments: { images: {}, pastes: {}, nextImage: 1, nextPaste: 1 },
+    });
+    server.push('messagesReturned', {
+      sessionId: 's1',
+      messages: [{ text: 'look at [Image #1]', images: [theirs] }],
+    });
+    await flushAsync();
+    expect(interaction.cachedDraft('s1')).toEqual({
+      text: 'look at [Image #2]\nsee [Image #1]',
+      images: [{ ...theirs, number: 2 }, mine],
+    });
+    // The next composer restores from the draft, not from the composer state it had.
+    expect(interaction.cachedAttachments('s1')).toBeUndefined();
   });
 });
 

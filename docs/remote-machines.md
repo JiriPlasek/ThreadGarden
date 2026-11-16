@@ -11,7 +11,7 @@ rest of this guide applies to it as written for the Ubuntu PC.
 
 To reuse repositories, tools and Claude Code history already on Windows, use the
 [native Windows worker](windows-machines.md). It runs under your signed-in account,
-starts manually, and has no power control or idle shutdown.
+starts when you sign in, and has no power control or idle shutdown.
 If a WSL worker is already installed on the same PC, see
 [switching between WSL and native](windows-machines.md#if-you-already-have-a-wsl-worker)
 for the separate histories and pairings, shared default port, and how to stop one
@@ -36,6 +36,8 @@ without deleting its data.
   address the VPN gives the Ubuntu PC and use it away from home. Threadgarden
   does not set up or manage that, and nothing in it is exposed to the
   internet.
+- The Android app pairs with it the same way, and with the desktop too: see
+  [Threadgarden on the phone](phone.md).
 - Every paired device has **full control** of the Ubuntu PC's chats (send,
   answer permissions, stop), and through them of what Claude Code can do on
   that machine. Pairing can be revoked from either side. (A Windows PC's

@@ -1,0 +1,14 @@
+{
+  "cases": [
+    {
+      "error": {
+        "code": "NOT_FOUND"
+      },
+      "params": {
+        "machineId": "m1",
+        "name": "Desk"
+      }
+    }
+  ],
+  "method": "machines.update"
+}

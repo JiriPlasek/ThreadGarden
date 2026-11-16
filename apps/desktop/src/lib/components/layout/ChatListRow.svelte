@@ -10,6 +10,8 @@
   import PinOffIcon from '@lucide/svelte/icons/pin-off';
   import SquareTerminalIcon from '@lucide/svelte/icons/square-terminal';
   import * as ContextMenu from '#lib/components/ui/context-menu/index.js';
+  import ShortcutHint from '#lib/components/ShortcutHint.svelte';
+  import { ariaKeyShortcuts, shortcut } from '#lib/shortcuts.js';
   import { formatHoldUntil } from '#lib/format/hold.js';
   import { fullTime, relativeTime } from '#lib/format/time.js';
   import { cn } from '#lib/utils.js';
@@ -194,27 +196,53 @@
     {/snippet}
   </ContextMenu.Trigger>
   <ContextMenu.Content class="min-w-40">
-    <ContextMenu.Item class="py-1 text-xs" onSelect={() => onOpen(chat)}>Open</ContextMenu.Item>
+    <ContextMenu.Item
+      class="py-1 text-xs"
+      aria-keyshortcuts={ariaKeyShortcuts(shortcut('list-open').combos)}
+      onSelect={() => onOpen(chat)}
+    >
+      Open <ShortcutHint combos={shortcut('list-open').combos} />
+    </ContextMenu.Item>
     <ContextMenu.Separator />
     <ContextMenu.Item class="py-1 text-xs" onSelect={() => onTogglePin(chat)}>
       {#if chat.pinned}<PinOffIcon /> Unpin{:else}<PinIcon /> Pin{/if}
     </ContextMenu.Item>
-    <ContextMenu.Item class="py-1 text-xs" onSelect={() => onRename(chat)}>
+    <ContextMenu.Item
+      class="py-1 text-xs"
+      aria-keyshortcuts={ariaKeyShortcuts(shortcut('chat-rename').combos)}
+      onSelect={() => onRename(chat)}
+    >
       <PencilIcon /> Rename…
+      <ShortcutHint combos={shortcut('chat-rename').combos} />
     </ContextMenu.Item>
     {#if onMove}
       <ContextMenu.Separator />
       {#if chat.bucket !== 'active'}
-        <ContextMenu.Item class="py-1 text-xs" onSelect={() => onMove(chat, 'active')}>
+        <ContextMenu.Item
+          class="py-1 text-xs"
+          aria-keyshortcuts={ariaKeyShortcuts(shortcut('list-activate').combos)}
+          onSelect={() => onMove(chat, 'active')}
+        >
           <InboxIcon /> Make active
+          <ShortcutHint combos={shortcut('list-activate').combos} />
         </ContextMenu.Item>
       {/if}
-      <ContextMenu.Item class="py-1 text-xs" onSelect={() => onMove(chat, 'onHold')}>
+      <ContextMenu.Item
+        class="py-1 text-xs"
+        aria-keyshortcuts={ariaKeyShortcuts(shortcut('list-hold').combos)}
+        onSelect={() => onMove(chat, 'onHold')}
+      >
         <PauseIcon /> Put on hold…
+        <ShortcutHint combos={shortcut('list-hold').combos} />
       </ContextMenu.Item>
       {#if !archived}
-        <ContextMenu.Item class="py-1 text-xs" onSelect={() => onMove(chat, 'archived')}>
+        <ContextMenu.Item
+          class="py-1 text-xs"
+          aria-keyshortcuts={ariaKeyShortcuts(shortcut('list-archive').combos)}
+          onSelect={() => onMove(chat, 'archived')}
+        >
           <ArchiveIcon /> Archive
+          <ShortcutHint combos={shortcut('list-archive').combos} />
         </ContextMenu.Item>
       {/if}
     {/if}

@@ -34,6 +34,8 @@ folder with `VERSION`, `install.ps1`, `bin/node.exe`, `bin/threadgarden.cmd` and
 elevation. The stable installed `bin/threadgarden.cmd` and `node/node.exe`, the
 `current` junction, and apply-script arguments (installer, version, from,
 installBase, updateDir, timeoutS) must remain compatible with older updaters.
+The per-user startup entry "Threadgarden headless" names that stable launcher,
+so it must stay where it is.
 
 ## Workflow
 

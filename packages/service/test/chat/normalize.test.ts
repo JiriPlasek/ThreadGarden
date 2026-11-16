@@ -792,6 +792,34 @@ describe('Normalizer', () => {
     ]);
   });
 
+  it("gives each image its tag's number: as sent from here, else only when the tags leave no doubt", () => {
+    const png = (data: string) => ({
+      type: 'image',
+      source: { type: 'base64', media_type: 'image/png', data },
+    });
+    const prompt = (uuid: string, text: string, images: string[]) =>
+      user(uuid, [{ type: 'text', text }, ...images.map(png)]);
+    const sent: Record<string, number[]> = { mine: [2, 9] };
+    const n = new Normalizer({ now: () => 1, imageNumbers: (uuid) => sent[uuid] });
+    const imagesOf = (r: PushResult) => (r.items[0] as Extract<ChatItem, { kind: 'user' }>).images;
+
+    // Sent from here: the stored numbers, even with a hand-typed tag in the text.
+    expect(
+      imagesOf(n.push(prompt('mine', '[Image #2] then [Image #5] [Image #9]', ['A', 'B']))),
+    ).toEqual([
+      { mediaType: 'image/png', data: 'A', number: 2 },
+      { mediaType: 'image/png', data: 'B', number: 9 },
+    ]);
+    // The terminal's: one distinct tag per image, in order (its only image may be #2).
+    expect(imagesOf(n.push(prompt('cli', 'see [Image #2]', ['A'])))).toEqual([
+      { mediaType: 'image/png', data: 'A', number: 2 },
+    ]);
+    // More tags than images: no guessing, the images show as they are.
+    expect(imagesOf(n.push(prompt('typed', '[Image #1] and [Image #2]', ['A'])))).toEqual([
+      { mediaType: 'image/png', data: 'A' },
+    ]);
+  });
+
   it('normalizes SessionMessage history equivalently to live messages', () => {
     const live: SDKMessage[] = [
       user('u1', 'list files'),
@@ -883,6 +911,60 @@ describe('Normalizer: user messages the CLI writes itself', () => {
   it('keeps synthetic user messages that do not follow a boundary', () => {
     const items = run(new Normalizer(), [special('x1', 'injected', { isSynthetic: true })]);
     expect(items).toMatchObject([{ kind: 'user', id: 'x1', text: 'injected' }]);
+  });
+
+  // A loaded skill's instructions, as the live stream carries them (CLI 2.1.319:
+  // `isSynthetic`; history drops these entries, which the transcript marks `isMeta`).
+  const skillText = [
+    'Base directory for this skill: C:\\Users\\me\\.claude\\plugins\\cache\\superpowers\\7.0.0\\skills\\brainstorming',
+    '',
+    '# Brainstorming',
+    '',
+    'You are very good at building.',
+  ].join('\n');
+
+  it('collapses a loaded skill to a labelled system item with the instructions as detail', () => {
+    const items = run(new Normalizer(), [
+      special('k1', [{ type: 'text', text: skillText }], { isSynthetic: true }),
+    ]);
+    expect(items).toEqual([
+      { kind: 'system', id: 'k1', level: 'info', text: 'Skill: brainstorming', detail: skillText },
+    ]);
+  });
+
+  it('collapses a skill the transcript marks isMeta, with a forward-slash path', () => {
+    const text = 'Base directory for this skill: /home/me/proj/.claude/skills/work/\n\n# Work';
+    const items = run(new Normalizer(), [special('k2', text, { isMeta: true })]);
+    expect(items).toEqual([
+      { kind: 'system', id: 'k2', level: 'info', text: 'Skill: work', detail: text },
+    ]);
+  });
+
+  it('nests a subagent’s skill under the subagent that loaded it', () => {
+    const items = run(new Normalizer(), [
+      sdk({
+        ...(user('k3', [{ type: 'text', text: skillText }], 'toolu_agent') as unknown as Record<
+          string,
+          unknown
+        >),
+        isSynthetic: true,
+      }),
+    ]);
+    expect(items).toEqual([
+      {
+        kind: 'system',
+        id: 'k3',
+        level: 'info',
+        text: 'Skill: brainstorming',
+        detail: skillText,
+        parentToolUseId: 'toolu_agent',
+      },
+    ]);
+  });
+
+  it('keeps skill-like text the user typed as their message', () => {
+    const items = run(new Normalizer(), [special('k4', skillText)]);
+    expect(items).toMatchObject([{ kind: 'user', id: 'k4', text: skillText }]);
   });
 
   it('renders slash command entries as the command the user typed', () => {

@@ -1,3 +1,4 @@
+import { messagePreview } from '@threadgarden/protocol';
 import {
   AWAY_ERROR,
   type ChatHeaderInfo,
@@ -11,7 +12,10 @@ import {
   type ChatTask,
   type ChatTasksEvent,
   type MovePeer,
+  type QueuedMessage,
   type Result,
+  type PromptSuggestion,
+  type ReturnedMessage,
 } from '@threadgarden/protocol';
 import { SvelteMap } from 'svelte/reactivity';
 import { RequestError } from '../service/client';
@@ -66,6 +70,7 @@ export const runningTasks = (tasks: readonly ChatTask[]): number =>
 
 /** A new chat's title until its machine names it: its first line, as the service makes it. */
 const titleFrom = (text: string): string => {
+  text = messagePreview(text);
   const line = text
     .split('\n')
     .find((l) => l.trim())
@@ -113,6 +118,14 @@ export class ChatState {
    * the list). Empty for chats Threadgarden does not run.
    */
   tasks = $state.raw<ChatTask[]>([]);
+  promptSuggestion = $state.raw<PromptSuggestion | null>(null);
+  /** Kept across composer remounts and replay so a dismissed prediction stays dismissed. */
+  dismissedSuggestionId: string | null = null;
+
+  dismissSuggestion = (): void => {
+    this.dismissedSuggestionId = this.promptSuggestion?.id ?? this.dismissedSuggestionId;
+    this.promptSuggestion = null;
+  };
   /**
    * Where the chat went when it was moved away (protocol 9): this copy is
    * read-only. Null for a chat that is here.
@@ -157,8 +170,12 @@ export class ChatState {
 
   /** Answers given here, by request id (shows "Always allowed" / the chosen answers). */
   readonly decisions = new SvelteMap<string, Decision>();
-  /** Messages sent while Claude was working that the service queued (spec §6.4). */
-  queuedMessages = $state(0);
+  /**
+   * Messages sent while Claude was working that it has not read yet, as the
+   * service last listed them (`chat.open`, then every `chat.status`). Each
+   * joins `items` where Claude reads it.
+   */
+  queuedMessages = $state.raw<QueuedMessage[]>([]);
 
   /** Permission requests the user still has to answer. */
   pendingRequests = $derived(
@@ -360,6 +377,10 @@ export class ChatsState {
       chat.hasMore = r.hasMore;
       // An older service has no task tracking: no tasks.
       chat.tasks = Array.isArray(r.tasks) ? r.tasks : [];
+      chat.promptSuggestion =
+        r.promptSuggestion?.id === chat.dismissedSuggestionId ? null : (r.promptSuggestion ?? null);
+      // One that predates the queue list shows a queued message in the transcript at once.
+      chat.queuedMessages = r.queued ?? [];
       chat.movedTo = r.movedTo ?? null;
       chat.seq = r.seq;
       chat.loaded = true;
@@ -466,7 +487,10 @@ export class ChatsState {
     chat.stickRequests += 1;
   };
 
-  /** Sends a message; resolves to whether the service queued it behind the running turn. */
+  /**
+   * Sends a message; resolves to whether the service queued it behind the
+   * running turn (it then shows in `queuedMessages` until Claude reads it).
+   */
   send = async (sessionId: string, text: string, images?: ImageRef[]): Promise<boolean> => {
     if (!this.api) throw new Error('Not connected to the Threadgarden service');
     this.stickToBottom(sessionId);
@@ -475,9 +499,16 @@ export class ChatsState {
       text,
       ...(images?.length ? { images } : {}),
     });
-    const chat = this.byId.get(sessionId);
-    if (r.queued && chat) chat.queuedMessages += 1;
     return r.queued;
+  };
+
+  /**
+   * Takes a queued message back before Claude reads it (to remove or edit it):
+   * its text and images. Rejects (`NOT_QUEUED`) once Claude has taken it up.
+   */
+  withdraw = async (sessionId: string, messageId: string): Promise<ReturnedMessage> => {
+    if (!this.api) throw new Error('Not connected to the Threadgarden service');
+    return this.api.request('chat.withdraw', { sessionId, messageId });
   };
 
   /** Starts a chat in `cwd` with its first message; resolves to the new chat's id. */
@@ -677,9 +708,16 @@ export class ChatsState {
       chat.tasks = e.tasks;
     } else {
       chat.status = e.status;
+      chat.promptSuggestion =
+        e.status === 'idle' && e.promptSuggestion?.id !== chat.dismissedSuggestionId
+          ? (e.promptSuggestion ?? null)
+          : null;
       chat.waitingFor = e.waitingFor;
-      // The turn ended: whatever was queued has been taken up.
-      if (e.status !== 'working' && e.status !== 'needsYou') chat.queuedMessages = 0;
+      const queued = e.queued ?? [];
+      // A message leaving the queue joined the items just before this event: show
+      // them now, not a frame later, so it never vanishes for a frame.
+      if (queued.length < chat.queuedMessages.length && chat.queued.length > 0) this.flush();
+      chat.queuedMessages = queued;
       if (e.header) chat.header = { ...chat.header, ...e.header };
     }
   };

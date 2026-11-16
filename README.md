@@ -37,6 +37,7 @@ It uses your own `claude` install and login, through the official Agent SDK. Not
 - **Remote machines:** run chats on another computer from the same window. Start a project, clone a repo, or move a chat there with its whole conversation, and update it from Settings.
 - **Power:** turn a remote machine on and off through a Tasmota smart plug.
 - **Away machines:** read an off machine's chats from a local copy; a reply waits and goes out once it's on.
+- **Android app:** every machine's chats on the phone, with an alert as soon as a chat needs you, and Turn on through the plug. See [Threadgarden on the phone](docs/phone.md).
 - Analytics, a quick switcher (Ctrl+K), keyboard shortcuts (Ctrl+/ lists them) and themes.
 
 ## Install
@@ -125,11 +126,11 @@ Then open the distro with `wsl -d threadgarden`, run `cd ~`, and do steps 3 to 6
 
 To use a PC's existing Windows repos, tools, Claude Code login and history, install the [native Windows worker](docs/windows-machines.md). Download and verify the `threadgarden-headless-windows-x64.zip` release, extract it and run its `install.ps1` as your normal Windows user. Then open a new terminal and run `threadgarden pair`; add the address and code in Settings → Machines.
 
-After a reboot, run `threadgarden start`. It runs in the background while you stay signed in, without WSL or a system account. Stop it with `threadgarden stop`. This option has no power control or idle shutdown.
+It starts by itself when you sign in to Windows and runs in the background while you stay signed in, without WSL or a system account. Stop it with `threadgarden stop`, start it with `threadgarden start`. This option has no power control or idle shutdown.
 
 | Windows worker | Environment and history | Startup | Power control |
 | --- | --- | --- | --- |
-| Native | Your existing Windows account, tools and Claude history | Run `threadgarden start` after signing in | None |
+| Native | Your existing Windows account, tools and Claude history | When you sign in | None |
 | WSL | The dedicated Linux distro's tools, login and Claude history | At boot, including before sign-in | Optional; shuts down the whole PC |
 
 Installing native leaves an existing WSL installation in place. They have separate data and pairings, and both default to port 47380, so stop the WSL worker before switching to native. The [switching guide](docs/windows-machines.md#if-you-already-have-a-wsl-worker) explains how to keep the distro and its history.
@@ -156,6 +157,7 @@ There's no Threadgarden account; it uses whatever Claude Code uses, except that 
 - A moved chat isn't listed by `claude --resume` on its new machine, and can't be forked yet.
 - A machine that's off shows only the last few messages of each chat.
 - macOS and Linux pass CI but haven't seen much real use.
+- The phone app receives every chat's output in the background, about 180 MB in a busy hour: mind mobile data. It keeps no copy of a machine that's off.
 
 ## License
 

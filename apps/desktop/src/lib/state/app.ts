@@ -2,7 +2,7 @@
  * Wires the service client to every state module. The UI calls `startApp` once;
  * tests build their own instances and call `init` with a fake client instead.
  */
-import { appVersion, serviceConnection, updater, type ServiceConnection } from '../native';
+import { appVersion, isPhone, serviceConnection, updater, type ServiceConnection } from '../native';
 import { startAttention } from '../notifications';
 import { agents } from './agents.svelte';
 import { analytics } from './analytics.svelte';
@@ -54,7 +54,8 @@ const wire = (): void => {
   agents.init(client, { machineId: () => localScope.machineId });
   lifecycle.init(client, agents, connection, connectTo);
   usage.init(client);
-  analytics.init(client);
+  // Analytics reads This PC's history: the phone has none.
+  if (!isPhone) analytics.init(client);
   // Notifications: a watcher per machine (the scopes below), one tray badge (the sum).
   startAttention({ scopes, machines, settings, tabs, places, power });
   // Paired machines: a scope each, on its relay client through the local service.
@@ -62,23 +63,30 @@ const wire = (): void => {
   places.follow(scopes);
   agents.follow(scopes);
   // While a machine is away, its scope reads the copy on the local service.
+  // The phone keeps no copies in stage one: a machine's scope reads the machine only.
   scopes.follow(machines, tabs, (m) =>
     createScope(m.id, m.client, {
       tabs,
       agents,
-      copies: {
-        local: client,
-        name: () => machineNameOf(machines, m.id),
-        hello: () => machines.get(m.id)?.info ?? null,
-        status: () => machines.get(m.id)?.status,
-        away,
-      },
+      ...(isPhone
+        ? {}
+        : {
+            copies: {
+              local: client,
+              name: () => machineNameOf(machines, m.id),
+              hello: () => machines.get(m.id)?.info ?? null,
+              status: () => machines.get(m.id)?.status,
+              away,
+            },
+          }),
     }),
   );
-  // The local copy of each paired machine's chats, kept while it is connected.
-  copySync.init({ local: client, scopes, machines });
-  // The messages written for machines that are away, waiting on this device.
-  away.init(client);
+  if (!isPhone) {
+    // The local copy of each paired machine's chats, kept while it is connected.
+    copySync.init({ local: client, scopes, machines });
+    // The messages written for machines that are away, waiting on this device.
+    away.init(client);
+  }
   // Power control: before the machines connect, so it sees each one added.
   power.init(client, machines);
   // Updating machines: likewise, so it hears each one open.
@@ -116,13 +124,16 @@ const run = async (): Promise<void> => {
   // Wired first, so "Restart service" works even when no service could be used.
   wire();
   // Self-update: started before connecting, so a release whose service cannot
-  // start can still be replaced by the next one.
-  updates.init({
-    api: client,
-    updater,
-    appVersion,
-    stopLocalService: lifecycle.stopLocalService,
-    restoreLocalService: lifecycle.startLocalService,
-  });
+  // start can still be replaced by the next one. The phone has no desktop
+  // updater (it gets its own notice).
+  if (!isPhone) {
+    updates.init({
+      api: client,
+      updater,
+      appVersion,
+      stopLocalService: lifecycle.stopLocalService,
+      restoreLocalService: lifecycle.startLocalService,
+    });
+  }
   await connectTo(await serviceConnection());
 };

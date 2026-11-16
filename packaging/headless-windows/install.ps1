@@ -1,7 +1,8 @@
 # Installs this Threadgarden headless release for the current user on Windows.
 # Idempotent: running a newer release's install.ps1 upgrades `current` to it, and
-# running the installed copy again just refreshes the launcher, the PATH entry and
-# the service. Needs no administrator, except once for the firewall rule (below).
+# running the installed copy again just refreshes the launcher, the PATH entry, the
+# start at sign-in and the service. Needs no administrator, except once for the
+# firewall rule (below).
 #
 # THREADGARDEN_UNATTENDED=1 is the service updating itself: nobody can answer a
 # prompt, so it never elevates and never waits for input.
@@ -159,10 +160,12 @@ if (-not $unattended) {
     Write-Output 'The firewall rule that lets paired devices reach Threadgarden is already in place.'
   } else {
     $program = $nodeExe.Replace("'", "''")
+    # Private and domain networks only: on a network Windows calls Public (a café,
+    # a hotel), the private address ranges are strangers too.
     $rule = "New-NetFirewallRule -Name 'Threadgarden-headless' -DisplayName 'Threadgarden headless' " +
       '-Direction Inbound -Action Allow -Protocol TCP -LocalPort 47380 ' +
       "-Program '$program' " +
-      '-RemoteAddress 10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10 -Profile Any'
+      '-RemoteAddress 10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,100.64.0.0/10 -Profile Private,Domain'
     $script = "try { $rule | Out-Null; exit 0 } catch { exit 1 }"
     $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script))
     Write-Output ''
@@ -188,6 +191,41 @@ if (-not $unattended) {
       Write-Output "Skipped the firewall rule; other devices can't reach this machine until install.ps1 is run again and the rule is allowed."
     }
   }
+  # The rule covers private and domain networks: one Windows calls Public lets nothing in.
+  # Windows often calls a new network Public, so say which ones are.
+  try {
+    $public = @(Get-NetConnectionProfile -ErrorAction Stop | Where-Object { $_.NetworkCategory -eq 'Public' })
+  } catch {
+    $public = @()
+  }
+  foreach ($p in $public) {
+    Write-Output ''
+    Write-Output "Windows has the network '$($p.Name)' ($($p.InterfaceAlias)) set to Public, so other devices"
+    Write-Output "can't reach Threadgarden over it. If it is your home or office network, or your VPN,"
+    Write-Output 'make it Private: Settings > Network & internet > its connection > Private network.'
+  }
+}
+
+# Starts at sign-in: a per-user startup entry, no administrator. It runs as the
+# signed-in user, so Git, gh and Claude Code keep the credentials Windows keeps for
+# that user (a task that runs without a sign-in would not have them). It names the
+# stable launcher, so updates never need to touch it; Task Manager > Startup apps
+# turns it off, and Windows keeps that apart from the entry, so an update leaves it off.
+# THREADGARDEN_STARTUP_KEY is for tests, which must never write the real one.
+$startupKey = if ($env:THREADGARDEN_STARTUP_KEY) {
+  $env:THREADGARDEN_STARTUP_KEY
+} else {
+  'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+}
+$powershell = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+$startCommand = "`"$powershell`" -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass " +
+  "-Command `"& '$($cli.Replace("'", "''"))' start`""
+try {
+  if (-not (Test-Path -LiteralPath $startupKey)) { New-Item -Path $startupKey -Force | Out-Null }
+  New-ItemProperty -LiteralPath $startupKey -Name 'Threadgarden headless' -Value $startCommand `
+    -PropertyType String -Force | Out-Null
+} catch {
+  Write-Output "Could not set Threadgarden to start at sign-in: $($_.Exception.Message)"
 }
 
 # Starts it, or restarts it so an upgrade takes effect. node.exe can only be
@@ -204,6 +242,6 @@ if ($LASTEXITCODE -ne 0) {
 if (-not $unattended) {
   Write-Output ''
   Write-Output 'Installed. Pair this machine with your desktop: threadgarden pair'
-  Write-Output 'After a restart of this PC, start Threadgarden again with: threadgarden start'
+  Write-Output 'Threadgarden starts by itself when you sign in to Windows (Task Manager > Startup apps turns that off).'
 }
 exit 0

@@ -4,6 +4,7 @@ import {
   buildOneShotOptions,
   buildQueryOptions,
   buildSessionEnv,
+  WINDOWS_API_KEY_VARIABLE,
 } from '../../src/sdk/real-adapter.js';
 
 const canUseTool: CanUseTool = async () => ({ behavior: 'allow' });
@@ -54,6 +55,14 @@ describe('buildQueryOptions', () => {
         'systemPrompt',
       ].sort(),
     );
+  });
+
+  it('asks for prompt suggestions only when the setting is on', () => {
+    expect(buildQueryOptions(start())).not.toHaveProperty('promptSuggestions');
+    expect(buildQueryOptions(start({ promptSuggestions: false }))).not.toHaveProperty(
+      'promptSuggestions',
+    );
+    expect(buildQueryOptions(start({ promptSuggestions: true })).promptSuggestions).toBe(true);
   });
 
   it('declares the per-task stop affordance, so Stop / Esc on a turn spares background tasks', () => {
@@ -183,6 +192,35 @@ describe('buildSessionEnv', () => {
       ANTHROPIC_API_KEY: 'threadgarden',
     });
     expect(buildSessionEnv(unit, null, { keepInheritedKey: false })).toEqual({ PATH: '/usr/bin' });
+  });
+
+  // A native Windows worker runs with the user's whole environment: a key set there
+  // for another tool must not bill its chats; only one set for Threadgarden does.
+  it('takes a native Windows worker’s key only from THREADGARDEN_ANTHROPIC_API_KEY', () => {
+    const user = { Path: 'C:\\bin', ANTHROPIC_API_KEY: 'for-another-tool' };
+    const keyFrom = WINDOWS_API_KEY_VARIABLE;
+    expect(buildSessionEnv(user, null, { keyFrom })).toEqual({ Path: 'C:\\bin' });
+    expect(
+      buildSessionEnv({ ...user, THREADGARDEN_ANTHROPIC_API_KEY: 'for-threadgarden' }, null, {
+        keyFrom,
+      }),
+    ).toEqual({ Path: 'C:\\bin', ANTHROPIC_API_KEY: 'for-threadgarden' });
+    // Threadgarden's own key still wins (not that one reaches a worker today).
+    expect(
+      buildSessionEnv({ THREADGARDEN_ANTHROPIC_API_KEY: 'chosen' }, 'own', { keyFrom }),
+    ).toEqual({ ANTHROPIC_API_KEY: 'own' });
+  });
+
+  // Windows' names are case-insensitive: Claude Code would read this one there.
+  it('drops an inherited key whatever the case of its name', () => {
+    expect(buildSessionEnv({ Anthropic_Api_Key: 'x', PATH: '/bin' }, null)).toEqual({
+      PATH: '/bin',
+    });
+    expect(
+      buildSessionEnv({ threadgarden_anthropic_api_key: 'k' }, null, {
+        keyFrom: WINDOWS_API_KEY_VARIABLE,
+      }),
+    ).toEqual({ ANTHROPIC_API_KEY: 'k' });
   });
 
   it('keeps the other credentials Claude Code reads, which are chosen on purpose', () => {

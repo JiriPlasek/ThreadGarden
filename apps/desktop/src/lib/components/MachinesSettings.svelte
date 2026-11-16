@@ -5,9 +5,11 @@
   import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
   import MachineUpdate from '#lib/components/MachineUpdate.svelte';
   import { machineState } from '#lib/components/layout/MachineHeading.svelte';
+  import PhoneAccess from '#lib/components/PhoneAccess.svelte';
   import PowerSettings from '#lib/components/PowerSettings.svelte';
+  import PlugCard from '#lib/components/phone/PlugCard.svelte';
   import { Button } from '#lib/components/ui/button/index.js';
-  import { appVersion } from '#lib/native.js';
+  import { appVersion, isPhone } from '#lib/native.js';
   import { useApp } from '#lib/state/context.js';
   import { hostSuffix, type MachineEntry } from '#lib/state/machines.svelte.js';
   import { THIS_PC } from '#lib/state/refs.js';
@@ -18,8 +20,20 @@
    * immediate (they are not part of the dialog's Save): a machine's name, its
    * address and port (the pin stays, so a different machine at the new address
    * is still refused), and Remove, which also asks the machine to forget this
-   * PC when it can be reached.
+   * PC when it can be reached. The phone has no This PC to list, and keeps
+   * its own plug details (`PlugCard`): the desktop's power card, which hands
+   * the plug's settings to the machine, isn't on the phone.
    */
+  let {
+    onStartAtSignIn,
+    startOnLogin = false,
+  }: {
+    /** Start at sign-in was turned on from Let my phone connect (the dialog's form follows). */
+    onStartAtSignIn?: () => void;
+    /** The dialog's form has Start on login ticked, saved or not (Let my phone connect's offer). */
+    startOnLogin?: boolean;
+  } = $props();
+
   const { machines, interaction, machineUpdates } = useApp();
 
   const paired = $derived(machines.list.filter((m) => !m.local));
@@ -123,7 +137,11 @@
     Machines
   </h3>
 
-  <p class="text-sm">{THIS_PC} · Threadgarden {appVersion}</p>
+  {#if !isPhone}
+    <p class="text-sm">{THIS_PC} · Threadgarden {appVersion}</p>
+    <!-- The desktop listens for the phone: the phone itself has nothing to offer here. -->
+    <PhoneAccess {onStartAtSignIn} {startOnLogin} />
+  {/if}
 
   {#each paired as m (m.id)}
     {@const shown = machineState({ name: m.name, status: machines.shown(m) })}
@@ -203,7 +221,11 @@
         >
       </div>
       <MachineUpdate machine={m} />
-      <PowerSettings machine={m} />
+      {#if isPhone}
+        <PlugCard machine={m} />
+      {:else}
+        <PowerSettings machine={m} />
+      {/if}
     </div>
   {/each}
 

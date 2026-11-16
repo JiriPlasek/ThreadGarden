@@ -101,6 +101,12 @@ export const SHORTCUTS: readonly Shortcut[] = [
 
   // Chat list — ChatList.
   {
+    id: 'chat-rename',
+    group: 'Chat list',
+    combos: [['F2']],
+    description: 'Rename the focused chat in the list, or the current chat elsewhere',
+  },
+  {
     id: 'list-move',
     group: 'Chat list',
     combos: [['Up'], ['Down']],
@@ -219,13 +225,25 @@ export const SHORTCUTS: readonly Shortcut[] = [
     id: 'composer-stop',
     group: 'Composer',
     combos: [['Esc']],
-    description: 'Stop Claude while it is working',
+    description: 'Stop Claude while it is working (queued messages come back to the box)',
+  },
+  {
+    id: 'composer-recall-queued',
+    group: 'Composer',
+    combos: [['Up']],
+    description: 'Take the last queued message back to edit it (in an empty message box)',
   },
   {
     id: 'composer-mention',
     group: 'Composer',
     combos: [['@']],
     description: 'Mention a file or folder',
+  },
+  {
+    id: 'composer-accept-suggestion',
+    group: 'Composer',
+    combos: [['Tab']],
+    description: 'Accept the suggested reply',
   },
   {
     id: 'composer-command',
@@ -348,6 +366,20 @@ export const detectPlatform = (nav: NavigatorLike | undefined): Platform => {
 /** The platform of this window. */
 export const currentPlatform = (): Platform =>
   detectPlatform(typeof navigator === 'undefined' ? undefined : (navigator as NavigatorLike));
+
+/** F2 belongs to the list cursor first, then to the open chat; popups own their keys. */
+export const isChatRenameKey = (e: KeyboardEvent): boolean =>
+  e.key === 'F2' &&
+  !e.ctrlKey &&
+  !e.metaKey &&
+  !e.altKey &&
+  !e.shiftKey &&
+  !e.repeat &&
+  !e.isComposing &&
+  !e.defaultPrevented &&
+  !document.querySelector(
+    '[role="dialog"]:not([data-state="closed"]), [role="alertdialog"]:not([data-state="closed"]), [role="menu"]:not([data-state="closed"])',
+  );
 
 const LABELS: Record<Platform, Record<string, string>> = {
   other: { Mod: 'Ctrl', Ctrl: 'Ctrl', Shift: 'Shift', Alt: 'Alt' },
