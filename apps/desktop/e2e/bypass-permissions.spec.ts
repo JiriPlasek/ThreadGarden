@@ -23,6 +23,18 @@ test('bypass requires confirmation in the chat header and New chat; Cancel keeps
   const confirmation = page.getByRole('alertdialog', { name: 'Enable bypass permissions?' });
   await expect(confirmation).toBeVisible();
   await expect(headerMode).toHaveValue('plan');
+  // Each button is as wide as its label, inside the dialog.
+  const enable = confirmation.getByRole('button', {
+    name: 'Enable bypass permissions',
+    exact: true,
+  });
+  expect(await enable.evaluate((b) => b.scrollWidth <= b.clientWidth)).toBe(true);
+  const [box, dialogBox] = [await enable.boundingBox(), await confirmation.boundingBox()];
+  expect(box!.x + box!.width).toBeLessThanOrEqual(dialogBox!.x + dialogBox!.width);
+  const cancelBox = await confirmation
+    .getByRole('button', { name: 'Cancel', exact: true })
+    .boundingBox();
+  expect(Math.abs(cancelBox!.y - box!.y)).toBeLessThan(box!.height / 2); // one row
   await confirmation.getByRole('button', { name: 'Cancel', exact: true }).click();
   await expect(headerMode).toHaveValue('plan');
   await headerMode.selectOption('bypassPermissions');

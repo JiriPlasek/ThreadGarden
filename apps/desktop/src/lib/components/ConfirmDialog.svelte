@@ -67,7 +67,11 @@
 </script>
 
 <AlertDialog.Root bind:open>
-  <AlertDialog.Content size="sm" class="gap-4 p-5" onCloseAutoFocus={closeAutoFocus}>
+  <AlertDialog.Content
+    size="sm"
+    class="gap-4 p-5 data-[size=sm]:max-w-sm"
+    onCloseAutoFocus={closeAutoFocus}
+  >
     <AlertDialog.Header>
       <AlertDialog.Title class="text-base">{title}</AlertDialog.Title>
       {#if description}
@@ -78,7 +82,9 @@
     {#if error}
       <p class="text-destructive text-sm" role="alert">{error}</p>
     {/if}
-    <AlertDialog.Footer>
+    <!-- Buttons as wide as their labels, not the small size's two equal columns,
+         which cut off a long label like "Enable bypass permissions". -->
+    <AlertDialog.Footer class="flex-wrap group-data-[size=sm]/alert-dialog-content:flex">
       <AlertDialog.Cancel size="sm" disabled={busy}>{cancelLabel}</AlertDialog.Cancel>
       <AlertDialog.Action
         size="sm"
