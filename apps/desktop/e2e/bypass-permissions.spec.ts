@@ -35,6 +35,9 @@ test('bypass requires confirmation in the chat header and New chat; Cancel keeps
     .getByRole('button', { name: 'Cancel', exact: true })
     .boundingBox();
   expect(Math.abs(cancelBox!.y - box!.y)).toBeLessThan(box!.height / 2); // one row
+  // At the dialog's two sides, only its padding (p-5) from each edge.
+  expect(cancelBox!.x - dialogBox!.x).toBeLessThan(24);
+  expect(dialogBox!.x + dialogBox!.width - (box!.x + box!.width)).toBeLessThan(24);
   await confirmation.getByRole('button', { name: 'Cancel', exact: true }).click();
   await expect(headerMode).toHaveValue('plan');
   await headerMode.selectOption('bypassPermissions');

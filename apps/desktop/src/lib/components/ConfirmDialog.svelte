@@ -82,9 +82,11 @@
     {#if error}
       <p class="text-destructive text-sm" role="alert">{error}</p>
     {/if}
-    <!-- Buttons as wide as their labels, not the small size's two equal columns,
-         which cut off a long label like "Enable bypass permissions". -->
-    <AlertDialog.Footer class="flex-wrap group-data-[size=sm]/alert-dialog-content:flex">
+    <!-- Buttons as wide as their labels, at the dialog's two sides; not the small
+         size's two equal columns, which cut off a label like "Enable bypass permissions". -->
+    <AlertDialog.Footer
+      class="flex-wrap group-data-[size=sm]/alert-dialog-content:flex sm:justify-between"
+    >
       <AlertDialog.Cancel size="sm" disabled={busy}>{cancelLabel}</AlertDialog.Cancel>
       <AlertDialog.Action
         size="sm"
