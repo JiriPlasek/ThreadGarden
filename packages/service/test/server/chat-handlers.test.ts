@@ -292,13 +292,22 @@ describe('chat handlers', () => {
     },
   );
 
-  it('does not apply the new-chat default to history with no remembered mode', async () => {
+  it('continues history with no remembered mode in the new-chat default, then keeps that mode', async () => {
     const adapter = new FakeAdapter();
     addHistory(adapter, 'old', 1);
     await start(adapter);
     await ok('settings.set', { defaultPermissionMode: 'bypassPermissions' });
+    expect(await ok('chat.open', { sessionId: 'old', tail: 1 })).toMatchObject({
+      header: { permissionMode: 'bypassPermissions' },
+    });
     await ok('chat.send', { sessionId: 'old', text: 'continue' });
-    expect(adapter.lastSession().options.permissionMode).toBeUndefined();
+    expect(adapter.lastSession().options.permissionMode).toBe('bypassPermissions');
+
+    // Continued once, the chat remembers its mode: a later default does not change it.
+    await ok('chat.end', { sessionId: 'old' });
+    await ok('settings.set', { defaultPermissionMode: 'plan' });
+    await ok('chat.send', { sessionId: 'old', text: 'again' });
+    expect(adapter.lastSession().options.permissionMode).toBe('bypassPermissions');
   });
 
   it('forks inherit the source chat permission mode', async () => {
