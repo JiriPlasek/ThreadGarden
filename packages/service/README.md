@@ -2,6 +2,13 @@
 
 Long-lived Node service that owns Claude Code and Codex sessions and serves the UI over a token-authenticated WebSocket bound to `127.0.0.1` (random port).
 
+Native Windows workers use the same service and Windows Claude Code history as
+the desktop. `threadgarden start` runs `serve --headless` detached as the signed-in
+user; `stop` shuts it down. The per-user Windows zip is built with
+`pnpm build:headless --platform windows`; setup, pairing, shared-service behavior
+and updates are covered in [the Windows guide](../../docs/windows-machines.md).
+Native workers advertise no power capability and register no idle shutdown.
+
 Codex support:
 
 - Install the Codex CLI and sign in with `codex login`. Choose one of its models in New chat's model picker. Models use their native display names; the internal `codex:` routing prefix is hidden. Models and reasoning levels come from the installed CLI's `model/list` catalog, including before any chat runs. `THREADGARDEN_CODEX_PATH` overrides executable discovery; native binaries and npm's Windows launchers are supported. Claude's executable and Anthropic key are not required for Codex chats.

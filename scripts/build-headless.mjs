@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 /**
- * Builds the headless Linux package:
+ * Builds a headless Linux or native Windows package:
  *
- *   node scripts/build-headless.mjs [--arch x64|arm64]
+ *   node scripts/build-headless.mjs [--platform linux|windows] [--arch x64|arm64]
  *
  * Bundles the service, fetches the pinned Node for the arch (through
  * fetch-node-sidecar.mjs, so the download is hash-verified) and writes
  * `dist-headless/threadgarden-headless-<version>-linux-<arch>.tar.gz` plus a
  * `.sha256` file beside it. `--arch` defaults to x64; the Node download is the
- * only network access.
+ * only network access. Windows x64 writes a zip with install.ps1 and node.exe.
  *
  * Old machines update themselves from what this builds: its names and layout are
  * frozen (`packages/protocol/src/update.ts`; `updater.test.ts` compares them).
@@ -21,9 +21,10 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const OUT = join(ROOT, 'dist-headless');
-const SRC = join(ROOT, 'packaging', 'headless');
-
-const TRIPLES = { x64: 'x86_64-unknown-linux-gnu', arm64: 'aarch64-unknown-linux-gnu' };
+const TRIPLES = {
+  linux: { x64: 'x86_64-unknown-linux-gnu', arm64: 'aarch64-unknown-linux-gnu' },
+  windows: { x64: 'x86_64-pc-windows-msvc' },
+};
 
 const arg = (name) => {
   const argv = process.argv.slice(2);
@@ -43,8 +44,11 @@ const run = (cmd, args) => {
 
 const main = async () => {
   const arch = arg('arch') ?? 'x64';
-  const triple = TRIPLES[arch];
-  if (!triple) throw new Error(`unknown --arch ${arch}; use x64 or arm64`);
+  const platform = arg('platform') ?? 'linux';
+  const triple = TRIPLES[platform]?.[arch];
+  if (!triple) throw new Error(`unsupported platform/arch: ${platform}/${arch}`);
+  const windows = platform === 'windows';
+  const src = join(ROOT, 'packaging', windows ? 'headless-windows' : 'headless');
 
   const { version } = JSON.parse(await readFile(join(ROOT, 'package.json'), 'utf8'));
   const name = `threadgarden-headless-${version}`;
@@ -62,7 +66,7 @@ const main = async () => {
   await mkdir(join(dir, 'bin'), { recursive: true });
   await mkdir(join(dir, 'lib'));
 
-  const nodeOut = join(dir, 'bin', 'node');
+  const nodeOut = join(dir, 'bin', windows ? 'node.exe' : 'node');
   run(process.execPath, [
     join(ROOT, 'scripts', 'fetch-node-sidecar.mjs'),
     '--target',
@@ -77,26 +81,41 @@ const main = async () => {
     join(ROOT, 'packages', 'service', 'dist', 'service.mjs'),
     join(dir, 'lib', 'service.mjs'),
   );
-  await copyFile(join(SRC, 'threadgarden'), join(dir, 'bin', 'threadgarden'));
-  await copyFile(join(SRC, 'install.sh'), join(dir, 'install.sh'));
-  await copyFile(join(SRC, 'threadgarden.service'), join(dir, 'threadgarden.service'));
+  const launcher = windows ? 'threadgarden.cmd' : 'threadgarden';
+  const installer = windows ? 'install.ps1' : 'install.sh';
+  await copyFile(join(src, launcher), join(dir, 'bin', launcher));
+  await copyFile(join(src, installer), join(dir, installer));
+  if (!windows) {
+    await copyFile(join(src, 'threadgarden.service'), join(dir, 'threadgarden.service'));
+  }
   await writeFile(join(dir, 'VERSION'), `${version}\n`);
-  for (const f of ['bin/node', 'bin/threadgarden', 'install.sh']) await chmod(join(dir, f), 0o755);
+  if (!windows) {
+    for (const f of ['bin/node', 'bin/threadgarden', 'install.sh'])
+      await chmod(join(dir, f), 0o755);
+  }
 
-  const tarball = join(OUT, `${name}-linux-${arch}.tar.gz`);
+  const asset = `${name}-${platform}-${arch}.${windows ? 'zip' : 'tar.gz'}`;
+  const tarball = join(OUT, asset);
   // On Windows the built-in bsdtar (Git's GNU tar reads `C:` as a remote host).
   const tar =
     process.platform === 'win32'
       ? join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe')
       : 'tar';
-  const r = spawnSync(tar, ['-czf', tarball, '-C', stage, name], { stdio: 'inherit' });
+  // bsdtar writes zip on Windows/macOS; Linux CI builds its original tarball.
+  const r = spawnSync(
+    tar,
+    windows
+      ? ['--format=zip', '-cf', tarball, '-C', stage, name]
+      : ['-czf', tarball, '-C', stage, name],
+    { stdio: 'inherit' },
+  );
   if (r.status !== 0) throw new Error('tar failed');
   await rm(stage, { recursive: true, force: true });
 
   const sum = createHash('sha256')
     .update(await readFile(tarball))
     .digest('hex');
-  await writeFile(`${tarball}.sha256`, `${sum}  ${name}-linux-${arch}.tar.gz\n`);
+  await writeFile(`${tarball}.sha256`, `${sum}  ${asset}\n`);
   console.log(`build-headless: wrote ${tarball}`);
 };
 

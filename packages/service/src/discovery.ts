@@ -45,7 +45,7 @@ export const removeDiscovery = async (dataDir: string): Promise<void> => {
   await unlink(discoveryPath(dataDir)).catch(() => {});
 };
 
-const isAlive = (pid: number): boolean => {
+export const isAlive = (pid: number): boolean => {
   try {
     process.kill(pid, 0);
     return true;

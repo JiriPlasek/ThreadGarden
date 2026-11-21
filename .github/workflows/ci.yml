@@ -44,6 +44,29 @@ jobs:
           if-no-files-found: error
           path: dist-headless/*.tar.gz*
 
+      - name: Build the native Windows worker
+        if: runner.os == 'Windows'
+        run: pnpm build:headless --platform windows
+      - name: Check the Windows package
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json | ConvertFrom-Json).version
+          $zip = "dist-headless/threadgarden-headless-$version-windows-x64.zip"
+          $expected = (Get-Content "$zip.sha256").Split(' ')[0]
+          if ((Get-FileHash $zip -Algorithm SHA256).Hash.ToLower() -ne $expected) { throw 'Checksum mismatch' }
+          $files = @(tar -tf $zip)
+          foreach ($file in @('VERSION', 'install.ps1', 'bin/node.exe', 'bin/threadgarden.cmd', 'lib/service.mjs')) {
+            if ($files -notcontains "threadgarden-headless-$version/$file") { throw "Missing $file" }
+          }
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Windows'
+        with:
+          name: threadgarden-headless-windows
+          retention-days: 7
+          if-no-files-found: error
+          path: dist-headless/*.zip*
+
   rust:
     strategy:
       fail-fast: false

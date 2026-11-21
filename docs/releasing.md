@@ -62,6 +62,7 @@ anything.
    - `ANDROID_KEY_ALIAS`: `threadgarden`;
    - `ANDROID_CERT_SHA256`: the fingerprint from step 3. Every release then
      checks the APK is signed by this key. Without it the job only warns.
+
 5. Delete the `.jks` from the PC once it's in the password manager.
 
 Until the three secrets and the alias are there, every release (and
@@ -91,7 +92,11 @@ the workflow stops before building anything. Then watch **Actions → Release**:
    headless package (`threadgarden-headless-<version>-linux-x64.tar.gz`, and the
    same as `threadgarden-headless-linux-x64.tar.gz`) and the Windows setup script
    (`threadgarden-setup-worker.ps1`), each with a `.sha256`, and the signed phone
-   app (`threadgarden-<version>.apk`), uploaded to it;
+   app (`threadgarden-<version>.apk`), uploaded to it; also the native Windows
+   worker (`threadgarden-headless-<version>-windows-x64.zip` and the fixed
+   `threadgarden-headless-windows-x64.zip`), each with a `.sha256`. The release
+   does not wait on that one: if its job fails, the release goes out without it,
+   and running the failed job again uploads it;
 3. the update manifest (`latest.json`) and `SHA256SUMS` (every file, the APK
    included), checked;
 4. **publish**, only if everything above succeeded.

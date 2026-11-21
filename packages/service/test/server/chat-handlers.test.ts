@@ -480,6 +480,47 @@ describe('chat handlers', () => {
     ).toBe('NOT_FOUND');
   });
 
+  // The worker runs with the user's whole environment: a key set there for another
+  // tool must not bill its chats; one set for Threadgarden does.
+  const nativeWindows = (sessionEnv: NodeJS.ProcessEnv): Partial<StartOptions> => ({
+    headless: true,
+    platform: 'win32',
+    host: null,
+    remote: { addresses: ['127.0.0.1'], port: 0 },
+    sessionEnv,
+  });
+
+  it(
+    'a native Windows worker’s chats never get the user’s ANTHROPIC_API_KEY',
+    { timeout: 20_000 },
+    async () => {
+      const adapter = new FakeAdapter();
+      await start(
+        adapter,
+        nativeWindows({ Path: 'C:\\bin', ANTHROPIC_API_KEY: 'for-another-tool' }),
+      );
+      await ok('chat.create', { cwd: dir, text: 'one' });
+      expect(adapter.lastSession().options.env).toEqual({ Path: 'C:\\bin' });
+    },
+  );
+
+  it(
+    'a native Windows worker’s chats get THREADGARDEN_ANTHROPIC_API_KEY',
+    { timeout: 20_000 },
+    async () => {
+      const adapter = new FakeAdapter();
+      await start(
+        adapter,
+        nativeWindows({ Path: 'C:\\bin', THREADGARDEN_ANTHROPIC_API_KEY: 'for-threadgarden' }),
+      );
+      await ok('chat.create', { cwd: dir, text: 'two' });
+      expect(adapter.lastSession().options.env).toEqual({
+        Path: 'C:\\bin',
+        ANTHROPIC_API_KEY: 'for-threadgarden',
+      });
+    },
+  );
+
   it('auth.setApiKey reaches new and resumed sessions only, and is never stored', async () => {
     const adapter = new FakeAdapter();
     addHistory(adapter, 'h1', 1);

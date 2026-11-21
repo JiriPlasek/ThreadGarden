@@ -3,6 +3,7 @@
  * service (bin.ts does that), every other command talks to the running service
  * over loopback with the token from its `service.json`, like the desktop does.
  */
+import { execFile } from 'node:child_process';
 import { WebSocket } from 'ws';
 import {
   PROTOCOL_VERSION,
@@ -13,12 +14,15 @@ import {
   type Params,
   type Result,
 } from '@threadgarden/protocol';
-import { readDiscovery, type Discovery } from './discovery.js';
+import { startDetached } from './detach.js';
+import { isAlive, readDiscovery, type Discovery } from './discovery.js';
 import { PAIRING_CODE_TTL_MS } from './machine/devices.js';
 import { REMOTE_PORT } from './server/remote-server.js';
 
 export type Command =
   | { kind: 'serve'; headless: boolean; port?: number }
+  | { kind: 'start' }
+  | { kind: 'stop' }
   | { kind: 'pair' }
   | { kind: 'status' }
   | { kind: 'devices' }
@@ -33,13 +37,29 @@ export const NOT_RUNNING =
 export const NOT_LISTENING =
   'Not listening for devices: no private network address yet. Threadgarden checks ' +
   'again every minute; see ~/.local/share/threadgarden/logs/service.log.';
+/** Windows has no systemd: the owner starts the service with `threadgarden start`. */
+export const NOT_RUNNING_WINDOWS = 'Threadgarden is not running. Start it with: threadgarden start';
+export const NOT_LISTENING_WINDOWS =
+  'Not listening for devices: no private network address yet. Threadgarden checks ' +
+  'again every minute; see %APPDATA%\\threadgarden\\logs\\service.log.';
+export const START_FAILED_WINDOWS =
+  'Threadgarden did not start. See %APPDATA%\\threadgarden\\logs\\service.log.';
+const ALREADY_RUNNING = 'Threadgarden is already running.';
+const ALREADY_RUNNING_DESKTOP =
+  'Threadgarden is already running for this user, but not headless (the desktop app). ' +
+  'Quit it completely, then run threadgarden start again.';
 
-export const USAGE = `Usage: threadgarden <command>
+const WINDOWS_COMMANDS = `
+  start                               Start the service in the background, headless
+  stop                                Stop the service and its chats`;
+
+/** `start` and `stop` exist on Windows only; elsewhere systemd starts and stops the service. */
+export const usageFor = (platform: NodeJS.Platform): string => `Usage: threadgarden <command>
 
 Commands:
   serve [--headless [--port <port>]]  Run the service; --headless listens for paired
-                                      devices (port ${REMOTE_PORT} unless given) and never exits when idle
-  pair                                Show a pairing code for adding this machine in Threadgarden
+                                      devices (port ${REMOTE_PORT} unless given) and never exits when idle${platform === 'win32' ? WINDOWS_COMMANDS : ''}
+  pair                              Show a pairing code for adding this machine in Threadgarden
   status                              Show whether the service runs and where devices reach it
   devices                             List the devices paired with this machine
   revoke <device-id>                  Unpair a device; it is disconnected at once
@@ -87,6 +107,8 @@ export const parseArgs = (argv: string[]): Command => {
       return { kind: 'serve', headless: false };
     case 'serve':
       return parseServe(rest);
+    case 'start':
+    case 'stop':
     case 'pair':
     case 'status':
     case 'devices':
@@ -216,20 +238,21 @@ const describeDevice = (d: Device): string =>
 const listenAddresses = (d: Discovery): string[] =>
   d.remotePort === undefined ? [] : (d.remoteAddresses ?? []).map((a) => `${a}:${d.remotePort}`);
 
-type ClientCommand = Exclude<Command, { kind: 'serve' | 'help' | 'error' }>;
+type ClientCommand = Exclude<Command, { kind: 'serve' | 'start' | 'stop' | 'help' | 'error' }>;
 
 const runCommand = async (
   cmd: ClientCommand,
   call: Call,
   out: Out,
   discovery: Discovery,
+  platform: NodeJS.Platform,
 ): Promise<number> => {
   switch (cmd.kind) {
     case 'pair': {
       const port = discovery.remotePort;
       const addresses = port === undefined ? [] : (discovery.remoteAddresses ?? []);
       if (port === undefined || addresses.length === 0) {
-        out(NOT_LISTENING);
+        out(platform === 'win32' ? NOT_LISTENING_WINDOWS : NOT_LISTENING);
         return 1;
       }
       const machine = await call('machine.get', {});
@@ -284,43 +307,173 @@ const runCommand = async (
   }
 };
 
+/** `start` waits this long for the service it started to answer, as the desktop shell does. */
+const START_TIMEOUT_MS = 15_000;
+/** `stop` waits this long for the service to exit before ending it and its children. */
+const STOP_TIMEOUT_MS = 30_000;
+const POLL_MS = 250;
+
+export type CliDeps = {
+  dataDir: string;
+  out: Out;
+  connect?: typeof connectLocal;
+  /** Default `process.platform`. */
+  platform?: NodeJS.Platform;
+  /** What `start` runs: this Node on this service with `serve --headless` (bin.ts). */
+  serve?: { execPath: string; args: string[] };
+  /** Default `startDetached`. */
+  detach?: (cmd: string, args: string[]) => Promise<number>;
+  /** Ends a service that outlived `stop`, with its children (default `taskkill /T /F`). */
+  kill?: (pid: number) => Promise<void>;
+  /** Default: whether the pid exists. */
+  alive?: (pid: number) => boolean;
+  sleep?: (ms: number) => Promise<void>;
+};
+
+const taskkill = (pid: number): Promise<void> =>
+  new Promise((resolve, reject) => {
+    execFile('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true }, (err) =>
+      err ? reject(err) : resolve(),
+    );
+  });
+
+const wait = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+type Live = { discovery: Discovery; conn: LocalConnection; call: Call; headless: boolean };
+
+/** The service this data dir's `service.json` names, if it answers `hello`; the caller closes it. */
+const reach = async (deps: CliDeps): Promise<Live | null> => {
+  const discovery = await readDiscovery(deps.dataDir);
+  if (!discovery) return null;
+  let conn: LocalConnection;
+  try {
+    conn = await (deps.connect ?? connectLocal)(discovery.port, discovery.token);
+  } catch {
+    return null;
+  }
+  const call: Call = async (method, params) =>
+    methods[method].result.parse(await conn.call(method, params)) as Result<typeof method>;
+  try {
+    const hello = await call('hello', {
+      protocolVersion: PROTOCOL_VERSION,
+      client: 'threadgarden-cli',
+    });
+    return { discovery, conn, call, headless: hello.machine?.headless === true };
+  } catch {
+    conn.close();
+    return null;
+  }
+};
+
+const startHeadless = async (deps: CliDeps, platform: NodeJS.Platform): Promise<number> => {
+  const { out } = deps;
+  const sleep = deps.sleep ?? wait;
+  const status = async (live: Live): Promise<number> => {
+    try {
+      return await runCommand({ kind: 'status' }, live.call, out, live.discovery, platform);
+    } finally {
+      live.conn.close();
+    }
+  };
+  const running = await reach(deps);
+  if (running) {
+    if (!running.headless) {
+      running.conn.close();
+      out(ALREADY_RUNNING_DESKTOP);
+      return 1;
+    }
+    out(ALREADY_RUNNING);
+    return status(running);
+  }
+  if (!deps.serve) throw new Error('start needs the command that serves');
+  try {
+    await (deps.detach ?? startDetached)(deps.serve.execPath, deps.serve.args);
+  } catch (err) {
+    out(`Error: could not start Threadgarden: ${err instanceof Error ? err.message : String(err)}`);
+    return 1;
+  }
+  for (let waited = 0; waited < START_TIMEOUT_MS; waited += POLL_MS) {
+    await sleep(POLL_MS);
+    const started = await reach(deps);
+    if (started) return status(started);
+  }
+  out(START_FAILED_WINDOWS);
+  return 1;
+};
+
+const stopHeadless = async (deps: CliDeps): Promise<number> => {
+  const { out } = deps;
+  const sleep = deps.sleep ?? wait;
+  const alive = deps.alive ?? isAlive;
+  const running = await reach(deps);
+  if (!running) {
+    out('Threadgarden is not running.');
+    return 0;
+  }
+  const { pid } = running.discovery;
+  // It may close before it answers; either way it is waited for, and ended if it stays.
+  await running.call('service.shutdown', { stopAll: true }).catch(() => {});
+  running.conn.close();
+  for (let waited = 0; alive(pid) && waited < STOP_TIMEOUT_MS; waited += POLL_MS) {
+    await sleep(POLL_MS);
+  }
+  if (alive(pid)) {
+    try {
+      await (deps.kill ?? taskkill)(pid);
+    } catch (err) {
+      out(
+        `Error: could not stop Threadgarden: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return 1;
+    }
+  }
+  out('Stopped Threadgarden.');
+  return 0;
+};
+
 /**
  * Runs a command other than `serve`; resolves to the process exit code: 0 on
  * success, 1 on failure (the service not running included), 2 on wrong usage.
  */
-export const runCli = async (
-  cmd: Command,
-  deps: { dataDir: string; out: Out; connect?: typeof connectLocal },
-): Promise<number> => {
+export const runCli = async (cmd: Command, deps: CliDeps): Promise<number> => {
   const { out } = deps;
+  const platform = deps.platform ?? process.platform;
+  const notRunning = platform === 'win32' ? NOT_RUNNING_WINDOWS : NOT_RUNNING;
   switch (cmd.kind) {
     case 'help':
-      out(USAGE);
+      out(usageFor(platform));
       return 0;
     case 'error':
       out(cmd.message);
       return 2;
     case 'serve':
       throw new Error('serve runs the service; bin.ts starts it');
+    case 'start':
+    case 'stop':
+      if (platform !== 'win32') {
+        out(`On this machine systemd runs Threadgarden: systemctl --user ${cmd.kind} threadgarden`);
+        return 1;
+      }
+      return cmd.kind === 'start' ? startHeadless(deps, platform) : stopHeadless(deps);
   }
   const discovery = await readDiscovery(deps.dataDir);
   if (!discovery) {
-    out(NOT_RUNNING);
+    out(notRunning);
     return 1;
   }
   let conn: LocalConnection;
   try {
     conn = await (deps.connect ?? connectLocal)(discovery.port, discovery.token);
   } catch {
-    out(NOT_RUNNING);
+    out(notRunning);
     return 1;
   }
   const call: Call = async (method, params) =>
     methods[method].result.parse(await conn.call(method, params)) as Result<typeof method>;
   try {
-    return await runCommand(cmd, call, out, discovery);
+    return await runCommand(cmd, call, out, discovery, platform);
   } catch (err) {
-    if (err instanceof ConnectionLost) out(NOT_RUNNING);
+    if (err instanceof ConnectionLost) out(notRunning);
     else if (err instanceof CallTimeout) out('Threadgarden did not answer in time.');
     else out(`Error: ${err instanceof Error ? err.message : String(err)}`);
     return 1;
