@@ -4,7 +4,11 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CodexHistory } from '../../src/sdk/codex-history.js';
 import { CodexStore } from '../../src/sdk/codex-store.js';
-import type { CodexConnection, ConnectCodex } from '../../src/sdk/codex-client.js';
+import {
+  CodexNotFoundError,
+  type CodexConnection,
+  type ConnectCodex,
+} from '../../src/sdk/codex-client.js';
 import { Normalizer } from '../../src/chat/normalize.js';
 
 const A = '11111111-1111-4111-8111-111111111111';
@@ -264,5 +268,127 @@ describe('native Codex history', () => {
   it('rejects repeated cursors instead of hanging an index pass', async () => {
     const h = setup(() => ({ data: [thread(A)], nextCursor: 'same' }));
     await expect(h.history.list()).rejects.toThrow('repeated a history cursor');
+  });
+
+  it('lists the chats it knows, with no problem, when the Codex CLI is not installed', async () => {
+    const store = new CodexStore(dir);
+    const missing: ConnectCodex = () => {
+      throw new CodexNotFoundError();
+    };
+    const history = new CodexHistory(store, () => ({}), missing, missing);
+    histories.push(history);
+    store.save({ id: OWN, threadId: A, cwd: dir, native: true, createdAt: 1, updatedAt: 2 });
+    const list = await history.list();
+    expect(list.map((info) => info.sessionId)).toEqual([OWN]);
+    expect(history.historyProblem).toBeUndefined();
+  });
+
+  it('still reports a Codex CLI that is installed but broken', async () => {
+    const store = new CodexStore(dir);
+    const broken: ConnectCodex = () => {
+      throw new Error('spawn EACCES');
+    };
+    const history = new CodexHistory(store, () => ({}), broken, broken);
+    histories.push(history);
+    await expect(history.list()).rejects.toThrow('EACCES');
+    expect(history.historyProblem).toContain('EACCES');
+  });
+
+  it('keeps chats imported from an earlier Codex home in the list', async () => {
+    const h = setup(() => ({ data: [], nextCursor: null }));
+    h.store.save({
+      id: OWN,
+      threadId: A,
+      cwd: dir,
+      home: '/original',
+      native: true,
+      createdAt: 1,
+      updatedAt: 2,
+    });
+    h.store.save({
+      id: `codex-${B}`,
+      threadId: B,
+      cwd: dir,
+      home: '/current',
+      native: true,
+      createdAt: 1,
+      updatedAt: 2,
+    });
+    const list = await h.history.list();
+    // B was in the current home and Codex no longer lists it: it is gone.
+    expect(list.map((info) => info.sessionId)).toEqual([OWN]);
+  });
+
+  it('does not undo a model or effort picked in a live chat when the history is polled', async () => {
+    const h = setup(() => ({
+      data: [thread(A, { reasoningEffort: 'low' })],
+      nextCursor: null,
+    }));
+    h.store.save({
+      id: OWN,
+      threadId: A,
+      cwd: dir,
+      native: true,
+      model: 'codex:test-model',
+      effort: 'low',
+      createdAt: 100000,
+      updatedAt: 200000,
+    });
+    // A live session holds the record object the store keeps for its thread.
+    const live = h.store.recordForThread(A)!;
+    live.model = 'codex:picked';
+    live.effort = 'high';
+    h.store.save(live);
+    await h.history.list();
+    expect(live).toMatchObject({ model: 'codex:picked', effort: 'high' });
+    expect(h.store.read(OWN)).toMatchObject({ model: 'codex:picked', effort: 'high' });
+  });
+
+  it('follows a model changed in Codex itself after the chat was last used here', async () => {
+    const h = setup(() => ({
+      data: [thread(A, { updatedAt: 300, model: 'other-model', reasoningEffort: 'medium' })],
+      nextCursor: null,
+    }));
+    h.store.save({
+      id: OWN,
+      threadId: A,
+      cwd: dir,
+      native: true,
+      model: 'codex:test-model',
+      effort: 'low',
+      createdAt: 100000,
+      updatedAt: 200000,
+    });
+    await h.history.list();
+    expect(h.store.read(OWN)).toMatchObject({ model: 'codex:other-model', effort: 'medium' });
+  });
+
+  it('polls external threads over one connection and writes only records that changed', async () => {
+    const h = setup((method, p) =>
+      method === 'thread/loaded/list'
+        ? { data: [A], nextCursor: null }
+        : method === 'thread/read'
+          ? { thread: thread(String(p.threadId), { status: { type: 'idle' } }) }
+          : {},
+    );
+    await h.history.external();
+    const save = vi.spyOn(h.store, 'save');
+    await h.history.external();
+    await h.history.external();
+    expect(h.envs).toHaveLength(1);
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it('shares one external pass between overlapping callers', async () => {
+    const h = setup((method, p) =>
+      method === 'thread/loaded/list'
+        ? { data: [A], nextCursor: null }
+        : method === 'thread/read'
+          ? { thread: thread(String(p.threadId), { status: { type: 'idle' } }) }
+          : {},
+    );
+    const [first, second] = await Promise.all([h.history.external(), h.history.external()]);
+    expect(second).toEqual(first);
+    expect(h.calls.filter((call) => call.method === 'thread/loaded/list')).toHaveLength(1);
   });
 });

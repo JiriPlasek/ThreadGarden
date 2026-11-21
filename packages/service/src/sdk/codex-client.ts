@@ -58,10 +58,18 @@ export const findCodex = (env: NodeJS.ProcessEnv): string => {
       if (target && /\.(exe|com|m?js)$/i.test(target) && existsSync(target)) return target;
     } else return candidate;
   }
-  throw new Error(
-    'Codex CLI was not found. Install Codex, run codex login, or set THREADGARDEN_CODEX_PATH.',
-  );
+  throw new CodexNotFoundError();
 };
+
+/** No Codex CLI on this machine: the normal state for anyone who only uses Claude. */
+export class CodexNotFoundError extends Error {
+  constructor() {
+    super(
+      'Codex CLI was not found. Install Codex, run codex login, or set THREADGARDEN_CODEX_PATH.',
+    );
+    this.name = 'CodexNotFoundError';
+  }
+}
 
 const connector =
   (shared: boolean): ConnectCodex =>

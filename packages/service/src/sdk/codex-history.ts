@@ -4,6 +4,7 @@ import path from 'node:path';
 import type { SDKSessionInfo, SessionMessage } from './adapter.js';
 import {
   connectCodex,
+  CodexNotFoundError,
   connectSharedCodex,
   initializeCodex,
   type CodexConnection,
@@ -24,6 +25,11 @@ export class CodexHistory {
   historyProblem?: string;
   private externalRetryAt = 0;
   private externalProblem?: Error;
+  /** The shared-runtime connection the external poll reuses while it keeps polling. */
+  private sharedClient?: CodexConnection;
+  private sharedReady?: Promise<CodexConnection>;
+  private sharedIdle?: ReturnType<typeof setTimeout>;
+  private externalPass?: Promise<ExternalSession[]>;
   constructor(
     private readonly store: CodexStore,
     private env: () => NodeJS.ProcessEnv,
@@ -37,6 +43,10 @@ export class CodexHistory {
   }
 
   close(): void {
+    this.closeIndex();
+    this.closeShared();
+  }
+  private closeIndex(): void {
     clearTimeout(this.idle);
     this.ready = undefined;
     const client = this.client;
@@ -63,13 +73,13 @@ export class CodexHistory {
           await this.initialize(client);
           return client;
         } catch (error) {
-          this.close();
+          this.closeIndex();
           throw error;
         }
       })();
       return await run(await this.ready);
     } finally {
-      if (--this.users === 0) this.idle = setTimeout(() => this.close(), 15_000).unref();
+      if (--this.users === 0) this.idle = setTimeout(() => this.closeIndex(), 15_000).unref();
     }
   }
 
@@ -111,7 +121,12 @@ export class CodexHistory {
   private remember(thread: Rec, home = this.home()): CodexRecord {
     const threadId = str(thread.id);
     if (!uuid.test(threadId)) throw new Error('Codex returned an invalid thread id');
+    // A live chat holds this same record object: fields it chooses must survive a poll.
     const own = this.store.recordForThread(threadId);
+    const before = own && JSON.stringify(own);
+    // Codex's model and effort win for a new import, or after the thread was used in Codex
+    // itself since Threadgarden last touched it; otherwise a choice made here stands.
+    const usedElsewhere = !own || millis(thread.updatedAt) > own.updatedAt;
     const record: CodexRecord = own ?? {
       id: `codex-${threadId}`,
       threadId,
@@ -131,9 +146,10 @@ export class CodexHistory {
     record.nativePath = str(thread.path) || record.nativePath;
     record.modelProvider = str(thread.modelProvider) || record.modelProvider;
     record.runtimeVersion = str(thread.cliVersion) || record.runtimeVersion;
-    if (thread.model) record.model = `codex:${str(thread.model)}`;
-    if (thread.reasoningEffort) record.effort = str(thread.reasoningEffort);
-    this.store.save(record);
+    if (usedElsewhere && thread.model) record.model = `codex:${str(thread.model)}`;
+    if (usedElsewhere && thread.reasoningEffort) record.effort = str(thread.reasoningEffort);
+    // Polls repeat the same answer; rewriting every record each time is wasted disk churn.
+    if (JSON.stringify(record) !== before) this.store.save(record);
     return record;
   }
 
@@ -166,8 +182,11 @@ export class CodexHistory {
           } while (cursor);
         }
         // Locally created chats may not be materialized by Codex until their first turn starts.
+        // Chats imported from an earlier Codex home stay too: this listing only sees the current one.
+        const home = this.home();
         for (const record of this.store.records())
-          if (!record.native || record.createdHere) ids.add(record.id);
+          if (!record.native || record.createdHere || (record.home && record.home !== home))
+            ids.add(record.id);
         return [...ids]
           .map((id) => this.store.info(id))
           .filter((info): info is SDKSessionInfo => !!info);
@@ -176,6 +195,12 @@ export class CodexHistory {
         return infos;
       });
     } catch (error) {
+      // No Codex CLI is the normal state for a Claude-only user, not a problem to report;
+      // keeping every known chat listed stops the index from removing them meanwhile.
+      if (error instanceof CodexNotFoundError) {
+        this.historyProblem = undefined;
+        return this.store.list();
+      }
       this.historyProblem = error instanceof Error ? error.message : String(error);
       throw error;
     }
@@ -236,21 +261,59 @@ export class CodexHistory {
     });
   }
 
-  async external(): Promise<ExternalSession[]> {
-    if (Date.now() < this.externalRetryAt) throw this.externalProblem;
-    const client = this.shared(
-      this.env(),
-      () => {},
-      () => {},
-    );
-    let timer: ReturnType<typeof setTimeout> | undefined;
+  /** Overlapping callers (the poll and an on-demand check) share one pass. */
+  external(): Promise<ExternalSession[]> {
+    if (Date.now() < this.externalRetryAt) return Promise.reject(this.externalProblem);
+    return (this.externalPass ??= this.readExternal().finally(() => {
+      this.externalPass = undefined;
+    }));
+  }
+
+  private closeShared(): void {
+    clearTimeout(this.sharedIdle);
+    this.sharedReady = undefined;
+    const client = this.sharedClient;
+    this.sharedClient = undefined;
+    client?.close();
+  }
+
+  /** One `app-server proxy` serves every poll; it closes once polls stop for 15 seconds. */
+  private sharedConnection(): Promise<CodexConnection> {
+    clearTimeout(this.sharedIdle);
+    this.sharedReady ??= (async () => {
+      const client = this.shared(
+        this.env(),
+        () => {},
+        () => {
+          if (this.sharedClient === client) {
+            this.sharedClient = undefined;
+            this.sharedReady = undefined;
+          }
+        },
+      );
+      this.sharedClient = client;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          initializeCodex(client),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(
+              () => reject(new Error('Codex shared runtime is unavailable')),
+              3_000,
+            );
+          }),
+        ]);
+        return client;
+      } finally {
+        clearTimeout(timer);
+      }
+    })();
+    return this.sharedReady;
+  }
+
+  private async readExternal(): Promise<ExternalSession[]> {
     try {
-      await Promise.race([
-        initializeCodex(client),
-        new Promise<never>((_, reject) => {
-          timer = setTimeout(() => reject(new Error('Codex shared runtime is unavailable')), 3_000);
-        }),
-      ]);
+      const client = await this.sharedConnection();
       const sessions: ExternalSession[] = [];
       let cursor: string | undefined;
       const seen = new Set<string>();
@@ -295,14 +358,13 @@ export class CodexHistory {
       } while (cursor);
       this.externalProblem = undefined;
       this.externalRetryAt = 0;
+      this.sharedIdle = setTimeout(() => this.closeShared(), 15_000).unref();
       return sessions;
     } catch (error) {
+      this.closeShared();
       this.externalProblem = error instanceof Error ? error : new Error(String(error));
       this.externalRetryAt = Date.now() + 30_000;
       throw error;
-    } finally {
-      clearTimeout(timer);
-      client.close();
     }
   }
 }
