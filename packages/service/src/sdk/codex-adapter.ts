@@ -725,8 +725,26 @@ export class CodexSession implements AgentSession {
   }
 }
 
+/**
+ * The model Codex's config names for a new thread (`model` in config.toml), if any.
+ * Older CLIs without `config/read` name none.
+ */
+const configuredCodexModel = async (client: CodexConnection): Promise<string | undefined> => {
+  try {
+    const result = await client.request('config/read', {});
+    return str(rec(result.config).model) || undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+/**
+ * Codex's selectable models. One is `isDefault`: the config's model when it is in
+ * the catalog, else the catalog's own default.
+ */
 export const readCodexModels = async (client: CodexConnection): Promise<ModelInfo[]> => {
   const models: ModelInfo[] = [];
+  let catalogDefault: string | undefined;
   let cursor: string | undefined;
   do {
     const result = await client.request('model/list', {
@@ -741,6 +759,7 @@ export const readCodexModels = async (client: CodexConnection): Promise<ModelInf
       )
         .map((e) => str(rec(e).reasoningEffort))
         .filter(Boolean);
+      if (model.isDefault === true) catalogDefault ??= str(model.model);
       models.push({
         value: `codex:${str(model.model)}`,
         displayName: str(model.displayName) || str(model.model),
@@ -750,7 +769,12 @@ export const readCodexModels = async (client: CodexConnection): Promise<ModelInf
     }
     cursor = str(result.nextCursor) || undefined;
   } while (cursor);
-  return models;
+  const configured = await configuredCodexModel(client);
+  const chosen =
+    configured && models.some((m) => m.value === `codex:${configured}`)
+      ? configured
+      : catalogDefault;
+  return models.map((m) => (m.value === `codex:${chosen}` ? { ...m, isDefault: true } : m));
 };
 
 export class CodexAdapter {

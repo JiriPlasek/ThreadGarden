@@ -12,7 +12,7 @@ import type {
   ModelInfo,
 } from './adapter.js';
 import { CodexAdapter } from './codex-adapter.js';
-import { findCodex } from './codex-client.js';
+import { CodexNotFoundError, findCodex } from './codex-client.js';
 import { isCodexModel, isCodexSession } from './providers.js';
 import type { Settings } from '@threadgarden/protocol';
 import type { ExternalSession } from '../external/poller.js';
@@ -109,13 +109,17 @@ export class MultiAdapter implements AgentAdapter {
       const models = await this.codex.models(this.runtimeEnv());
       this.catalog = { until: Date.now() + 60_000, models };
       return models;
-    } catch {
-      // A selectable default also explains installation/auth failures at chat startup.
+    } catch (error) {
+      // No CLI is the usual state for a Claude-only user: Codex is simply not offered.
+      if (error instanceof CodexNotFoundError) return [];
+      // A CLI that is there but can't list its models: a selectable default still
+      // starts a chat, and explains an auth failure there.
       return [
         {
           value: 'codex:default',
           displayName: 'Default (Codex)',
           description: 'Uses your installed Codex CLI and login',
+          isDefault: true,
         },
       ];
     }

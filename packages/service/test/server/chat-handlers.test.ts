@@ -690,6 +690,80 @@ describe('chat handlers', () => {
     expect(await ok('chat.models', {})).toEqual(models);
   });
 
+  describe("Claude's models in the picker", () => {
+    const claudeRows = [
+      {
+        value: 'default',
+        displayName: 'Default (recommended)',
+        description: 'Opus 5.5 · Most capable',
+        resolvedModel: 'claude-opus-5-5',
+      },
+      {
+        value: 'opus',
+        displayName: 'Opus',
+        description: 'Most capable',
+        resolvedModel: 'claude-opus-5-5',
+      },
+      {
+        value: 'sonnet',
+        displayName: 'Sonnet',
+        description: 'Fast',
+        resolvedModel: 'claude-sonnet-5-5',
+      },
+    ];
+    const live = async (models: typeof claudeRows) => {
+      const adapter = new FakeAdapter();
+      await start(adapter);
+      const { sessionId } = await ok<{ sessionId: string }>('chat.create', { cwd: dir, text: 'x' });
+      adapter.lastSession().models = models;
+      return { sessionId, adapter };
+    };
+
+    it('has no "default" row: the row it resolves to is marked as the default', async () => {
+      const { sessionId } = await live(claudeRows);
+      const expected = [
+        { value: 'opus', displayName: 'Opus', description: 'Most capable', isDefault: true },
+        { value: 'sonnet', displayName: 'Sonnet', description: 'Fast' },
+      ];
+      expect(await ok('chat.models', { sessionId })).toEqual(expected);
+      expect(await ok('chat.models', {})).toEqual(expected);
+    });
+
+    it('names the default row after its model when no other row is that model', async () => {
+      await live([{ ...claudeRows[0]!, resolvedModel: 'claude-fable-5-1' }, claudeRows[2]!]);
+      expect(await ok('chat.models', {})).toEqual([
+        {
+          value: 'default',
+          displayName: 'Fable 5.1',
+          description: 'Opus 5.5 · Most capable',
+          isDefault: true,
+        },
+        { value: 'sonnet', displayName: 'Sonnet', description: 'Fast' },
+      ]);
+    });
+
+    it('are remembered across a restart, before any Claude chat runs', async () => {
+      const { sessionId } = await live(claudeRows);
+      await ok('chat.models', { sessionId });
+      await svc!.close();
+      svc = undefined;
+      // A fresh adapter runs nothing: the list can only come from the database.
+      svc = await startService({
+        dataDir: join(dir, 'data'),
+        claudeConfigDir: join(dir, 'claude'),
+        adapter: new FakeAdapter(),
+        claude: { path: '/bin/claude', version: '2.1.314' },
+        externalRun: async () => '[]',
+        sessionEnv: { PATH: '/usr/bin' },
+        installSignalHandlers: false,
+      });
+      expect(await ok('chat.models', {})).toEqual([
+        { value: 'opus', displayName: 'Opus', description: 'Most capable', isDefault: true },
+        { value: 'sonnet', displayName: 'Sonnet', description: 'Fast' },
+      ]);
+    }, 15_000);
+  });
+
   it('chat.open lists the tasks of a chat Threadgarden runs; chat.stopTask stops one', async () => {
     const adapter = new FakeAdapter();
     addHistory(adapter, 'h1', 1);

@@ -147,6 +147,8 @@ type Model = {
   displayName: string;
   description: string;
   supportedEffortLevels?: string[];
+  /** The model its runtime uses when none is named (protocol `chat.models`). */
+  isDefault?: boolean;
 };
 
 const errorText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
@@ -203,7 +205,57 @@ const toModel = (m: ModelInfo): Model => ({
   displayName: m.displayName,
   description: m.description,
   ...(m.supportedEffortLevels ? { supportedEffortLevels: [...m.supportedEffortLevels] } : {}),
+  ...(m.isDefault ? { isDefault: true } : {}),
 });
+
+/** A Claude model id as people say it: `claude-opus-5-5` is "Opus 5.5"; others as they are. */
+export const claudeModelName = (id: string): string => {
+  const m = /^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?$/i.exec(id);
+  if (!m) return id;
+  const family = m[1]!.charAt(0).toUpperCase() + m[1]!.slice(1).toLowerCase();
+  return `${family} ${m[2]}${m[3] ? `.${m[3]}` : ''}`;
+};
+
+/**
+ * Claude's rows for a picker. Claude Code lists a `default` row beside the model it
+ * resolves to; the picker shows that model, marked `isDefault`, and no `default` row.
+ * A default no other row covers stays, named after its model.
+ */
+export const claudeModels = (list: ModelInfo[]): Model[] => {
+  const fallback = list.find((m) => m.value === 'default');
+  const others = list.filter((m) => m !== fallback);
+  const rows = others.map((m) => toModel({ ...m, isDefault: false }));
+  if (!fallback) return rows;
+  const target = fallback.resolvedModel;
+  const i = target ? others.findIndex((m) => m.value === target || m.resolvedModel === target) : -1;
+  if (i >= 0) {
+    rows[i] = { ...rows[i]!, isDefault: true };
+    return rows;
+  }
+  return [
+    {
+      ...toModel(fallback),
+      ...(target ? { displayName: claudeModelName(target) } : {}),
+      isDefault: true,
+    },
+    ...rows,
+  ];
+};
+
+/** Where the last Claude model list is kept, so a picker has it before any chat runs. */
+export const CLAUDE_MODELS_KEY = 'claudeModels';
+const storedModels = (value: unknown): Model[] | undefined => {
+  if (!Array.isArray(value) || value.length === 0) return undefined;
+  const ok = value.every(
+    (m: unknown) =>
+      !!m &&
+      typeof m === 'object' &&
+      typeof (m as Model).value === 'string' &&
+      typeof (m as Model).displayName === 'string' &&
+      typeof (m as Model).description === 'string',
+  );
+  return ok ? (value as Model[]) : undefined;
+};
 
 export type ChatHandlers = {
   /** What `chat.send` does (scheduled sends go out through it). */
@@ -235,7 +287,7 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
   };
   const commandsByCwd = new Map<string, Command[]>();
   let lastCommands: Command[] | undefined;
-  let lastModels: Model[] | undefined;
+  let lastModels: Model[] | undefined = storedModels(db.getUiState(CLAUDE_MODELS_KEY));
 
   const changed = (sessionIds: string[]) =>
     deps.emit({ event: 'sessions.changed', data: { sessionIds } });
@@ -778,7 +830,10 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
     }
     if (s && !isCodexSession(s.sessionId)) {
       try {
-        lastModels = (await s.supportedModels()).map(toModel);
+        const models = claudeModels(await s.supportedModels());
+        if (models.length && JSON.stringify(models) !== JSON.stringify(lastModels))
+          db.setUiState(CLAUDE_MODELS_KEY, models);
+        lastModels = models;
       } catch (err) {
         deps.onError(err, `supportedModels (session ${s.sessionId})`);
       }

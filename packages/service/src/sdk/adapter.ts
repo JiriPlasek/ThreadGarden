@@ -44,6 +44,8 @@ export type {
 export type Effort = string;
 export type ModelInfo = Omit<ClaudeModelInfo, 'supportedEffortLevels'> & {
   supportedEffortLevels?: string[];
+  /** The model its runtime uses when none is named (Codex's catalog and config). */
+  isDefault?: boolean;
 };
 export const CLAUDE_EFFORT_LEVELS: readonly EffortLevel[] = [
   'low',
