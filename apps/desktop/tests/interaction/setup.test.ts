@@ -151,6 +151,64 @@ describe('new chat dialog (spec §5.4)', () => {
     ).toBe('bypassPermissions');
   });
 
+  it('groups the model picker into Claude and Codex when both offer models', async () => {
+    const { app, context } = await setup((server) => {
+      Object.assign(server.handlers, {
+        'projects.list': () => [project('p1', 'alpha')],
+        'chat.models': () => [
+          { value: 'default', displayName: 'Default', description: '' },
+          { value: 'opus', displayName: 'Opus', description: '' },
+          { value: 'codex:test-model', displayName: 'Codex · Test', description: '' },
+        ],
+        'chat.commands': () => [],
+        'files.suggest': () => [],
+      });
+    });
+    await app.places.refresh();
+    app.interaction.openNewChat('/work/alpha');
+    render(NewChatDialog, { context });
+    const dialog = await screen.findByRole('dialog', { name: /new chat/i });
+    const picker = within(dialog).getByRole('combobox', { name: /model/i });
+    await within(picker).findByRole('option', { name: /^Test$/ });
+    const groups = [...picker.querySelectorAll('optgroup')].map((g) => ({
+      label: g.label,
+      values: [...g.querySelectorAll('option')].map((o) => o.value),
+    }));
+    expect(groups).toEqual([
+      { label: 'Claude', values: ['', 'opus'] },
+      { label: 'Codex', values: ['codex:test-model'] },
+    ]);
+    await userEvent.selectOptions(picker, 'codex:test-model');
+    await waitFor(() =>
+      expect(within(dialog).getByRole('textbox', { name: /message/i }).dataset.placeholder).toBe(
+        'What should Codex do?',
+      ),
+    );
+  });
+
+  it('keeps one ungrouped model list when only Claude offers models', async () => {
+    const { app, context } = await setup((server) => {
+      Object.assign(server.handlers, {
+        'projects.list': () => [project('p1', 'alpha')],
+        'chat.models': () => [{ value: 'opus', displayName: 'Opus', description: '' }],
+        'chat.commands': () => [],
+        'files.suggest': () => [],
+      });
+    });
+    await app.places.refresh();
+    app.interaction.openNewChat('/work/alpha');
+    render(NewChatDialog, { context });
+    const dialog = await screen.findByRole('dialog', { name: /new chat/i });
+    const picker = within(dialog).getByRole('combobox', { name: /model/i });
+    await within(picker).findByRole('option', { name: /^Opus$/ });
+    expect(picker.querySelector('optgroup')).toBeNull();
+    expect(
+      within(picker)
+        .getAllByRole('option')
+        .map((o) => (o as HTMLOptionElement).value),
+    ).toEqual(['', 'opus']);
+  });
+
   it('starts a chat in a project with the chosen model and mode', async () => {
     const { server, app, context } = await setup((server) => {
       Object.assign(server.handlers, {

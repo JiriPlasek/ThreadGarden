@@ -21,6 +21,7 @@
   import { fullTime } from '#lib/format/time.js';
   import { baseName, rawStatus, shownStatus } from '#lib/components/layout/chat-info.js';
   import { modelLabel } from '#lib/format/model.js';
+  import { agentNameOf, isCodexModel, runtimeOfChat } from '#lib/runtime.js';
   import IconButton from '#lib/components/layout/IconButton.svelte';
   import ProjectIcon from '#lib/components/layout/ProjectIcon.svelte';
   import StatusIcon from '#lib/components/layout/StatusIcon.svelte';
@@ -74,9 +75,12 @@
   const machineName = $derived(machines.several ? machineNameOf(machines, machineId) : null);
 
   const sessionId = $derived(chat.sessionId);
+  /** A conversation keeps its runtime: Claude Code's or Codex's. */
+  const codex = $derived(runtimeOfChat(sessionId) === 'codex');
+  const agent = $derived(agentNameOf(runtimeOfChat(sessionId)));
   /** Codex names bypass after what it does there: it never asks. */
   const PERMISSION_MODES = $derived(
-    sessionId.startsWith('codex-')
+    codex
       ? PERMISSION_MODE_OPTIONS.map((m) =>
           m.value === 'bypassPermissions' ? { ...m, label: "Don't ask permissions" } : m,
         )
@@ -136,7 +140,10 @@
 
   const modelOptions = $derived(
     withCurrent(
-      (chat.models ?? []).map((m) => ({ value: m.value, label: m.displayName || m.value })),
+      // Only the chat's own runtime: switching between Claude and Codex needs a new chat.
+      (chat.models ?? [])
+        .filter((m) => isCodexModel(m.value) === codex)
+        .map((m) => ({ value: m.value, label: m.displayName || m.value })),
       header.model,
     ).map((option) => ({ ...option, label: modelLabel(option.label) })),
   );
@@ -206,7 +213,7 @@
   const busy = $derived(status === 'working' || status === 'needsYou');
   const endDescription = $derived(
     endSessionWarning({
-      agentName: sessionId.startsWith('codex-') ? 'Codex' : 'Claude',
+      agentName: agent,
       busy,
       tasks: runningTasks.length,
       listed: true,
@@ -319,7 +326,7 @@
               />{/if}
           </DropdownMenu.Item>
         {/if}
-        {#if machines.several && !chat.movedTo && !sessionId.startsWith('codex-') && supportsMove(machines.get(machineId))}
+        {#if machines.several && !chat.movedTo && !codex && supportsMove(machines.get(machineId))}
           <DropdownMenu.Separator />
           <DropdownMenu.Item
             class="py-1 text-xs"
@@ -557,7 +564,7 @@
             </span>
             {usage.pct}%
           </span>
-        {:else if sessionId.startsWith('codex-')}
+        {:else if codex}
           <span
             class="text-muted-foreground"
             title="Codex has not reported a context reading for this chat"
@@ -612,7 +619,7 @@
 </ConfirmDialog>
 
 <BypassPermissionsDialog
-  agentName={sessionId.startsWith('codex-') ? 'Codex' : 'Claude'}
+  agentName={agent}
   bind:open={confirmBypass}
   onConfirm={async () => {
     if (bypassSession) await chats.setPermissionMode(bypassSession, 'bypassPermissions');

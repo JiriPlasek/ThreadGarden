@@ -473,6 +473,25 @@ describe('chat view', () => {
     await waitFor(() => expect(writeText).toHaveBeenCalledWith('claude --resume abc-123'));
   });
 
+  it("a Claude chat's model picker offers only Claude's models", async () => {
+    const { server, app, context } = await streamingSetup();
+    const claude = server.handlers['chat.models']!;
+    server.handlers['chat.models'] = (p) => [
+      ...(claude(p) as unknown[]),
+      { value: 'codex:test-model', displayName: 'Codex · Test', description: '' },
+    ];
+    await app.chats.open('s');
+    render(ChatView, { context, props: { ref: { machineId: LOCAL, sessionId: 's' } } });
+    const model = await screen.findByRole('combobox', { name: /model/i });
+    await waitFor(() =>
+      expect(
+        within(model)
+          .getAllByRole('option')
+          .map((o) => (o as HTMLOptionElement).value),
+      ).toEqual(['opus', 'sonnet']),
+    );
+  });
+
   it('header pickers change the model and permission mode of a live chat', async () => {
     const { server, app, context } = await streamingSetup();
     await app.chats.open('s');

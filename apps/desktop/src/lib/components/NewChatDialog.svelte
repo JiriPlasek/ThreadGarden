@@ -26,6 +26,7 @@
   import { isPhone } from '#lib/native.js';
   import { nameProblem, projectsApi, supportsProjects } from '#lib/projects.js';
   import { modelLabel } from '#lib/format/model.js';
+  import { agentNameOf, isCodexModel, modelsByRuntime, runtimeOfModel } from '#lib/runtime.js';
   import { useApp } from '#lib/state/context.js';
   import { awayRefusal } from '#lib/state/copy-api.js';
   import { machineAway, machineLabel, machineNameOf } from '#lib/state/machines.svelte.js';
@@ -205,9 +206,12 @@
   /** A folder made whose chat did not start (Start there). */
   let made = $state<NotStarted | null>(null);
   let model = $state('');
+  /** The chosen model is Codex's: the chat runs on Codex, not Claude Code. */
+  const codexChosen = $derived(isCodexModel(model));
+  const agent = $derived(agentNameOf(runtimeOfModel(model)));
   /** Codex names bypass after what it does there: it never asks. */
   const PERMISSION_MODES = $derived(
-    model.startsWith('codex:')
+    codexChosen
       ? PERMISSION_MODE_OPTIONS.map((m) =>
           m.value === 'bypassPermissions' ? { ...m, label: "Don't ask permissions" } : m,
         )
@@ -318,6 +322,8 @@
   });
 
   const modelOptions = $derived(models.filter((m) => m.value !== 'default'));
+  /** Claude's and Codex's models apart: the picker groups them when both are offered. */
+  const modelGroups = $derived(modelsByRuntime(modelOptions));
 
   /** A folder chosen with Browse… (or a made one) joins its machine's list, selected. */
   const pickFolder = (path: string, on = scope.machineId): void => {
@@ -341,7 +347,7 @@
   let pendingNew: { machineId: string; cwd: string; sessionId: string; codex: boolean } | null =
     null;
   const pendingIdFor = (on: string, at: string, model?: string): string => {
-    const codex = model?.startsWith('codex:') ?? false;
+    const codex = isCodexModel(model);
     if (pendingNew?.machineId !== on || pendingNew.cwd !== at || pendingNew.codex !== codex) {
       pendingNew = { machineId: on, cwd: at, sessionId: newChatSessionId(model), codex };
     }
@@ -399,7 +405,7 @@
         createIn,
         name: called,
         github,
-        ...(send.chat.model?.startsWith('codex:') ? { model: send.chat.model } : {}),
+        ...(isCodexModel(send.chat.model) ? { model: send.chat.model } : {}),
       });
     } catch (err) {
       noteMissingClaude(target, err);
@@ -480,7 +486,7 @@
     <Dialog.Header>
       <Dialog.Title class="text-base">New chat</Dialog.Title>
       <Dialog.Description class="text-xs"
-        >{model.startsWith('codex:')
+        >{codexChosen
           ? 'Codex starts in the folder you choose, with your Codex settings and login.'
           : 'Claude Code starts in the folder you choose, with your Claude Code settings.'}</Dialog.Description
       >
@@ -582,14 +588,31 @@
       </div>
 
       <div class="grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-2 text-xs">
+        {#snippet modelOption(m: ModelChoice)}
+          <option value={m.value} title={m.description}
+            >{modelLabel(m.displayName || m.value)}</option
+          >
+        {/snippet}
         <label for="new-chat-model" class="text-muted-foreground">Model</label>
         <select id="new-chat-model" class={selectClass} bind:value={model}>
-          <option value="">Default</option>
-          {#each modelOptions as m (m.value)}
-            <option value={m.value} title={m.description}
-              >{modelLabel(m.displayName || m.value)}</option
-            >
-          {/each}
+          {#if modelGroups.codex.length}
+            <optgroup label="Claude">
+              <option value="">Default</option>
+              {#each modelGroups.claude as m (m.value)}
+                {@render modelOption(m)}
+              {/each}
+            </optgroup>
+            <optgroup label="Codex">
+              {#each modelGroups.codex as m (m.value)}
+                {@render modelOption(m)}
+              {/each}
+            </optgroup>
+          {:else}
+            <option value="">Default</option>
+            {#each modelOptions as m (m.value)}
+              {@render modelOption(m)}
+            {/each}
+          {/if}
         </select>
 
         <label for="new-chat-mode" class="text-muted-foreground">Permission mode</label>
@@ -600,7 +623,7 @@
         </select>
       </div>
 
-      {#if buildFlags.apiKeyOnly && !settings.hasApiKey && !model.startsWith('codex:')}
+      {#if buildFlags.apiKeyOnly && !settings.hasApiKey && !codexChosen}
         <p role="note" class="rounded-md bg-amber-500/15 px-2 py-1.5 text-xs">
           This build of Threadgarden runs chats only on an Anthropic API key. Add your key first.
           <button
@@ -628,11 +651,9 @@
             {draftKey}
             cwd={composerCwd}
             commandScope={{ cwd: composerCwd }}
-            agentName={model.startsWith('codex:') ? 'Codex' : 'Claude'}
+            agentName={agent}
             label="First message"
-            placeholder={model.startsWith('codex:')
-              ? 'What should Codex do?'
-              : 'What should Claude do?'}
+            placeholder={`What should ${agent} do?`}
             autofocus
             onSubmit={create}
             {onControl}
@@ -644,7 +665,7 @@
 </Dialog.Root>
 
 <BypassPermissionsDialog
-  agentName={model.startsWith('codex:') ? 'Codex' : 'Claude'}
+  agentName={agent}
   bind:open={confirmBypass}
   onConfirm={() => {
     mode = 'bypassPermissions';
