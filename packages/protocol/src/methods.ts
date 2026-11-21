@@ -342,6 +342,11 @@ export const methods = {
         displayName: z.string(),
         description: z.string(),
         supportedEffortLevels: z.array(z.string()).optional(),
+        /**
+         * The model its runtime uses when none is named: one per runtime at most.
+         * Absent from older services, which also send Claude's `default` row.
+         */
+        isDefault: z.boolean().optional(),
       }),
     ),
   ),
