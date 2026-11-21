@@ -151,17 +151,23 @@
   });
   const waitedFor = $derived(quietSince === null ? 0 : now - quietSince);
 
+  // The user item and the queued list arrive in separate updates, so for a
+  // moment a message Claude has read can be in both: it is the user item then
+  // (two rows with one key would throw `each_key_duplicate`).
+  const read = $derived(new Set(queued.length ? items.map((it) => it.id) : []));
   // The waiting row sits between the conversation and the queued messages: it is
   // about the turn in progress, which they wait behind.
   const rows: ListRow[] = $derived([
     ...buildRows(items),
     ...(waitingShown ? [WAITING_ROW] : []),
-    ...queued.map((message): QueuedRow => ({
-      kind: 'queued',
-      key: message.id,
-      message,
-      itemIds: [message.id],
-    })),
+    ...queued
+      .filter((message) => !read.has(message.id))
+      .map((message): QueuedRow => ({
+        kind: 'queued',
+        key: message.id,
+        message,
+        itemIds: [message.id],
+      })),
   ]);
   /** Anchors name a row by its first item id: stable when runs grow or regroup. */
   const anchorKeys = $derived(rows.map((r) => r.itemIds[0] ?? r.key));

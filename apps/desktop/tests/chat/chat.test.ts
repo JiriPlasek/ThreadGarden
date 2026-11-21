@@ -53,6 +53,26 @@ describe('message list', () => {
     expect(screen.getAllByText('looking at the parser')).toHaveLength(1);
   });
 
+  it('a queued message that has just joined the transcript shows once, without a crash', async () => {
+    // The user item and the queued list come in separate updates: for a moment
+    // the same id is in both (a slow machine renders that moment).
+    const queued = [{ id: 'u2', text: 'perm needed', ts: 1 }];
+    const { container, rerender } = render(MessageList, {
+      items: [user('u1'), text('a1', 'answer')],
+      queued,
+      working: true,
+    });
+    await waitFor(() => expect(container.querySelector('[data-queued-message]')).toBeTruthy());
+    await rerender({
+      items: [user('u1'), text('a1', 'answer'), user('u2', 'perm needed')],
+      queued,
+      working: true,
+    });
+    await waitFor(() => expect(container.querySelector('[data-queued-message]')).toBeNull());
+    expect(container.querySelectorAll('[data-row="u2"]')).toHaveLength(1);
+    expect(screen.getAllByText('perm needed')).toHaveLength(1);
+  });
+
   it('while a turn works and nothing is moving, says it is waiting for Claude', async () => {
     const { rerender } = render(MessageList, { items: [user('u1')], working: true });
     const waiting = await screen.findByRole('status', { name: /waiting for claude/i });
