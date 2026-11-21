@@ -1,4 +1,5 @@
 /** Opt-in CLI checks. Inference additionally needs THREADGARDEN_TEST_CODEX_INFERENCE=1. */
+import { useThrowawayCodexHome } from './codex-home.js';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -9,13 +10,20 @@ import { MultiAdapter } from '../../src/sdk/multi-adapter.js';
 import { FakeAdapter } from '../../src/testing/fake-adapter.js';
 import { MemoryRegistry } from '../chat/live-helpers.js';
 
+// The threads these tests start never reach the user's Codex history.
+useThrowawayCodexHome();
+
 describe('installed Codex CLI', () => {
   it('initializes app-server and reads its model catalog', async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), 'tg-codex-catalog-'));
     try {
+      if (process.env.THREADGARDEN_TEST_CODEX_REAL_HOME !== '1')
+        expect(path.basename(process.env.CODEX_HOME ?? '')).toMatch(/^tg-codex-home-/);
       const models = await new CodexAdapter(dir).models(process.env);
       expect(models.length).toBeGreaterThan(0);
       expect(models.every((model) => model.value.startsWith('codex:'))).toBe(true);
+      // Exactly one is what a new thread uses when none is named.
+      expect(models.filter((model) => model.isDefault)).toHaveLength(1);
     } finally {
       await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
     }

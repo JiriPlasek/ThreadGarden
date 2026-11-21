@@ -1,9 +1,13 @@
 /** Separate opt-in diagnostic: requires a working native OS sandbox, no inference. */
+import { useThrowawayCodexHome } from './codex-home.js';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { expect, it } from 'vitest';
 import { connectCodex, initializeCodex } from '../../src/sdk/codex-client.js';
+
+// The threads these tests start never reach the user's Codex history.
+useThrowawayCodexHome();
 
 it.skipIf(process.platform !== 'win32' || process.env.THREADGARDEN_TEST_CODEX_SANDBOX !== '1')(
   'runs a harmless command directly in the installed Windows sandbox',

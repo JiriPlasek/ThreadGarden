@@ -1,4 +1,5 @@
 /** Real CLI workflows, deliberately bounded to disposable folders and harmless commands. */
+import { useThrowawayCodexHome } from './codex-home.js';
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -16,6 +17,9 @@ import { rec, str, type Rec } from '../../src/sdk/codex-events.js';
 import { MultiAdapter } from '../../src/sdk/multi-adapter.js';
 import { FakeAdapter } from '../../src/testing/fake-adapter.js';
 import { MemoryRegistry } from '../chat/live-helpers.js';
+
+// The threads these tests start never reach the user's Codex history.
+useThrowawayCodexHome();
 
 const enabled = process.env.THREADGARDEN_TEST_CODEX_INFERENCE === '1';
 const roots: string[] = [];
