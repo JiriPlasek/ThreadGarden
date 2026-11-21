@@ -66,7 +66,16 @@ if (command.kind === 'serve') {
   serve(command);
 } else {
   const { dataDir } = resolveDataDirs(process.env, process.platform, os.homedir());
-  runCli(command, { dataDir, out: (s) => void process.stdout.write(`${s}\n`) }).then(
+  runCli(command, {
+    dataDir,
+    out: (s) => void process.stdout.write(`${s}\n`),
+    platform: process.platform,
+    // `threadgarden start`: the same Node on the same service, as the launcher runs it.
+    serve: {
+      execPath: process.execPath,
+      args: ['--disable-warning=ExperimentalWarning', process.argv[1] ?? '', 'serve', '--headless'],
+    },
+  }).then(
     (code) => {
       // Not process.exit(): it could cut off output still being written to a pipe.
       process.exitCode = code;

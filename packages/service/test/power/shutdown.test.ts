@@ -1124,6 +1124,7 @@ describe('the headless service', () => {
       adapter: generateCorpus({ sessions: 1, projects: 1, bigSessionMessages: 0 }),
       installSignalHandlers: false,
       headless: o.headless,
+      platform: 'linux',
       poweroff: o.poweroff,
       // Never detected here: a test run inside WSL must not think it is a Windows worker.
       host: o.host ?? null,
@@ -1179,7 +1180,7 @@ describe('the headless service', () => {
   it('hello reports host wsl on a WSL headless machine and omits it elsewhere', async () => {
     expect(await helloMachine({ headless: true, host: 'wsl' })).toMatchObject({
       host: 'wsl',
-      platform: process.platform,
+      platform: 'linux',
     });
     expect(await helloMachine({ headless: true, host: null })).not.toHaveProperty('host');
     // A desktop is never a worker, whatever it runs on.

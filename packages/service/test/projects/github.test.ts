@@ -143,9 +143,19 @@ describe('githubStatus', () => {
     });
   });
 
+  it('github status on win32 asks for gh auth login over Remote Desktop', async () => {
+    const out = async (result: { code: number; stderr: string }) =>
+      githubStatus(fakeTools([{ cmd: 'gh', match: AUTH, result }]), 'win32');
+    for (const stderr of ['You are not logged into any GitHub hosts.', 'failed to read keyring']) {
+      expect((await out({ code: 1, stderr })).problem).toBe(
+        'Run gh auth login on this machine (over Remote Desktop).',
+      );
+    }
+  });
+
   it('not signed in, keyring, gh missing', async () => {
     const out = async (result: { code: number; stderr: string }) =>
-      githubStatus(fakeTools([{ cmd: 'gh', match: AUTH, result }]));
+      githubStatus(fakeTools([{ cmd: 'gh', match: AUTH, result }]), 'linux');
     expect(await out({ code: 1, stderr: 'You are not logged into any GitHub hosts.' })).toEqual({
       ready: false,
       login: null,
@@ -202,7 +212,7 @@ describe('listRepos', () => {
     ]);
     await expect(listRepos(notReady)).rejects.toMatchObject({
       code: 'GH_NOT_READY',
-      message: 'Run gh auth login on this machine (over SSH).',
+      message: `Run gh auth login on this machine (over ${process.platform === 'win32' ? 'Remote Desktop' : 'SSH'}).`,
     });
     const failed = fakeTools([
       { cmd: 'gh', match: /^api/, result: { code: 1, stderr: 'HTTP 502\nmore' } },

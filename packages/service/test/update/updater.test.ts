@@ -184,9 +184,9 @@ const writeUpdateFiles = async (files: Record<string, string>): Promise<void> =>
 };
 
 describe('MachineUpdater.supported', () => {
-  it('is Linux with an installed current release', async () => {
+  it('is Linux or native Windows with an installed current release', async () => {
     expect(make().updater.supported()).toBe(true);
-    expect(make({ platform: 'win32' }).updater.supported()).toBe(false);
+    expect(make({ platform: 'win32' }).updater.supported()).toBe(true);
     expect(make({ platform: 'darwin' }).updater.supported()).toBe(false);
     await rm(join(installBase, 'current'), { recursive: true });
     expect(make().updater.supported()).toBe(false);
@@ -884,11 +884,14 @@ describe('the release an updater expects (frozen)', () => {
     const expand = (t: string): string =>
       t.replaceAll('${version}', NEXT).replaceAll('${arch}', 'x64');
     const folder = expand(/const name = `(.+)`;/.exec(build)![1]!);
-    const tarball = `${folder}${expand(/join\(OUT, `\$\{name\}(.+)`\)/.exec(build)![1]!)}`;
+    const tarball = `${folder}-linux-x64.tar.gz`;
+    expect(build).toContain("arg('platform') ?? 'linux'");
+    expect(build).toContain("windows ? 'zip' : 'tar.gz'");
     expect(build).toContain("arg('arch') ?? 'x64'");
-    for (const file of ['install.sh', 'threadgarden.service', 'VERSION']) {
+    for (const file of ['threadgarden.service', 'VERSION']) {
       expect(build).toContain(`join(dir, '${file}')`);
     }
+    expect(build).toContain("windows ? 'install.ps1' : 'install.sh'");
 
     const f = releaseFetch(NEXT);
     const r = fakeRun();

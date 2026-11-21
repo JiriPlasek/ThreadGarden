@@ -69,22 +69,49 @@ const realSdk: SdkApi = {
  * SDK mode the key is always used when present, so a key left in the shell
  * would quietly bill the API instead of the plan.
  *
- * `keepInheritedKey` (a headless service) keeps it: there the environment
- * comes only from its systemd unit (in a WSL worker's distro too), written on
- * purpose, and Threadgarden's own key never reaches a remote machine
+ * `keepInheritedKey` (a headless Linux service) keeps it: there the
+ * environment comes only from its systemd unit (in a WSL worker's distro too),
+ * written on purpose. Threadgarden's own key never reaches a remote machine
  * (`auth.setApiKey` is local only), so it is the only way to run such a
  * machine on an API key.
+ *
+ * `keyFrom` (a native Windows worker) names the one variable a key is taken
+ * from instead. Such a worker runs with the user's whole environment, where an
+ * `ANTHROPIC_API_KEY` set for some other tool would bill every chat, so that
+ * one is dropped as on a desktop, and only a key set for Threadgarden on
+ * purpose (`THREADGARDEN_ANTHROPIC_API_KEY`) becomes the session's.
+ *
+ * Names match case-insensitively: Windows' do, so `Anthropic_Api_Key` is the
+ * same variable to Claude Code there.
  */
 export const buildSessionEnv = (
   base: NodeJS.ProcessEnv,
   apiKey: string | null,
-  opts: { keepInheritedKey?: boolean } = {},
+  opts: { keepInheritedKey?: boolean; keyFrom?: string } = {},
 ): Record<string, string | undefined> => {
   const env: Record<string, string | undefined> = { ...base };
-  if (opts.keepInheritedKey !== true) delete env.ANTHROPIC_API_KEY;
+  const take = (name: string): string | undefined => {
+    let value: string | undefined;
+    for (const key of Object.keys(env)) {
+      if (key.toUpperCase() !== name.toUpperCase()) continue;
+      value ??= env[key];
+      delete env[key];
+    }
+    return value;
+  };
+  if (opts.keyFrom !== undefined) {
+    take('ANTHROPIC_API_KEY');
+    const chosen = take(opts.keyFrom);
+    if (chosen) env.ANTHROPIC_API_KEY = chosen;
+  } else if (opts.keepInheritedKey !== true) {
+    take('ANTHROPIC_API_KEY');
+  }
   if (apiKey !== null) env.ANTHROPIC_API_KEY = apiKey;
   return env;
 };
+
+/** The variable a native Windows worker takes an API key from (`buildSessionEnv`'s `keyFrom`). */
+export const WINDOWS_API_KEY_VARIABLE = 'THREADGARDEN_ANTHROPIC_API_KEY';
 
 /** Claude Code refuses Bypass permissions (and its opt-in) when it runs as root. */
 export const canBypassPermissions = (): boolean => process.getuid?.() !== 0;

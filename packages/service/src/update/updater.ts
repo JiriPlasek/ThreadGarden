@@ -1,14 +1,16 @@
 /**
  * A headless machine updating itself: what the owner did by hand over SSH.
  * Downloads a release, checks it and unpacks it, then hands over to the apply
- * script in a systemd unit of its own, because the install restarts this service.
+ * script in its own systemd unit (Linux) or detached PowerShell (native Windows),
+ * because the install restarts this service.
  *
  * Everything that must outlive that restart is in `<dataDir>/update/`:
  * - `pending.json`: `{version, from}`, the update handed over to the script;
  * - `skipped`: the sudo steps install.sh left out, one per line;
  * - `last.json`: how the last update ended (a `done` or `failed` `UpdateStatus`);
  * - `<version>/`: the download;
- * - `apply.sh` and `install.log`: the script, and what the install printed.
+ * - `apply.sh` / `apply.ps1` and `install.log`: the script and installer output;
+ * - `apply.pid`: the detached Windows apply process, while it works.
  */
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
@@ -31,8 +33,11 @@ import {
 } from '@threadgarden/protocol';
 import { z } from 'zod';
 import type { Logger } from '../logger.js';
+import { startDetached } from '../detach.js';
+import { isAlive } from '../discovery.js';
 import { ServiceError } from '../server/router.js';
 import { APPLY_SCRIPT, applyArgs } from './apply-script.js';
+import { WINDOWS_APPLY_SCRIPT } from './windows-apply-script.js';
 import { fetchChecked, type Fetch } from './github.js';
 
 const RELEASES = 'https://github.com/JiriPlasek/ThreadGarden/releases/download';
@@ -87,6 +92,8 @@ export type UpdaterDeps = {
   fetch: Fetch;
   /** Default `runCommand`: `tar`, `systemd-run` and `systemctl`. */
   run?: Run;
+  /** Windows apply process, independent of the service being replaced. */
+  detach?: typeof startDetached;
   /** How many chats an update would stop. */
   busyCount: () => Promise<number>;
   emit: (s: UpdateStatus) => void;
@@ -111,17 +118,22 @@ export class MachineUpdater {
   constructor(private readonly deps: UpdaterDeps) {
     this.updateDir = path.join(deps.dataDir, 'update');
     this.installBase =
-      deps.installBase ?? path.join(os.homedir(), '.local', 'share', 'threadgarden-headless');
+      deps.installBase ??
+      ((deps.platform ?? process.platform) === 'win32'
+        ? path.join(
+            process.env.LOCALAPPDATA ?? path.join(os.homedir(), 'AppData', 'Local'),
+            'threadgarden-headless',
+          )
+        : path.join(os.homedir(), '.local', 'share', 'threadgarden-headless'));
     this.run = deps.run ?? runCommand;
   }
 
   /**
-   * An install this updater can replace: on x64 Linux, the only package released,
-   * with install.sh's `current` in place.
+   * An installed x64 Linux or native Windows worker, with `current` in place.
    */
   supported(): boolean {
     return (
-      (this.deps.platform ?? process.platform) === 'linux' &&
+      ['linux', 'win32'].includes(this.deps.platform ?? process.platform) &&
       (this.deps.arch ?? process.arch) === 'x64' &&
       existsSync(path.join(this.installBase, 'current'))
     );
@@ -190,6 +202,7 @@ export class MachineUpdater {
         await this.finish(pending, here);
       }
       await rm(this.file('pending.json'), { force: true });
+      await rm(this.file('apply.pid'), { force: true });
     }
     await rm(this.file('skipped'), { force: true });
     await this.removeDownloads();
@@ -215,10 +228,14 @@ export class MachineUpdater {
 
   private async unitActive(version: string): Promise<boolean> {
     try {
+      if ((this.deps.platform ?? process.platform) === 'win32') {
+        const pid = Number(await readFile(this.file('apply.pid'), 'utf8'));
+        return Number.isSafeInteger(pid) && pid > 0 && isAlive(pid);
+      }
       const r = await this.run('systemctl', ['--user', 'is-active', unitName(version)]);
       return r.code === 0;
     } catch (err) {
-      this.deps.log.warn(`update: asking systemd about the update unit: ${errorText(err)}`);
+      this.deps.log.warn(`update: checking the apply process or unit: ${errorText(err)}`);
       return false;
     }
   }
@@ -228,7 +245,8 @@ export class MachineUpdater {
     const from = this.deps.currentVersion;
     const download = path.join(this.updateDir, version);
     const folder = `threadgarden-headless-${version}`;
-    const tarName = `${folder}-linux-x64.tar.gz`;
+    const windows = (this.deps.platform ?? process.platform) === 'win32';
+    const tarName = `${folder}-${windows ? 'windows-x64.zip' : 'linux-x64.tar.gz'}`;
     const tarball = path.join(download, tarName);
     const url = `${RELEASES}/v${version}/${tarName}`;
     let reason: UpdateFailure = 'download';
@@ -249,13 +267,20 @@ export class MachineUpdater {
 
       reason = 'unpack';
       this.stage(version, 'installing');
-      const unpacked = await this.run('tar', ['-xzf', tarball, '-C', download]);
+      const unpacked = await this.run(
+        windows ? path.join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'tar.exe') : 'tar',
+        [windows ? '-xf' : '-xzf', tarball, '-C', download],
+      );
       if (unpacked.code !== 0) throw new Error(`tar failed: ${unpacked.stderr}`);
       const found = (await readFile(path.join(download, folder, 'VERSION'), 'utf8')).trim();
       if (found !== version) throw new Error(`The release says it is ${found}, not ${version}`);
 
       reason = 'install';
-      await this.launch(version, from, path.join(download, folder, 'install.sh'));
+      await this.launch(
+        version,
+        from,
+        path.join(download, folder, windows ? 'install.ps1' : 'install.sh'),
+      );
       this.stage(version, 'restarting');
     } catch (err) {
       await this.fail(version, reason, errorText(err));
@@ -281,12 +306,44 @@ export class MachineUpdater {
   }
 
   private async launch(version: string, from: string, installSh: string): Promise<void> {
-    await this.writeFileAtomic('apply.sh', APPLY_SCRIPT);
+    const windows = (this.deps.platform ?? process.platform) === 'win32';
+    await this.writeFileAtomic(
+      windows ? 'apply.ps1' : 'apply.sh',
+      windows ? WINDOWS_APPLY_SCRIPT : APPLY_SCRIPT,
+    );
     // A `done` from an earlier update would pass for this one, and old skipped
     // steps would show a false note.
     await rm(this.file('last.json'), { force: true });
     await rm(this.file('skipped'), { force: true });
     await this.writeFileAtomic('pending.json', JSON.stringify({ version, from }));
+    if (windows) {
+      const pid = await (this.deps.detach ?? startDetached)(
+        path.join(
+          process.env.SystemRoot ?? 'C:\\Windows',
+          'System32',
+          'WindowsPowerShell',
+          'v1.0',
+          'powershell.exe',
+        ),
+        [
+          '-NoProfile',
+          '-NonInteractive',
+          '-ExecutionPolicy',
+          'Bypass',
+          '-File',
+          this.file('apply.ps1'),
+          ...applyArgs({
+            installSh,
+            version,
+            from,
+            installBase: this.installBase,
+            updateDir: this.updateDir,
+          }),
+        ],
+      );
+      await this.writeFileAtomic('apply.pid', String(pid));
+      return;
+    }
     const launched = await this.run('systemd-run', [
       '--user',
       '--collect',
@@ -317,6 +374,7 @@ export class MachineUpdater {
     try {
       await rm(path.join(this.updateDir, version), { recursive: true, force: true });
       await rm(this.file('pending.json'), { force: true });
+      await rm(this.file('apply.pid'), { force: true });
       await this.writeFileAtomic('last.json', JSON.stringify(failed));
     } catch (err) {
       this.deps.log.error(`update: cleaning up after a failure: ${errorText(err)}`);

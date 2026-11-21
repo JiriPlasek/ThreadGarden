@@ -740,6 +740,31 @@ replaced and the log says so; paired devices then see another certificate
 and must pair again. A desktop service opens the same listener only while
 the owner has **Let my phone connect** on ([The phone](#the-phone)).
 
+**Native Windows.** `threadgarden start` launches `serve --headless` as a detached,
+hidden process under the signed-in Windows user and waits for an authenticated
+`hello`. `stop` uses local `service.shutdown`, waiting up to 30 seconds before
+ending the process tree. The worker inherits that user's environment and uses
+their Windows Claude config, repositories and tools; an inherited
+`ANTHROPIC_API_KEY` is dropped as on a desktop, and only
+`THREADGARDEN_ANTHROPIC_API_KEY` gives sessions a key (`buildSessionEnv`'s
+`keyFrom`). The installer adds a per-user startup entry (`HKCU\…\Run`,
+"Threadgarden headless") that runs the stable launcher's `start` hidden at
+sign-in: no service, task or stored password, so Windows keeps the user's
+credentials (Git, `gh`) available to it. It has no power capability or
+idle-shutdown handlers; WSL keeps its Linux power behavior. Its firewall rule
+covers Private and Domain networks only.
+The desktop on the same PC shares the data directory and instance lock.
+
+`pnpm build:headless --platform windows` builds the Windows x64 zip with
+`install.ps1`, `VERSION`, `bin/node.exe`, `bin/threadgarden.cmd` and `lib/service.mjs`.
+The per-user install at `%LOCALAPPDATA%\threadgarden-headless` holds version folders,
+a `current` directory junction, a stable `bin/threadgarden.cmd` and `node/node.exe`.
+The firewall names the stable executable, so updates need no elevation. Updates
+download the zip, verify its checksum and run `apply.ps1` in detached PowerShell;
+`apply.pid` identifies it while it works. It waits for the restarted service's
+`last.json`, restoring the old junction, executable and launcher on failure.
+The Linux update format and systemd launcher are unchanged.
+
 **Packaging.** `pnpm build:headless` (`scripts/build-headless.mjs`) writes
 `dist-headless/threadgarden-headless-<version>-linux-<x64|arm64>.tar.gz` and
 its `.sha256`: the service bundle, the pinned Node.js runtime, the

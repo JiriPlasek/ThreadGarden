@@ -1,5 +1,12 @@
 # @threadgarden/service
 
+Native Windows workers use the same service and Windows Claude Code history as
+the desktop. `threadgarden start` runs `serve --headless` detached as the signed-in
+user; `stop` shuts it down. The per-user Windows zip is built with
+`pnpm build:headless --platform windows`; setup, pairing, shared-service behavior
+and updates are covered in [the Windows guide](../../docs/windows-machines.md).
+Native workers advertise no power capability and register no idle shutdown.
+
 Long-lived Node service that owns Claude Code sessions and serves the UI over a token-authenticated WebSocket bound to `127.0.0.1` (random port).
 
 Sessions started while the `promptSuggestions` setting ("Suggest my next reply", off by default) is on pass the SDK's `promptSuggestions` option; each prediction is an extra model call after every turn, so the setting is read at every start and resume. A valid `prompt_suggestion` after a successful, uninterrupted turn becomes a transient `{id, text}` prediction on `chat.status` and `chat.open`, replayed through `chat.since`. Predictions clear on new input, activity or session end and never become transcript items. Claude Code decides when to generate one and respects its own suggestion settings and usage limits.

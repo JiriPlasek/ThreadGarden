@@ -42,7 +42,11 @@ import { DB_FILE, migrateDataDir } from './migrate-data-dir.js';
 import { ChatStore } from './move/store.js';
 import type { AgentAdapter } from './sdk/adapter.js';
 import type { ClaudeFound, ClaudeProblem } from './sdk/claude-path.js';
-import { buildSessionEnv, canBypassPermissions } from './sdk/real-adapter.js';
+import {
+  buildSessionEnv,
+  canBypassPermissions,
+  WINDOWS_API_KEY_VARIABLE,
+} from './sdk/real-adapter.js';
 import { CopyStore } from './away/copies.js';
 import { AwayDeliverer, connectToMachine } from './away/deliverer.js';
 import { AwayQueue } from './away/queue.js';
@@ -154,7 +158,8 @@ export type StartOptions = {
   projectTools?: Tools;
   /**
    * Base environment of session processes (default `process.env`). An
-   * inherited `ANTHROPIC_API_KEY` is dropped (kept by a headless service) and
+   * inherited `ANTHROPIC_API_KEY` is dropped (kept by a headless Linux service;
+   * a native Windows worker takes `THREADGARDEN_ANTHROPIC_API_KEY` instead) and
    * Threadgarden's API key, when set, is added on top (`buildSessionEnv`).
    */
   sessionEnv?: NodeJS.ProcessEnv;
@@ -186,11 +191,9 @@ export type StartOptions = {
    * (devices live in the database). Default: neither, as on a desktop.
    */
   headless?: boolean;
-  /**
-   * Headless only: powers the machine off (default `systemctl poweroff`, or Windows'
-   * `shutdown.exe` in WSL; tests replace it). One passed in is always used: no test
-   * or mock ever reaches Windows.
-   */
+  /** The platform `hello` reports and capabilities follow. Default `process.platform` (tests replace it). */
+  platform?: NodeJS.Platform;
+  /** Headless Linux only: `systemctl poweroff`, or Windows' `shutdown.exe` in WSL. */
   poweroff?: () => Promise<void>;
   /**
    * What the machine runs on: `wsl` a worker in WSL on a Windows PC, which Windows
@@ -285,6 +288,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   const clearTimer = opts.clearInterval ?? ((t) => clearInterval(t));
   const log = opts.logger ?? createLogger(dataDir);
   const headless = opts.headless === true;
+  const platform = (opts.platform ?? process.platform) as MachineInfo['platform'];
   if (headless && !opts.adapter) throw new Error('A headless service needs history (an adapter)');
   /** A worker in WSL: only a headless machine is ever one. */
   const wsl = headless && (opts.host === undefined ? detectWsl() : opts.host === 'wsl');
@@ -346,17 +350,17 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
     return {
       id,
       name,
-      platform: process.platform as MachineInfo['platform'],
+      platform,
       headless,
       home: os.homedir(),
       // `away` is every service's (This PC too): it takes message and chat ids. It is added
       // here, not to `CAPABILITIES`, since a service of this build answers for it, like `power`.
-      // `power` is for headless machines only (a desktop is never switched off this way).
+      // Native Windows has no power controller; WSL keeps the Linux power path.
       capabilities: headless
         ? [
             ...CAPABILITIES,
             AWAY_CAPABILITY,
-            POWER_CAPABILITY,
+            ...(platform === 'linux' ? [POWER_CAPABILITY] : []),
             ...(canUpdate() ? [UPDATE_CAPABILITY] : []),
           ]
         : [...CAPABILITIES, AWAY_CAPABILITY],
@@ -382,9 +386,20 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   const claude: { current: ClaudeStatus | undefined } = { current: opts.claude };
   /** Threadgarden's optional API key (§5.5): in memory only, never logged or stored. */
   let apiKey: string | null = null;
-  /** A session's environment (`buildSessionEnv`); a headless service keeps an inherited API key. */
+  /**
+   * A session's environment (`buildSessionEnv`): a headless Linux service keeps
+   * an inherited API key (its systemd unit's); a native Windows worker takes one
+   * only from `THREADGARDEN_ANTHROPIC_API_KEY`, never from the user's own
+   * `ANTHROPIC_API_KEY`.
+   */
   const sessionEnvOf = (): Record<string, string | undefined> =>
-    buildSessionEnv(opts.sessionEnv ?? process.env, apiKey, { keepInheritedKey: headless });
+    buildSessionEnv(
+      opts.sessionEnv ?? process.env,
+      apiKey,
+      headless && platform === 'win32'
+        ? { keyFrom: WINDOWS_API_KEY_VARIABLE }
+        : { keepInheritedKey: headless },
+    );
   let db: Db | undefined;
   let power: PowerHub | undefined;
   /** Messages waiting for paired machines that are away (protocol 11; with a database). */
@@ -414,15 +429,16 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   /** New project and Clone (with a database); its running clones stop with the service. */
   let maker: ProjectMaker | undefined;
   /** Idle tracking for idle shutdown (a headless machine's power control). */
-  const idle = headless
-    ? new IdleMonitor({
-        sessions: () => host?.list() ?? [],
-        external: () => (opts.externals ?? (() => poller?.snapshot() ?? []))(),
-        // null is "never"; 60 until the database is open.
-        minutes: () => (db ? db.getSettings().idleShutdownMinutes : 60),
-        now: clock,
-      })
-    : undefined;
+  const idle =
+    headless && platform === 'linux'
+      ? new IdleMonitor({
+          sessions: () => host?.list() ?? [],
+          external: () => (opts.externals ?? (() => poller?.snapshot() ?? []))(),
+          // null is "never"; 60 until the database is open.
+          minutes: () => (db ? db.getSettings().idleShutdownMinutes : 60),
+          now: clock,
+        })
+      : undefined;
   let powerMachine: ReturnType<typeof registerPowerMachineHandlers> | undefined;
   /** Idle and manual shutdown (headless, with a database). */
   let shutdown: ShutdownSequence | undefined;
