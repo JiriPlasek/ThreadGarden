@@ -220,6 +220,64 @@ describe('native Codex history', () => {
     expect(h.calls.some((call) => call.method === 'thread/turns/list')).toBe(false);
   });
 
+  it('shows each queued message once when one turn took several of them', async () => {
+    const h = setup((method, p) => {
+      if (method === 'thread/list')
+        return { data: p.archived ? [] : [thread(A, { historyMode: 'legacy' })], nextCursor: null };
+      if (method === 'thread/read')
+        return {
+          thread: thread(A, {
+            historyMode: 'legacy',
+            turns: p.includeTurns
+              ? [
+                  {
+                    id: 'turn1',
+                    status: 'completed',
+                    items: [
+                      {
+                        id: 'native-user',
+                        clientId: 'u1',
+                        type: 'userMessage',
+                        startedAtMs: 150000,
+                        content: [
+                          { type: 'text', text: 'first' },
+                          { type: 'text', text: 'second' },
+                          { type: 'text', text: 'third' },
+                        ],
+                      },
+                      { id: 'reply', type: 'agentMessage', text: 'Done', startedAtMs: 160000 },
+                    ],
+                  },
+                ]
+              : [],
+          }),
+        };
+      return {};
+    });
+    h.store.save({ id: OWN, threadId: A, cwd: dir, createdAt: 100000, updatedAt: 200000 });
+    for (const [uuid, text] of [
+      ['u1', 'first'],
+      ['u2', 'second'],
+      ['u3', 'third'],
+    ] as const)
+      h.store.append(h.store.read(OWN)!, {
+        type: 'user',
+        uuid,
+        timestamp: new Date(150000).toISOString(),
+        message: { role: 'user', content: text },
+      } as never);
+    await h.history.list();
+    const texts = (await h.history.messages(OWN))
+      .filter((message) => message.type === 'user')
+      .flatMap((message) => {
+        const content = (message as unknown as { message: { content: unknown } }).message.content;
+        return typeof content === 'string'
+          ? [content]
+          : (content as { text: string }[]).map((block) => block.text);
+      });
+    expect(texts).toEqual(['first', 'second', 'third']);
+  });
+
   it('uses the saved Codex home when the current discovery folder changes', async () => {
     const h = setup((method) =>
       method === 'thread/read' ? { thread: thread(A) } : { data: [], nextCursor: null },
