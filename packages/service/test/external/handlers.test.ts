@@ -133,6 +133,37 @@ describe('external handlers', () => {
   });
 });
 
+describe('system.status with Codex', () => {
+  it("says external Claude sessions are unavailable when only Codex's runtime answers", async () => {
+    const poller = new ExternalPoller(
+      async () => {
+        throw new Error('claude agents is not available');
+      },
+      () => new Set(),
+      () => {},
+      { codexEnabled: () => true, codex: async () => [] },
+    );
+    const router = new Router();
+    registerExternalHandlers(router, {
+      poller,
+      lastModifiedOf: () => undefined,
+      claude: () => ({ path: '/bin/claude', version: '2.1.314' }),
+      indexing: () => ({ done: 0, total: 0 }),
+      requireCodex: async () => {},
+    });
+    await poller.refresh();
+    const r = await router.dispatch({ id: 1, method: 'system.status', params: {} } as never, {
+      clientId: 'c',
+      origin: 'local',
+    });
+    if ('error' in r) throw new Error(r.error.message);
+    expect(r.result).toMatchObject({
+      externalAvailable: false,
+      codex: { found: true, externalAvailable: true },
+    });
+  });
+});
+
 describe('external.stop', () => {
   const stopSetup = (
     agents: unknown[] = AGENTS,

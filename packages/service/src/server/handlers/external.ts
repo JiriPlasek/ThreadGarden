@@ -110,7 +110,12 @@ export const registerExternalHandlers = (router: Router, deps: ExternalHandlerDe
   router.register('chat.resumeCommand', async (p) => ({
     command:
       (await deps.resumeCommand?.(p.sessionId)) ??
-      resumeCommand(p.sessionId, poller?.available ? poller.snapshot() : null),
+      resumeCommand(
+        p.sessionId,
+        poller?.providerAvailable('claude')
+          ? poller.snapshot().filter((e) => e.kind !== 'codex')
+          : null,
+      ),
   }));
 
   /**
@@ -189,7 +194,8 @@ export const registerExternalHandlers = (router: Router, deps: ExternalHandlerDe
     return {
       ...(codex ? { codex } : {}),
       claude,
-      externalAvailable: poller?.available ?? false,
+      // Claude's own list: Settings says terminal and background sessions are shown.
+      externalAvailable: poller?.providerAvailable('claude') ?? false,
       indexing: deps.indexing(),
     };
   });

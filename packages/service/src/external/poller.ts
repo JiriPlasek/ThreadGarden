@@ -28,6 +28,12 @@ export type ExternalSession = {
 
 export const POLL_VISIBLE_MS = 2_000;
 export const POLL_HIDDEN_MS = 10_000;
+/**
+ * Codex's shared runtime between polls: each reading opens a connection and
+ * reads every loaded thread, too heavy for Claude's 2 s cadence. On-demand
+ * readings (`current`: a resume check, Stop) always ask it afresh.
+ */
+export const CODEX_POLL_MS = 15_000;
 export const AGENTS_TIMEOUT_MS = 5_000;
 export const AGENTS_ARGS = ['agents', '--json', '--all'];
 
@@ -98,6 +104,8 @@ export type PollerOptions = {
   /** Independent read-only Codex runtime source. Failure never hides Claude sessions. */
   codex?: () => Promise<ExternalSession[]>;
   codexEnabled?: () => boolean;
+  /** The clock for Codex's cadence (`CODEX_POLL_MS`); defaults to `Date.now`. */
+  now?: () => number;
 };
 
 export class ExternalPoller {
@@ -108,6 +116,10 @@ export class ExternalPoller {
   private started = false;
   private timer: NodeJS.Timeout | undefined;
   private inflight: Promise<void> | undefined;
+  /** Whether the poll in flight asks Codex afresh (`refresh(true)`). */
+  private inflightFresh = false;
+  /** Codex's last reading, reused between polls until `CODEX_POLL_MS` has passed. */
+  private codexReading: { at: number; list: ExternalSession[]; ok: boolean } | undefined;
   private sourceAvailable = { claude: false, codex: false };
   private readonly setTimer: NonNullable<PollerOptions['setTimeout']>;
   private readonly clearTimer: NonNullable<PollerOptions['clearTimeout']>;
@@ -160,7 +172,7 @@ export class ExternalPoller {
   async current(provider?: 'claude' | 'codex'): Promise<ExternalSession[] | null> {
     try {
       if ((this.opts.enabled?.() ?? true) || (this.opts.codexEnabled?.() ?? false)) {
-        await this.refresh();
+        await this.refresh(provider !== 'claude');
         return (provider ? this.sourceAvailable[provider] : this.available)
           ? this.snapshot().filter(
               (e) => !provider || (e.kind === 'codex' ? 'codex' : 'claude') === provider,
@@ -181,12 +193,24 @@ export class ExternalPoller {
     }
   }
 
-  /** Polls now (joins a poll already running); never rejects. */
-  refresh(): Promise<void> {
-    this.inflight ??= this.poll().finally(() => {
-      this.inflight = undefined;
-    });
-    return this.inflight;
+  /**
+   * Polls now (joins a poll already running); never rejects. `freshCodex` asks
+   * Codex's runtime even when its last reading is recent; it waits for a poll in
+   * flight that would reuse it, then polls again.
+   */
+  refresh(freshCodex = false): Promise<void> {
+    if (this.inflight && (!freshCodex || this.inflightFresh)) return this.inflight;
+    const p: Promise<void> = (this.inflight ?? Promise.resolve())
+      .then(() => this.poll(freshCodex))
+      .finally(() => {
+        if (this.inflight === p) {
+          this.inflight = undefined;
+          this.inflightFresh = false;
+        }
+      });
+    this.inflight = p;
+    this.inflightFresh = freshCodex;
+    return p;
   }
 
   private cancel(): void {
@@ -251,14 +275,30 @@ export class ExternalPoller {
     };
   }
 
-  private async poll(): Promise<void> {
+  private async poll(freshCodex = false): Promise<void> {
     try {
       let list: ExternalSession[] = [];
       let ok = false;
-      const result = await this.fetchSources(
-        this.opts.enabled?.() ?? true,
-        this.opts.codexEnabled?.() ?? false,
-      );
+      const codexOn = (this.opts.codexEnabled?.() ?? false) && !!this.opts.codex;
+      const now = (this.opts.now ?? Date.now)();
+      const reuse =
+        codexOn && !freshCodex && this.codexReading && now - this.codexReading.at < CODEX_POLL_MS
+          ? this.codexReading
+          : undefined;
+      const result = await this.fetchSources(this.opts.enabled?.() ?? true, codexOn && !reuse);
+      if (!codexOn) this.codexReading = undefined;
+      else if (!reuse)
+        this.codexReading = {
+          at: now,
+          list: result.list.filter((e) => e.kind === 'codex'),
+          ok: result.available.codex,
+        };
+      if (reuse) {
+        // Threadgarden may have started one of them since: own ids stay out.
+        const own = this.ownIds();
+        result.list.push(...reuse.list.filter((e) => !e.sessionId || !own.has(e.sessionId)));
+        result.available.codex = reuse.ok;
+      }
       list = result.list;
       this.sourceAvailable = result.available;
       ok = result.available.claude || result.available.codex;
