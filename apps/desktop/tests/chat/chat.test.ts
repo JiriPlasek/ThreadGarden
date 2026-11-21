@@ -492,6 +492,49 @@ describe('chat view', () => {
     );
   });
 
+  it("a chat that named no model shows its runtime's default one", async () => {
+    const { server, app, context } = await streamingSetup();
+    const open = server.handlers['chat.open']!;
+    server.handlers['chat.open'] = (p) => ({
+      ...(open(p) as object),
+      header: { permissionMode: 'default' },
+    });
+    server.handlers['chat.models'] = () => [
+      { value: 'opus', displayName: 'Opus', description: '' },
+      { value: 'sonnet', displayName: 'Sonnet', description: '', isDefault: true },
+      { value: 'codex:test-model', displayName: 'Codex · Test', description: '', isDefault: true },
+    ];
+    await app.chats.open('s');
+    render(ChatView, { context, props: { ref: { machineId: LOCAL, sessionId: 's' } } });
+    const model = (await screen.findByRole('combobox', { name: /model/i })) as HTMLSelectElement;
+    await waitFor(() => expect(within(model).getAllByRole('option').length).toBe(2));
+    expect(model.value).toBe('sonnet');
+  });
+
+  it("a chat started on Claude's default shows the row it resolves to", async () => {
+    const { server, app, context } = await streamingSetup();
+    const open = server.handlers['chat.open']!;
+    server.handlers['chat.open'] = (p) => ({
+      ...(open(p) as object),
+      header: { model: 'default', permissionMode: 'default' },
+    });
+    server.handlers['chat.models'] = () => [
+      { value: 'opus', displayName: 'Opus', description: '', isDefault: true },
+      { value: 'sonnet', displayName: 'Sonnet', description: '' },
+    ];
+    await app.chats.open('s');
+    render(ChatView, { context, props: { ref: { machineId: LOCAL, sessionId: 's' } } });
+    const model = (await screen.findByRole('combobox', { name: /model/i })) as HTMLSelectElement;
+    await waitFor(() =>
+      expect(
+        within(model)
+          .getAllByRole('option')
+          .map((o) => (o as HTMLOptionElement).value),
+      ).toEqual(['opus', 'sonnet']),
+    );
+    expect(model.value).toBe('opus');
+  });
+
   it('header pickers change the model and permission mode of a live chat', async () => {
     const { server, app, context } = await streamingSetup();
     await app.chats.open('s');

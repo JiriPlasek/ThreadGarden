@@ -102,8 +102,12 @@ const message = (dialog: HTMLElement) =>
   within(dialog).getByRole('textbox', { name: /message/i }) as HTMLDivElement;
 
 const repoRows = async (dialog: HTMLElement) => {
-  await waitFor(() => expect(within(dialog).getAllByRole('radio').length).toBeGreaterThan(0));
-  return within(dialog).getAllByRole('radio') as HTMLInputElement[];
+  await waitFor(() =>
+    expect(
+      within(within(dialog).getByRole('tabpanel')).getAllByRole('radio').length,
+    ).toBeGreaterThan(0),
+  );
+  return within(within(dialog).getByRole('tabpanel')).getAllByRole('radio') as HTMLInputElement[];
 };
 
 /** Chooses `Jiri/Plant` and sends `text`. */
@@ -135,7 +139,7 @@ describe('New chat: Clone', () => {
 
     await userEvent.type(within(dialog).getByRole('searchbox', { name: /search/i }), 'PLA');
     expect(
-      within(dialog)
+      within(within(dialog).getByRole('tabpanel'))
         .getAllByRole('radio')
         .map((r) => (r as HTMLInputElement).value),
     ).toEqual(['Jiri/Plant']);
@@ -148,7 +152,7 @@ describe('New chat: Clone', () => {
     });
     const dialog = await openClone(env);
     expect(await within(dialog).findByText(problem)).toBeTruthy();
-    expect(within(dialog).queryAllByRole('radio')).toHaveLength(0);
+    expect(within(within(dialog).getByRole('tabpanel')).queryAllByRole('radio')).toHaveLength(0);
     expect(within(dialog).queryByRole('searchbox')).toBeNull();
     expect(env.remote.calls('github.repos')).toHaveLength(0);
   });

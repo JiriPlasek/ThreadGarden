@@ -21,7 +21,7 @@
   import { fullTime } from '#lib/format/time.js';
   import { baseName, rawStatus, shownStatus } from '#lib/components/layout/chat-info.js';
   import { modelLabel } from '#lib/format/model.js';
-  import { agentNameOf, isCodexModel, runtimeOfChat } from '#lib/runtime.js';
+  import { LEGACY_DEFAULT, agentNameOf, isCodexModel, runtimeOfChat } from '#lib/runtime.js';
   import IconButton from '#lib/components/layout/IconButton.svelte';
   import ProjectIcon from '#lib/components/layout/ProjectIcon.svelte';
   import StatusIcon from '#lib/components/layout/StatusIcon.svelte';
@@ -138,20 +138,29 @@
       ? [{ value: current, label: current }, ...options]
       : options;
 
+  /** Only the chat's own runtime: switching between Claude and Codex needs a new chat. */
+  const ownModels = $derived((chat.models ?? []).filter((m) => isCodexModel(m.value) === codex));
+  /**
+   * The model shown: the chat's own, else (none named, or Claude's `default`)
+   * its runtime's default row; an older service's `default` row matches as is.
+   */
+  const shownModel = $derived(
+    header.model && header.model !== LEGACY_DEFAULT
+      ? header.model
+      : (ownModels.find((m) => m.isDefault)?.value ?? header.model),
+  );
   const modelOptions = $derived(
     withCurrent(
-      // Only the chat's own runtime: switching between Claude and Codex needs a new chat.
-      (chat.models ?? [])
-        .filter((m) => isCodexModel(m.value) === codex)
-        .map((m) => ({ value: m.value, label: m.displayName || m.value })),
-      header.model,
+      ownModels.map((m) => ({ value: m.value, label: m.displayName || m.value })),
+      shownModel,
     ).map((option) => ({ ...option, label: modelLabel(option.label) })),
   );
   const effortOptions = $derived(
     withCurrent(
-      (chat.models?.find((m) => m.value === header.model)?.supportedEffortLevels ?? []).map(
-        (e) => ({ value: e, label: e }),
-      ),
+      (chat.models?.find((m) => m.value === shownModel)?.supportedEffortLevels ?? []).map((e) => ({
+        value: e,
+        label: e,
+      })),
       header.effort,
     ),
   );
@@ -371,8 +380,8 @@
     aria-label="Model"
     class={selectClass}
     disabled={!live || modelOptions.length === 0}
-    value={header.model ?? ''}
-    onchange={change(chats.setModel, () => header.model ?? '')}
+    value={shownModel ?? ''}
+    onchange={change(chats.setModel, () => shownModel ?? '')}
   >
     {#if modelOptions.length === 0}
       <option value="">Model</option>

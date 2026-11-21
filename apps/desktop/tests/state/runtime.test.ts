@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   agentNameOf,
+  defaultRow,
+  pickerRows,
+  requestedModel,
   isCodexChat,
   isCodexModel,
   modelsByRuntime,
@@ -43,5 +46,29 @@ describe('runtime of a chat or model', () => {
       codex: [{ value: 'codex:b' }, { value: 'codex:a' }],
     });
     expect(modelsByRuntime([{ value: 'opus' }]).codex).toEqual([]);
+  });
+
+  it("lists a runtime's real models, dropping a stray default row once one is marked", () => {
+    const marked = [{ value: 'default' }, { value: 'opus', isDefault: true }, { value: 'sonnet' }];
+    expect(pickerRows(marked).map((m) => m.value)).toEqual(['opus', 'sonnet']);
+    // An older service marks none: its default row stays and stands for the default.
+    const legacy = [{ value: 'default' }, { value: 'opus' }];
+    expect(pickerRows(legacy).map((m) => m.value)).toEqual(['default', 'opus']);
+    // No model matched Claude's default: its row stays, marked, named after its model.
+    const unmatched = [{ value: 'default', isDefault: true }, { value: 'opus' }];
+    expect(pickerRows(unmatched).map((m) => m.value)).toEqual(['default', 'opus']);
+  });
+
+  it('preselects the marked default, else the default row, else the first', () => {
+    expect(defaultRow([{ value: 'a' }, { value: 'b', isDefault: true }])?.value).toBe('b');
+    expect(defaultRow([{ value: 'a' }, { value: 'default' }])?.value).toBe('default');
+    expect(defaultRow([{ value: 'a' }, { value: 'b' }])?.value).toBe('a');
+    expect(defaultRow([])).toBeUndefined();
+  });
+
+  it("asks for no model for an older service's default row", () => {
+    expect(requestedModel('default')).toBe('');
+    expect(requestedModel('opus')).toBe('opus');
+    expect(requestedModel('codex:x')).toBe('codex:x');
   });
 });
