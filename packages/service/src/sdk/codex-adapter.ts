@@ -222,75 +222,121 @@ export class CodexSession implements AgentSession {
     this.starting = true;
     // Capture before initialization: inputs arriving during startup belong to the next turn.
     const messages = this.inputs.splice(0);
+    const shown = new Set<SDKUserMessage>();
     try {
       await this.ready;
       if (this.closed) return;
       // Match LiveSession's queued-input semantics: one subsequent turn consumes the batch.
       if (messages.length === 0) return;
-      const input: Rec[] = [];
-      for (const message of messages) {
-        const content: unknown = message.message.content;
-        const blocks = typeof content === 'string' ? [{ type: 'text', text: content }] : content;
-        if (!Array.isArray(blocks)) throw new Error('Unsupported Codex input');
-        for (const block of blocks) {
-          const b = rec(block);
-          if (b.type === 'text') {
-            input.push({ type: 'text', text: str(b.text), text_elements: [] });
-            this.record.firstPrompt ??= str(b.text);
-          } else if (b.type === 'image') {
-            const source = rec(b.source);
-            input.push({
-              type: 'image',
-              url: `data:${str(source.media_type)};base64,${str(source.data)}`,
-            });
-          } else throw new Error(`Unsupported Codex input: ${str(b.type)}`);
-        }
-        if (message.uuid) this.lifecycle(message.uuid, 'started');
-        this.emit({ ...message, timestamp: new Date().toISOString() }, true);
+      try {
+        await this.startTurn(messages, shown);
+      } catch (error) {
+        // One turn failing (rejected, timed out, unsupported input) leaves the thread usable;
+        // a dead app-server fails the whole session through onExit instead.
+        if (this.closed) return;
+        for (const message of messages) if (!shown.has(message)) this.show(message);
+        const text = error instanceof Error ? error.message : String(error);
+        const id = randomUUID();
+        this.turnError(id, text);
+        this.emit(
+          {
+            type: 'result',
+            uuid: `${id}-result`,
+            subtype: 'error_during_execution',
+            is_error: true,
+            errors: [text],
+          },
+          true,
+        );
       }
-      const policy = codexPermissions(this.record.permissionMode);
-      const model = codexModel(this.record.model);
-      const collaborationMode = this.record.preservePermissions
-        ? this.nativeCollaboration && {
-            ...this.nativeCollaboration,
-            settings: {
-              ...rec(this.nativeCollaboration.settings),
-              ...(model ? { model } : {}),
-              ...(this.record.effort ? { reasoning_effort: this.record.effort } : {}),
-            },
-          }
-        : model && {
-            mode: this.record.permissionMode === 'plan' ? 'plan' : 'default',
-            settings: {
-              model,
-              reasoning_effort: this.record.effort ?? null,
-              developer_instructions: null,
-            },
-          };
-      this.completedWhileStarting = false;
-      this.turnUsage = undefined;
-      this.lastAssistant = undefined;
-      const result = await this.client.request('turn/start', {
-        threadId: this.record.threadId,
-        input,
-        ...(messages[0]?.uuid ? { clientUserMessageId: messages[0].uuid } : {}),
-        ...(codexModel(this.record.model) ? { model: codexModel(this.record.model) } : {}),
-        ...(this.record.effort ? { effort: this.record.effort } : {}),
-        ...(!this.record.preservePermissions
-          ? {
-              approvalPolicy: policy.approvalPolicy,
-              sandboxPolicy: policy.sandboxPolicy,
-              approvalsReviewer: policy.approvalsReviewer ?? 'user',
-            }
-          : {}),
-        ...(collaborationMode ? { collaborationMode } : {}),
-      });
-      if (!this.completedWhileStarting) this.activeTurn = str(rec(result.turn).id) || undefined;
     } finally {
       this.starting = false;
       if (!this.activeTurn && this.inputs.length && !this.closed)
         void this.drain().catch((error: unknown) => this.fail(error));
     }
+  }
+
+  private show(message: SDKUserMessage): void {
+    if (message.uuid) this.lifecycle(message.uuid, 'started');
+    this.emit({ ...message, timestamp: new Date().toISOString() }, true);
+  }
+
+  private turnError(id: string, text: string): void {
+    this.emit(
+      {
+        type: 'assistant',
+        uuid: `${id}-error`,
+        message: {
+          id: `${id}-error`,
+          role: 'assistant',
+          model: '<synthetic>',
+          content: [{ type: 'text', text: `Codex: ${text || 'Turn failed'}` }],
+        },
+      },
+      true,
+    );
+  }
+
+  private async startTurn(messages: SDKUserMessage[], shown: Set<SDKUserMessage>): Promise<void> {
+    const input: Rec[] = [];
+    for (const message of messages) {
+      const content: unknown = message.message.content;
+      const blocks = typeof content === 'string' ? [{ type: 'text', text: content }] : content;
+      if (!Array.isArray(blocks)) throw new Error('Unsupported Codex input');
+      for (const block of blocks) {
+        const b = rec(block);
+        if (b.type === 'text') {
+          input.push({ type: 'text', text: str(b.text), text_elements: [] });
+          this.record.firstPrompt ??= str(b.text);
+        } else if (b.type === 'image') {
+          const source = rec(b.source);
+          input.push({
+            type: 'image',
+            url: `data:${str(source.media_type)};base64,${str(source.data)}`,
+          });
+        } else throw new Error(`Unsupported Codex input: ${str(b.type)}`);
+      }
+      this.show(message);
+      shown.add(message);
+    }
+    const policy = codexPermissions(this.record.permissionMode);
+    const model = codexModel(this.record.model);
+    const collaborationMode = this.record.preservePermissions
+      ? this.nativeCollaboration && {
+          ...this.nativeCollaboration,
+          settings: {
+            ...rec(this.nativeCollaboration.settings),
+            ...(model ? { model } : {}),
+            ...(this.record.effort ? { reasoning_effort: this.record.effort } : {}),
+          },
+        }
+      : model && {
+          mode: this.record.permissionMode === 'plan' ? 'plan' : 'default',
+          settings: {
+            model,
+            reasoning_effort: this.record.effort ?? null,
+            developer_instructions: null,
+          },
+        };
+    this.completedWhileStarting = false;
+    this.turnUsage = undefined;
+    this.lastAssistant = undefined;
+    const result = await this.client.request('turn/start', {
+      threadId: this.record.threadId,
+      input,
+      ...(messages[0]?.uuid ? { clientUserMessageId: messages[0].uuid } : {}),
+      ...(codexModel(this.record.model) ? { model: codexModel(this.record.model) } : {}),
+      ...(this.record.effort ? { effort: this.record.effort } : {}),
+      ...(!this.record.preservePermissions
+        ? {
+            approvalPolicy: policy.approvalPolicy,
+            sandboxPolicy: policy.sandboxPolicy,
+            approvalsReviewer: policy.approvalsReviewer ?? 'user',
+          }
+        : {}),
+      ...(collaborationMode ? { collaborationMode } : {}),
+    });
+    if (!this.completedWhileStarting) this.activeTurn = str(rec(result.turn).id) || undefined;
   }
 
   /** As Claude Code's Esc: messages still waiting for a turn are cancelled with the turn. */
@@ -446,11 +492,19 @@ export class CodexSession implements AgentSession {
     if (this.closed) return;
     try {
       const p = message.params ?? {};
-      if (p.threadId && this.record.threadId && p.threadId !== this.record.threadId) return;
+      // Requests come before the thread filter: this app-server only runs this chat's thread
+      // and its sub-agents, and a sub-agent's unanswered approval would hang the parent's turn.
       if (message.id !== undefined && message.method) {
         void this.approve(message).catch((error: unknown) => this.fail(error));
         return;
       }
+      if (message.method === 'serverRequest/resolved') {
+        const id = p.requestId as number | string;
+        this.approvals.get(id)?.abort();
+        this.approvals.delete(id);
+        return;
+      }
+      if (p.threadId && this.record.threadId && p.threadId !== this.record.threadId) return;
       switch (message.method) {
         case 'turn/started':
           this.activeTurn = str(rec(p.turn).id);
@@ -532,12 +586,6 @@ export class CodexSession implements AgentSession {
         case 'item/completed':
           this.item(rec(p.item), true);
           break;
-        case 'serverRequest/resolved': {
-          const id = p.requestId as number | string;
-          this.approvals.get(id)?.abort();
-          this.approvals.delete(id);
-          break;
-        }
         case 'turn/completed': {
           this.completedWhileStarting = this.starting;
           for (const [id, text] of this.streamed) {
@@ -561,25 +609,7 @@ export class CodexSession implements AgentSession {
               type: 'rate_limit_event',
               rate_limit_info: { status: 'rejected', rateLimitType: 'current' },
             });
-          if (failed)
-            this.emit(
-              {
-                type: 'assistant',
-                uuid: `${str(turn.id)}-error`,
-                message: {
-                  id: `${str(turn.id)}-error`,
-                  role: 'assistant',
-                  model: '<synthetic>',
-                  content: [
-                    {
-                      type: 'text',
-                      text: `Codex: ${str(rec(turn.error).message) || 'Turn failed'}`,
-                    },
-                  ],
-                },
-              },
-              true,
-            );
+          if (failed) this.turnError(str(turn.id), str(error.message));
           this.emit(
             {
               type: 'result',

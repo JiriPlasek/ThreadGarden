@@ -379,6 +379,79 @@ describe('Codex provider', () => {
     expect(connection.replies.some((reply) => reply.id === 73)).toBe(false);
   });
 
+  it("answers a sub-agent's approval request instead of leaving its turn hanging", async () => {
+    const h = harness();
+    const session = h.create();
+    const connection = await h.running();
+    connection.event(
+      'item/commandExecution/requestApproval',
+      { threadId: 'child-thread', itemId: 'child-command', command: 'ls' },
+      81,
+    );
+    await vi.waitFor(() => expect(session.pendingRequests()).toHaveLength(1));
+    session.respond('codex-81', { decision: 'allow' });
+    await vi.waitFor(() =>
+      expect(connection.replies).toContainEqual({ id: 81, result: { decision: 'accept' } }),
+    );
+    connection.event('item/fileChange/requestApproval', { threadId: 'child-thread' }, 82);
+    await vi.waitFor(() => expect(session.pendingRequests()).toHaveLength(1));
+    connection.event('serverRequest/resolved', { threadId: 'child-thread', requestId: 82 });
+    await vi.waitFor(() => expect(session.pendingRequests()).toHaveLength(0));
+    connection.event('item/tool/unknownRequest', { threadId: 'child-thread' }, 83);
+    expect(connection.client.reject).toHaveBeenCalledWith(83, expect.any(String));
+    // A sub-agent's ordinary events still stay out of the parent's transcript.
+    connection.event('item/completed', {
+      threadId: 'child-thread',
+      item: { id: 'child-answer', type: 'agentMessage', text: 'from the child' },
+    });
+    connection.event('turn/completed', { turn: { id: 'turn-1', status: 'completed' } });
+    await vi.waitFor(() => expect(session.status).toBe('idle'));
+    expect(
+      session
+        .snapshot(100)
+        .items.some((i) => i.kind === 'assistantText' && i.id === 'child-answer'),
+    ).toBe(false);
+  });
+
+  it('shows a rejected turn/start as a failed turn and keeps the chat usable', async () => {
+    let failNext = true;
+    const h = harness();
+    const session = h.create();
+    const connection = await h.running();
+    connection.event('turn/completed', { turn: { id: 'turn-1', status: 'completed' } });
+    await vi.waitFor(() => expect(session.status).toBe('idle'));
+    const request = vi.mocked(connection.client.request);
+    const original = request.getMockImplementation()!;
+    request.mockImplementation(async (method: string, params: Rec) => {
+      if (method === 'turn/start' && failNext) {
+        failNext = false;
+        throw new Error('Codex rejected the model and effort');
+      }
+      return original(method, params);
+    });
+    session.send({ text: 'this one fails' });
+    await vi.waitFor(() =>
+      expect(
+        session
+          .snapshot(100)
+          .items.some(
+            (i) =>
+              i.kind === 'assistantText' &&
+              i.markdown.includes('Codex rejected the model and effort'),
+          ),
+      ).toBe(true),
+    );
+    await vi.waitFor(() => expect(session.status).toBe('idle'));
+    expect(connection.client.close).not.toHaveBeenCalled();
+    session.send({ text: 'this one works' });
+    await vi.waitFor(() =>
+      expect(
+        connection.calls.filter((c) => c.method === 'turn/start').at(-1)!.params.input,
+      ).toEqual([{ type: 'text', text: 'this one works', text_elements: [] }]),
+    );
+    expect(session.status).toBe('working');
+  });
+
   it('consumes queued messages in one next turn and applies reasoning controls natively', async () => {
     const h = harness();
     const session = h.create();
