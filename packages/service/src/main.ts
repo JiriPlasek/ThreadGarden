@@ -38,6 +38,7 @@ import { ProjectIcons, type FoundIcon } from './history/project-icons.js';
 import { createQuickSearch } from './history/search.js';
 import { watchProjects } from './history/watcher.js';
 import { createLogger, type Logger } from './logger.js';
+import { serialRunner } from './serial.js';
 import { DB_FILE, migrateDataDir } from './migrate-data-dir.js';
 import { ChatStore } from './move/store.js';
 import type { AgentAdapter } from './sdk/adapter.js';
@@ -1226,19 +1227,18 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
           adapter.dispose?.();
         },
       };
-      let syncing: Promise<void> | undefined;
-      startSync = () => {
-        syncing ??= index
+      // One sync at a time; one asked for during a sync (a setting changed
+      // where Claude or Codex keeps its history) runs again after it.
+      startSync = serialRunner(async () => {
+        if (closing) return;
+        await index
           .fullSync()
           // A sync is when folders are known to be worth checking again (v1.1 §4).
           .then(() =>
             closing ? undefined : folders.refresh(opened.listProjects().map((p) => p.path)),
           )
-          .catch((err: unknown) => log.error(`full sync: ${String(err)}`))
-          .finally(() => {
-            syncing = undefined;
-          });
-      };
+          .catch((err: unknown) => log.error(`full sync: ${String(err)}`));
+      });
     }
 
     registerFileHandlers(router, { index: new FileIndex() });
