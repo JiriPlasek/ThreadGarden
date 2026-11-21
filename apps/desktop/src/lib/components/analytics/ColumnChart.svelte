@@ -32,6 +32,8 @@
     line,
     week = false,
     height = 150,
+    axisFormat = compact,
+    valueFormat = full,
   }: {
     id: string;
     /** What the chart shows, for its keyboard group and SVG title. */
@@ -42,6 +44,10 @@
     /** Each day starts a week (long ranges). */
     week?: boolean;
     height?: number;
+    /** Axis ticks (default: compact numbers). */
+    axisFormat?: (n: number) => string;
+    /** Values in the readout and its description (default: every digit). */
+    valueFormat?: (n: number) => string;
   } = $props();
 
   const LEFT = 44;
@@ -126,9 +132,9 @@
     readout
       ? [
           readout.day,
-          ...readout.rows.map((r) => `${r.name} ${full(r.value)}`),
-          ...(readout.total !== null ? [`Total ${full(readout.total)}`] : []),
-          ...(readout.line ? [`${readout.line.name} ${full(readout.line.value)}`] : []),
+          ...readout.rows.map((r) => `${r.name} ${valueFormat(r.value)}`),
+          ...(readout.total !== null ? [`Total ${valueFormat(readout.total)}`] : []),
+          ...(readout.line ? [`${readout.line.name} ${valueFormat(readout.line.value)}`] : []),
         ].join(', ')
       : '',
   );
@@ -211,7 +217,7 @@
           y={y(t)}
           dy="0.32em"
           text-anchor="end"
-          class="fill-muted-foreground text-[0.625rem] tabular-nums">{compact(t)}</text
+          class="fill-muted-foreground text-[0.625rem] tabular-nums">{axisFormat(t)}</text
         >
       {/each}
       {#if line}
@@ -241,7 +247,7 @@
             y={ly(t)}
             dy="0.32em"
             text-anchor="end"
-            class="fill-muted-foreground text-[0.625rem] tabular-nums">{compact(t)}</text
+            class="fill-muted-foreground text-[0.625rem] tabular-nums">{axisFormat(t)}</text
           >
         {/each}
         <path d={areaPath} fill={line.color} opacity="0.1" />
@@ -297,21 +303,21 @@
       {#each readout.rows as r (r.name)}
         <div class="flex items-center gap-2">
           <span class="h-0.5 w-3 shrink-0 rounded" style:background={r.color}></span>
-          <span class="font-semibold tabular-nums">{full(r.value)}</span>
+          <span class="font-semibold tabular-nums">{valueFormat(r.value)}</span>
           <span class="text-muted-foreground truncate">{r.name}</span>
         </div>
       {/each}
       {#if readout.total !== null}
         <div class="mt-0.5 flex items-center gap-2 border-t pt-0.5">
           <span class="w-3 shrink-0"></span>
-          <span class="font-semibold tabular-nums">{full(readout.total)}</span>
+          <span class="font-semibold tabular-nums">{valueFormat(readout.total)}</span>
           <span class="text-muted-foreground">Total</span>
         </div>
       {/if}
       {#if readout.line}
         <div class="flex items-center gap-2">
           <span class="h-0.5 w-3 shrink-0 rounded" style:background={readout.line.color}></span>
-          <span class="font-semibold tabular-nums">{full(readout.line.value)}</span>
+          <span class="font-semibold tabular-nums">{valueFormat(readout.line.value)}</span>
           <span class="text-muted-foreground truncate">{readout.line.name}</span>
         </div>
       {/if}

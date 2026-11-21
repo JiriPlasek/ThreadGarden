@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   compact,
+  usd,
   full,
   hourLabel,
   labelIndices,
@@ -10,6 +11,15 @@ import {
 } from '../../src/lib/components/analytics/format';
 
 describe('analytics format', () => {
+  it('dollars: rough, never more digits than they deserve', () => {
+    expect(usd(0)).toBe('$0');
+    expect(usd(0.004)).toBe('< $0.01');
+    expect(usd(3.456)).toBe('$3.46');
+    expect(usd(42.4)).toBe('$42');
+    expect(usd(1432)).toBe('$1.4K');
+    expect(usd(2_500_000)).toBe('$2.5M');
+  });
+
   it('numbers: in full under 10,000, compact above', () => {
     expect(compact(0)).toBe('0');
     expect(compact(1284)).toBe('1,284');

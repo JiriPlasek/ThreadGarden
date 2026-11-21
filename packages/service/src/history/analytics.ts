@@ -7,6 +7,7 @@
 import type { Analytics, AnalyticsRange } from '@threadgarden/protocol';
 import { baseName, titleFor, UNTITLED_TITLE } from './catalog.js';
 import type { Db } from './db.js';
+import { costOf } from './prices.js';
 import { localDay, STATS_VERSION } from './stats.js';
 
 const RANGE_DAYS: Record<Exclude<AnalyticsRange, 'all'>, number> = {
@@ -163,9 +164,21 @@ export const queryAnalytics = (db: Db, q: AnalyticsQuery): Analytics => {
   const activeDays = new Set<string>();
   let messages = 0;
   let outputTokens = 0;
+  let allTokens = 0;
+  let estimatedCostUsd = 0;
+  const unpriced = new Set<string>();
+  /** Each row's estimated cost (undefined: the model has no price), for the buckets below. */
+  const rowCost = new Map<Row, number | undefined>();
   const byModel = new Map<
     string,
-    { model: string; input: number; output: number; cacheRead: number; cacheCreation: number }
+    {
+      model: string;
+      input: number;
+      output: number;
+      cacheRead: number;
+      cacheCreation: number;
+      costUsd: number | null;
+    }
   >();
   for (const r of perDay) {
     const day = r.day as string;
@@ -177,11 +190,32 @@ export const queryAnalytics = (db: Db, q: AnalyticsQuery): Analytics => {
     if (i !== undefined) activity[i]!.messages += n;
     const model = r.model as string;
     if (model === '') continue;
-    const t = byModel.get(model) ?? { model, input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
-    t.input += num(r.input);
-    t.output += num(r.output);
-    t.cacheRead += num(r.cache_read);
-    t.cacheCreation += num(r.cache_creation);
+    const counts = {
+      input: num(r.input),
+      output: num(r.output),
+      cacheRead: num(r.cache_read),
+      cacheCreation: num(r.cache_creation),
+    };
+    const rowTokens = counts.input + counts.output + counts.cacheRead + counts.cacheCreation;
+    allTokens += rowTokens;
+    const cost = costOf(model, counts);
+    rowCost.set(r, cost);
+    if (cost === undefined) {
+      if (rowTokens > 0) unpriced.add(model);
+    } else estimatedCostUsd += cost;
+    const t = byModel.get(model) ?? {
+      model,
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheCreation: 0,
+      costUsd: cost === undefined ? null : 0,
+    };
+    t.input += counts.input;
+    t.output += counts.output;
+    t.cacheRead += counts.cacheRead;
+    t.cacheCreation += counts.cacheCreation;
+    if (t.costUsd !== null && cost !== undefined) t.costUsd += cost;
     byModel.set(model, t);
   }
   for (const r of all(
@@ -201,12 +235,25 @@ export const queryAnalytics = (db: Db, q: AnalyticsQuery): Analytics => {
   if (totals.length > MAX_MODELS) models.push(OTHER_MODEL);
   const slot = new Map(shown.map((t, i) => [t.model, i]));
   const tokenDays = keys.map((day) => ({ day, values: models.map(() => 0) }));
+  // A slot without a price stays null: `Other` has one when any of its models has.
+  const slotPriced = models.map((m, i) =>
+    i === MAX_MODELS && totals.length > MAX_MODELS
+      ? totals.slice(MAX_MODELS).some((t) => t.costUsd !== null)
+      : byModel.get(m)?.costUsd !== null,
+  );
+  const costDays = keys.map((day) => ({
+    day,
+    values: slotPriced.map((priced): number | null => (priced ? 0 : null)),
+  }));
   for (const r of perDay) {
     const model = r.model as string;
     if (model === '') continue;
     const i = index.get(keyOf(r.day as string));
     if (i === undefined) continue;
-    tokenDays[i]!.values[slot.get(model) ?? MAX_MODELS]! += num(r.output);
+    const s = slot.get(model) ?? MAX_MODELS;
+    tokenDays[i]!.values[s]! += num(r.output);
+    const cost = rowCost.get(r);
+    if (cost !== undefined) costDays[i]!.values[s] = (costDays[i]!.values[s] ?? 0) + cost;
   }
 
   // ── the chats in the range: the chats KPI, projects and topics (their titles) ──
@@ -281,13 +328,16 @@ export const queryAnalytics = (db: Db, q: AnalyticsQuery): Analytics => {
       chats,
       messages,
       outputTokens,
+      tokens: allTokens,
+      estimatedCostUsd,
+      unpricedModels: [...unpriced].sort(),
       activeDays: activeDays.size,
       busiestProject: busiest
         ? { projectId: busiest.projectId, name: busiest.name, messages: busiest.messages }
         : null,
     },
     activity,
-    tokens: { models, days: tokenDays, totals },
+    tokens: { models, days: tokenDays, costDays, totals },
     projects,
     tools,
     agents,

@@ -22,6 +22,9 @@ const sample = (over: Partial<Analytics> = {}): Analytics => ({
     chats: 12,
     messages: 340,
     outputTokens: 123_456,
+    tokens: 12_469,
+    estimatedCostUsd: 0.0481,
+    unpricedModels: [],
     activeDays: 5,
     busiestProject: { projectId: 'p1', name: 'alpha', messages: 200 },
   },
@@ -33,9 +36,27 @@ const sample = (over: Partial<Analytics> = {}): Analytics => ({
   tokens: {
     models: ['claude-sonnet', 'claude-opus'],
     days: [25, 26, 27, 28, 29, 30, 31].map((d, i) => ({ day: day(d), values: [i * 100, i * 50] })),
+    costDays: [25, 26, 27, 28, 29, 30, 31].map((d, i) => ({
+      day: day(d),
+      values: [i * 0.01, null],
+    })),
     totals: [
-      { model: 'claude-sonnet', input: 10, output: 2100, cacheRead: 9000, cacheCreation: 5 },
-      { model: 'claude-opus', input: 4, output: 1050, cacheRead: 300, cacheCreation: 0 },
+      {
+        model: 'claude-sonnet',
+        input: 10,
+        output: 2100,
+        cacheRead: 9000,
+        cacheCreation: 5,
+        costUsd: 0.0345,
+      },
+      {
+        model: 'claude-opus',
+        input: 4,
+        output: 1050,
+        cacheRead: 300,
+        cacheCreation: 0,
+        costUsd: null,
+      },
     ],
   },
   projects: [
@@ -162,7 +183,8 @@ describe('AnalyticsView', () => {
     for (const [label, value] of <[string, string][]>[
       ['Chats', '12'],
       ['Messages', '340'],
-      ['Output tokens', '123.5K'],
+      ['Tokens', '12.5K'],
+      ['Est. cost', '≈ $0.05'],
       ['Active days', '5'],
     ]) {
       const term = within(tiles).getByText(label, { selector: 'dt' });
@@ -171,6 +193,7 @@ describe('AnalyticsView', () => {
     for (const name of [
       'Activity',
       'Output tokens by model',
+      'Estimated cost by model',
       'Top projects',
       'Tools used',
       'Subagents',
@@ -183,6 +206,72 @@ describe('AnalyticsView', () => {
     // Two models: a legend names them.
     const tokens = screen.getByRole('figure', { name: 'Output tokens by model' });
     expect(within(tokens).getByText('claude-opus')).toBeTruthy();
+  });
+
+  it('the Tokens tile splits its total; Est. cost says what it is', async () => {
+    await view(sample({ kpis: { ...sample().kpis, unpricedModels: ['unknown', 'gpt-4o'] } }));
+    const tiles = screen.getByRole('heading', { name: 'Analytics' }).closest('section')!;
+    expect(within(tiles).queryByText('Output tokens', { selector: 'dt' })).toBeNull();
+    const tokens = within(tiles).getByText('Tokens', { selector: 'dt' }).nextElementSibling!;
+    const split = tokens.getAttribute('title')!;
+    for (const part of ['Input 14', 'Output 3,150', 'Cache read 9,300', 'Cache write 5'])
+      expect(split).toContain(part);
+    const cost = within(tiles).getByText('Est. cost', { selector: 'dt' }).nextElementSibling!;
+    expect(cost.getAttribute('title')).toContain('Estimated at API list prices');
+    expect(cost.getAttribute('title')).toContain('Not priced: unknown, gpt-4o');
+  });
+
+  it('cost tile without prices', async () => {
+    const data = sample();
+    await view({
+      ...data,
+      kpis: { ...data.kpis, estimatedCostUsd: 0, unpricedModels: ['claude-sonnet', 'claude-opus'] },
+      tokens: { ...data.tokens, totals: data.tokens.totals.map((t) => ({ ...t, costUsd: null })) },
+    });
+    const tiles = screen.getByRole('heading', { name: 'Analytics' }).closest('section')!;
+    const cost = within(tiles).getByText('Est. cost', { selector: 'dt' });
+    expect(cost.nextElementSibling?.textContent?.trim()).toBe('—');
+  });
+
+  it("the cost card's table lists each model's tokens and dollars", async () => {
+    await view();
+    const card = screen.getByRole('figure', { name: 'Estimated cost by model' });
+    // claude-opus has no price: the chart leaves it out (no legend entry for it).
+    expect(card.textContent).not.toContain('claude-opus');
+    await userEvent.click(within(card).getByRole('button', { name: 'Show data' }));
+    const [perModel, perDay] = within(card).getAllByRole('table');
+    for (const column of ['Model', 'Input', 'Output', 'Cache read', 'Cache write', 'Est. cost'])
+      expect(within(perModel!).getByRole('columnheader', { name: column })).toBeTruthy();
+    const sonnet = within(perModel!)
+      .getByRole('rowheader', { name: 'claude-sonnet' })
+      .closest('tr')!;
+    expect(within(sonnet).getByRole('cell', { name: '$0.03' })).toBeTruthy();
+    const opus = within(perModel!).getByRole('rowheader', { name: 'claude-opus' }).closest('tr')!;
+    expect(within(opus).getByRole('cell', { name: '—' })).toBeTruthy();
+    expect(within(perDay!).getByRole('cell', { name: '$0.06' })).toBeTruthy();
+    // claude-opus has no price: no "$0" for it anywhere in the cost card.
+    expect(within(perDay!).getAllByRole('cell', { name: '—' }).length).toBeGreaterThan(0);
+    expect(within(perDay!).queryByRole('cell', { name: '$0' })).toBeTruthy(); // sonnet's first day
+  });
+
+  it('an older service without tokens or costs still shows Analytics', async () => {
+    const data = sample();
+    // A service older than 0.11.0: none of the token-total or cost fields.
+    const older = structuredClone(data) as unknown as {
+      kpis: Record<string, unknown>;
+      tokens: { costDays?: unknown; totals: Record<string, unknown>[] };
+    };
+    for (const key of ['tokens', 'estimatedCostUsd', 'unpricedModels']) delete older.kpis[key];
+    delete older.tokens.costDays;
+    for (const t of older.tokens.totals) delete t.costUsd;
+    await view(older as unknown as Analytics);
+    const tiles = screen.getByRole('heading', { name: 'Analytics' }).closest('section')!;
+    const value = (label: string) =>
+      within(tiles).getByText(label, { selector: 'dt' }).nextElementSibling?.textContent?.trim();
+    expect(value('Tokens')).toBe('12.5K'); // summed from the per-model totals
+    expect(value('Est. cost')).toBe('—');
+    const card = screen.getByRole('figure', { name: 'Estimated cost by model' });
+    expect(within(card).getByText(/newer service/)).toBeTruthy();
   });
 
   it('"Show data" reveals the table view', async () => {
