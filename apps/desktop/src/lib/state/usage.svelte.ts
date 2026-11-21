@@ -15,6 +15,7 @@ import {
   type UsageState,
   type UsageWindow,
 } from '@threadgarden/protocol';
+import { isCodexChat } from '../runtime';
 import { quietly, type Api } from './api';
 
 /** The window the meter shows: the 5-hour one, else an event's window of unknown type. */
@@ -63,6 +64,19 @@ export const sortWindows = (ws: readonly UsageWindow[]): UsageWindow[] => {
     return ORDER.length + 1;
   };
   return [...ws].sort((a, b) => rank(a.key) - rank(b.key) || a.key.localeCompare(b.key));
+};
+
+/**
+ * When the limit that refuses requests now resets: the latest reset among
+ * the rejected windows still ahead.
+ */
+const latestRejectedReset = (windows: readonly UsageWindow[], now: number): number | undefined => {
+  let latest: number | undefined;
+  for (const w of windows) {
+    if (w.status !== 'rejected' || w.resetsAt === undefined || w.resetsAt <= now) continue;
+    if (latest === undefined || w.resetsAt > latest) latest = w.resetsAt;
+  }
+  return latest;
 };
 
 /** `localStorage` key of a paired machine's last usage state. */
@@ -119,14 +133,11 @@ export class UsageStore {
    * When the limit that refuses requests now resets: the latest reset among
    * the rejected windows still ahead.
    */
-  limitResetAt = $derived.by((): number | undefined => {
-    let latest: number | undefined;
-    for (const w of this.value.windows) {
-      if (w.status !== 'rejected' || w.resetsAt === undefined || w.resetsAt <= this.now) continue;
-      if (latest === undefined || w.resetsAt > latest) latest = w.resetsAt;
-    }
-    return latest;
-  });
+  limitResetAt = $derived(latestRejectedReset(this.value.windows, this.now));
+
+  /** The usage state that governs a chat: Codex's for a Codex chat, else Claude's. */
+  private stateFor = (sessionId: string): UsageState =>
+    isCodexChat(sessionId) ? (this.value.providers?.codex ?? usageEmpty) : this.value;
 
   init = (api: Api): void => {
     this.api = api;
@@ -142,23 +153,14 @@ export class UsageStore {
    * goes through (the service clears it) or the limit has reset.
    */
   refusal = (sessionId: string): RefusedChat | undefined => {
-    const state = sessionId.startsWith('codex-')
-      ? (this.value.providers?.codex ?? usageEmpty)
-      : this.value;
-    const r = state.refused.find((x) => x.sessionId === sessionId);
+    const r = this.stateFor(sessionId).refused.find((x) => x.sessionId === sessionId);
     if (!r) return undefined;
     return r.resetsAt !== undefined && r.resetsAt <= this.now ? undefined : r;
   };
 
-  limitResetAtFor = (sessionId: string): number | undefined => {
-    const state = sessionId.startsWith('codex-')
-      ? (this.value.providers?.codex ?? usageEmpty)
-      : this.value;
-    const times = state.windows
-      .filter((w) => w.status === 'rejected' && w.resetsAt !== undefined && w.resetsAt > this.now)
-      .map((w) => w.resetsAt!);
-    return times.length ? Math.max(...times) : undefined;
-  };
+  /** `limitResetAt` for the limits that govern this chat (its own runtime's). */
+  limitResetAtFor = (sessionId: string): number | undefined =>
+    latestRejectedReset(this.stateFor(sessionId).windows, this.now);
 
   /** Asks a running chat on the machine for a fresh reading. */
   refresh = async (): Promise<void> => {

@@ -16,6 +16,7 @@
   import SettingsIcon from '@lucide/svelte/icons/settings';
   import type { Component } from 'svelte';
   import ProjectIcon from '#lib/components/layout/ProjectIcon.svelte';
+  import { isCodexChat } from '#lib/runtime.js';
   import ShortcutHint from '#lib/components/ShortcutHint.svelte';
   import PickerKeyHints from '#lib/components/PickerKeyHints.svelte';
   import * as Dialog from '#lib/components/ui/dialog/index.js';
@@ -78,7 +79,7 @@
     // Not for a chat whose own machine's service can't move chats (protocol 8).
     if (
       !ref ||
-      ref.sessionId.startsWith('codex-') ||
+      isCodexChat(ref.sessionId) ||
       !machines.several ||
       !supportsMove(machines.get(ref.machineId))
     )

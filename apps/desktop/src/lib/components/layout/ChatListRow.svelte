@@ -10,6 +10,7 @@
   import PinOffIcon from '@lucide/svelte/icons/pin-off';
   import SquareTerminalIcon from '@lucide/svelte/icons/square-terminal';
   import * as ContextMenu from '#lib/components/ui/context-menu/index.js';
+  import { isCodexChat } from '#lib/runtime.js';
   import ShortcutHint from '#lib/components/ShortcutHint.svelte';
   import { ariaKeyShortcuts, shortcut } from '#lib/shortcuts.js';
   import { formatHoldUntil } from '#lib/format/hold.js';
@@ -142,7 +143,7 @@
         <div
           class="text-muted-foreground flex min-w-0 items-center gap-1.5 pl-5.5 text-xs leading-4"
         >
-          {#if showProvider}<ProviderIcon codex={chat.sessionId.startsWith('codex-')} />{/if}
+          {#if showProvider}<ProviderIcon codex={isCodexChat(chat.sessionId)} />{/if}
           {#if machineName}
             <span class="bg-muted max-w-[30%] shrink-0 truncate rounded px-1 text-[0.6875rem]"
               >{machineName}</span

@@ -7,6 +7,7 @@
   import SearchIcon from '@lucide/svelte/icons/search';
   import XIcon from '@lucide/svelte/icons/x';
   import { Button } from '#lib/components/ui/button/index.js';
+  import { isCodexChat } from '#lib/runtime.js';
   import { rowPx } from '#lib/interface-scale.js';
   import { supportsMove } from '#lib/projects.js';
   import ActionTooltip from '#lib/components/ActionTooltip.svelte';
@@ -198,8 +199,8 @@
     }),
   );
   const showProviders = $derived(
-    items.some((chat) => chat.sessionId.startsWith('codex-')) &&
-      items.some((chat) => !chat.sessionId.startsWith('codex-')),
+    items.some((chat) => isCodexChat(chat.sessionId)) &&
+      items.some((chat) => !isCodexChat(chat.sessionId)),
   );
 
   /** The keyboard cursor (a row key) follows the active tab until the user moves it. */
@@ -704,7 +705,7 @@
           onTogglePin={() => togglePin(chat)}
           onMove={(_, bucket) => moveFromMenu(chat, bucket)}
           onMoveMachine={machines.several &&
-          !chat.sessionId.startsWith('codex-') &&
+          !isCodexChat(chat.sessionId) &&
           supportsMove(machines.get(chat.machineId))
             ? () =>
                 interaction.openMoveChat(

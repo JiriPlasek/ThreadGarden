@@ -14,6 +14,7 @@
   import XIcon from '@lucide/svelte/icons/x';
   import { tick, untrack } from 'svelte';
   import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
+  import { agentNameOf, isCodexChat, runtimeOfChat } from '#lib/runtime.js';
   import Composer from '#lib/components/composer/Composer.svelte';
   import SetupScreen from '#lib/components/SetupScreen.svelte';
   import { imageCountText } from '#lib/format/images.js';
@@ -83,7 +84,7 @@
   const scope = useScope();
   const { chats, interaction, scheduled } = scope;
   const sessionId = $derived(ref.sessionId);
-  const agentName = $derived(sessionId.startsWith('codex-') ? 'Codex' : 'Claude');
+  const agentName = $derived(agentNameOf(runtimeOfChat(sessionId)));
   /** A chat just created from the new-chat dialog starts with its composer focused. */
   const focusComposer = untrack(() => interaction.takeComposerFocus(sessionId));
   const chat = $derived(chats.get(sessionId));
@@ -769,7 +770,7 @@
             hasMore={chat.hasMore}
             loadingOlder={chat.loadingOlder}
             onLoadOlder={() => void chats.loadOlder(sessionId)}
-            onFork={readOnly || sessionId.startsWith('codex-') ? undefined : fork}
+            onFork={readOnly || isCodexChat(sessionId) ? undefined : fork}
             requests={readOnly ? undefined : requests}
             requestsDocked={!readOnly}
             tasks={machineAway ? [] : chat.tasks}
