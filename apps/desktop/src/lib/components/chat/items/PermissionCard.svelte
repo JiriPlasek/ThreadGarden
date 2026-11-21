@@ -15,7 +15,9 @@
    */
   let { item }: { item: RequestItem } = $props();
 
-  const requests = chatActions().requests;
+  const actions = chatActions();
+  const agentName = $derived(actions.agentName ?? 'Claude');
+  const requests = actions.requests;
   /** At most this many "Always allow" choices are offered. */
   const MAX_SUGGESTIONS = 3;
 
@@ -152,8 +154,8 @@
             bind:this={feedbackInput}
             bind:value={feedback}
             class="bg-background h-7 min-w-0 flex-1 rounded-md border px-2 text-xs"
-            placeholder="Tell Claude what to do instead (optional)"
-            aria-label="Feedback for Claude"
+            placeholder="Tell {agentName} what to do instead (optional)"
+            aria-label="Feedback for {agentName}"
             onkeydown={(e) => {
               if (e.key === 'Escape') {
                 e.stopPropagation();

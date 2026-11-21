@@ -159,6 +159,77 @@ const streamedReply = (adapter: FakeAdapter, text: string) => {
 };
 
 describe('chat handlers', () => {
+  it('discovers Codex models cold and starts without Claude or an Anthropic key', async () => {
+    const codexModels = [
+      {
+        value: 'codex:test-model',
+        displayName: 'Codex Test',
+        description: '',
+        supportedEffortLevels: ['minimal', 'high'],
+      },
+    ];
+    const adapter = Object.assign(new FakeAdapter(), {
+      models: async () => codexModels,
+      requireCodex: vi.fn(async () => {}),
+      resumeCommand: async () => 'codex resume saved-thread',
+    });
+    await start(adapter, {
+      apiKeyOnly: true,
+      claude: { problem: 'missing', detail: 'Claude is not installed' },
+    });
+    expect(await ok('chat.models', { cwd: dir })).toEqual(codexModels);
+    expect(await code('chat.create', { cwd: dir, text: 'Claude' })).toBe('API_KEY_REQUIRED');
+    const { sessionId } = await ok<{ sessionId: string }>('chat.create', {
+      cwd: dir,
+      text: 'Codex',
+      model: 'codex:test-model',
+      effort: 'minimal',
+      permissionMode: 'bypassPermissions',
+    });
+    expect(sessionId).toMatch(/^codex-/);
+    expect(adapter.requireCodex).toHaveBeenCalledOnce();
+    expect(adapter.started.at(-1)?.options).toMatchObject({
+      model: 'codex:test-model',
+      effort: 'minimal',
+      permissionMode: 'bypassPermissions',
+    });
+    adapter.lastSession().models = codexModels;
+    expect(await ok('chat.models', { sessionId })).toEqual(codexModels);
+    expect(await ok('chat.resumeCommand', { sessionId })).toEqual({
+      command: 'codex resume saved-thread',
+    });
+    expect(await ok('system.status', {})).toMatchObject({
+      claude: { found: false },
+      codex: { found: true },
+    });
+  });
+
+  it('preserves a client Codex id across retries and rejects runtime mismatches', async () => {
+    const adapter = Object.assign(new FakeAdapter(), { requireCodex: async () => {} });
+    await start(adapter);
+    const sessionId = 'codex-00000000-0000-4000-8000-000000000001';
+    const params = { cwd: dir, text: 'Codex', model: 'codex:test-model', sessionId };
+    expect(await ok('chat.create', params)).toEqual({ sessionId });
+    expect(await ok('chat.create', params)).toEqual({ sessionId });
+    expect(adapter.started).toHaveLength(1);
+    expect(
+      await code('chat.create', { ...params, sessionId: '00000000-0000-4000-8000-000000000002' }),
+    ).toBe('INVALID_PARAMS');
+    expect(await code('chat.create', { ...params, model: 'sonnet' })).toBe('INVALID_PARAMS');
+  });
+
+  it('explains a missing Codex executable at create time', async () => {
+    const adapter = Object.assign(new FakeAdapter(), {
+      requireCodex: async () => {
+        throw new Error('Install Codex CLI');
+      },
+    });
+    await start(adapter);
+    const response = await call('chat.create', { cwd: dir, text: 'hello', model: 'codex:default' });
+    expect(response.error).toEqual({ code: 'CODEX_MISSING', message: 'Install Codex CLI' });
+    expect(adapter.started).toHaveLength(0);
+  });
+
   it('uses the saved new-chat default and allows an explicit ask-before-acting override', async () => {
     const adapter = new FakeAdapter();
     await start(adapter);
@@ -617,6 +688,80 @@ describe('chat handlers', () => {
     expect(await ok('chat.commands', { cwd: dir })).toEqual(commands);
     expect(await ok('chat.commands', {})).toEqual(commands);
     expect(await ok('chat.models', {})).toEqual(models);
+  });
+
+  describe("Claude's models in the picker", () => {
+    const claudeRows = [
+      {
+        value: 'default',
+        displayName: 'Default (recommended)',
+        description: 'Opus 5.5 · Most capable',
+        resolvedModel: 'claude-opus-5-5',
+      },
+      {
+        value: 'opus',
+        displayName: 'Opus',
+        description: 'Most capable',
+        resolvedModel: 'claude-opus-5-5',
+      },
+      {
+        value: 'sonnet',
+        displayName: 'Sonnet',
+        description: 'Fast',
+        resolvedModel: 'claude-sonnet-5-5',
+      },
+    ];
+    const live = async (models: typeof claudeRows) => {
+      const adapter = new FakeAdapter();
+      await start(adapter);
+      const { sessionId } = await ok<{ sessionId: string }>('chat.create', { cwd: dir, text: 'x' });
+      adapter.lastSession().models = models;
+      return { sessionId, adapter };
+    };
+
+    it('has no "default" row: the row it resolves to is marked as the default', async () => {
+      const { sessionId } = await live(claudeRows);
+      const expected = [
+        { value: 'opus', displayName: 'Opus', description: 'Most capable', isDefault: true },
+        { value: 'sonnet', displayName: 'Sonnet', description: 'Fast' },
+      ];
+      expect(await ok('chat.models', { sessionId })).toEqual(expected);
+      expect(await ok('chat.models', {})).toEqual(expected);
+    });
+
+    it('names the default row after its model when no other row is that model', async () => {
+      await live([{ ...claudeRows[0]!, resolvedModel: 'claude-fable-5-1' }, claudeRows[2]!]);
+      expect(await ok('chat.models', {})).toEqual([
+        {
+          value: 'default',
+          displayName: 'Fable 5.1',
+          description: 'Opus 5.5 · Most capable',
+          isDefault: true,
+        },
+        { value: 'sonnet', displayName: 'Sonnet', description: 'Fast' },
+      ]);
+    });
+
+    it('are remembered across a restart, before any Claude chat runs', async () => {
+      const { sessionId } = await live(claudeRows);
+      await ok('chat.models', { sessionId });
+      await svc!.close();
+      svc = undefined;
+      // A fresh adapter runs nothing: the list can only come from the database.
+      svc = await startService({
+        dataDir: join(dir, 'data'),
+        claudeConfigDir: join(dir, 'claude'),
+        adapter: new FakeAdapter(),
+        claude: { path: '/bin/claude', version: '2.1.314' },
+        externalRun: async () => '[]',
+        sessionEnv: { PATH: '/usr/bin' },
+        installSignalHandlers: false,
+      });
+      expect(await ok('chat.models', {})).toEqual([
+        { value: 'opus', displayName: 'Opus', description: 'Most capable', isDefault: true },
+        { value: 'sonnet', displayName: 'Sonnet', description: 'Fast' },
+      ]);
+    }, 15_000);
   });
 
   it('chat.open lists the tasks of a chat Threadgarden runs; chat.stopTask stops one', async () => {

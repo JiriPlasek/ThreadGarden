@@ -51,7 +51,7 @@ export type ScheduledDeps = {
   /** The chat is in a turn (working, or waiting on the user): a new message would only queue. */
   busy: (sessionId: string) => boolean;
   /** The reset time of the usage limit refusing requests now, if one does and it is known. */
-  limitResetAt: () => number | undefined;
+  limitResetAt: (sessionId?: string) => number | undefined;
   /** A chat Threadgarden knows (`NOT_FOUND` otherwise). */
   exists: (sessionId: string) => boolean;
   describe: (sessionId: string) => { title: string; projectName: string };
@@ -206,7 +206,7 @@ export class ScheduledSends {
     if (p.text.trim() === '' && images.length === 0) {
       throw new ServiceError('INVALID_PARAMS', 'A scheduled message needs text or an image');
     }
-    const { sendAt, afterReset } = this.when(p);
+    const { sendAt, afterReset } = this.when(p, p.sessionId);
     const id = p.id ?? randomUUID();
     this.deps.raw
       .prepare(
@@ -243,7 +243,7 @@ export class ScheduledSends {
     }
     const retimed = p.sendAt !== undefined || p.whenLimitResets === true;
     const { sendAt, afterReset } = retimed
-      ? this.when(p)
+      ? this.when(p, r.session_id)
       : { sendAt: r.send_at, afterReset: r.after_reset === 1 };
     this.deps.raw
       .prepare(
@@ -341,7 +341,7 @@ export class ScheduledSends {
       if (taken.has(r.session_id)) continue;
       taken.add(r.session_id);
       if (this.blocked(r.session_id)) continue;
-      const reset = this.deps.limitResetAt();
+      const reset = this.deps.limitResetAt(r.session_id);
       if (reset !== undefined && reset > now) {
         // Known to be refused until then: wait for the reset rather than be refused.
         this.deps.raw
@@ -407,7 +407,7 @@ export class ScheduledSends {
     const r = this.deps.raw.prepare('SELECT * FROM scheduled_sends WHERE id = ?').get(id) as
       Row | undefined;
     if (!r) return;
-    const reset = this.deps.limitResetAt();
+    const reset = this.deps.limitResetAt(r.session_id);
     if (r.rescheduled === 1 || reset === undefined) {
       this.deps.raw
         .prepare(`UPDATE scheduled_sends SET state = 'failed', error = ? WHERE id = ?`)
@@ -425,9 +425,9 @@ export class ScheduledSends {
       .run(reset + LIMIT_RESET_MARGIN_MS, id);
   }
 
-  private when(p: When): { sendAt: number; afterReset: boolean } {
+  private when(p: When, sessionId: string): { sendAt: number; afterReset: boolean } {
     if (p.whenLimitResets === true) {
-      const reset = this.deps.limitResetAt();
+      const reset = this.deps.limitResetAt(sessionId);
       if (reset === undefined) {
         throw new ServiceError('NO_RESET_TIME', 'When the usage limit resets is not known');
       }

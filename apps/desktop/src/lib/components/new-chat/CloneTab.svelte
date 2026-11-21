@@ -2,6 +2,7 @@
   import type { GithubStatus, Repo } from '@threadgarden/protocol';
   import { onMount } from 'svelte';
   import { fullTime, relativeTime } from '#lib/format/time.js';
+  import { isCodexModel } from '#lib/runtime.js';
   import { projectsApi, type ProjectsApi } from '#lib/projects.js';
   import CreateInField from './CreateInField.svelte';
   import { watchClone, type CloneWatch } from './clone.js';
@@ -118,7 +119,11 @@
     if (!createIn) throw new Error('Choose where to clone it first.');
     const on = projectsApi(send.target.api);
     const chosen = repo;
-    const result = await on.clone({ createIn, repo: chosen });
+    const result = await on.clone({
+      createIn,
+      repo: chosen,
+      ...(isCodexModel(send.chat.model) ? { model: send.chat.model } : {}),
+    });
     if (result.status === 'existing') {
       if (live) existing = { path: result.path, send };
       return null;

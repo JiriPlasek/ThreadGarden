@@ -261,17 +261,24 @@ class ScriptedSession extends FakeSession {
       { name: 'init', description: 'Create a CLAUDE.md for this project', argumentHint: '' },
     ];
     this.models = [
-      { value: 'default', displayName: 'Default', description: 'Recommended model' },
+      {
+        value: 'default',
+        displayName: 'Default',
+        description: 'Recommended model',
+        resolvedModel: 'claude-opus-4-1',
+      },
       {
         value: 'opus',
         displayName: 'Opus',
         description: 'Most capable',
+        resolvedModel: 'claude-opus-4-1',
         supportedEffortLevels: ['low', 'medium', 'high', 'xhigh', 'max'],
       },
       {
         value: 'sonnet',
         displayName: 'Sonnet',
         description: 'Fast and capable',
+        resolvedModel: 'claude-sonnet-4-5',
         supportedEffortLevels: ['low', 'medium', 'high'],
       },
     ];

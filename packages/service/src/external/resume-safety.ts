@@ -5,6 +5,7 @@
  */
 import type { ChatStatus } from '@threadgarden/protocol';
 import type { ExternalSession } from './poller.js';
+import { isCodexSession } from '../sdk/providers.js';
 
 export const RECENT_MODIFIED_MS = 120_000;
 
@@ -41,11 +42,14 @@ export const checkResume = (o: {
   now: number;
 }): ResumeCheck => {
   const recentlyModified = o.now - o.lastModified < RECENT_MODIFIED_MS;
+  const runtime = isCodexSession(o.sessionId) ? 'Codex' : 'Claude Code';
   if (o.external === null) {
     return {
       status: 'unverified',
       reason:
-        "Threadgarden cannot check whether this chat is open in another Claude Code process (the 'claude agents' command is unavailable).",
+        runtime === 'Codex'
+          ? 'Threadgarden cannot access the shared Codex runtime to check whether this chat is open elsewhere.'
+          : "Threadgarden cannot check whether this chat is open in another Claude Code process (the 'claude agents' command is unavailable).",
       recentlyModified,
     };
   }
@@ -56,8 +60,8 @@ export const checkResume = (o: {
       live.kind === 'background'
         ? 'as a background session'
         : live.pid !== undefined
-          ? `in another Claude Code process (pid ${live.pid})`
-          : 'in another Claude Code process';
+          ? `in another ${runtime} process (pid ${live.pid})`
+          : `in another ${runtime} process`;
     return {
       status: 'blocked',
       canStop:
@@ -68,6 +72,13 @@ export const checkResume = (o: {
       recentlyModified,
     };
   }
+  if (runtime === 'Codex')
+    return {
+      status: 'unverified',
+      reason:
+        'This chat is not loaded in the shared Codex runtime. Independent Codex CLI processes cannot be ruled out; stop any other copy before continuing here.',
+      recentlyModified,
+    };
   return {
     status: 'ok',
     reason:

@@ -103,6 +103,7 @@
     commandScope,
     working = false,
     queued = 0,
+    agentName = 'Claude',
     placeholder = 'Message Claude…',
     label = 'Message',
     autofocus = false,
@@ -129,6 +130,7 @@
     working?: boolean;
     /** Messages sent while working that Claude has not read yet. */
     queued?: number;
+    agentName?: string;
     placeholder?: string;
     label?: string;
     autofocus?: boolean;
@@ -251,6 +253,9 @@
   let files = $state.raw<FileSuggestion[]>([]);
   let filesLoading = $state(false);
   let commands = $state.raw<SlashCommand[] | null>(null);
+  $effect(() => {
+    commands = agentName === 'Codex' ? [] : null;
+  });
   let suggestTimer: ReturnType<typeof setTimeout> | undefined;
   let suggestGen = 0;
 
@@ -296,7 +301,7 @@
     if (commands !== null) return;
     interaction
       .commands(commandScope)
-      .then((list) => (commands = list))
+      .then((list) => (commands = agentName === 'Codex' ? [] : list))
       .catch(() => (commands = []));
   };
 
@@ -774,7 +779,7 @@
 
   const hint = $derived(
     working && text.trim() && !editing
-      ? 'Claude is working: this message is queued, and Claude reads it at its next step.'
+      ? `${agentName} is working: this message is queued, and ${agentName} reads it ${agentName === 'Codex' ? 'when the current turn ends' : 'at its next step'}.`
       : null,
   );
   const empty = $derived(!text.trim() && images.length === 0);
@@ -960,7 +965,7 @@
       {/if}
     </div>
     {#if working && onInterrupt}
-      <ActionTooltip label="Stop Claude" combos={stopKeys}>
+      <ActionTooltip label="Stop {agentName}" combos={stopKeys}>
         {#snippet children({ props })}
           <button
             {...props}

@@ -50,6 +50,35 @@ describe('extractText', () => {
 });
 
 describe('Indexer', () => {
+  it('refreshes and prunes only the requested provider, and preserves history on a failed listing', async () => {
+    const { db, indexer, adapter } = setup(3);
+    try {
+      await indexer.fullSync();
+      const infos = [...adapter.sessions.values()].map((session) => session.info);
+      const owned = infos[0]!.sessionId;
+      await expect(
+        indexer.refreshSource(
+          async () => {
+            throw new Error('Unavailable');
+          },
+          (id) => id === owned,
+        ),
+      ).rejects.toThrow('Unavailable');
+      expect(db.allSessionIds()).toHaveLength(3);
+      await indexer.refreshSource(
+        async () => [],
+        (id) => id === owned,
+      );
+      expect(db.allSessionIds()).toHaveLength(2);
+      expect(db.allSessionIds()).not.toContain(owned);
+      expect(db.allSessionIds()).toEqual(
+        expect.arrayContaining(infos.slice(1).map((info) => info.sessionId)),
+      );
+    } finally {
+      await indexer.stop();
+      db.close();
+    }
+  });
   it('fullSync indexes all sessions and emits progress', async () => {
     const { db, events, indexer, adapter } = setup();
     await indexer.fullSync();

@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { EventMsg } from '@threadgarden/protocol';
-import { ExternalPoller, parseAgents } from '../../src/external/poller.js';
+import {
+  CODEX_POLL_MS,
+  ExternalPoller,
+  parseAgents,
+  POLL_VISIBLE_MS,
+} from '../../src/external/poller.js';
 
 const SAMPLE = [
   {
@@ -43,6 +48,95 @@ const make = (run: (args: string[]) => Promise<string>, own: string[] = []) => {
 };
 
 afterEach(() => vi.useRealTimers());
+
+describe('independent provider discovery', () => {
+  it('keeps Claude results when Codex is unavailable and vice versa', async () => {
+    let claudeFails = false;
+    let codexFails = true;
+    const poller = new ExternalPoller(
+      async () => {
+        if (claudeFails) throw new Error('Claude unavailable');
+        return JSON.stringify(SAMPLE);
+      },
+      () => new Set(['codex-owned']),
+      () => {},
+      {
+        codexEnabled: () => true,
+        codex: async () => {
+          if (codexFails) throw new Error('Codex unavailable');
+          return ['codex-external', 'codex-owned'].map((sessionId) => ({
+            sessionId,
+            kind: 'codex',
+            cwd: '/repo',
+            startedAt: 1,
+            status: 'busy',
+            raw: {},
+          }));
+        },
+      },
+    );
+    expect(await poller.current('claude')).toHaveLength(3);
+    expect(await poller.current('codex')).toBeNull();
+    claudeFails = true;
+    codexFails = false;
+    expect(await poller.current('claude')).toBeNull();
+    expect(await poller.current('codex')).toMatchObject([{ sessionId: 'codex-external' }]);
+  });
+});
+
+describe("Codex's runtime cadence", () => {
+  it('asks Codex at most every CODEX_POLL_MS between polls, but always on demand', async () => {
+    let now = 1_000_000;
+    const codex = vi.fn(async () => [
+      { sessionId: 'codex-x', kind: 'codex', cwd: '/r', startedAt: 1, status: 'busy', raw: {} },
+    ]);
+    const run = vi.fn(async () => '[]');
+    const poller = new ExternalPoller(
+      run,
+      () => new Set(),
+      () => {},
+      { codexEnabled: () => true, codex, now: () => now },
+    );
+    await poller.refresh();
+    expect(codex).toHaveBeenCalledTimes(1);
+    for (const step of [POLL_VISIBLE_MS, POLL_VISIBLE_MS, POLL_VISIBLE_MS]) {
+      now += step;
+      await poller.refresh();
+    }
+    // Claude's own list keeps its cadence; Codex's is reused, sessions and all.
+    expect(run).toHaveBeenCalledTimes(4);
+    expect(codex).toHaveBeenCalledTimes(1);
+    expect(poller.snapshot()).toMatchObject([{ sessionId: 'codex-x' }]);
+    expect(poller.providerAvailable('codex')).toBe(true);
+    now += CODEX_POLL_MS;
+    await poller.refresh();
+    expect(codex).toHaveBeenCalledTimes(2);
+    // A resume check or Stop must see the runtime as it is now.
+    expect(await poller.current('codex')).toMatchObject([{ sessionId: 'codex-x' }]);
+    expect(codex).toHaveBeenCalledTimes(3);
+  });
+
+  it('forgets Codex sessions once Codex polling is switched off', async () => {
+    let codexOn = true;
+    const poller = new ExternalPoller(
+      async () => '[]',
+      () => new Set(),
+      () => {},
+      {
+        codexEnabled: () => codexOn,
+        codex: async () => [
+          { sessionId: 'codex-x', kind: 'codex', cwd: '/r', startedAt: 1, raw: {} },
+        ],
+      },
+    );
+    await poller.refresh();
+    expect(poller.snapshot()).toHaveLength(1);
+    codexOn = false;
+    await poller.refresh();
+    expect(poller.snapshot()).toEqual([]);
+    expect(poller.providerAvailable('codex')).toBe(false);
+  });
+});
 
 describe('parseAgents', () => {
   it('parses claude agents output with unknown fields', () => {

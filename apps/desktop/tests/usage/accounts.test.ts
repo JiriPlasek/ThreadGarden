@@ -26,6 +26,28 @@ const machine = (
 };
 
 describe('groupUsage', () => {
+  it('keeps Claude and ChatGPT quotas separate even with the same email on two machines', () => {
+    const machines = ['pc', 'laptop'].map((id) => {
+      const m = machine(id, login('same@example.test'), [
+        win('five_hour', 100, { utilization: 90 }),
+      ]);
+      m.state.providers = {
+        codex: {
+          windows: [win('five_hour', 200, { utilization: 20 })],
+          refused: [],
+          account: { ...login('same@example.test', 'pro'), runtime: 'codex' },
+        },
+      };
+      return m;
+    });
+    const entries = groupUsage(machines);
+    expect(entries.map((e) => e.key)).toEqual([
+      'email:same@example.test',
+      'codex:email:same@example.test',
+    ]);
+    expect(entries.map((e) => e.windows[0]?.utilization)).toEqual([90, 20]);
+    expect(entries.map((e) => e.machines.length)).toEqual([2, 2]);
+  });
   it('one account everywhere is one entry with both machines and the newest window per key', () => {
     const entries = groupUsage([
       machine('pc', login('me@x.cz'), [

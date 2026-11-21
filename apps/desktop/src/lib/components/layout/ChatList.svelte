@@ -7,6 +7,7 @@
   import SearchIcon from '@lucide/svelte/icons/search';
   import XIcon from '@lucide/svelte/icons/x';
   import { Button } from '#lib/components/ui/button/index.js';
+  import { isCodexChat } from '#lib/runtime.js';
   import { rowPx } from '#lib/interface-scale.js';
   import { supportsMove } from '#lib/projects.js';
   import ActionTooltip from '#lib/components/ActionTooltip.svelte';
@@ -196,6 +197,10 @@
       hasMore,
       keyOf,
     }),
+  );
+  const showProviders = $derived(
+    items.some((chat) => isCodexChat(chat.sessionId)) &&
+      items.some((chat) => !isCodexChat(chat.sessionId)),
   );
 
   /** The keyboard cursor (a row key) follows the active tab until the user moves it. */
@@ -694,11 +699,14 @@
             ? 0
             : (scope.chats.get(chat.sessionId)?.running ?? chat.runningTasks ?? 0)}
           scheduled={scope.scheduled.forChat(chat.sessionId)}
+          showProvider={showProviders}
           onOpen={(_, e) => onRowClick(chat, e)}
           onRename={() => (renaming = chat)}
           onTogglePin={() => togglePin(chat)}
           onMove={(_, bucket) => moveFromMenu(chat, bucket)}
-          onMoveMachine={machines.several && supportsMove(machines.get(chat.machineId))
+          onMoveMachine={machines.several &&
+          !isCodexChat(chat.sessionId) &&
+          supportsMove(machines.get(chat.machineId))
             ? () =>
                 interaction.openMoveChat(
                   { machineId: chat.machineId, sessionId: chat.sessionId },

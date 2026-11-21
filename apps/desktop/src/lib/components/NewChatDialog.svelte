@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { ImageRef, Project, Result } from '@threadgarden/protocol';
-  import { PERMISSION_MODE_OPTIONS as PERMISSION_MODES } from '@threadgarden/protocol';
+  import { PERMISSION_MODE_OPTIONS } from '@threadgarden/protocol';
   import { untrack } from 'svelte';
   import { buildFlags } from '#lib/build-flags.js';
   import Composer from '#lib/components/composer/Composer.svelte';
@@ -25,14 +25,27 @@
   import * as Dialog from '#lib/components/ui/dialog/index.js';
   import { isPhone } from '#lib/native.js';
   import { nameProblem, projectsApi, supportsProjects } from '#lib/projects.js';
+  import { modelLabel } from '#lib/format/model.js';
+  import { providerMarks } from '#lib/assets/provider-marks.js';
+  import {
+    agentNameOf,
+    defaultRow,
+    isCodexModel,
+    modelsByRuntime,
+    pickerRows,
+    requestedModel,
+    type Runtime,
+  } from '#lib/runtime.js';
   import { useApp } from '#lib/state/context.js';
   import { awayRefusal } from '#lib/state/copy-api.js';
   import { machineAway, machineLabel, machineNameOf } from '#lib/state/machines.svelte.js';
+  import { newChatSessionId } from '#lib/state/refs.js';
   import { newChatDraftKey, type ModelChoice } from '#lib/state/interaction.svelte.js';
 
   /**
    * Starts a chat (spec §5.4): in any listed project or any folder from the
-   * native picker, with a model and permission mode. The first message is written here, with the full
+   * native picker, with a model and permission mode for the chosen runtime.
+   * The first message is written here, with the full
    * composer (`@` files of the chosen folder, `/` commands, images); its draft
    * is kept per folder (`new:<cwd>`).
    *
@@ -201,7 +214,49 @@
   let cloning = $state(false);
   /** A folder made whose chat did not start (Start there). */
   let made = $state<NotStarted | null>(null);
+  /**
+   * The runtime asked for (Claude or Codex) and the model picked for it; an
+   * empty pick means that runtime's default row. Both are kept between opens,
+   * the pick only on the same machine (a model is never sent to another).
+   */
+  let runtime = $state<Runtime>('claude');
   let model = $state('');
+  let models = $state.raw<ModelChoice[]>([]);
+  const byRuntime = $derived(modelsByRuntime(models));
+  const claudeRows = $derived(pickerRows(byRuntime.claude));
+  const codexRows = $derived(pickerRows(byRuntime.codex));
+  /** The machine offers Codex: its service found the Codex CLI. */
+  const codexOffered = $derived(codexRows.length > 0);
+  /** The runtime the chat starts on: Codex only while the machine offers it. */
+  const shownRuntime = $derived<Runtime>(runtime === 'codex' && codexOffered ? 'codex' : 'claude');
+  const runtimeRows = $derived(shownRuntime === 'codex' ? codexRows : claudeRows);
+  /** The row shown as chosen: the pick when it is this runtime's, else the runtime's default. */
+  const selected = $derived(
+    runtimeRows.some((m) => m.value === model) ? model : (defaultRow(runtimeRows)?.value ?? ''),
+  );
+  /** What the new chat asks for (an older service's `default` row asks for none). */
+  const chosenModel = $derived(requestedModel(selected));
+  /** The chat runs on Codex, not Claude Code. */
+  const codexChosen = $derived(shownRuntime === 'codex');
+  const agent = $derived(agentNameOf(shownRuntime));
+  const RUNTIMES: { id: Runtime; label: string }[] = [
+    { id: 'claude', label: 'Claude' },
+    { id: 'codex', label: 'Codex' },
+  ];
+  const CODEX_MISSING = 'Install the Codex CLI and run codex login to use Codex here';
+  /** Another runtime: its default model is preselected. */
+  const chooseRuntime = (id: Runtime): void => {
+    runtime = id;
+    model = '';
+  };
+  /** Codex names bypass after what it does there: it never asks. */
+  const PERMISSION_MODES = $derived(
+    codexChosen
+      ? PERMISSION_MODE_OPTIONS.map((m) =>
+          m.value === 'bypassPermissions' ? { ...m, label: "Don't ask permissions" } : m,
+        )
+      : PERMISSION_MODE_OPTIONS,
+  );
   let mode = $state('default');
   let confirmBypass = $state(false);
   $effect(() => {
@@ -213,7 +268,6 @@
     if (value === 'bypassPermissions' && mode !== value) confirmBypass = true;
     else mode = value;
   };
-  let models = $state.raw<ModelChoice[]>([]);
   let error = $state<string | null>(null);
   /** Set once a chat was created: focus goes to its composer, not back to the trigger. */
   let created = false;
@@ -306,8 +360,6 @@
       .catch(() => {});
   });
 
-  const modelOptions = $derived(models.filter((m) => m.value !== 'default'));
-
   /** A folder chosen with Browse… (or a made one) joins its machine's list, selected. */
   const pickFolder = (path: string, on = scope.machineId): void => {
     picked = { machineId: on, path };
@@ -327,10 +379,12 @@
    * message is queued (or the machine or folder changes): sending again after
    * a lost reply asks for the same chat, which the machine makes only once.
    */
-  let pendingNew: { machineId: string; cwd: string; sessionId: string } | null = null;
-  const pendingIdFor = (on: string, at: string): string => {
-    if (pendingNew?.machineId !== on || pendingNew.cwd !== at) {
-      pendingNew = { machineId: on, cwd: at, sessionId: crypto.randomUUID() };
+  let pendingNew: { machineId: string; cwd: string; sessionId: string; codex: boolean } | null =
+    null;
+  const pendingIdFor = (on: string, at: string, model?: string): string => {
+    const codex = isCodexModel(model);
+    if (pendingNew?.machineId !== on || pendingNew.cwd !== at || pendingNew.codex !== codex) {
+      pendingNew = { machineId: on, cwd: at, sessionId: newChatSessionId(model), codex };
     }
     return pendingNew.sessionId;
   };
@@ -340,7 +394,8 @@
     // A connected machine names the chat itself, as it always has. The test is
     // `chats.create`'s own (its link isn't open), so an id is kept exactly when
     // the message waits on this device.
-    const sessionId = target.api.status !== 'open' ? pendingIdFor(target.machineId, at) : undefined;
+    const sessionId =
+      target.api.status !== 'open' ? pendingIdFor(target.machineId, at, chat.model) : undefined;
     const id = await target.chats
       .create({ cwd: at, ...chat, ...(sessionId ? { sessionId } : {}) })
       .catch((err: unknown) => {
@@ -381,7 +436,12 @@
     const called = name;
     let result: Result<'projects.create'>;
     try {
-      result = await projectsApi(target.api).create({ createIn, name: called, github });
+      result = await projectsApi(target.api).create({
+        createIn,
+        name: called,
+        github,
+        ...(isCodexModel(send.chat.model) ? { model: send.chat.model } : {}),
+      });
     } catch (err) {
       noteMissingClaude(target, err);
       error = errorText(err);
@@ -427,7 +487,7 @@
   const create = async (text: string, images: ImageRef[]): Promise<boolean> => {
     error = null;
     made = null;
-    const send = sendOf({ target: scope, draftKey, text, images, model, mode });
+    const send = sendOf({ target: scope, draftKey, text, images, model: chosenModel, mode });
     if (tab === 'new') return startProject(send);
     if (tab === 'clone') return startClone(send);
     return startInFolder(send);
@@ -461,7 +521,9 @@
     <Dialog.Header>
       <Dialog.Title class="text-base">New chat</Dialog.Title>
       <Dialog.Description class="text-xs"
-        >Claude Code starts in the folder you choose, with your Claude Code settings.</Dialog.Description
+        >{codexChosen
+          ? 'Codex starts in the folder you choose, with your Codex settings and login.'
+          : 'Claude Code starts in the folder you choose, with your Claude Code settings.'}</Dialog.Description
       >
     </Dialog.Header>
 
@@ -561,11 +623,58 @@
       </div>
 
       <div class="grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-2 text-xs">
+        <span id="new-chat-runtime-label" class="text-muted-foreground">Agent</span>
+        <div
+          role="radiogroup"
+          aria-labelledby="new-chat-runtime-label"
+          class="bg-muted flex w-full min-w-0 gap-0.5 rounded-md p-0.5"
+        >
+          {#each RUNTIMES as r (r.id)}
+            {@const off = r.id === 'codex' && !codexOffered}
+            <label
+              title={off ? CODEX_MISSING : undefined}
+              class="text-muted-foreground has-[:checked]:bg-background has-[:checked]:text-foreground has-[:focus-visible]:ring-ring flex min-w-0 flex-1 cursor-pointer items-center justify-center gap-1.5 rounded px-3 py-1 text-sm has-[:checked]:shadow-sm has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-50 has-[:focus-visible]:ring-2"
+            >
+              <input
+                type="radio"
+                name="new-chat-runtime"
+                value={r.id}
+                class="sr-only"
+                checked={shownRuntime === r.id}
+                disabled={off}
+                aria-describedby={off ? 'new-chat-codex-missing' : undefined}
+                onchange={() => chooseRuntime(r.id)}
+              />
+              <svg
+                viewBox="0 0 24 24"
+                class="size-3.5 shrink-0"
+                fill="currentColor"
+                aria-hidden="true"
+              >
+                <path d={r.id === 'codex' ? providerMarks.openai : providerMarks.claude} />
+              </svg>
+              <span class="truncate">{r.label}</span>
+            </label>
+          {/each}
+          {#if !codexOffered}
+            <span id="new-chat-codex-missing" class="sr-only">{CODEX_MISSING}</span>
+          {/if}
+        </div>
+
         <label for="new-chat-model" class="text-muted-foreground">Model</label>
-        <select id="new-chat-model" class={selectClass} bind:value={model}>
-          <option value="">Default</option>
-          {#each modelOptions as m (m.value)}
-            <option value={m.value} title={m.description}>{m.displayName || m.value}</option>
+        <select
+          id="new-chat-model"
+          class={selectClass}
+          value={selected}
+          onchange={(e) => (model = e.currentTarget.value)}
+        >
+          {#if runtimeRows.length === 0}
+            <option value="">Claude Code's default</option>
+          {/if}
+          {#each runtimeRows as m (m.value)}
+            <option value={m.value} title={m.description}
+              >{modelLabel(m.displayName || m.value)}</option
+            >
           {/each}
         </select>
 
@@ -577,7 +686,7 @@
         </select>
       </div>
 
-      {#if buildFlags.apiKeyOnly && !settings.hasApiKey}
+      {#if buildFlags.apiKeyOnly && !settings.hasApiKey && !codexChosen}
         <p role="note" class="rounded-md bg-amber-500/15 px-2 py-1.5 text-xs">
           This build of Threadgarden runs chats only on an Anthropic API key. Add your key first.
           <button
@@ -605,8 +714,9 @@
             {draftKey}
             cwd={composerCwd}
             commandScope={{ cwd: composerCwd }}
+            agentName={agent}
             label="First message"
-            placeholder="What should Claude do?"
+            placeholder={`What should ${agent} do?`}
             autofocus
             onSubmit={create}
             {onControl}
@@ -618,6 +728,7 @@
 </Dialog.Root>
 
 <BypassPermissionsDialog
+  agentName={agent}
   bind:open={confirmBypass}
   onConfirm={() => {
     mode = 'bypassPermissions';

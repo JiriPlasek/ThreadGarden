@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { ChatTask } from '@threadgarden/protocol';
   import { endSessionWarning } from '#lib/components/chat/end-session.js';
+  import { agentNameOf, isCodexChat, runtimeOfChat } from '#lib/runtime.js';
   import RunningTaskList from '#lib/components/chat/RunningTaskList.svelte';
   import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
   import HoldDialog from '#lib/components/HoldDialog.svelte';
@@ -36,6 +37,7 @@
     const busy = status === 'working' || status === 'needsYou';
     const warning = endSessionWarning({
       busy,
+      agentName: agentNameOf(runtimeOfChat(t.sessionId)),
       tasks: loaded ? tasks.length : (t.runningTasks ?? 0),
       listed: loaded,
       after: ARCHIVE_AFTER,
@@ -44,7 +46,7 @@
       tasks,
       description:
         warning ??
-        `Threadgarden is running “${t.title}”. Ending stops its Claude Code process; ${ARCHIVE_AFTER}`,
+        `Threadgarden is running “${t.title}”. Ending stops its ${isCodexChat(t.sessionId) ? 'Codex' : 'Claude Code'} process; ${ARCHIVE_AFTER}`,
     };
   });
 

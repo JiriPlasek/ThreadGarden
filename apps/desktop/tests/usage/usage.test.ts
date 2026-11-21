@@ -134,6 +134,47 @@ describe('usage meter and dialog', () => {
 describe('usage per machine', () => {
   const KEY = `threadgarden.usage.${M1}`;
 
+  it("a chat's limit reset and refusal come from its own runtime's limits", () => {
+    const codexChat = 'codex-00000000-0000-4000-8000-000000000001';
+    const rejected = (key: string, resetsAt: number): UsageWindow => ({
+      key,
+      status: 'rejected',
+      utilization: 100,
+      resetsAt,
+      observedAt: Date.now(),
+      source: 'event',
+    });
+    const store = new UsageStore();
+    const claudeReset = Date.now() + HOUR;
+    const codexReset = Date.now() + 3 * HOUR;
+    store.value = usageState({
+      windows: [
+        rejected('five_hour', claudeReset),
+        rejected('seven_day', Date.now() - HOUR),
+        { ...rejected('model:x', Date.now() + 9 * HOUR), status: 'allowed' },
+      ],
+      refused: [{ sessionId: 's', at: Date.now(), resetsAt: claudeReset }],
+      providers: {
+        codex: {
+          windows: [
+            rejected('codex:primary', codexReset),
+            rejected('codex:secondary', Date.now() + 2 * HOUR),
+          ],
+          refused: [{ sessionId: codexChat, at: Date.now(), resetsAt: codexReset }],
+        },
+      },
+    });
+    expect(store.limitResetAt).toBe(claudeReset);
+    expect(store.limitResetAtFor('s')).toBe(claudeReset);
+    expect(store.limitResetAtFor(codexChat)).toBe(codexReset);
+    expect(store.refusal('s')?.resetsAt).toBe(claudeReset);
+    expect(store.refusal(codexChat)?.resetsAt).toBe(codexReset);
+    expect(store.refusal('codex-00000000-0000-4000-8000-000000000002')).toBeUndefined();
+    store.value = usageState();
+    expect(store.limitResetAtFor(codexChat)).toBeUndefined();
+    store.stop();
+  });
+
   it('forget() stops the reset timer and removes the kept copy', () => {
     vi.useFakeTimers({ toFake: ['Date', 'setTimeout', 'clearTimeout'] });
     try {

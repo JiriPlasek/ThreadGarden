@@ -127,7 +127,8 @@
         <button
           type="button"
           class="hover:bg-muted h-8 rounded-md border px-3 text-xs"
-          onclick={onDismiss}>{kind === 'update' ? 'Dismiss' : 'Browse history without it'}</button
+          onclick={onDismiss}
+          >{kind === 'update' ? 'Dismiss' : 'Continue with Codex or browse history'}</button
         >
       {/if}
     </div>

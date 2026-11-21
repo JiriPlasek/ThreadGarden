@@ -492,6 +492,7 @@ export class TaskTracker {
         const t = this.edit(prev);
         prev.inLevel = true;
         t.backgrounded = true;
+        if (nonEmpty(raw.model)) t.model = nonEmpty(raw.model)!;
         const parentTaskId = str(raw.parent_task_id);
         if (parentTaskId !== undefined) t.parentTaskId = parentTaskId;
         if (!isFinished(t) && t.status !== 'paused' && t.status !== 'running') {
@@ -512,6 +513,7 @@ export class TaskTracker {
           description: nonEmpty(raw.description) ?? taskType ?? 'Task',
           status: 'running',
           backgrounded: true,
+          ...(nonEmpty(raw.model) ? { model: nonEmpty(raw.model) } : {}),
           ...(parentTaskId === undefined ? {} : { parentTaskId }),
           startedAt: this.opts.now(),
         },

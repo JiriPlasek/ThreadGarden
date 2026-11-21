@@ -108,5 +108,5 @@ export const agentRowStatus = (
   return { icon: 'ok', text: 'Done' };
 };
 
-/** A model id or alias as the row shows it: without a leading `claude-`. */
-export const shortModel = (model: string): string => model.replace(/^claude-/, '');
+/** A model id or alias as the row shows it: without its internal provider prefix. */
+export const shortModel = (model: string): string => model.replace(/^(claude-|codex:)/, '');

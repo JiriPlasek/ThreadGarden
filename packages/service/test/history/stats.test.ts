@@ -43,6 +43,38 @@ const collect = (messages: SessionMessage[], fallback = at(1, 0)) => {
 };
 
 describe('localDay', () => {
+  it('counts Codex item envelopes as one turn and keeps the final reported usage', () => {
+    const stats = collect([
+      assistant(at(5, 12), {
+        id: 'thought',
+        model: 'gpt-test',
+        extra: { codex_turn_id: 'turn1' },
+        content: [{ type: 'thinking', thinking: 'summary' }],
+      }),
+      assistant(at(5, 12), {
+        id: 'tool',
+        model: 'gpt-test',
+        extra: { codex_turn_id: 'turn1' },
+        content: [{ type: 'tool_use', id: 'tool1', name: 'Bash', input: {} }],
+      }),
+      assistant(at(5, 12), {
+        id: 'reply',
+        model: 'gpt-test',
+        extra: { codex_turn_id: 'turn1' },
+        usage: { input_tokens: 60, output_tokens: 20, cache_read_input_tokens: 40 },
+      }),
+    ]);
+    expect(stats.days).toMatchObject([
+      {
+        model: 'gpt-test',
+        assistantMessages: 1,
+        inputTokens: 60,
+        outputTokens: 20,
+        cacheReadTokens: 40,
+      },
+    ]);
+    expect(stats.tools).toMatchObject([{ name: 'Bash', calls: 1 }]);
+  });
   it('formats the local calendar day', () => {
     expect(localDay(at(5, 23, 59))).toBe('2026-10-05');
     expect(localDay(new Date(2026, 0, 1, 0, 0).getTime())).toBe('2026-01-01');

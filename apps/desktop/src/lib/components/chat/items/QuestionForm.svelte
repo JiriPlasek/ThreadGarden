@@ -26,7 +26,9 @@
    */
   let { item }: { item: RequestItem } = $props();
 
-  const requests = chatActions().requests;
+  const actions = chatActions();
+  const agentName = $derived(actions.agentName ?? 'Claude');
+  const requests = actions.requests;
   const questions = $derived(parseQuestions(item.input));
   const uid = $derived(item.requestId.replace(/[^\w-]/g, '_'));
 
@@ -151,14 +153,14 @@
 {:else}
   <form
     class="rounded-lg border border-amber-500/60 bg-amber-500/5 p-3 text-sm shadow-xs"
-    aria-label="Question from Claude"
+    aria-label="Question from {agentName}"
     data-request-id={item.requestId}
     onsubmit={submit}
   >
     <div class="flex items-center gap-2 text-amber-900 dark:text-amber-200">
       <MessageCircleQuestionIcon class="size-4 shrink-0" aria-hidden="true" />
       <span class="font-medium"
-        >Claude has {questions && questions.length > 1 ? 'questions' : 'a question'}</span
+        >{agentName} has {questions && questions.length > 1 ? 'questions' : 'a question'}</span
       >
     </div>
 

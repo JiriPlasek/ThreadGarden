@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { PERMISSION_MODE_OPTIONS as PERMISSION_MODES } from '@threadgarden/protocol';
+  import { PERMISSION_MODE_OPTIONS } from '@threadgarden/protocol';
   import ActivityIcon from '@lucide/svelte/icons/activity';
   import ArrowRightLeftIcon from '@lucide/svelte/icons/arrow-right-left';
   import ArchiveIcon from '@lucide/svelte/icons/archive';
@@ -20,6 +20,8 @@
   import { formatHoldUntil } from '#lib/format/hold.js';
   import { fullTime } from '#lib/format/time.js';
   import { baseName, rawStatus, shownStatus } from '#lib/components/layout/chat-info.js';
+  import { modelLabel } from '#lib/format/model.js';
+  import { LEGACY_DEFAULT, agentNameOf, isCodexModel, runtimeOfChat } from '#lib/runtime.js';
   import IconButton from '#lib/components/layout/IconButton.svelte';
   import ProjectIcon from '#lib/components/layout/ProjectIcon.svelte';
   import StatusIcon from '#lib/components/layout/StatusIcon.svelte';
@@ -73,6 +75,17 @@
   const machineName = $derived(machines.several ? machineNameOf(machines, machineId) : null);
 
   const sessionId = $derived(chat.sessionId);
+  /** A conversation keeps its runtime: Claude Code's or Codex's. */
+  const codex = $derived(runtimeOfChat(sessionId) === 'codex');
+  const agent = $derived(agentNameOf(runtimeOfChat(sessionId)));
+  /** Codex names bypass after what it does there: it never asks. */
+  const PERMISSION_MODES = $derived(
+    codex
+      ? PERMISSION_MODE_OPTIONS.map((m) =>
+          m.value === 'bypassPermissions' ? { ...m, label: "Don't ask permissions" } : m,
+        )
+      : PERMISSION_MODE_OPTIONS,
+  );
   const header = $derived(chat.header);
   const summary = $derived(chat.summary);
   let renaming = $state(false);
@@ -125,21 +138,37 @@
       ? [{ value: current, label: current }, ...options]
       : options;
 
+  /** Only the chat's own runtime: switching between Claude and Codex needs a new chat. */
+  const ownModels = $derived((chat.models ?? []).filter((m) => isCodexModel(m.value) === codex));
+  /**
+   * The model shown: the chat's own, else (none named, or Claude's `default`)
+   * its runtime's default row; an older service's `default` row matches as is.
+   */
+  const shownModel = $derived(
+    header.model && header.model !== LEGACY_DEFAULT
+      ? header.model
+      : (ownModels.find((m) => m.isDefault)?.value ?? header.model),
+  );
   const modelOptions = $derived(
     withCurrent(
-      (chat.models ?? []).map((m) => ({ value: m.value, label: m.displayName || m.value })),
-      header.model,
-    ),
+      ownModels.map((m) => ({ value: m.value, label: m.displayName || m.value })),
+      shownModel,
+    ).map((option) => ({ ...option, label: modelLabel(option.label) })),
   );
   const effortOptions = $derived(
     withCurrent(
-      (chat.models?.find((m) => m.value === header.model)?.supportedEffortLevels ?? []).map(
-        (e) => ({ value: e, label: e }),
-      ),
+      (chat.models?.find((m) => m.value === shownModel)?.supportedEffortLevels ?? []).map((e) => ({
+        value: e,
+        label: e,
+      })),
       header.effort,
     ),
   );
-  const modeOptions = $derived(withCurrent(PERMISSION_MODES, header.permissionMode));
+  const modeOptions = $derived(
+    withCurrent(PERMISSION_MODES, header.permissionMode).map((option) =>
+      option.value === 'custom' ? { ...option, label: 'Custom (Codex configuration)' } : option,
+    ),
+  );
 
   let error = $state<string | null>(null);
   let confirmBypass = $state(false);
@@ -192,7 +221,12 @@
   const runningTasks = $derived(chat.tasks.filter(taskRunning));
   const busy = $derived(status === 'working' || status === 'needsYou');
   const endDescription = $derived(
-    endSessionWarning({ busy, tasks: runningTasks.length, listed: true }) ?? undefined,
+    endSessionWarning({
+      agentName: agent,
+      busy,
+      tasks: runningTasks.length,
+      listed: true,
+    }) ?? undefined,
   );
   const endNow = async (): Promise<void> => {
     await chats.end(sessionId);
@@ -301,7 +335,7 @@
               />{/if}
           </DropdownMenu.Item>
         {/if}
-        {#if machines.several && !chat.movedTo && supportsMove(machines.get(machineId))}
+        {#if machines.several && !chat.movedTo && !codex && supportsMove(machines.get(machineId))}
           <DropdownMenu.Separator />
           <DropdownMenu.Item
             class="py-1 text-xs"
@@ -346,8 +380,8 @@
     aria-label="Model"
     class={selectClass}
     disabled={!live || modelOptions.length === 0}
-    value={header.model ?? ''}
-    onchange={change(chats.setModel, () => header.model ?? '')}
+    value={shownModel ?? ''}
+    onchange={change(chats.setModel, () => shownModel ?? '')}
   >
     {#if modelOptions.length === 0}
       <option value="">Model</option>
@@ -539,6 +573,12 @@
             </span>
             {usage.pct}%
           </span>
+        {:else if codex}
+          <span
+            class="text-muted-foreground"
+            title="Codex has not reported a context reading for this chat"
+            >Context not reported</span
+          >
         {/if}
         {#if !usage && header.contextTokens !== undefined}
           <!-- From the history, when no run of this chat (or its model) has said the window's size. -->
@@ -561,6 +601,9 @@
         {/if}
         {#if header.claudeVersion}
           <span title="Claude Code version">claude {header.claudeVersion}</span>
+        {/if}
+        {#if header.runtimeVersion && header.runtime === 'codex'}
+          <span title="Codex version recorded for this chat">codex {header.runtimeVersion}</span>
         {/if}
       </div>
     </div>
@@ -585,6 +628,7 @@
 </ConfirmDialog>
 
 <BypassPermissionsDialog
+  agentName={agent}
   bind:open={confirmBypass}
   onConfirm={async () => {
     if (bypassSession) await chats.setPermissionMode(bypassSession, 'bypassPermissions');

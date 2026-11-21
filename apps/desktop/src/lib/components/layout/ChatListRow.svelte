@@ -10,6 +10,7 @@
   import PinOffIcon from '@lucide/svelte/icons/pin-off';
   import SquareTerminalIcon from '@lucide/svelte/icons/square-terminal';
   import * as ContextMenu from '#lib/components/ui/context-menu/index.js';
+  import { isCodexChat } from '#lib/runtime.js';
   import ShortcutHint from '#lib/components/ShortcutHint.svelte';
   import { ariaKeyShortcuts, shortcut } from '#lib/shortcuts.js';
   import { formatHoldUntil } from '#lib/format/hold.js';
@@ -19,6 +20,7 @@
   import RunningBadge from './RunningBadge.svelte';
   import ScheduledBadge from './ScheduledBadge.svelte';
   import StatusIcon, { isYourTurn } from './StatusIcon.svelte';
+  import ProviderIcon from './ProviderIcon.svelte';
 
   let {
     chat,
@@ -35,6 +37,7 @@
     now,
     running = 0,
     scheduled = [],
+    showProvider = false,
     onOpen,
     onRename,
     onTogglePin,
@@ -65,6 +68,8 @@
     running?: number;
     /** v1.3 B: the chat's scheduled messages (the clock badge). */
     scheduled?: readonly ScheduledSend[];
+    /** Only mixed Claude/Codex lists need a runtime mark. */
+    showProvider?: boolean;
     /** A click (with its modifiers: Ctrl/Cmd and Shift select), or "Open" from the menu. */
     onOpen: (chat: ChatSummary, e?: MouseEvent) => void;
     onRename: (chat: ChatSummary) => void;
@@ -138,6 +143,7 @@
         <div
           class="text-muted-foreground flex min-w-0 items-center gap-1.5 pl-5.5 text-xs leading-4"
         >
+          {#if showProvider}<ProviderIcon codex={isCodexChat(chat.sessionId)} />{/if}
           {#if machineName}
             <span class="bg-muted max-w-[30%] shrink-0 truncate rounded px-1 text-[0.6875rem]"
               >{machineName}</span

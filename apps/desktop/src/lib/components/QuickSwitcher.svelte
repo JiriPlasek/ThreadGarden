@@ -16,6 +16,7 @@
   import SettingsIcon from '@lucide/svelte/icons/settings';
   import type { Component } from 'svelte';
   import ProjectIcon from '#lib/components/layout/ProjectIcon.svelte';
+  import { isCodexChat } from '#lib/runtime.js';
   import ShortcutHint from '#lib/components/ShortcutHint.svelte';
   import PickerKeyHints from '#lib/components/PickerKeyHints.svelte';
   import * as Dialog from '#lib/components/ui/dialog/index.js';
@@ -76,7 +77,13 @@
   const moveCommand = $derived.by((): Command | null => {
     const ref = tabs.active ? parseChatKey(tabs.active) : null;
     // Not for a chat whose own machine's service can't move chats (protocol 8).
-    if (!ref || !machines.several || !supportsMove(machines.get(ref.machineId))) return null;
+    if (
+      !ref ||
+      isCodexChat(ref.sessionId) ||
+      !machines.several ||
+      !supportsMove(machines.get(ref.machineId))
+    )
+      return null;
     const chat = scopes.get(ref.machineId)?.chats.get(ref.sessionId);
     if (chat?.movedTo) return null;
     return {

@@ -338,6 +338,33 @@ describe('tool rows', () => {
 });
 
 describe('chat view', () => {
+  it('implements a Codex plan through native permission controls before sending the instruction', async () => {
+    const sessionId = 'codex-00000000-0000-4000-8000-000000000001';
+    const { server, app, context } = await setup((server) => {
+      server.handlers['chat.open'] = () => ({
+        summary: summary(sessionId, { live: true, status: 'idle' }),
+        header: { runtime: 'codex', model: 'codex:test-model', permissionMode: 'plan' },
+        items: [text('plan', 'Review this plan')],
+        hasMore: false,
+        seq: 1,
+      });
+      server.handlers['chat.setPermissionMode'] = () => ({});
+      server.handlers['chat.send'] = () => ({ queued: false });
+    });
+    await app.chats.open(sessionId);
+    render(ChatView, { context, props: { ref: { machineId: LOCAL, sessionId } } });
+    expect(await screen.findByText('Context not reported')).toBeTruthy();
+    await userEvent.click(await screen.findByRole('button', { name: 'Implement plan' }));
+    await waitFor(() => expect(server.calls('chat.send')).toHaveLength(1));
+    expect(server.calls('chat.setPermissionMode')[0]?.params).toEqual({
+      sessionId,
+      value: 'acceptEdits',
+    });
+    expect(server.calls('chat.send')[0]?.params).toMatchObject({
+      sessionId,
+      text: 'Implement the plan.',
+    });
+  });
   const streamingSetup = () =>
     setup((server) => {
       server.handlers['chat.open'] = (p) => ({
@@ -444,6 +471,68 @@ describe('chat view', () => {
     render(ChatView, { context, props: { ref: { machineId: LOCAL, sessionId: 'abc-123' } } });
     await userEvent.click(await screen.findByRole('button', { name: /copy resume command/i }));
     await waitFor(() => expect(writeText).toHaveBeenCalledWith('claude --resume abc-123'));
+  });
+
+  it("a Claude chat's model picker offers only Claude's models", async () => {
+    const { server, app, context } = await streamingSetup();
+    const claude = server.handlers['chat.models']!;
+    server.handlers['chat.models'] = (p) => [
+      ...(claude(p) as unknown[]),
+      { value: 'codex:test-model', displayName: 'Codex · Test', description: '' },
+    ];
+    await app.chats.open('s');
+    render(ChatView, { context, props: { ref: { machineId: LOCAL, sessionId: 's' } } });
+    const model = await screen.findByRole('combobox', { name: /model/i });
+    await waitFor(() =>
+      expect(
+        within(model)
+          .getAllByRole('option')
+          .map((o) => (o as HTMLOptionElement).value),
+      ).toEqual(['opus', 'sonnet']),
+    );
+  });
+
+  it("a chat that named no model shows its runtime's default one", async () => {
+    const { server, app, context } = await streamingSetup();
+    const open = server.handlers['chat.open']!;
+    server.handlers['chat.open'] = (p) => ({
+      ...(open(p) as object),
+      header: { permissionMode: 'default' },
+    });
+    server.handlers['chat.models'] = () => [
+      { value: 'opus', displayName: 'Opus', description: '' },
+      { value: 'sonnet', displayName: 'Sonnet', description: '', isDefault: true },
+      { value: 'codex:test-model', displayName: 'Codex · Test', description: '', isDefault: true },
+    ];
+    await app.chats.open('s');
+    render(ChatView, { context, props: { ref: { machineId: LOCAL, sessionId: 's' } } });
+    const model = (await screen.findByRole('combobox', { name: /model/i })) as HTMLSelectElement;
+    await waitFor(() => expect(within(model).getAllByRole('option').length).toBe(2));
+    expect(model.value).toBe('sonnet');
+  });
+
+  it("a chat started on Claude's default shows the row it resolves to", async () => {
+    const { server, app, context } = await streamingSetup();
+    const open = server.handlers['chat.open']!;
+    server.handlers['chat.open'] = (p) => ({
+      ...(open(p) as object),
+      header: { model: 'default', permissionMode: 'default' },
+    });
+    server.handlers['chat.models'] = () => [
+      { value: 'opus', displayName: 'Opus', description: '', isDefault: true },
+      { value: 'sonnet', displayName: 'Sonnet', description: '' },
+    ];
+    await app.chats.open('s');
+    render(ChatView, { context, props: { ref: { machineId: LOCAL, sessionId: 's' } } });
+    const model = (await screen.findByRole('combobox', { name: /model/i })) as HTMLSelectElement;
+    await waitFor(() =>
+      expect(
+        within(model)
+          .getAllByRole('option')
+          .map((o) => (o as HTMLOptionElement).value),
+      ).toEqual(['opus', 'sonnet']),
+    );
+    expect(model.value).toBe('opus');
   });
 
   it('header pickers change the model and permission mode of a live chat', async () => {

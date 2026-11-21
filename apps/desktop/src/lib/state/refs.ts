@@ -1,3 +1,5 @@
+import { isCodexModel } from '../runtime';
+
 /**
  * A chat is known by its machine and its session id: the same session id can
  * exist on two machines (a copied `~/.claude`), and they must stay apart in
@@ -27,3 +29,7 @@ export const parseChatKey = (key: string): ChatRef | null => {
   if (i <= 0 || i === key.length - 1) return null;
   return { machineId: key.slice(0, i), sessionId: key.slice(i + 1) };
 };
+
+/** Choose the runtime-qualified id before a new chat is queued for an offline machine. */
+export const newChatSessionId = (model?: string): string =>
+  `${isCodexModel(model) ? 'codex-' : ''}${crypto.randomUUID()}`;

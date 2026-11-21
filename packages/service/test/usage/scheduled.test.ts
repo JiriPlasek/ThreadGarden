@@ -24,7 +24,7 @@ describe('ScheduledSends', () => {
   let late: { sessionId: string; dueAt: number }[];
   let errors: unknown[];
 
-  const make = () =>
+  const make = (resetFor?: (id?: string) => number | undefined) =>
     new ScheduledSends({
       raw: db.raw,
       now: () => Date.now(),
@@ -38,7 +38,8 @@ describe('ScheduledSends', () => {
         sent.push({ sessionId, text, images });
       },
       busy: (id) => busy.has(id),
-      limitResetAt: () => (reset !== undefined && reset > Date.now() ? reset : undefined),
+      limitResetAt:
+        resetFor ?? (() => (reset !== undefined && reset > Date.now() ? reset : undefined)),
       exists: (id) => id !== 'nope',
       describe: (id) => ({ title: `Chat ${id}`, projectName: 'Threadgarden' }),
       noteLate: (sessionId, dueAt) => late.push({ sessionId, dueAt }),
@@ -62,6 +63,17 @@ describe('ScheduledSends', () => {
   afterEach(() => {
     vi.useRealTimers();
     db.close();
+  });
+
+  it('does not delay a Codex scheduled send behind a Claude account limit', async () => {
+    const s = make((id) => (id?.startsWith('codex-') ? undefined : T0 + 60 * MIN));
+    s.start();
+    s.create({ sessionId: 'claude-a', text: 'Claude', sendAt: T0 + MIN });
+    s.create({ sessionId: 'codex-a', text: 'Codex', sendAt: T0 + MIN });
+    await tick(MIN);
+    expect(sent).toEqual([{ sessionId: 'codex-a', text: 'Codex', images: [] }]);
+    expect(s.list('claude-a')[0]?.state).toBe('pending');
+    s.dispose();
   });
 
   it('sends at its time, through chat.send, and announces it', async () => {

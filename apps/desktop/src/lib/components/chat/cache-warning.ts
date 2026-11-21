@@ -6,11 +6,13 @@ export const CACHE_WARNING_SHARE = 0.2;
 /** The window assumed when no run of the chat (or of its model) has said its size. */
 export const DEFAULT_CONTEXT_WINDOW = 200_000;
 
-type CacheHeader = Pick<ChatHeaderInfo, 'lastReply' | 'contextUsage' | 'contextTokens'>;
+type CacheHeader = Pick<ChatHeaderInfo, 'runtime' | 'lastReply' | 'contextUsage' | 'contextTokens'>;
 
 /** When the last reply's prompt cache runs out; undefined before a reply. */
 export const cacheExpiresAt = (header: CacheHeader): number | undefined =>
-  header.lastReply ? header.lastReply.at + header.lastReply.cacheTtlMs : undefined;
+  header.runtime !== 'codex' && header.lastReply
+    ? header.lastReply.at + header.lastReply.cacheTtlMs
+    : undefined;
 
 /**
  * "Cache expired · re-reads 180k tokens" when the next message sends the whole

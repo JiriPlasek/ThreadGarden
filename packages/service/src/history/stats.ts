@@ -204,7 +204,7 @@ export class StatsCollector {
     const t = this.time(r);
     const day = this.dayOf(t);
     const main = r.isSidechain !== true && (r.parent_tool_use_id ?? null) === null;
-    const id = str(msg.id);
+    const id = str(r.codex_turn_id) ?? str(msg.id);
     const key = id ? `id:${id}` : `anon:${this.anonymous++}`;
     const usage = isRec(msg.usage) ? msg.usage : undefined;
     const known = this.replies.get(key);

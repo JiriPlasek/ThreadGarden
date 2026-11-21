@@ -38,6 +38,7 @@
 
   let {
     items,
+    agentName = 'Claude',
     queued = [],
     hasMore = false,
     loadingOlder = false,
@@ -54,6 +55,7 @@
     stickRequests = 0,
   }: {
     items: readonly ChatItem[];
+    agentName?: string;
     /** Messages sent while Claude worked that it has not read yet, oldest first. */
     queued?: readonly QueuedMessage[];
     hasMore?: boolean;
@@ -89,6 +91,9 @@
   );
 
   setChatActions({
+    get agentName() {
+      return agentName;
+    },
     get fork() {
       return onFork;
     },
@@ -421,10 +426,10 @@
               <div
                 class="text-muted-foreground flex items-center gap-1.5 px-2 py-1 text-xs"
                 role="status"
-                aria-label="Waiting for Claude"
+                aria-label="Waiting for {agentName}"
               >
                 <LoaderCircleIcon class="size-4 shrink-0 animate-spin" aria-hidden="true" />
-                <span>Waiting for Claude…</span>
+                <span>Waiting for {agentName}…</span>
                 {#if waitedFor >= 1000}
                   <span class="tabular-nums" aria-hidden="true">{elapsed(waitedFor)}</span>
                 {/if}
@@ -432,7 +437,12 @@
             {:else if row.kind === 'queued'}
               <!-- Sent, not read yet: greyed out, and no fork (the transcript does not have it). -->
               <div role="group" aria-label="Queued message" data-queued-message>
-                <div class="opacity-50" title="Queued: Claude reads this at its next step">
+                <div
+                  class="opacity-50"
+                  title="Queued: {agentName} reads this {agentName === 'Codex'
+                    ? 'when the current turn ends'
+                    : 'at its next step'}"
+                >
                   <UserItem
                     item={{
                       kind: 'user',
@@ -453,7 +463,7 @@
                     <button
                       type="button"
                       class="hover:bg-muted hover:text-foreground flex items-center gap-0.5 rounded px-1"
-                      title="Remove it before Claude reads it"
+                      title="Remove it before {agentName} reads it"
                       onclick={() => onWithdraw(id)}
                     >
                       <XIcon class="size-3" aria-hidden="true" /> Remove
