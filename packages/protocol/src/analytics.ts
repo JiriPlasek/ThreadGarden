@@ -10,6 +10,8 @@ export const AnalyticsRangeSchema = z.enum(['7d', '30d', '90d', 'all']);
 export type AnalyticsRange = z.infer<typeof AnalyticsRangeSchema>;
 
 const count = z.number().int().nonnegative();
+/** US dollars, estimated at API list prices (the service's price table). */
+const usd = z.number().nonnegative();
 
 export const AnalyticsSchema = z.object({
   range: AnalyticsRangeSchema,
@@ -28,6 +30,12 @@ export const AnalyticsSchema = z.object({
     /** User and assistant messages in the range (main conversation only). */
     messages: count,
     outputTokens: count,
+    /** Every kind of token: input, output, cache read and cache write. */
+    tokens: count,
+    /** A rough cost at API list prices, over the models that have a price. */
+    estimatedCostUsd: usd,
+    /** Models with tokens in the range and no price, left out of every cost (sorted). */
+    unpricedModels: z.array(z.string()),
     /** Days with at least one message. */
     activeDays: count,
     busiestProject: z
@@ -48,6 +56,13 @@ export const AnalyticsSchema = z.object({
         values: z.array(count),
       }),
     ),
+    /** Estimated cost per bucket, `values` lined up with `models`; unpriced models add 0. */
+    costDays: z.array(
+      z.object({
+        day: z.string(),
+        values: z.array(usd),
+      }),
+    ),
     /** Totals per model in the range, all token kinds (for the table view). */
     totals: z.array(
       z.object({
@@ -56,6 +71,8 @@ export const AnalyticsSchema = z.object({
         output: count,
         cacheRead: count,
         cacheCreation: count,
+        /** Null when the model has no price. */
+        costUsd: usd.nullable(),
       }),
     ),
   }),

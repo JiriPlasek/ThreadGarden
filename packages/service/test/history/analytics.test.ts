@@ -68,7 +68,7 @@ const fixtures: Fixture[] = [
       firstAt: at(10, 30, 9),
       days: [
         row('2026-10-30', '', { userMessages: 2 }),
-        row('2026-10-30', 'claude-sonnet', {
+        row('2026-10-30', 'claude-sonnet-4-6', {
           assistantMessages: 2,
           inputTokens: 100,
           outputTokens: 1000,
@@ -76,7 +76,7 @@ const fixtures: Fixture[] = [
           cacheCreationTokens: 50,
         }),
         row('2026-10-31', '', { userMessages: 1 }),
-        row('2026-10-31', 'claude-opus', { assistantMessages: 1, outputTokens: 500 }),
+        row('2026-10-31', 'claude-opus-5-5', { assistantMessages: 1, outputTokens: 500 }),
       ],
       hours: [
         { day: '2026-10-30', hour: 9, messages: 4 }, // Friday
@@ -97,7 +97,7 @@ const fixtures: Fixture[] = [
       firstAt: at(10, 26, 11),
       days: [
         row('2026-10-26', '', { userMessages: 1 }),
-        row('2026-10-26', 'claude-sonnet', { assistantMessages: 1, outputTokens: 200 }),
+        row('2026-10-26', 'claude-sonnet-4-6', { assistantMessages: 1, outputTokens: 200 }),
       ],
       hours: [{ day: '2026-10-26', hour: 11, messages: 2 }], // Monday
       tools: [{ day: '2026-10-26', name: 'Read', calls: 1 }],
@@ -123,13 +123,28 @@ describe('queryAnalytics', () => {
     const db = seed(fixtures, { '/w/alpha': 'alpha', '/w/beta': 'beta' });
     const r = queryAnalytics(db, { range: '7d', now: NOW });
     expect(r).toMatchObject({ range: '7d', from: '2026-10-25', to: '2026-10-31', bucket: 'day' });
-    expect(r.kpis).toEqual({
+    // Sonnet 4.6 at $3 / $15 / $0.30 read / $3.75 write, Opus 5.5 at $4 / $20 per million.
+    const sonnet30 = (100 * 3 + 1000 * 15 + 5000 * 0.3 + 50 * 3.75) / 1e6;
+    const sonnet26 = (200 * 15) / 1e6;
+    const opus31 = (500 * 20) / 1e6;
+    const { estimatedCostUsd, ...kpis } = r.kpis;
+    expect(kpis).toEqual({
       chats: 2,
       messages: 8,
       outputTokens: 1700,
+      tokens: 100 + 1000 + 5000 + 50 + 500 + 200,
+      unpricedModels: [],
       activeDays: 3,
       busiestProject: { projectId: '/w/alpha', name: 'alpha', messages: 6 },
     });
+    expect(estimatedCostUsd).toBeCloseTo(sonnet30 + sonnet26 + opus31, 12);
+    expect(r.tokens.totals[0]!.costUsd).toBeCloseTo(sonnet30 + sonnet26, 12);
+    expect(r.tokens.totals[1]!.costUsd).toBeCloseTo(opus31, 12);
+    const costOn = (day: string) => r.tokens.costDays.find((d) => d.day === day)?.values;
+    expect(costOn('2026-10-30')?.[0]).toBeCloseTo(sonnet30, 12);
+    expect(costOn('2026-10-30')?.[1]).toBe(0);
+    expect(costOn('2026-10-31')?.[1]).toBeCloseTo(opus31, 12);
+    expect(r.tokens.costDays).toHaveLength(7);
     expect(r.activity).toHaveLength(7);
     expect(r.activity[0]).toEqual({ day: '2026-10-25', messages: 0, chatsStarted: 0 });
     expect(r.activity.find((d) => d.day === '2026-10-30')).toEqual({
@@ -138,11 +153,11 @@ describe('queryAnalytics', () => {
       chatsStarted: 1,
     });
     expect(r.activity.find((d) => d.day === '2026-10-26')?.chatsStarted).toBe(1);
-    expect(r.tokens.models).toEqual(['claude-sonnet', 'claude-opus']);
+    expect(r.tokens.models).toEqual(['claude-sonnet-4-6', 'claude-opus-5-5']);
     expect(r.tokens.days.find((d) => d.day === '2026-10-30')?.values).toEqual([1000, 0]);
     expect(r.tokens.days.find((d) => d.day === '2026-10-31')?.values).toEqual([0, 500]);
-    expect(r.tokens.totals[0]).toEqual({
-      model: 'claude-sonnet',
+    expect(r.tokens.totals[0]).toMatchObject({
+      model: 'claude-sonnet-4-6',
       input: 100,
       output: 1200,
       cacheRead: 5000,
@@ -226,6 +241,60 @@ describe('queryAnalytics', () => {
     expect(r.tokens.totals).toHaveLength(6);
   });
 
+  it("Other's cost", () => {
+    const models = [
+      'claude-opus-5-5',
+      'claude-sonnet-4-6',
+      'claude-haiku-4-5',
+      'claude-opus-5',
+      'claude-sonnet-5',
+      'claude-haiku-5-5',
+    ];
+    const db = seed([
+      {
+        id: 'x',
+        project: '/w/x',
+        stats: {
+          firstAt: at(10, 31),
+          days: models.map((m, i) => row('2026-10-31', m, { outputTokens: 600 - i * 100 })),
+        },
+      },
+    ]);
+    const r = queryAnalytics(db, { range: '7d', now: NOW });
+    expect(r.tokens.models.at(-1)).toBe('Other');
+    // Sonnet 5 writes 200 at $10, Haiku 5.5 writes 100 at $0.50 per million.
+    const other = (200 * 10 + 100 * 0.5) / 1e6;
+    expect(r.tokens.costDays.at(-1)?.values[4]).toBeCloseTo(other, 12);
+    expect(r.tokens.costDays.at(-1)?.values[0]).toBeCloseTo((600 * 20) / 1e6, 12);
+  });
+
+  it('unpriced models', () => {
+    const db = seed([
+      {
+        id: 'x',
+        project: '/w/x',
+        stats: {
+          firstAt: at(10, 31),
+          days: [
+            row('2026-10-31', 'claude-opus-5-5', { outputTokens: 1000 }),
+            row('2026-10-31', 'unknown', { outputTokens: 50, inputTokens: 5 }),
+            row('2026-10-31', 'claude-3-5-sonnet-20241022', { cacheReadTokens: 70 }),
+          ],
+        },
+      },
+    ]);
+    const r = queryAnalytics(db, { range: '7d', now: NOW });
+    expect(r.kpis.unpricedModels).toEqual(['claude-3-5-sonnet-20241022', 'unknown']);
+    expect(r.kpis.tokens).toBe(1000 + 50 + 5 + 70);
+    expect(r.kpis.estimatedCostUsd).toBeCloseTo((1000 * 20) / 1e6, 12);
+    const cost = Object.fromEntries(r.tokens.totals.map((t) => [t.model, t.costUsd]));
+    expect(cost).toEqual({
+      'claude-opus-5-5': expect.closeTo((1000 * 20) / 1e6, 12),
+      unknown: null,
+      'claude-3-5-sonnet-20241022': null,
+    });
+  });
+
   it('an empty range has zeros everywhere and no busiest project', () => {
     const db = seed([]);
     const r = queryAnalytics(db, { range: '30d', now: NOW });
@@ -233,9 +302,14 @@ describe('queryAnalytics', () => {
       chats: 0,
       messages: 0,
       outputTokens: 0,
+      tokens: 0,
+      estimatedCostUsd: 0,
+      unpricedModels: [],
       activeDays: 0,
       busiestProject: null,
     });
+    expect(r.tokens.costDays).toHaveLength(30);
+    expect(r.tokens.costDays.every((d) => d.values.length === 0)).toBe(true);
     expect(r.activity).toHaveLength(30);
     expect(r.tokens.models).toEqual([]);
     expect(r.projects).toEqual([]);

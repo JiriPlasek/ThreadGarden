@@ -52,7 +52,13 @@ const sampleItems = [
 describe('protocol schemas', () => {
   it('exposes the protocol version', () => {
     expect(PROTOCOL_VERSION).toBe(11);
-    expect([9, 10, 11, 12, 13].map(acceptsRemoteProtocol)).toEqual([false, true, true, true, false]);
+    expect([9, 10, 11, 12, 13].map(acceptsRemoteProtocol)).toEqual([
+      false,
+      true,
+      true,
+      true,
+      false,
+    ]);
   });
 
   it('accepts every ChatItem kind', () => {
@@ -627,15 +633,27 @@ describe('protocol schemas', () => {
         chats: 2,
         messages: 9,
         outputTokens: 1200,
+        tokens: 1215,
+        estimatedCostUsd: 0.0181,
+        unpricedModels: ['unknown'],
         activeDays: 1,
         busiestProject: { projectId: '/w/a', name: 'a', messages: 9 },
       },
       activity: [{ day: '2026-10-31', messages: 9, chatsStarted: 2 }],
       tokens: {
-        models: ['claude-sonnet'],
-        days: [{ day: '2026-10-31', values: [1200] }],
+        models: ['claude-sonnet-4-6', 'unknown'],
+        days: [{ day: '2026-10-31', values: [1200, 0] }],
+        costDays: [{ day: '2026-10-31', values: [0.0181, 0] }],
         totals: [
-          { model: 'claude-sonnet', input: 5, output: 1200, cacheRead: 9, cacheCreation: 1 },
+          {
+            model: 'claude-sonnet-4-6',
+            input: 5,
+            output: 1200,
+            cacheRead: 9,
+            cacheCreation: 1,
+            costUsd: 0.0181,
+          },
+          { model: 'unknown', input: 0, output: 0, cacheRead: 0, cacheCreation: 0, costUsd: null },
         ],
       },
       projects: [{ projectId: '/w/a', name: 'a', messages: 9, chats: 2 }],
@@ -661,6 +679,15 @@ describe('protocol schemas', () => {
       expect(r.safeParse(empty).success).toBe(true);
       expect(r.safeParse({ ...sample, bucket: 'month' }).success).toBe(false);
       expect(r.safeParse({ ...sample, pending: -1 }).success).toBe(false);
+    });
+
+    it('analytics.get costs are dollars, never negative, null for an unpriced model', () => {
+      const r = methods['analytics.get'].result;
+      const negative = { ...sample, kpis: { ...sample.kpis, estimatedCostUsd: -1 } };
+      expect(r.safeParse(negative).success).toBe(false);
+      const { tokens, ...older } = sample.kpis;
+      expect(r.safeParse({ ...sample, kpis: { ...older, tokens } }).success).toBe(true);
+      expect(r.safeParse({ ...sample, kpis: older }).success).toBe(false);
     });
   });
 
