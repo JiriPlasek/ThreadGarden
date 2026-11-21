@@ -13,6 +13,20 @@ export const compact = (n: number): string =>
 /** Every digit, for tables and tooltips (1,284,302). */
 export const full = (n: number): string => FULL.format(n);
 
+const DOLLARS = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
+
+/**
+ * A rough dollar figure: cents below $10 ($3.46), whole dollars below
+ * $1,000 ($42), compact above ($1.4K); anything under a cent reads "< $0.01".
+ */
+export const usd = (n: number): string => {
+  if (n === 0) return '$0';
+  if (n < 0.01) return '< $0.01';
+  if (n < 10) return `$${n.toFixed(2)}`;
+  if (n < 1000) return `$${DOLLARS.format(n)}`;
+  return `$${COMPACT.format(n)}`;
+};
+
 /** Local midnight of a `YYYY-MM-DD` day. */
 export const dateOf = (day: string): Date => {
   const [y, m, d] = day.split('-').map(Number) as [number, number, number];

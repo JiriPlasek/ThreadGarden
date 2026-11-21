@@ -8,7 +8,7 @@
   import ChartCard from './ChartCard.svelte';
   import ColumnChart, { type Series } from './ColumnChart.svelte';
   import DataTable from './DataTable.svelte';
-  import { compact, full, hourLabel, longDay, shortDay, WEEKDAYS_LONG } from './format';
+  import { compact, full, hourLabel, longDay, shortDay, usd, WEEKDAYS_LONG } from './format';
   import Heatmap from './Heatmap.svelte';
 
   /**
@@ -65,7 +65,8 @@
     color: 'var(--viz-s2)',
     values: data?.activity.map((a) => a.chatsStarted) ?? [],
   });
-  const tokenSeries = $derived.by((): Series[] => {
+  /** One series per model, the same colors in the tokens and the cost chart. */
+  const modelSeries = (rows: readonly { values: readonly number[] }[]): Series[] => {
     if (!data) return [];
     const models = data.tokens.models;
     const slots = analytics.modelSlots(
@@ -75,9 +76,40 @@
     return models.map((model, i) => ({
       name: model,
       color: model === OTHER ? 'var(--viz-other)' : SLOTS[slots[i] ?? 0]!,
-      values: data.tokens.days.map((d) => d.values[i] ?? 0),
+      values: rows.map((d) => d.values[i] ?? 0),
     }));
+  };
+  const tokenSeries = $derived(data ? modelSeries(data.tokens.days) : []);
+  const costSeries = $derived(data ? modelSeries(data.tokens.costDays) : []);
+
+  /** The Tokens tile's split by kind, summed over the models. */
+  const tokenSplit = $derived.by(() => {
+    const sum = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
+    for (const t of data?.tokens.totals ?? []) {
+      sum.input += t.input;
+      sum.output += t.output;
+      sum.cacheRead += t.cacheRead;
+      sum.cacheCreation += t.cacheCreation;
+    }
+    return [
+      `Input ${full(sum.input)}`,
+      `Output ${full(sum.output)}`,
+      `Cache read ${full(sum.cacheRead)}`,
+      `Cache write ${full(sum.cacheCreation)}`,
+    ].join(' · ');
   });
+  /** A cost only when some model with tokens has a price; otherwise "—", never a fake $0. */
+  const priced = $derived(data?.tokens.totals.some((t) => t.costUsd !== null) ?? false);
+  const costTitle = $derived(
+    data
+      ? [
+          'Estimated at API list prices; your plan costs what it costs.',
+          ...(data.kpis.unpricedModels.length
+            ? [`Not priced: ${data.kpis.unpricedModels.join(', ')}`]
+            : []),
+        ].join(' ')
+      : '',
+  );
 
   const kpis = $derived(
     data
@@ -89,9 +121,14 @@
             title: full(data.kpis.messages),
           },
           {
-            label: 'Output tokens',
-            value: compact(data.kpis.outputTokens),
-            title: full(data.kpis.outputTokens),
+            label: 'Tokens',
+            value: compact(data.kpis.tokens),
+            title: `${full(data.kpis.tokens)}: ${tokenSplit}`,
+          },
+          {
+            label: 'Est. cost',
+            value: priced ? `≈ ${usd(data.kpis.estimatedCostUsd)}` : '—',
+            title: costTitle,
           },
           { label: 'Active days', value: String(data.kpis.activeDays), title: '' },
           {
@@ -184,7 +221,7 @@
       {/if}
     {:else}
       <div class={cn('flex flex-col gap-4 transition-opacity', analytics.loading && 'opacity-60')}>
-        <dl class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+        <dl class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
           {#each kpis as k (k.label)}
             <div class="bg-background rounded-lg border px-4 py-3">
               <dt class="text-muted-foreground text-xs">{k.label}</dt>
@@ -249,6 +286,42 @@
               caption="Output tokens per {week ? 'week' : 'day'} and model"
               columns={[week ? 'Week' : 'Day', ...data.tokens.models]}
               rows={data.tokens.days.map((d) => [dayName(d.day), ...d.values])}
+            />
+          {/snippet}
+        </ChartCard>
+
+        <ChartCard
+          id="an-cost"
+          title="Estimated cost by model"
+          description="Rough, at API list prices, per {week ? 'week' : 'day'}"
+          empty={data.kpis.estimatedCostUsd === 0 ? 'No priced token usage in this range.' : null}
+        >
+          <ColumnChart
+            id="an-cost-chart"
+            label="Estimated cost per {week ? 'week' : 'day'} by model"
+            {days}
+            {week}
+            series={costSeries}
+            axisFormat={usd}
+            valueFormat={usd}
+          />
+          {#snippet table()}
+            <DataTable
+              caption="Tokens and estimated cost per model in the range"
+              columns={['Model', 'Input', 'Output', 'Cache read', 'Cache write', 'Est. cost']}
+              rows={data.tokens.totals.map((t) => [
+                t.model,
+                t.input,
+                t.output,
+                t.cacheRead,
+                t.cacheCreation,
+                t.costUsd === null ? '—' : usd(t.costUsd),
+              ])}
+            />
+            <DataTable
+              caption="Estimated cost per {week ? 'week' : 'day'} and model"
+              columns={[week ? 'Week' : 'Day', ...data.tokens.models]}
+              rows={data.tokens.costDays.map((d) => [dayName(d.day), ...d.values.map(usd)])}
             />
           {/snippet}
         </ChartCard>

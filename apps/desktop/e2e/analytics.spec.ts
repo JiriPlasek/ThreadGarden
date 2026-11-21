@@ -17,7 +17,13 @@ test('Analytics: open from the places column, read a chart, filter to a project 
   const view = page.getByRole('region', { name: 'Analytics' });
   const chats = view.locator('dt', { hasText: /^Chats$/ }).locator('+ dd');
   await expect(chats).not.toHaveText('0');
-  for (const name of ['Activity', 'Output tokens by model', 'Top projects', 'When you work']) {
+  for (const name of [
+    'Activity',
+    'Output tokens by model',
+    'Estimated cost by model',
+    'Top projects',
+    'When you work',
+  ]) {
     await expect(view.getByRole('figure', { name })).toBeVisible();
   }
 
