@@ -66,7 +66,7 @@
     values: data?.activity.map((a) => a.chatsStarted) ?? [],
   });
   /** One series per model, the same colors in the tokens and the cost chart. */
-  const modelSeries = (rows: readonly { values: readonly number[] }[]): Series[] => {
+  const modelSeries = (rows: readonly { values: readonly (number | null)[] }[]): Series[] => {
     if (!data) return [];
     const models = data.tokens.models;
     const slots = analytics.modelSlots(
@@ -80,10 +80,17 @@
     }));
   };
   const tokenSeries = $derived(data ? modelSeries(data.tokens.days) : []);
-  const costSeries = $derived(data ? modelSeries(data.tokens.costDays) : []);
+  /** A service older than 0.11.0 sends no costs (the app can update before it restarts). */
+  const costDays = $derived(data?.tokens.costDays);
+  /** Models without a price are null in every bucket: left out, never charted as $0. */
+  const costSeries = $derived(
+    costDays
+      ? modelSeries(costDays).filter((_, i) => costDays.some((d) => d.values[i] != null))
+      : [],
+  );
 
-  /** The Tokens tile's split by kind, summed over the models. */
-  const tokenSplit = $derived.by(() => {
+  /** Every token by kind, summed over the models (an older service sends no total). */
+  const tokenSum = $derived.by(() => {
     const sum = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
     for (const t of data?.tokens.totals ?? []) {
       sum.input += t.input;
@@ -91,6 +98,14 @@
       sum.cacheRead += t.cacheRead;
       sum.cacheCreation += t.cacheCreation;
     }
+    return sum;
+  });
+  const allTokens = $derived(
+    data?.kpis.tokens ??
+      tokenSum.input + tokenSum.output + tokenSum.cacheRead + tokenSum.cacheCreation,
+  );
+  const tokenSplit = $derived.by(() => {
+    const sum = tokenSum;
     return [
       `Input ${full(sum.input)}`,
       `Output ${full(sum.output)}`,
@@ -99,14 +114,13 @@
     ].join(' · ');
   });
   /** A cost only when some model with tokens has a price; otherwise "—", never a fake $0. */
-  const priced = $derived(data?.tokens.totals.some((t) => t.costUsd !== null) ?? false);
+  const priced = $derived(data?.tokens.totals.some((t) => t.costUsd != null) ?? false);
+  const unpriced = $derived(data?.kpis.unpricedModels ?? []);
   const costTitle = $derived(
     data
       ? [
           'Estimated at API list prices; your plan costs what it costs.',
-          ...(data.kpis.unpricedModels.length
-            ? [`Not priced: ${data.kpis.unpricedModels.join(', ')}`]
-            : []),
+          ...(unpriced.length ? [`Not priced: ${unpriced.join(', ')}`] : []),
         ].join(' ')
       : '',
   );
@@ -122,12 +136,12 @@
           },
           {
             label: 'Tokens',
-            value: compact(data.kpis.tokens),
-            title: `${full(data.kpis.tokens)}: ${tokenSplit}`,
+            value: compact(allTokens),
+            title: `${full(allTokens)}: ${tokenSplit}`,
           },
           {
             label: 'Est. cost',
-            value: priced ? `≈ ${usd(data.kpis.estimatedCostUsd)}` : '—',
+            value: priced ? `≈ ${usd(data.kpis.estimatedCostUsd ?? 0)}` : '—',
             title: costTitle,
           },
           { label: 'Active days', value: String(data.kpis.activeDays), title: '' },
@@ -294,7 +308,11 @@
           id="an-cost"
           title="Estimated cost by model"
           description="Rough, at API list prices, per {week ? 'week' : 'day'}"
-          empty={data.kpis.estimatedCostUsd === 0 ? 'No priced token usage in this range.' : null}
+          empty={!costDays
+            ? 'Costs need a newer service on this machine: restart Threadgarden.'
+            : !data.kpis.estimatedCostUsd
+              ? 'No priced token usage in this range.'
+              : null}
         >
           <ColumnChart
             id="an-cost-chart"
@@ -315,13 +333,16 @@
                 t.output,
                 t.cacheRead,
                 t.cacheCreation,
-                t.costUsd === null ? '—' : usd(t.costUsd),
+                t.costUsd == null ? '—' : usd(t.costUsd),
               ])}
             />
             <DataTable
               caption="Estimated cost per {week ? 'week' : 'day'} and model"
               columns={[week ? 'Week' : 'Day', ...data.tokens.models]}
-              rows={data.tokens.costDays.map((d) => [dayName(d.day), ...d.values.map(usd)])}
+              rows={(costDays ?? []).map((d) => [
+                dayName(d.day),
+                ...d.values.map((v) => (v === null ? '—' : usd(v))),
+              ])}
             />
           {/snippet}
         </ChartCard>

@@ -30,12 +30,16 @@ export const AnalyticsSchema = z.object({
     /** User and assistant messages in the range (main conversation only). */
     messages: count,
     outputTokens: count,
-    /** Every kind of token: input, output, cache read and cache write. */
-    tokens: count,
+    /**
+     * Every kind of token: input, output, cache read and cache write. This and
+     * the cost fields below are absent from a service older than 0.11.0 (the
+     * app can update before its service restarts).
+     */
+    tokens: count.optional(),
     /** A rough cost at API list prices, over the models that have a price. */
-    estimatedCostUsd: usd,
+    estimatedCostUsd: usd.optional(),
     /** Models with tokens in the range and no price, left out of every cost (sorted). */
-    unpricedModels: z.array(z.string()),
+    unpricedModels: z.array(z.string()).optional(),
     /** Days with at least one message. */
     activeDays: count,
     busiestProject: z
@@ -56,13 +60,18 @@ export const AnalyticsSchema = z.object({
         values: z.array(count),
       }),
     ),
-    /** Estimated cost per bucket, `values` lined up with `models`; unpriced models add 0. */
-    costDays: z.array(
-      z.object({
-        day: z.string(),
-        values: z.array(usd),
-      }),
-    ),
+    /**
+     * Estimated cost per bucket, `values` lined up with `models`; null for a
+     * model without a price (`Other`: when none of its models has one).
+     */
+    costDays: z
+      .array(
+        z.object({
+          day: z.string(),
+          values: z.array(usd.nullable()),
+        }),
+      )
+      .optional(),
     /** Totals per model in the range, all token kinds (for the table view). */
     totals: z.array(
       z.object({
@@ -72,7 +81,7 @@ export const AnalyticsSchema = z.object({
         cacheRead: count,
         cacheCreation: count,
         /** Null when the model has no price. */
-        costUsd: usd.nullable(),
+        costUsd: usd.nullable().optional(),
       }),
     ),
   }),

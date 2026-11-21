@@ -685,9 +685,24 @@ describe('protocol schemas', () => {
       const r = methods['analytics.get'].result;
       const negative = { ...sample, kpis: { ...sample.kpis, estimatedCostUsd: -1 } };
       expect(r.safeParse(negative).success).toBe(false);
-      const { tokens, ...older } = sample.kpis;
-      expect(r.safeParse({ ...sample, kpis: { ...older, tokens } }).success).toBe(true);
-      expect(r.safeParse({ ...sample, kpis: older }).success).toBe(false);
+      const unpricedOther = {
+        ...sample,
+        tokens: { ...sample.tokens, costDays: [{ day: '2026-10-31', values: [0.0181, null] }] },
+      };
+      expect(r.parse(unpricedOther).tokens.costDays?.[0]?.values).toEqual([0.0181, null]);
+    });
+
+    it('analytics.get from an older service (no tokens or cost fields) still parses', () => {
+      const r = methods['analytics.get'].result;
+      // A service older than 0.11.0: none of the token-total or cost fields.
+      const older = structuredClone(sample) as unknown as {
+        kpis: Record<string, unknown>;
+        tokens: { costDays?: unknown; totals: Record<string, unknown>[] };
+      };
+      for (const key of ['tokens', 'estimatedCostUsd', 'unpricedModels']) delete older.kpis[key];
+      delete older.tokens.costDays;
+      for (const t of older.tokens.totals) delete t.costUsd;
+      expect(r.safeParse(older).success).toBe(true);
     });
   });
 

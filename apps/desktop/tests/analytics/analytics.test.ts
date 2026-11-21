@@ -38,7 +38,7 @@ const sample = (over: Partial<Analytics> = {}): Analytics => ({
     days: [25, 26, 27, 28, 29, 30, 31].map((d, i) => ({ day: day(d), values: [i * 100, i * 50] })),
     costDays: [25, 26, 27, 28, 29, 30, 31].map((d, i) => ({
       day: day(d),
-      values: [i * 0.01, i * 0.002],
+      values: [i * 0.01, null],
     })),
     totals: [
       {
@@ -236,6 +236,8 @@ describe('AnalyticsView', () => {
   it("the cost card's table lists each model's tokens and dollars", async () => {
     await view();
     const card = screen.getByRole('figure', { name: 'Estimated cost by model' });
+    // claude-opus has no price: the chart leaves it out (no legend entry for it).
+    expect(card.textContent).not.toContain('claude-opus');
     await userEvent.click(within(card).getByRole('button', { name: 'Show data' }));
     const [perModel, perDay] = within(card).getAllByRole('table');
     for (const column of ['Model', 'Input', 'Output', 'Cache read', 'Cache write', 'Est. cost'])
@@ -247,6 +249,29 @@ describe('AnalyticsView', () => {
     const opus = within(perModel!).getByRole('rowheader', { name: 'claude-opus' }).closest('tr')!;
     expect(within(opus).getByRole('cell', { name: '—' })).toBeTruthy();
     expect(within(perDay!).getByRole('cell', { name: '$0.06' })).toBeTruthy();
+    // claude-opus has no price: no "$0" for it anywhere in the cost card.
+    expect(within(perDay!).getAllByRole('cell', { name: '—' }).length).toBeGreaterThan(0);
+    expect(within(perDay!).queryByRole('cell', { name: '$0' })).toBeTruthy(); // sonnet's first day
+  });
+
+  it('an older service without tokens or costs still shows Analytics', async () => {
+    const data = sample();
+    // A service older than 0.11.0: none of the token-total or cost fields.
+    const older = structuredClone(data) as unknown as {
+      kpis: Record<string, unknown>;
+      tokens: { costDays?: unknown; totals: Record<string, unknown>[] };
+    };
+    for (const key of ['tokens', 'estimatedCostUsd', 'unpricedModels']) delete older.kpis[key];
+    delete older.tokens.costDays;
+    for (const t of older.tokens.totals) delete t.costUsd;
+    await view(older as unknown as Analytics);
+    const tiles = screen.getByRole('heading', { name: 'Analytics' }).closest('section')!;
+    const value = (label: string) =>
+      within(tiles).getByText(label, { selector: 'dt' }).nextElementSibling?.textContent?.trim();
+    expect(value('Tokens')).toBe('12.5K'); // summed from the per-model totals
+    expect(value('Est. cost')).toBe('—');
+    const card = screen.getByRole('figure', { name: 'Estimated cost by model' });
+    expect(within(card).getByText(/newer service/)).toBeTruthy();
   });
 
   it('"Show data" reveals the table view', async () => {

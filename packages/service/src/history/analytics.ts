@@ -235,7 +235,16 @@ export const queryAnalytics = (db: Db, q: AnalyticsQuery): Analytics => {
   if (totals.length > MAX_MODELS) models.push(OTHER_MODEL);
   const slot = new Map(shown.map((t, i) => [t.model, i]));
   const tokenDays = keys.map((day) => ({ day, values: models.map(() => 0) }));
-  const costDays = keys.map((day) => ({ day, values: models.map(() => 0) }));
+  // A slot without a price stays null: `Other` has one when any of its models has.
+  const slotPriced = models.map((m, i) =>
+    i === MAX_MODELS && totals.length > MAX_MODELS
+      ? totals.slice(MAX_MODELS).some((t) => t.costUsd !== null)
+      : byModel.get(m)?.costUsd !== null,
+  );
+  const costDays = keys.map((day) => ({
+    day,
+    values: slotPriced.map((priced): number | null => (priced ? 0 : null)),
+  }));
   for (const r of perDay) {
     const model = r.model as string;
     if (model === '') continue;
@@ -243,7 +252,8 @@ export const queryAnalytics = (db: Db, q: AnalyticsQuery): Analytics => {
     if (i === undefined) continue;
     const s = slot.get(model) ?? MAX_MODELS;
     tokenDays[i]!.values[s]! += num(r.output);
-    costDays[i]!.values[s]! += rowCost.get(r) ?? 0;
+    const cost = rowCost.get(r);
+    if (cost !== undefined) costDays[i]!.values[s] = (costDays[i]!.values[s] ?? 0) + cost;
   }
 
   // ── the chats in the range: the chats KPI, projects and topics (their titles) ──

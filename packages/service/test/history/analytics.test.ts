@@ -140,11 +140,11 @@ describe('queryAnalytics', () => {
     expect(estimatedCostUsd).toBeCloseTo(sonnet30 + sonnet26 + opus31, 12);
     expect(r.tokens.totals[0]!.costUsd).toBeCloseTo(sonnet30 + sonnet26, 12);
     expect(r.tokens.totals[1]!.costUsd).toBeCloseTo(opus31, 12);
-    const costOn = (day: string) => r.tokens.costDays.find((d) => d.day === day)?.values;
+    const costOn = (day: string) => r.tokens.costDays!.find((d) => d.day === day)?.values;
     expect(costOn('2026-10-30')?.[0]).toBeCloseTo(sonnet30, 12);
     expect(costOn('2026-10-30')?.[1]).toBe(0);
     expect(costOn('2026-10-31')?.[1]).toBeCloseTo(opus31, 12);
-    expect(r.tokens.costDays).toHaveLength(7);
+    expect(r.tokens.costDays!).toHaveLength(7);
     expect(r.activity).toHaveLength(7);
     expect(r.activity[0]).toEqual({ day: '2026-10-25', messages: 0, chatsStarted: 0 });
     expect(r.activity.find((d) => d.day === '2026-10-30')).toEqual({
@@ -264,8 +264,8 @@ describe('queryAnalytics', () => {
     expect(r.tokens.models.at(-1)).toBe('Other');
     // Sonnet 5 writes 200 at $10, Haiku 5.5 writes 100 at $0.50 per million.
     const other = (200 * 10 + 100 * 0.5) / 1e6;
-    expect(r.tokens.costDays.at(-1)?.values[4]).toBeCloseTo(other, 12);
-    expect(r.tokens.costDays.at(-1)?.values[0]).toBeCloseTo((600 * 20) / 1e6, 12);
+    expect(r.tokens.costDays!.at(-1)?.values[4]).toBeCloseTo(other, 12);
+    expect(r.tokens.costDays!.at(-1)?.values[0]).toBeCloseTo((600 * 20) / 1e6, 12);
   });
 
   it('unpriced models', () => {
@@ -293,6 +293,13 @@ describe('queryAnalytics', () => {
       unknown: null,
       'claude-3-5-sonnet-20241022': null,
     });
+    // An unpriced model's slot is null in every bucket, never a $0 to chart.
+    const slots = r.tokens.models;
+    for (const d of r.tokens.costDays!) {
+      expect(d.values[slots.indexOf('unknown')]).toBeNull();
+      expect(d.values[slots.indexOf('claude-3-5-sonnet-20241022')]).toBeNull();
+      expect(d.values[slots.indexOf('claude-opus-5-5')]).not.toBeNull();
+    }
   });
 
   it('an empty range has zeros everywhere and no busiest project', () => {
@@ -308,8 +315,8 @@ describe('queryAnalytics', () => {
       activeDays: 0,
       busiestProject: null,
     });
-    expect(r.tokens.costDays).toHaveLength(30);
-    expect(r.tokens.costDays.every((d) => d.values.length === 0)).toBe(true);
+    expect(r.tokens.costDays!).toHaveLength(30);
+    expect(r.tokens.costDays!.every((d) => d.values.length === 0)).toBe(true);
     expect(r.activity).toHaveLength(30);
     expect(r.tokens.models).toEqual([]);
     expect(r.projects).toEqual([]);
