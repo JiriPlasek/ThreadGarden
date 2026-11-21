@@ -19,6 +19,14 @@ import type { ExternalSession } from '../external/poller.js';
 import os from 'node:os';
 import path from 'node:path';
 
+/** Anthropic credentials, matched case-insensitively as Windows matches variable names. */
+const ANTHROPIC_CREDENTIAL =
+  /^(THREADGARDEN_)?ANTHROPIC_(API_KEY|AUTH_TOKEN)$|^CLAUDE_CODE_OAUTH_TOKEN$/i;
+
+/** `env` without any Anthropic credential; everything else stays. */
+export const withoutAnthropicCredentials = (env: NodeJS.ProcessEnv): NodeJS.ProcessEnv =>
+  Object.fromEntries(Object.entries(env).filter(([key]) => !ANTHROPIC_CREDENTIAL.test(key)));
+
 /** Dispatch by explicit provider, never by a guessed GPT/Claude model-name pattern. */
 export class MultiAdapter implements AgentAdapter {
   private catalog?: { until: number; models: ModelInfo[] };
@@ -36,9 +44,16 @@ export class MultiAdapter implements AgentAdapter {
     this.catalog = undefined;
     this.codex.history.setEnvironment(() => this.runtimeEnv());
   }
+  /**
+   * The environment for every Codex process: a chat's app-server, and the
+   * catalog, history and shared-runtime connections. A chat's `env` was built
+   * for Claude (`buildSessionEnv`), and the service's own may hold the user's
+   * key too, so Anthropic credentials are removed: Codex and every tool it runs
+   * inherit this environment, and a model running `env` would send them on.
+   */
   private runtimeEnv(base = this.env()): NodeJS.ProcessEnv {
     return {
-      ...base,
+      ...withoutAnthropicCredentials(base),
       ...(this.settings.codexPath ? { THREADGARDEN_CODEX_PATH: this.settings.codexPath } : {}),
       ...(this.settings.codexHome ? { CODEX_HOME: this.settings.codexHome } : {}),
     };
