@@ -26,7 +26,13 @@ import {
   ReturnedMessageSchema,
 } from './items.js';
 import { McpStateSchema } from './mcp.js';
-import { ShellRunSchema, ShellSizeSchema, ShellViewSchema, SHELL_COMMAND_MAX, SHELL_INPUT_MAX } from './shell.js';
+import {
+  ShellRunSchema,
+  ShellSizeSchema,
+  ShellViewSchema,
+  SHELL_COMMAND_MAX,
+  SHELL_INPUT_MAX,
+} from './shell.js';
 import {
   DeviceSchema,
   DeviceTokenSchema,

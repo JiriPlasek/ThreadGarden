@@ -201,6 +201,32 @@ describe('a running command', () => {
     }
   });
 
+  it('a PTY that throws on input, resize or stop is SHELL_NOT_RUNNING, without its message', async () => {
+    const adapter = new FakeAdapter();
+    addHistory(adapter, 'h1');
+    const { fake, client: c } = await start(adapter);
+    const r = await run(c, 'h1', 'cat');
+    const pty = fake.last();
+    const fail = () => {
+      throw new Error('EPIPE hunter2');
+    };
+    pty.write = fail;
+    pty.resize = fail;
+    for (const [method, params] of [
+      ['shell.input', { runId: r.runId, data: 'hunter2' }],
+      ['shell.resize', { runId: r.runId, cols: 120, rows: 30 }],
+      ['shell.stop', { runId: r.runId }],
+    ] as const) {
+      const res = await c.raw(method, params);
+      expect(res.error, method).toMatchObject({
+        code: 'SHELL_NOT_RUNNING',
+        message: 'The command has ended',
+      });
+      expect(JSON.stringify(res), method).not.toContain('hunter2');
+    }
+    expect(logged.join('\n')).not.toContain('hunter2');
+  });
+
   it('never logs or echoes input', async () => {
     const adapter = new FakeAdapter();
     addHistory(adapter, 'h1');

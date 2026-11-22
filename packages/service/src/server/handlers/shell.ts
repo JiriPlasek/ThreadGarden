@@ -41,6 +41,17 @@ export const registerShellHandlers = (router: Router, deps: ShellHandlerDeps): v
     return run;
   };
 
+  /** A native PTY failure means the command is gone; its message never reaches the client. */
+  const native = (act: () => void): Record<string, never> => {
+    try {
+      act();
+    } catch (err) {
+      if (err instanceof ServiceError) throw err;
+      throw new ServiceError(SHELL_ERRORS.notRunning, 'The command has ended');
+    }
+    return {};
+  };
+
   router.register('shell.start', async (p) => {
     if (isCodexSession(p.sessionId)) {
       throw new ServiceError(SHELL_ERRORS.unsupported, '! commands are for Claude chats');
@@ -54,18 +65,18 @@ export const registerShellHandlers = (router: Router, deps: ShellHandlerDeps): v
   });
 
   router.register('shell.input', async (p) => {
-    running(p.runId).write(p.data);
-    return {};
+    const run = running(p.runId);
+    return native(() => run.write(p.data));
   });
 
   router.register('shell.resize', async (p) => {
-    running(p.runId).resize(p.cols, p.rows);
-    return {};
+    const run = running(p.runId);
+    return native(() => run.resize(p.cols, p.rows));
   });
 
   router.register('shell.stop', async (p) => {
-    running(p.runId).stop();
-    return {};
+    const run = running(p.runId);
+    return native(() => run.stop());
   });
 
   router.register('shell.get', async (p) => ({ view: host.get(p.sessionId)?.command() ?? null }));

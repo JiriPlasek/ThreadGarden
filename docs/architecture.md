@@ -225,23 +225,23 @@ scrollback when the chat is opened again.
 When the command ends (by itself or by **Stop**), the service appends it to the
 chat without starting a turn, in the CLI's format: two user messages sent with
 `shouldQuery: false`, `<bash-input>CMD</bash-input>`, then
-`<bash-stdout>OUT</bash-stdout><bash-stderr></bash-stderr>` (tag-like text inside is
-escaped as the CLI does). `OUT` is the terminal's text with escape codes removed;
-past 30,000 characters only the end is kept, behind the note
-`Output too large (‹N› characters); only the last 30000 are kept.` (the CLI keeps
-the start in a file under
-`~/.claude`, which Threadgarden never writes to). Claude sees it with the next user
-message (during a turn, at its next step). Appending never changes the chat's
-status and never emits `chatFinished`: each such message makes the CLI send a
-`result` with `num_turns: 0`, which `LiveSession` ignores. Stop sends Ctrl-C,
-then kills the process tree after 3 s if it still runs. End session, Stop all work,
-Move to… (a running command is a busy reason, `command`), service shutdown and a
-crashed Claude process end a running command too; one ended that way is not appended
-("Stopped when the session ended · not added to the chat"). A running `!` keeps its
-session from idle reclaim and counts as busy for the machine's idle shutdown (unlike
-background shells), and shows in **Running**. The PTY module loads at start; if it
-can't, the service omits the capability `shell` and the window doesn't offer `!`
-there ("Update ‹machine› to run ! commands here.").
+`<bash-stdout>OUT</bash-stdout><bash-stderr></bash-stderr>` (tag-like text
+inside is escaped as the CLI does). `OUT` is the terminal's text with escape
+codes removed; past 30,000 characters only the end is kept, behind the note
+`Output too large (‹N› characters); only the last 30000 are kept.` (the CLI
+keeps the start in a file under `~/.claude`, which Threadgarden never writes
+to). Claude sees it with the next user message (during a turn, at its next
+step). Appending never changes the chat's status and never emits `chatFinished`:
+each such message makes the CLI send a `result` with `num_turns: 0`, which
+`LiveSession` ignores. Stop sends Ctrl-C, then kills the process tree after 3 s
+if it still runs. End session, Stop all work, Move to… (a running command is a
+busy reason, `command`), service shutdown and a crashed Claude process end a
+running command too; one ended that way is not appended ("Stopped when the
+session ended · not added to the chat"). A running `!` keeps its session from
+idle reclaim and counts as busy for the machine's idle shutdown (unlike
+background shells), and shows in **Running**. The PTY module loads at start; if
+it can't, the service omits the capability `shell` and the window doesn't offer
+`!` there ("Update ‹machine› to run ! commands here.").
 
 **Activity panel** (v1.1 §2, v1.3 §2). Each live session folds the SDK's
 `system/task_*` and `background_tasks_changed` messages into a task list
@@ -293,21 +293,20 @@ service and the UI; the service validates every request.
   `!` commands in the chat). The desktop and its local service still need the
   exact version; a remote service is accepted one version either way (12, 13
   or 14 for a desktop on 13, `REMOTE_PROTOCOL_RANGE`; the Rust shell keeps its
-  own copy of the version in `src-tauri/src/service.rs`). What a machine can do is read from the
-  capabilities in its `hello`, not from its version: the desktop offers power
-  control only with `power`, New project, Clone and Browse… only with
-  `projects`, a machine as a target of Move to… only with `move`, and a
-  waiting message for a machine only with `away`, and the MCP servers banner,
+  own copy of the version in `src-tauri/src/service.rs`). What a machine can do
+  is read from the capabilities in its `hello`, not from its version: the
+  desktop offers power control only with `power`, New project, Clone and Browse…
+  only with `projects`, a machine as a target of Move to… only with `move`, and
+  a waiting message for a machine only with `away`, and the MCP servers banner,
   dialog and menu item only with `mcp`, and `!` only with `shell`. A worker in
-  WSL on a Windows PC also says
-  `host: 'wsl'` in its `machine` (an optional field, no new version; its
-  platform stays `linux`), and the desktop shows it as Windows (WSL). On an
-  older machine the New project and Clone tabs and Browse… show disabled with
-  "Update ‹machine› to use this", and Move to… lists it disabled with "Update
-  ‹machine› to move chats there"; power control without `power` isn't offered
-  at all. A method a service lacks still answers `METHOD_NOT_FOUND` (it
-  surfaces as any failed request). A machine outside that window shows as
-  needing attention ("Different Threadgarden version").
+  WSL on a Windows PC also says `host: 'wsl'` in its `machine` (an optional
+  field, no new version; its platform stays `linux`), and the desktop shows it
+  as Windows (WSL). On an older machine the New project and Clone tabs and
+  Browse… show disabled with "Update ‹machine› to use this", and Move to… lists
+  it disabled with "Update ‹machine› to move chats there"; power control without
+  `power` isn't offered at all. A method a service lacks still answers
+  `METHOD_NOT_FOUND` (it surfaces as any failed request). A machine outside that
+  window shows as needing attention ("Different Threadgarden version").
 - **Requests** `{id, method, params}` → `{id, result}` or `{id, error: {code,
   message}}`. Error codes the UI acts on include `GAP`, `RESUME_BLOCKED`,
   `CLAUDE_MISSING`, `NOT_LIVE`, `NOT_FOUND`, `FORK_FAILED` and
@@ -316,8 +315,9 @@ service and the UI; the service validates every request.
   `chat.older`, `chat.since`, `chat.create`, `chat.send`, `chat.respond`,
   `chat.fork`, `chat.end`, model/mode/effort controls, `chat.resumeCheck`),
   Threadgarden-side metadata, drafts, UI state, settings, `files.suggest`,
-  `work.stopAll`, `service.shutdown`, `system.status` and (v1.3) `analytics.get`. `chat.markSeen`
-  records that the user has seen a chat's latest turn ("Your turn", below).
+  `work.stopAll`, `service.shutdown`, `system.status` and (v1.3)
+  `analytics.get`. `chat.markSeen` records that the user has seen a chat's
+  latest turn ("Your turn", below).
   v1.3 (protocol 3) adds `usage.get` (the account's plan usage; `refresh`
   asks a running chat for a fresh reading) and `scheduled.create`, `.list`,
   `.get`, `.update`, `.cancel` and `.sendNow` (below).

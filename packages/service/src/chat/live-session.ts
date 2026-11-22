@@ -912,6 +912,7 @@ export class LiveSession {
 
   private stop(final: ChatStatus): void {
     this.run?.kill(); // first, so nothing is appended
+    this.appended.clear();
     const session = this.session;
     if (session) {
       this.session = null;
