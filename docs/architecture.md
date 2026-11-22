@@ -227,8 +227,9 @@ chat without starting a turn, in the CLI's format: two user messages sent with
 `shouldQuery: false`, `<bash-input>CMD</bash-input>`, then
 `<bash-stdout>OUT</bash-stdout><bash-stderr></bash-stderr>` (tag-like text inside is
 escaped as the CLI does). `OUT` is the terminal's text with escape codes removed;
-past 30,000 characters only the end is kept, behind the note `Output too large (N
-characters); only the last 30000 are kept.` (the CLI keeps the start in a file under
+past 30,000 characters only the end is kept, behind the note
+`Output too large (‹N› characters); only the last 30000 are kept.` (the CLI keeps
+the start in a file under
 `~/.claude`, which Threadgarden never writes to). Claude sees it with the next user
 message (during a turn, at its next step). Appending never changes the chat's
 status and never emits `chatFinished`: each such message makes the CLI send a
@@ -288,16 +289,17 @@ service and the UI; the service validates every request.
   as a mismatch, like 4409, and the client stops.
 - **Versions across machines.** The protocol is 13 (v1.4 was 5; 6 added power
   control, 7 projects, 8 the usage state's account, 9 moving a chat, 10
-  updating a machine, 11 a machine that's away, 12 MCP servers in the chat, 13 `!` commands in the chat). The
-  desktop and its local service still need the exact version; a remote
-  service is accepted one version either way (12, 13 or 14 for a desktop on 13,
-  `REMOTE_PROTOCOL_RANGE`; the Rust shell keeps its own copy of the version in
-  `src-tauri/src/service.rs`). What a machine can do is read from the
+  updating a machine, 11 a machine that's away, 12 MCP servers in the chat, 13
+  `!` commands in the chat). The desktop and its local service still need the
+  exact version; a remote service is accepted one version either way (12, 13
+  or 14 for a desktop on 13, `REMOTE_PROTOCOL_RANGE`; the Rust shell keeps its
+  own copy of the version in `src-tauri/src/service.rs`). What a machine can do is read from the
   capabilities in its `hello`, not from its version: the desktop offers power
   control only with `power`, New project, Clone and Browse… only with
-  `projects`, a machine as a target of Move to… only with `move`, and a waiting message
-  for a machine only with `away`, and the MCP servers banner, dialog and
-  menu item only with `mcp`, and `!` only with `shell`. A worker in WSL on a Windows PC also says
+  `projects`, a machine as a target of Move to… only with `move`, and a
+  waiting message for a machine only with `away`, and the MCP servers banner,
+  dialog and menu item only with `mcp`, and `!` only with `shell`. A worker in
+  WSL on a Windows PC also says
   `host: 'wsl'` in its `machine` (an optional field, no new version; its
   platform stays `linux`), and the desktop shows it as Windows (WSL). On an
   older machine the New project and Clone tabs and Browse… show disabled with
@@ -1703,7 +1705,7 @@ check and CI; the full results are in [the spike results](superpowers/specs/2026
   model call). It is not echoed on the stream, but each one brings
   `command_lifecycle` frames, a `system` `init` and a `result` with `num_turns: 0`.
 - Claude Code's Bash tool uses Git Bash on Windows when it is installed (the
-  `CLAUDE_CODE_GIT_BASH_PATH` file must be `<Git>inash.exe`), else PowerShell;
+  `CLAUDE_CODE_GIT_BASH_PATH` file must be `<Git>\bin\bash.exe`), else PowerShell;
   on Unix the user's bash or zsh.
 - `@lydell/node-pty` 1.2.0-beta.18 runs under the bundled Node 22 with no rebuild
   (N-API) on Windows x64 and Linux x64; Ctrl-C, resize and kill (the whole tree)
