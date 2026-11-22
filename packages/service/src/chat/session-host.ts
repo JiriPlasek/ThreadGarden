@@ -14,6 +14,7 @@
  * failing session never escape the reclaim timer or `stopAll`; they are
  * reported through `onError` and the remaining sessions carry on.
  */
+import { resolve } from 'node:path';
 import type { ChatPermissionMode, ChatStatus, EventMsg, Settings } from '@threadgarden/protocol';
 import type { AgentAdapter, SessionStore } from '../sdk/adapter.js';
 import { isCodexSession } from '../sdk/providers.js';
@@ -90,7 +91,12 @@ export type SessionHostDeps = {
   sentImages?: LiveSessionDeps['sentImages'];
   /** Handed to every session (see `LiveSessionDeps.onReturned`). */
   onReturned?: LiveSessionDeps['onReturned'];
+  /** Handed to every session (see `LiveSessionDeps.onMcpChange`). */
+  onMcpChange?: LiveSessionDeps['onMcpChange'];
 };
+
+const folderKey = (cwd: string): string =>
+  process.platform === 'win32' ? resolve(cwd).toLowerCase() : resolve(cwd);
 
 export class SessionHost {
   private readonly sessions = new Map<string, LiveSession>();
@@ -335,6 +341,14 @@ export class SessionHost {
     return undefined;
   }
 
+  /** The live Claude chats working in the folder `cwd` (case-insensitive on Windows). */
+  liveIn(cwd: string): LiveSession[] {
+    const key = folderKey(cwd);
+    return [...this.sessions.values()].filter(
+      (s) => s.live && !isCodexSession(s.sessionId) && folderKey(s.cwd) === key,
+    );
+  }
+
   liveCount(): number {
     let n = 0;
     for (const s of this.sessions.values()) if (s.live) n++;
@@ -388,6 +402,7 @@ export class SessionHost {
       onPermissionMode,
       sentImages,
       onReturned,
+      onMcpChange,
     } = this.deps;
     return {
       adapter,
@@ -411,6 +426,7 @@ export class SessionHost {
       ...(onPermissionMode ? { onPermissionMode } : {}),
       ...(sentImages ? { sentImages } : {}),
       ...(onReturned ? { onReturned } : {}),
+      ...(onMcpChange ? { onMcpChange } : {}),
       ...extra,
       log: extra.log ?? new EventLog(undefined, this.seqBase),
     };

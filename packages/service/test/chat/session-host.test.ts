@@ -597,3 +597,30 @@ describe('SessionHost', () => {
     ]);
   });
 });
+
+describe('SessionHost.liveIn', () => {
+  it('liveIn lists live Claude chats in the same folder', async () => {
+    const ctx = setup();
+    const a = ctx.host.create('/p', { text: 'a' }, {}, 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa');
+    const b = ctx.host.create('/p/', { text: 'b' }, {}, 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb');
+    ctx.host.create('/other', { text: 'c' });
+    ctx.host.create(
+      '/p',
+      { text: 'x' },
+      { model: 'codex:default' },
+      'codex-cccccccc-cccc-cccc-cccc-cccccccccccc',
+    );
+    const paused = ctx.host.create('/p', { text: 'd' });
+    paused.pause();
+    expect(
+      ctx.host
+        .liveIn('/p')
+        .map((s) => s.sessionId)
+        .sort(),
+    ).toEqual([a.sessionId, b.sessionId]);
+    if (process.platform === 'win32') {
+      const w = ctx.host.create('C:\\Win\\P', { text: 'w' });
+      expect(ctx.host.liveIn('c:\\win\\p\\').map((s) => s.sessionId)).toEqual([w.sessionId]);
+    }
+  });
+});
