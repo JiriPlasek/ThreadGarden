@@ -17,6 +17,9 @@ const h = vi.hoisted(() => {
     terms: [] as Fake[],
     dims: { cols: 80, rows: 24 } as { cols: number; rows: number } | undefined,
     lines: null as string[] | null,
+    cursorY: 0,
+    /** What the fake terminal answers a cursor-position query (ESC [ 6 n) with. */
+    reply: '\u001b[1;1R',
   };
 });
 
@@ -41,6 +44,10 @@ vi.mock('@xterm/xterm', () => ({
             return lines().length;
           },
           baseY: 0,
+          viewportY: 0,
+          get cursorY() {
+            return h.cursorY;
+          },
           getLine: (i: number) => ({ translateToString: () => lines()[i] ?? '' }),
         },
       };
@@ -57,6 +64,8 @@ vi.mock('@xterm/xterm', () => ({
     write(d: string, cb?: () => void) {
       this.ops.push(['write', d]);
       if (h.lines) this.lines = h.lines.slice();
+      // A real terminal answers queries in what it writes through onData.
+      if (d.includes('\u001b[6n')) this.data?.(h.reply);
       cb?.();
     }
     resize(c: number, r: number) {
@@ -127,6 +136,7 @@ beforeEach(() => {
   h.terms.length = 0;
   h.dims = { cols: 80, rows: 24 };
   h.lines = null;
+  h.cursorY = 0;
   document.documentElement.style.removeProperty('--background');
   vi.restoreAllMocks();
 });
@@ -172,6 +182,19 @@ describe('ShellBlock', () => {
     output.push(5, 'new');
     output.reset('fresh', 0);
     expect(term.ops.slice(1)).toEqual([['write', 'new'], ['reset'], ['write', 'fresh']]);
+  });
+
+  it("a replayed scrollback's terminal replies never reach the command", () => {
+    const output = new ShellOutput();
+    output.reset('where am I?\u001b[6n\r\n', 0);
+    const { props, term } = mount({ output });
+    output.reset('again\u001b[6n', 0);
+    expect(props.onInput).not.toHaveBeenCalled();
+    // Live output's replies, and typing, still go to the command.
+    output.push(output.end, '\u001b[6n');
+    expect(props.onInput).toHaveBeenCalledWith(h.reply);
+    term.data!('y');
+    expect(props.onInput).toHaveBeenLastCalledWith('y');
   });
 
   it('resizes at start for the starter and while focused, not otherwise', async () => {
@@ -245,6 +268,31 @@ describe('ShellBlock', () => {
       output.push(5, 'x');
       await tick();
       expect(hostHeight(container)).toBe('88px');
+    });
+
+    it('while running, the cursor row counts, so a prompt on a blank last line shows', async () => {
+      h.lines = ['line 1', 'line 2', 'line 3'];
+      h.cursorY = 3;
+      const output = new ShellOutput();
+      output.reset('x', 0);
+      const { container, props, rerender } = mount({ output });
+      expect(hostHeight(container)).toBe('88px'); // 4 rows * 20px + 8px
+      await rerender({
+        ...props,
+        run: run({ state: 'ended', exitCode: 0, endReason: 'exit' }),
+      } as never);
+      output.push(1, 'y');
+      await tick();
+      expect(hostHeight(container)).toBe('68px'); // 3 rows once it ended
+    });
+
+    it('the cursor row never makes it taller than 24 rows', () => {
+      h.lines = ['a'];
+      h.cursorY = 400;
+      const output = new ShellOutput();
+      output.reset('x', 0);
+      const { container } = mount({ output });
+      expect(hostHeight(container)).toBe('488px');
     });
 
     it('a long output stops at 24 rows', () => {

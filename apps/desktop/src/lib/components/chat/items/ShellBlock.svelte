@@ -55,7 +55,10 @@
   const rowsShown = (r: ShellRun): number => Math.min(r.rows, SHELL_BLOCK_ROWS);
 
   let lineHeight = $state(17);
-  /** Rows of content to show: the last used line of the buffer, 2 at least, 24 at most. */
+  /**
+   * Rows of content to show: the last used line of the buffer (or, until the
+   * command ends, the cursor's row), 2 at least, 24 at most.
+   */
   let usedRows = $state(2);
 
   const measure = (t: Terminal): void => {
@@ -69,6 +72,11 @@
         break;
       }
     }
+    // A prompt waiting on a blank last line stays in view.
+    if (untrack(() => run.state) !== 'ended') {
+      const cursorRow = buf.baseY + buf.cursorY + 1 - buf.viewportY;
+      last = Math.max(last, Math.min(t.rows, cursorRow));
+    }
     usedRows = Math.min(SHELL_BLOCK_ROWS, Math.max(2, last, buf.baseY > 0 ? t.rows : 0));
   };
 
@@ -81,6 +89,20 @@
     if (key === lastSent) return;
     lastSent = key;
     onResize(size);
+  };
+
+  /**
+   * True while the terminal replays output it already showed (the scrollback,
+   * a redraw): the replies it makes to queries in it (cursor position, colours)
+   * are dropped, since the command asked those long ago.
+   */
+  let replaying = false;
+  const replay = (t: Terminal, text: string): void => {
+    replaying = true;
+    t.write(text, () => {
+      replaying = false;
+      measure(t);
+    });
   };
 
   onMount(() => {
@@ -97,6 +119,8 @@
     t.loadAddon(fit);
     t.open(host);
     t.onData((data) => {
+      // Replies the terminal makes while replaying old output aren't for the command.
+      if (replaying) return;
       if (untrack(() => run.state) === 'running') onInput(data);
     });
     term = t;
@@ -136,14 +160,21 @@
     const t = term;
     const out = output;
     if (!t) return;
+    replaying = true;
     if (drawnOn === t) t.reset();
     drawnOn = t;
     const text = out.text();
-    if (text) t.write(text, () => measure(t));
-    else measure(t);
+    if (text) replay(t, text);
+    else {
+      replaying = false;
+      measure(t);
+    }
     return out.listen((data, reset) => {
-      if (reset) t.reset();
-      t.write(data, () => measure(t));
+      if (reset) {
+        replaying = true;
+        t.reset();
+        replay(t, data);
+      } else t.write(data, () => measure(t));
     });
   });
 
