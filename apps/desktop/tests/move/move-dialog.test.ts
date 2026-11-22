@@ -60,7 +60,7 @@ afterEach(() => {
 const start = async (
   o: {
     git?: GitState;
-    busy?: 'turn' | 'prompt' | 'subagents' | 'terminal' | null;
+    busy?: 'turn' | 'prompt' | 'subagents' | 'terminal' | 'command' | null;
     m1Move?: boolean;
     /** This PC's service can move chats (default true). */
     localMove?: boolean;
@@ -353,6 +353,59 @@ describe('the Move dialog', () => {
     await waitFor(() => expect(server.calls('chat.end')).toHaveLength(1));
     expect(server.calls('chat.end')[0]!.params).toEqual({ sessionId: 's1' });
     expect(server.calls('chat.interrupt')).toHaveLength(0);
+  });
+
+  it('a running ! command says so; Stop stops the command and checks again', async () => {
+    let busy: 'command' | null = 'command';
+    const { dialog, server, app } = await openDialog({
+      source: {
+        'move.check': () => ({ cwd: 'C:\\work\\threadgarden', busy, git: CLEAN }),
+        'chat.open': () => ({
+          summary: summary('s1', { status: 'idle', live: true }),
+          header: {},
+          items: [],
+          hasMore: false,
+          seq: 1,
+          shell: {
+            run: {
+              runId: 'run-7',
+              sessionId: 's1',
+              command: 'sudo apt upgrade',
+              cwd: '/work',
+              cols: 100,
+              rows: 24,
+              startedAt: Date.now(),
+              state: 'running',
+            },
+            output: '',
+            offset: 0,
+          },
+        }),
+        'shell.stop': () => {
+          busy = null;
+          return {};
+        },
+      },
+    });
+    await app.chats.open('s1');
+    expect(
+      await within(dialog).findByText(
+        'A ! command is running in this chat; moving it stops the command.',
+      ),
+    ).toBeTruthy();
+    expect(
+      (within(dialog).getByRole('button', { name: 'Move' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Stop the chat' }));
+    await waitFor(() => expect(server.calls('shell.stop')).toHaveLength(1));
+    expect(server.calls('shell.stop')[0]!.params).toEqual({ runId: 'run-7' });
+    expect(server.calls('chat.interrupt')).toHaveLength(0);
+    expect(server.calls('chat.end')).toHaveLength(0);
+    await waitFor(() =>
+      expect(
+        (within(dialog).getByRole('button', { name: 'Move' }) as HTMLButtonElement).disabled,
+      ).toBe(false),
+    );
   });
 
   it('a chat running in a terminal says so and cannot move', async () => {
