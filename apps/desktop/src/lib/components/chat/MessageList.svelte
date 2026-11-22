@@ -1,18 +1,20 @@
 <script lang="ts">
-  import type { ChatItem, ChatTask, QueuedMessage } from '@threadgarden/protocol';
+  import type { ChatItem, ChatTask, QueuedMessage, ShellRun } from '@threadgarden/protocol';
   import ArrowDownIcon from '@lucide/svelte/icons/arrow-down';
   import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
   import XIcon from '@lucide/svelte/icons/x';
   import { onDestroy, untrack } from 'svelte';
   import type { ListMemory } from '#lib/state/chats.svelte.js';
+  import type { ShellOutput } from '#lib/state/shell-output.js';
   import { setChatActions, type RequestActions } from './context';
   import { elapsed } from './format';
   import ItemBoundary from './items/ItemBoundary.svelte';
   import ItemView from './items/ItemView.svelte';
+  import ShellBlock from './items/ShellBlock.svelte';
   import ToolGroup from './items/ToolGroup.svelte';
   import UnknownItem from './items/UnknownItem.svelte';
   import UserItem from './items/UserItem.svelte';
-  import { buildRows, quietTail, type Row } from './rows';
+  import { buildRows, quietTail, withShell, type Row, type ShellRow } from './rows';
   import { captureAnchor, computeOffsets, restoreAnchor, visibleRange } from './virtual';
 
   /**
@@ -34,7 +36,19 @@
    */
   type QueuedRow = { kind: 'queued'; key: string; message: QueuedMessage; itemIds: string[] };
   type WaitingRow = { kind: 'waiting'; key: string; itemIds: string[] };
-  type ListRow = Row | WaitingRow | QueuedRow;
+  type ListRow = Row | ShellRow | WaitingRow | QueuedRow;
+
+  /** The chat's `!` command: shown as a live terminal block (see `withShell`). */
+  type ShellProps = {
+    run: ShellRun;
+    output: ShellOutput;
+    machineName: string;
+    home: string;
+    autofocus?: boolean;
+    onInput: (data: string) => void;
+    onResize: (size: { cols: number; rows: number }) => void;
+    onStop: () => void;
+  };
 
   let {
     items,
@@ -53,6 +67,7 @@
     fallbackHeight = 600,
     overscan = 6,
     stickRequests = 0,
+    shell,
   }: {
     items: readonly ChatItem[];
     agentName?: string;
@@ -79,6 +94,8 @@
     overscan?: number;
     /** Each change jumps to the bottom and follows new output again (`ChatsState.stickToBottom`). */
     stickRequests?: number;
+    /** The chat's `!` command, when it has one to show. */
+    shell?: ShellProps;
   } = $props();
 
   /** Within this distance of the bottom the list sticks to new output. */
@@ -158,7 +175,13 @@
   // The waiting row sits between the conversation and the queued messages: it is
   // about the turn in progress, which they wait behind.
   const rows: ListRow[] = $derived([
-    ...buildRows(items),
+    ...(shell
+      ? withShell(
+          buildRows(items),
+          shell.run,
+          items.map((it) => it.id),
+        )
+      : buildRows(items)),
     ...(waitingShown ? [WAITING_ROW] : []),
     ...queued
       .filter((message) => !read.has(message.id))
@@ -191,6 +214,7 @@
 
   const estimate = (row: ListRow): number => {
     if (row.kind === 'queued') return userHeight(row.message.text) + 16;
+    if (row.kind === 'shell') return 120 + 17 * Math.min(row.run.rows, 24);
     if (row.kind !== 'item') return 28;
     const it = row.item;
     switch (it.kind) {
@@ -479,7 +503,9 @@
               </div>
             {:else if row.kind === 'unknownGroup'}
               <ItemBoundary item={row.items}><UnknownItem items={row.items} /></ItemBoundary>
-            {:else}
+            {:else if row.kind === 'shell' && shell}
+              <ShellBlock {...shell} />
+            {:else if row.kind === 'toolGroup'}
               <ItemBoundary item={row.items}
                 ><ToolGroup name={row.name} items={row.items} /></ItemBoundary
               >

@@ -1,4 +1,4 @@
-import type { ChatItem } from '@threadgarden/protocol';
+import type { ChatItem, ShellRun } from '@threadgarden/protocol';
 
 export type ToolCallItem = Extract<ChatItem, { kind: 'toolCall' }>;
 export type UnknownChatItem = Extract<ChatItem, { kind: 'unknown' }>;
@@ -13,6 +13,9 @@ export type Row =
   | { kind: 'item'; key: string; item: ChatItem; children?: ChatItem[]; itemIds: string[] }
   | { kind: 'unknownGroup'; key: string; items: UnknownChatItem[]; itemIds: string[] }
   | { kind: 'toolGroup'; key: string; name: string; items: ToolCallItem[]; itemIds: string[] };
+
+/** The chat's `!` command, shown as a live terminal block (`withShell`). */
+export type ShellRow = { kind: 'shell'; key: string; run: ShellRun; itemIds: string[] };
 
 /** Tools that spawn a subagent: their children are grouped under them. */
 export const SUBAGENT_TOOLS = new Set(['Agent', 'Task']);
@@ -122,4 +125,25 @@ export const buildRows = (items: readonly ChatItem[]): Row[] => {
     );
   }
   return rows;
+};
+
+/**
+ * Adds the chat's `!` command to `rows`. Once its lines are in the chat
+ * (`run.entryId` is among `itemIds`) the block sits right after the `! command`
+ * line and the output line (`<entryId>:out`) is hidden: the block shows it. Until
+ * then, or when the run ended without being appended, the block comes last.
+ */
+export const withShell = (
+  rows: Row[],
+  run: ShellRun,
+  itemIds: readonly string[],
+): (Row | ShellRow)[] => {
+  const block: ShellRow = { kind: 'shell', key: `shell:${run.runId}`, run, itemIds: [] };
+  const entry = run.entryId;
+  if (entry === undefined || !itemIds.includes(entry)) return [...rows, block];
+  const out = `${entry}:out`;
+  const shown = rows.filter((r) => !(r.kind === 'item' && r.item.id === out));
+  const i = shown.findIndex((r) => r.kind === 'item' && r.item.id === entry);
+  if (i < 0) return [...shown, block];
+  return [...shown.slice(0, i + 1), block, ...shown.slice(i + 1)];
 };
