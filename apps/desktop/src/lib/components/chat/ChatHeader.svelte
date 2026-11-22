@@ -10,6 +10,7 @@
   import PauseIcon from '@lucide/svelte/icons/pause';
   import PencilIcon from '@lucide/svelte/icons/pencil';
   import PowerIcon from '@lucide/svelte/icons/power';
+  import ServerIcon from '@lucide/svelte/icons/server';
   import TerminalIcon from '@lucide/svelte/icons/terminal';
   import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
   import BypassPermissionsDialog from '#lib/components/BypassPermissionsDialog.svelte';
@@ -56,6 +57,7 @@
     readOnly = false,
     activityOpen = false,
     onToggleActivity,
+    onOpenMcp,
   }: {
     chat: ChatState;
     /**
@@ -66,6 +68,8 @@
     /** The Activity panel is shown. */
     activityOpen?: boolean;
     onToggleActivity?: () => void;
+    /** Opens the MCP servers dialog (Claude chats on a machine that manages them). */
+    onOpenMcp?: () => void;
   } = $props();
 
   const { machines, interaction, agents } = useApp();
@@ -342,6 +346,12 @@
             onSelect={() => interaction.openMoveChat({ machineId, sessionId }, summary)}
           >
             <ArrowRightLeftIcon /> Move to…
+          </DropdownMenu.Item>
+        {/if}
+        {#if onOpenMcp}
+          <DropdownMenu.Separator />
+          <DropdownMenu.Item class="py-1 text-xs" onSelect={onOpenMcp}>
+            <ServerIcon /> MCP servers…
           </DropdownMenu.Item>
         {/if}
         {#if isPhone}

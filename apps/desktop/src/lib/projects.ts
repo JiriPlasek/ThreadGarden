@@ -3,6 +3,7 @@
  * calls on one machine's client, so components and tests need not know the wire shape.
  */
 import {
+  MCP_CAPABILITY,
   MOVE_CAPABILITY,
   PROJECTS_CAPABILITY,
   ProjectNameSchema,
@@ -38,6 +39,10 @@ export const supportsProjects = (m: MachineEntry | undefined): boolean =>
 /** The machine's service can export and import a chat (Move to…). */
 export const supportsMove = (m: MachineEntry | undefined): boolean =>
   !!m?.info?.capabilities.includes(MOVE_CAPABILITY);
+
+/** The machine's service can list and manage a chat's MCP servers. */
+export const supportsMcp = (m: MachineEntry | undefined): boolean =>
+  !!m?.info?.capabilities.includes(MCP_CAPABILITY);
 
 export const projectsApi = (api: Api) => ({
   list: (path: string): Promise<FolderListing> => api.request('folders.list', { path }),

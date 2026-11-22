@@ -3,6 +3,7 @@
   import { PERMISSION_MODE_OPTIONS } from '@threadgarden/protocol';
   import { untrack } from 'svelte';
   import { buildFlags } from '#lib/build-flags.js';
+  import { type Control } from '#lib/components/composer/commands.js';
   import Composer from '#lib/components/composer/Composer.svelte';
   import BypassPermissionsDialog from '#lib/components/BypassPermissionsDialog.svelte';
   import InScope from '#lib/components/InScope.svelte';
@@ -494,7 +495,8 @@
   };
 
   /** `/model` and `/permissions` in the first message open this dialog's pickers (R25). */
-  const onControl = (control: 'model' | 'effort' | 'permissionMode'): string | null => {
+  const onControl = (control: Control): string | null => {
+    if (control === 'mcp') return 'MCP servers can be managed once the chat has started.';
     if (control === 'effort') {
       return 'Effort can be chosen in the chat header once the chat has started.';
     }

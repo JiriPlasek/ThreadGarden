@@ -29,7 +29,7 @@ export class ChatMcp {
       api.on('mcp.changed', (s) => {
         if (s.sessionId === this.sessionId) this.set(s);
       }),
-      api.onOpen(() => this.load()),
+      api.onOpen(() => quietly(this.load())),
     );
   }
 
