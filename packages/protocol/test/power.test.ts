@@ -85,9 +85,9 @@ describe('power protocol', () => {
     expect(params.safeParse({ force: false, despiteSignedIn: 'yes' }).success).toBe(false);
   });
 
-  it('is protocol 11 and accepts machines at 10 to 12', () => {
-    expect(PROTOCOL_VERSION).toBe(11);
-    expect([9, 10, 11, 12, 13].map(acceptsRemoteProtocol)).toEqual([
+  it('is protocol 12 and accepts machines at 11 to 13', () => {
+    expect(PROTOCOL_VERSION).toBe(12);
+    expect([10, 11, 12, 13, 14].map(acceptsRemoteProtocol)).toEqual([
       false,
       true,
       true,

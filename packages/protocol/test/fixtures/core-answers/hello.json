@@ -3,7 +3,7 @@
     {
       "params": {
         "client": "threadgarden-desktop",
-        "protocolVersion": 11
+        "protocolVersion": 12
       },
       "result": {
         "machine": {
@@ -14,7 +14,7 @@
           "name": "Phone",
           "platform": "linux"
         },
-        "protocolVersion": 11,
+        "protocolVersion": 12,
         "serviceVersion": "0.0.0"
       }
     }

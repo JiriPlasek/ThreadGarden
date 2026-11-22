@@ -419,6 +419,13 @@ pub const REFUSED: &[&str] = &[
     "away.queue",
     "away.cancel",
     "away.retry",
+    // A chat's MCP servers: the phone's own core has no chats.
+    "mcp.list",
+    "mcp.approve",
+    "mcp.signIn",
+    "mcp.submitCallback",
+    "mcp.act",
+    "chat.wake",
     // The desktop's plug setup dialog (finding and naming a plug): the phone takes typed details.
     "power.probe",
     "power.pairPlug",

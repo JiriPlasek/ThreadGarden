@@ -603,7 +603,7 @@ fn a_machine_on_another_protocol_is_left_alone() {
     let dir = tempfile::tempdir().unwrap();
     let core = core(dir.path());
     let newer = FakeMachine::start(Behaviour {
-        protocol: 13,
+        protocol: 14,
         ..Behaviour::default()
     });
     let mut events = core.events();
@@ -611,7 +611,7 @@ fn a_machine_on_another_protocol_is_left_alone() {
         pair(&core, &newer).await;
         let failed = failures_within(&mut events, Duration::from_secs(1)).await;
         assert!(
-            failed.iter().any(|r| r.contains("protocol 13")),
+            failed.iter().any(|r| r.contains("protocol 14")),
             "{failed:?}"
         );
         until("its link closed", || newer.devices_open() == 0).await;
