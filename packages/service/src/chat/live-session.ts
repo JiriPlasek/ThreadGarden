@@ -733,6 +733,7 @@ export class LiveSession {
       },
     );
     this.run = run;
+    if (this.idleSinceValue !== null) this.idleSinceValue = this.deps.now();
     this.noteRunning();
     return run.info;
   }
@@ -1220,6 +1221,8 @@ export class LiveSession {
    * them, `ECHOES`). Status, the queue and turn ends stay as they are.
    */
   private commandEnded(run: PtyRun, end: ShellRunEnd): void {
+    // Idle reclaim counts from the command's end, not from before it ran.
+    if (this.idleSinceValue !== null) this.idleSinceValue = this.deps.now();
     this.noteRunning();
     const session = this.session;
     if (end.reason === 'session' || !session || this.run !== run) return;

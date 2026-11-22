@@ -617,8 +617,13 @@ describe('SessionHost: ! commands', () => {
     expect(host.reclaimIdle(timers.now() + 60 * MIN)).toBe(0);
     expect(fake.closed).toBe(false);
 
+    // A long command: the idle wait counts from its end, not from before it ran.
+    timers.advance(60 * MIN);
     ctx.pty.last().exit(0);
-    expect(host.reclaimIdle(timers.now() + 60 * MIN)).toBe(1);
+    const wait = ctx.settings.idleReclaimMinutes * MIN;
+    expect(host.reclaimIdle(timers.now() + wait - 1)).toBe(0);
+    expect(fake.closed).toBe(false);
+    expect(host.reclaimIdle(timers.now() + wait)).toBe(1);
     expect(fake.closed).toBe(true);
   });
 
