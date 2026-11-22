@@ -17,11 +17,16 @@ import {
   type Result,
   type PromptSuggestion,
   type ReturnedMessage,
+  type ShellRun,
+  type ShellSize,
+  type ShellView,
+  type EventData,
 } from '@threadgarden/protocol';
 import { SvelteMap } from 'svelte/reactivity';
 import { RequestError } from '../service/client';
 import { quietly, type Api } from './api';
 import { copiedAtOf } from './copy-api';
+import { ShellOutput } from './shell-output';
 
 export const OPEN_TAIL = 200;
 export const OLDER_PAGE = 200;
@@ -144,8 +149,16 @@ export class ChatState {
    * message has gone out (`ChatsState.made`).
    */
   fromQueue = $state(false);
-  /** Running tasks, for the "N running" badges. */
-  running = $derived(runningTasks(this.tasks));
+  /** The chat's `!` command, running or the last one that ended (protocol 13); null when none. */
+  shell = $state.raw<ShellRun | null>(null);
+  /** The shown command's output; replaced for each run (a plain field: the terminal listens to it). */
+  shellOutput = new ShellOutput();
+  /** A `shell.get` is in flight (one read at a time). */
+  shellSyncing = false;
+  /** Running tasks and a running command, for the "N running" badges. */
+  running = $derived(
+    runningTasks(this.tasks) + (this.shell && this.shell.state !== 'ended' ? 1 : 0),
+  );
   /** Message list geometry, kept while the chat is resident. */
   view: ListMemory = { heights: new Map(), stick: true, anchor: null };
   /** Bumped by `stickToBottom`: a shown message list jumps to the bottom (v1.1 §5). */
@@ -240,6 +253,8 @@ export class ChatsState {
     api.on('chat.items', (e) => this.onItems(e));
     api.on('chat.status', (e) => this.onStatus(e));
     api.on('chat.tasks', (e) => this.onTasks(e));
+    api.on('shell.run', (e) => this.onShellRun(e));
+    api.on('shell.output', (e) => this.onShellOutput(e));
     // v1.2: the bucket (and hold) of an open chat shows in its header.
     api.on('sessions.changed', (e) => this.refreshSummaries(e.sessionIds));
     api.onReconnect(() => this.resync());
@@ -383,6 +398,7 @@ export class ChatsState {
       // One that predates the queue list shows a queued message in the transcript at once.
       chat.queuedMessages = r.queued ?? [];
       chat.movedTo = r.movedTo ?? null;
+      this.applyShellView(chat, r.shell ?? null);
       chat.seq = r.seq;
       chat.loaded = true;
       // Queued items at or below the snapshot are already part of it; applying a stale
@@ -653,6 +669,8 @@ export class ChatsState {
           chat.buffered = [];
           for (const e of buffered) this.dispatch(chat, e);
           this.flush();
+          // A running command's output may have moved on while we were away.
+          if (chat.shell && chat.shell.state !== 'ended') await this.syncShell(chat);
         } catch (err) {
           chat.resyncing = false;
           if (err instanceof RequestError && err.code === 'DISCONNECTED') {
@@ -669,6 +687,78 @@ export class ChatsState {
         }
       }),
     );
+  };
+
+  /** Makes `view` (the service's command and scrollback, or none) the chat's. */
+  private applyShellView = (chat: ChatState, view: ShellView | null): void => {
+    if (!view) {
+      chat.shell = null;
+      chat.shellOutput = new ShellOutput();
+      return;
+    }
+    if (chat.shell?.runId !== view.run.runId) chat.shellOutput = new ShellOutput();
+    chat.shell = view.run;
+    chat.shellOutput.reset(view.output, view.offset);
+  };
+
+  /** Reads the chat's command and scrollback again (after a gap or a reconnect); one read at a time. */
+  private syncShell = async (chat: ChatState): Promise<void> => {
+    if (!this.api || chat.shellSyncing) return;
+    chat.shellSyncing = true;
+    try {
+      const { view } = await this.api.request('shell.get', { sessionId: chat.sessionId });
+      if (this.byId.get(chat.sessionId) === chat) this.applyShellView(chat, view);
+    } catch {
+      // The next gap or reconnect reads it again.
+    } finally {
+      chat.shellSyncing = false;
+    }
+  };
+
+  /** A command started or changed; a different run replaces the shown one and its output. */
+  private setShellRun = (chat: ChatState, run: ShellRun): void => {
+    if (chat.shell?.runId !== run.runId) {
+      // An older run's late news must not replace a newer one.
+      if (chat.shell && run.startedAt < chat.shell.startedAt) return;
+      chat.shellOutput = new ShellOutput();
+    }
+    chat.shell = run;
+  };
+
+  private onShellRun = (run: EventData<'shell.run'>): void => {
+    const chat = this.byId.get(run.sessionId);
+    if (chat) this.setShellRun(chat, run);
+  };
+
+  private onShellOutput = (e: EventData<'shell.output'>): void => {
+    const chat = this.byId.get(e.sessionId);
+    if (!chat || chat.shell?.runId !== e.runId) return;
+    if (chat.shellOutput.push(e.offset, e.data) === 'gap') quietly(this.syncShell(chat));
+  };
+
+  /** Runs `command` (a `!` line) in the chat's folder; the terminal is `size` big. */
+  startCommand = async (sessionId: string, command: string, size: ShellSize): Promise<ShellRun> => {
+    if (!this.api) throw new Error('Not connected to the Threadgarden service');
+    const run = await this.api.request('shell.start', { sessionId, command, ...size });
+    const chat = this.byId.get(sessionId);
+    if (chat) this.setShellRun(chat, run);
+    return run;
+  };
+
+  /** Keystrokes for the running command (a password too: it goes nowhere else). */
+  commandInput = async (runId: string, data: string): Promise<void> => {
+    if (!this.api) throw new Error('Not connected to the Threadgarden service');
+    await this.api.request('shell.input', { runId, data });
+  };
+
+  commandResize = async (runId: string, size: ShellSize): Promise<void> => {
+    if (!this.api) throw new Error('Not connected to the Threadgarden service');
+    await this.api.request('shell.resize', { runId, ...size });
+  };
+
+  commandStop = async (runId: string): Promise<void> => {
+    if (!this.api) throw new Error('Not connected to the Threadgarden service');
+    await this.api.request('shell.stop', { runId });
   };
 
   private onItems = (e: ChatItemsEvent): void => {

@@ -6,6 +6,7 @@ import {
   MCP_CAPABILITY,
   MOVE_CAPABILITY,
   PROJECTS_CAPABILITY,
+  SHELL_CAPABILITY,
   ProjectNameSchema,
   type CloneJob,
   type FolderListing,
@@ -43,6 +44,10 @@ export const supportsMove = (m: MachineEntry | undefined): boolean =>
 /** The machine's service can list and manage a chat's MCP servers. */
 export const supportsMcp = (m: MachineEntry | undefined): boolean =>
   !!m?.info?.capabilities.includes(MCP_CAPABILITY);
+
+/** The machine's service can run `!` commands in a chat. */
+export const supportsShell = (m: MachineEntry | undefined): boolean =>
+  !!m?.info?.capabilities.includes(SHELL_CAPABILITY);
 
 export const projectsApi = (api: Api) => ({
   list: (path: string): Promise<FolderListing> => api.request('folders.list', { path }),
