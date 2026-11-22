@@ -519,3 +519,20 @@ test("the phone layout opens the MCP servers dialog from the chat's menu", async
   await page.keyboard.press('Escape');
   await expect(dialog).toBeHidden();
 });
+
+test('the phone layout runs a command and stops it with the button', async ({ page }) => {
+  await openPhone(page);
+  await openChat(page, 'session-15');
+  await send(page, 'Hello from the shell test');
+  await expect(page.getByText('This is the Threadgarden mock service answering.')).toBeVisible();
+  await send(page, '! sleep 60');
+  const block = page.locator('[data-shell-block]');
+  await expect(block).toBeVisible();
+  await expect(block).toContainText('Running ·');
+  // Fits the screen.
+  const box = await block.boundingBox();
+  expect(box!.x + box!.width).toBeLessThanOrEqual(412);
+  await block.getByRole('button', { name: 'Stop' }).tap();
+  await expect(block).toContainText('Stopped ·');
+  await expect(block.getByRole('button', { name: 'Stop' })).toHaveCount(0);
+});
