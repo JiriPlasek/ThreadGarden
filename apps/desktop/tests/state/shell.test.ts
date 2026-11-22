@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ServiceClient } from '../../src/lib/service/client';
 import { ChatsState } from '../../src/lib/state/chats.svelte';
 import { ShellOutput } from '../../src/lib/state/shell-output';
-import { FakeServer } from '../service/fake-ws';
+import { FakeServer, RpcFail } from '../service/fake-ws';
 
 const summary = (sessionId: string): ChatSummary => ({
   sessionId,
@@ -198,5 +198,69 @@ describe('a chat’s command', () => {
     expect(server.calls('shell.input')[0]!.params).toEqual({ runId: 'r9', data: 'pw\r' });
     expect(server.calls('shell.resize')[0]!.params).toEqual({ runId: 'r9', cols: 90, rows: 30 });
     expect(server.calls('shell.stop')[0]!.params).toEqual({ runId: 'r9' });
+  });
+
+  it('resync loads a run that started while away, over none or an ended one', async () => {
+    for (const open of [
+      {},
+      { shell: { run: run({ state: 'ended' }), output: 'old', offset: 0 } },
+    ]) {
+      server.calls('shell.get').length = 0;
+      const chats = await setup(open);
+      server.handlers['chat.since'] = () => ({ events: [], seq: 10 });
+      server.handlers['shell.get'] = () => ({
+        view: { run: run({ runId: 'r5', startedAt: 9000 }), output: 'fresh', offset: 0 },
+      });
+      await chats.resync();
+      const chat = chats.get('s1')!;
+      expect(chat.shell?.runId).toBe('r5');
+      expect(chat.shellOutput.text()).toBe('fresh');
+      expect(chat.running).toBe(1);
+    }
+  });
+
+  it('a chunk of an unknown run triggers exactly one shell.get', async () => {
+    const chats = await setup();
+    server.handlers['shell.get'] = () => ({
+      view: { run: run({ runId: 'r7' }), output: 'abc', offset: 0 },
+    });
+    server.push('shell.output', { runId: 'r7', sessionId: 's1', offset: 0, data: 'abc' });
+    server.push('shell.output', { runId: 'r7', sessionId: 's1', offset: 3, data: 'd' });
+    await flushAsync();
+    expect(server.calls('shell.get')).toHaveLength(1);
+    expect(chats.get('s1')!.shellOutput.text()).toBe('abc');
+  });
+
+  it('a late start reply does not revive an ended run, nor an older view replace a newer run', async () => {
+    const chats = await setup();
+    const chat = chats.get('s1')!;
+    server.push('shell.run', run({ state: 'ended', exitCode: 0, endReason: 'exit' }));
+    await flushAsync();
+    server.handlers['shell.start'] = () => run();
+    await chats.startCommand('s1', 'ls', { cols: 80, rows: 20 });
+    expect(chat.shell?.state).toBe('ended');
+    server.push('shell.run', run({ runId: 'r2', startedAt: 3000 }));
+    await flushAsync();
+    server.handlers['shell.get'] = () => ({ view: { run: run(), output: 'stale', offset: 0 } });
+    server.push('shell.output', { runId: 'zz', sessionId: 's1', offset: 0, data: 'x' });
+    await flushAsync();
+    expect(chat.shell?.runId).toBe('r2');
+    expect(chat.shellOutput.text()).toBe('');
+  });
+
+  it('a chunk during a shell.get is not lost, and a failing shell.get changes nothing', async () => {
+    const chats = await setup({ shell: { run: run(), output: 'ab', offset: 0 } });
+    const chat = chats.get('s1')!;
+    server.handlers['shell.get'] = () => {
+      throw new RpcFail('INTERNAL');
+    };
+    server.push('shell.output', { runId: 'r1', sessionId: 's1', offset: 5, data: 'x' });
+    await flushAsync();
+    expect(chat.shellOutput.text()).toBe('ab');
+    expect(chat.shell?.runId).toBe('r1');
+    // Contiguous chunks still apply (also while a read could be pending).
+    server.push('shell.output', { runId: 'r1', sessionId: 's1', offset: 2, data: 'cd' });
+    await flushAsync();
+    expect(chat.shellOutput.text()).toBe('abcd');
   });
 });

@@ -155,6 +155,8 @@ export class ChatState {
   shellOutput = new ShellOutput();
   /** A `shell.get` is in flight (one read at a time). */
   shellSyncing = false;
+  /** Ids of the runs this chat has shown: late news of one that was replaced is ignored. */
+  knownRuns = new Set<string>();
   /** Running tasks and a running command, for the "N running" badges. */
   running = $derived(
     runningTasks(this.tasks) + (this.shell && this.shell.state !== 'ended' ? 1 : 0),
@@ -669,8 +671,10 @@ export class ChatsState {
           chat.buffered = [];
           for (const e of buffered) this.dispatch(chat, e);
           this.flush();
-          // A running command's output may have moved on while we were away.
-          if (chat.shell && chat.shell.state !== 'ended') await this.syncShell(chat);
+          // A command may have started, or its output moved on, while we were away.
+          if (chat.live || (chat.shell && chat.shell.state !== 'ended')) {
+            await this.syncShell(chat);
+          }
         } catch (err) {
           chat.resyncing = false;
           if (err instanceof RequestError && err.code === 'DISCONNECTED') {
@@ -696,7 +700,12 @@ export class ChatsState {
       chat.shellOutput = new ShellOutput();
       return;
     }
-    if (chat.shell?.runId !== view.run.runId) chat.shellOutput = new ShellOutput();
+    if (chat.shell?.runId !== view.run.runId) {
+      // A view of an older run must not replace a newer one.
+      if (chat.shell && view.run.startedAt < chat.shell.startedAt) return;
+      chat.shellOutput = new ShellOutput();
+    }
+    chat.knownRuns.add(view.run.runId);
     chat.shell = view.run;
     chat.shellOutput.reset(view.output, view.offset);
   };
@@ -719,9 +728,16 @@ export class ChatsState {
   private setShellRun = (chat: ChatState, run: ShellRun): void => {
     if (chat.shell?.runId !== run.runId) {
       // An older run's late news must not replace a newer one.
-      if (chat.shell && run.startedAt < chat.shell.startedAt) return;
+      if (chat.shell && run.startedAt < chat.shell.startedAt) {
+        chat.knownRuns.add(run.runId);
+        return;
+      }
       chat.shellOutput = new ShellOutput();
+    } else if (chat.shell?.state === 'ended' && run.state !== 'ended') {
+      // A late `shell.start` reply must not bring an ended run back to life.
+      return;
     }
+    chat.knownRuns.add(run.runId);
     chat.shell = run;
   };
 
@@ -732,7 +748,13 @@ export class ChatsState {
 
   private onShellOutput = (e: EventData<'shell.output'>): void => {
     const chat = this.byId.get(e.sessionId);
-    if (!chat || chat.shell?.runId !== e.runId) return;
+    if (!chat) return;
+    if (chat.shell?.runId !== e.runId) {
+      if (chat.knownRuns.has(e.runId)) return;
+      // A run we haven't been told about (started while away, or elsewhere): load it.
+      quietly(this.syncShell(chat));
+      return;
+    }
     if (chat.shellOutput.push(e.offset, e.data) === 'gap') quietly(this.syncShell(chat));
   };
 
