@@ -75,13 +75,16 @@ export const terminalText = (raw: string): string => {
   return out.join('\n');
 };
 
-/** Text up to OUTPUT_LIMIT unchanged; past it the end, from a line start, under CUT_NOTE. */
-export const limitOutput = (text: string): string => {
+/**
+ * Text up to OUTPUT_LIMIT unchanged; past it the end, from a line start, under
+ * CUT_NOTE. `total` is the full output's length when `text` is already its end.
+ */
+export const limitOutput = (text: string, total = text.length): string => {
   if (text.length <= OUTPUT_LIMIT) return text;
   let kept = text.slice(text.length - OUTPUT_LIMIT);
   const lineBreak = kept.indexOf('\n');
   if (lineBreak >= 0) kept = kept.slice(lineBreak + 1);
-  return `${CUT_NOTE.replace('‹N›', String(text.length))}\n${kept}`;
+  return `${CUT_NOTE.replace('‹N›', String(total))}\n${kept}`;
 };
 
 const escapeTags = (s: string): string =>

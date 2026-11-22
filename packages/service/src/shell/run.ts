@@ -15,6 +15,8 @@ export const SHELL_CHUNK_MAX_CHARS = 65_536;
 export const SHELL_RATE_CHARS_PER_S = 524_288;
 export const SHELL_STOP_GRACE_MS = 3_000;
 export const SHELL_TRANSCRIPT_TAIL_CHARS = 1_048_576;
+/** node-pty throws when `kill` gets a signal on Windows. */
+const IS_WINDOWS = process.platform === 'win32';
 export const SKIP_MARKER = '\r\n\u001b[2m[… output skipped here: too fast to show …]\u001b[0m\r\n';
 
 export type ShellRunEnd = {
@@ -58,9 +60,11 @@ export class PtyRun {
   private pending = '';
   private flushTimer: unknown;
   private graceTimer: unknown;
+  private finalTimer: unknown;
   private emitted = 0;
   private scrollback = '';
   private raw = '';
+  private rawTotal = 0;
   private windowStart: number;
   private windowChars = 0;
   private skipping = false;
@@ -137,11 +141,29 @@ export class PtyRun {
     this.stopRequested = true;
     this.run.state = 'stopping';
     this.emitRun();
-    this.pty.write('\x03');
     this.graceTimer = this.deps.timers.setTimeout(() => {
       this.graceTimer = undefined;
-      if (!this.over) this.pty.kill();
+      if (this.over) return;
+      try {
+        this.pty.kill();
+      } catch {
+        // already gone, or can't be signalled: the final timer ends the run
+      }
+      this.finalTimer = this.deps.timers.setTimeout(() => {
+        this.finalTimer = undefined;
+        if (this.over) return;
+        if (!IS_WINDOWS) {
+          try {
+            this.pty.kill('SIGKILL');
+          } catch {
+            // already gone
+          }
+        }
+        this.finish(null, 'stopped');
+      }, SHELL_STOP_GRACE_MS);
     }, SHELL_STOP_GRACE_MS);
+    // After arming the timer, so a PTY that throws here still ends.
+    this.pty.write('\x03');
   }
 
   kill(): void {
@@ -172,6 +194,7 @@ export class PtyRun {
   private onData(data: string): void {
     if (this.over) return;
     this.raw += data;
+    this.rawTotal += data.length;
     if (this.raw.length > 2 * SHELL_TRANSCRIPT_TAIL_CHARS) {
       this.raw = this.raw.slice(this.raw.length - SHELL_TRANSCRIPT_TAIL_CHARS);
     }
@@ -223,14 +246,19 @@ export class PtyRun {
     this.flush();
     this.over = true;
     if (this.graceTimer !== undefined) this.deps.timers.clearTimeout(this.graceTimer);
+    if (this.finalTimer !== undefined) this.deps.timers.clearTimeout(this.finalTimer);
     this.graceTimer = undefined;
+    this.finalTimer = undefined;
     const endedAt = this.deps.now();
     this.run.state = 'ended';
     this.run.endedAt = endedAt;
     this.run.exitCode = exitCode;
     this.run.endReason = reason;
     this.emitRun();
-    const transcript = limitOutput(terminalText(tailAtLine(this.raw, SHELL_TRANSCRIPT_TAIL_CHARS)));
+    const tail = tailAtLine(this.raw, SHELL_TRANSCRIPT_TAIL_CHARS);
+    const text = terminalText(tail);
+    // When the start was dropped, CUT_NOTE counts it too.
+    const transcript = limitOutput(text, text.length + (this.rawTotal - tail.length));
     this.deps.onEnd({ exitCode, reason, durationMs: endedAt - this.run.startedAt, transcript });
   }
 }

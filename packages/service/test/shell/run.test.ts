@@ -109,7 +109,8 @@ describe('PtyRun', () => {
     p.exit(0);
     const end = t.ends[0];
     expect(end?.transcript.endsWith('the last line')).toBe(true);
-    expect(end?.transcript).toContain(CUT_NOTE.slice(0, 'Output too large ('.length));
+    // The full output is 50 lines of 99 999 x's and the last line: 5 000 013 characters.
+    expect(end?.transcript.startsWith(`${CUT_NOTE.replace('‹N›', '5000013')}\n`)).toBe(true);
   });
 
   it("attach mid-run continues from the scrollback's offset", () => {
@@ -164,6 +165,28 @@ describe('PtyRun', () => {
     vi.advanceTimersByTime(SHELL_STOP_GRACE_MS * 2);
     expect(u.pty.last().kills).toHaveLength(0);
     expect(u.ends[0]).toMatchObject({ reason: 'stopped', exitCode: 130 });
+  });
+
+  it('a stop whose exit never arrives still ends, stopped, after a second grace period', () => {
+    const t = setup();
+    const p = t.pty.last();
+    p.kill = (signal?: string) => {
+      p.kills.push(signal);
+      throw new Error('kill failed');
+    };
+    t.run.stop();
+    vi.advanceTimersByTime(SHELL_STOP_GRACE_MS);
+    expect(p.kills).toEqual([undefined]);
+    expect(t.ends).toHaveLength(0);
+    vi.advanceTimersByTime(SHELL_STOP_GRACE_MS);
+    // node-pty throws when given a signal on Windows, so there it only gets the plain kill.
+    expect(p.kills).toEqual(process.platform === 'win32' ? [undefined] : [undefined, 'SIGKILL']);
+    expect(t.ends).toEqual([expect.objectContaining({ reason: 'stopped', exitCode: null })]);
+    expect(t.run.info.state).toBe('ended');
+    expect(t.run.running).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+    p.exit(0);
+    expect(t.ends).toHaveLength(1);
   });
 
   it('resize resizes the PTY and re-emits the run with its size', () => {
