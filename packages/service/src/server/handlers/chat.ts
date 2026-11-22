@@ -271,6 +271,10 @@ export type ChatHandlers = {
    * drops its cached view, so the next read starts afresh (a move).
    */
   release: (sessionId: string) => void;
+  /** The chat's live session, resuming it first when Threadgarden is not running it. */
+  resumedOrLive: (sessionId: string) => Promise<LiveSession>;
+  /** Returns an archived or held chat to Active (a send or a command uses it). */
+  activate: (sessionId: string) => void;
 };
 
 export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): ChatHandlers => {
@@ -514,6 +518,7 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
     const v = await view(p.sessionId);
     // Read after the view so a status change during the history read is reflected.
     const summary = catalog.summary(p.sessionId)!;
+    const shell = host.get(p.sessionId)?.command();
     const n = Math.max(0, Math.floor(p.tail));
     const items = n === 0 ? [] : v.items.slice(-n);
     return {
@@ -526,6 +531,7 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
       promptSuggestion: v.promptSuggestion ?? null,
       queued: v.queued,
       movedTo: deps.awayTo?.(p.sessionId) ?? null,
+      ...(shell ? { shell } : {}),
     };
   });
 
@@ -855,5 +861,5 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
     return [...(lastModels ?? []), ...codex];
   });
 
-  return { send, requireRunnable, release };
+  return { send, requireRunnable, release, resumedOrLive, activate };
 };

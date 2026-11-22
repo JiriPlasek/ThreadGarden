@@ -331,6 +331,7 @@ describe('power on a service', () => {
       installSignalHandlers: false,
       headless,
       host: null,
+      shell: { pty: null }, // the capability list below doesn't depend on the PTY module
       ...(headless ? { remote: { addresses: ['127.0.0.1'], port: 0 } } : {}),
       logger: { debug() {}, info() {}, warn() {}, error() {}, flush: async () => {} },
     });

@@ -126,8 +126,20 @@ export class SessionHost {
     }, RECLAIM_INTERVAL_MS);
   }
 
-  /** Stops the reclaim timer (sessions are left alone; see `stopAll`). */
+  /**
+   * Stops the reclaim timer and kills running `!` commands (never appended); the
+   * sessions themselves are left alone (see `stopAll`).
+   */
   dispose(): void {
+    for (const s of this.sessions.values()) {
+      const runId = s.command()?.run.runId;
+      if (runId === undefined) continue;
+      try {
+        s.commandRun(runId)?.kill();
+      } catch (err) {
+        this.report(err, `stop command (session ${s.sessionId})`);
+      }
+    }
     if (this.reclaimTimer === undefined) return;
     this.timers.clearInterval(this.reclaimTimer);
     this.reclaimTimer = undefined;

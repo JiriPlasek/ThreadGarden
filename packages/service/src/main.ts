@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -7,6 +8,7 @@ import {
   CAPABILITIES,
   MCP_CAPABILITY,
   POWER_CAPABILITY,
+  SHELL_CAPABILITY,
   PROTOCOL_VERSION,
   UPDATE_CAPABILITY,
   draftWithReturned,
@@ -56,6 +58,9 @@ import { registerAwayHandlers } from './server/handlers/away.js';
 import { registerCopyHandlers } from './server/handlers/copies.js';
 import { registerChatHandlers } from './server/handlers/chat.js';
 import { registerMcpHandlers } from './server/handlers/mcp.js';
+import { registerShellHandlers } from './server/handlers/shell.js';
+import { loadPty, type PtyFactory } from './shell/pty.js';
+import { shellLine, type ShellLine } from './shell/shell-line.js';
 import { diskProjectFiles, type McpProjectFiles } from './mcp/project-files.js';
 import { isCodexSession } from './sdk/providers.js';
 import { busyOf, MoveLocks, registerMoveHandlers, type MoveGit } from './server/handlers/move.js';
@@ -161,6 +166,12 @@ export type StartOptions = {
   moveGit?: MoveGit;
   /** What Threadgarden reads and writes of a project's MCP approvals (default: the real files). */
   mcpFiles?: McpProjectFiles;
+  /**
+   * The PTY behind `!` commands. `pty: null` turns the feature off; without this option the
+   * PTY module is loaded at start (and the feature is off when it can't load). `line` is the
+   * program that runs a command (default: Claude Code's own shell; tests inject a fake).
+   */
+  shell?: { pty: PtyFactory | null; line?: (command: string) => ShellLine };
   /** Runs `git` and `gh` for New project and Clone (default: the real ones); tests inject a fake. */
   projectTools?: Tools;
   /**
@@ -288,6 +299,22 @@ export type ServiceHandle = {
   onClosed(cb: () => void): void;
 };
 
+/** The first `name` on PATH (with the PATHEXT suffixes on Windows), or undefined. */
+const whichOnPath = (name: string): string | undefined => {
+  const win = process.platform === 'win32';
+  const dirs = (process.env.PATH ?? process.env.Path ?? '').split(path.delimiter).filter((d) => d);
+  const exts = win
+    ? ['', ...(process.env.PATHEXT ?? '.EXE;.CMD').split(';').filter((e) => e)]
+    : [''];
+  for (const d of dirs) {
+    for (const e of exts) {
+      const candidate = path.join(d, name + e);
+      if (existsSync(candidate)) return candidate;
+    }
+  }
+  return undefined;
+};
+
 export const startService = async (opts: StartOptions): Promise<ServiceHandle> => {
   const { dataDir } = opts;
   const clock = opts.clock ?? Date.now;
@@ -295,6 +322,9 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   const clearTimer = opts.clearInterval ?? ((t) => clearInterval(t));
   const log = opts.logger ?? createLogger(dataDir);
   const headless = opts.headless === true;
+  // `!` commands need a PTY; without one (or `shell.pty: null`) the machine doesn't offer them.
+  const pty = opts.shell ? opts.shell.pty : ((await loadPty(log)) ?? null);
+  const shellCapability = pty ? [SHELL_CAPABILITY] : [];
   const platform = (opts.platform ?? process.platform) as MachineInfo['platform'];
   if (headless && !opts.adapter) throw new Error('A headless service needs history (an adapter)');
   /** A worker in WSL: only a headless machine is ever one. */
@@ -368,10 +398,11 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
             ...CAPABILITIES,
             AWAY_CAPABILITY,
             MCP_CAPABILITY,
+            ...shellCapability,
             ...(platform === 'linux' ? [POWER_CAPABILITY] : []),
             ...(canUpdate() ? [UPDATE_CAPABILITY] : []),
           ]
-        : [...CAPABILITIES, AWAY_CAPABILITY, MCP_CAPABILITY],
+        : [...CAPABILITIES, AWAY_CAPABILITY, MCP_CAPABILITY, ...shellCapability],
       // The platform stays linux, as its paths are; the app shows it as Windows (WSL).
       ...(wsl ? { host: 'wsl' as const } : {}),
     };
@@ -917,6 +948,15 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         };
       };
       const mcpRef: { current?: { refresh(id: string): Promise<void> } } = {};
+      const shellLineOf =
+        opts.shell?.line ??
+        ((command: string) =>
+          shellLine(command, {
+            platform: process.platform,
+            env: process.env,
+            which: whichOnPath,
+            exists: existsSync,
+          }));
       const sessionHost = new SessionHost({
         adapter,
         registry: opened,
@@ -936,6 +976,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         describe: describeChat,
         onError,
         onMcpChange: (id) => void mcpRef.current?.refresh(id),
+        ...(pty ? { shell: { pty, line: shellLineOf } } : {}),
         seqBase: seqBaseForEpoch(epoch),
         // v1.1 "Your turn": Threadgarden's own record of the turn end; lists show the chat unread.
         onTurnEnded: (id, at) => {
@@ -1140,6 +1181,13 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         now: clock,
         timers: opts.sessionTimers ?? realTimers,
         titles: chatTitles,
+      });
+      registerShellHandlers(router, {
+        host: sessionHost,
+        resumedOrLive: chatHandlers.resumedOrLive,
+        activate: chatHandlers.activate,
+        isMoving: (id) => moveLocks.isLocked(id),
+        awayTo: (id) => chatStore.awayTo(id),
       });
       mcpRef.current = registerMcpHandlers(router, {
         host: sessionHost,
