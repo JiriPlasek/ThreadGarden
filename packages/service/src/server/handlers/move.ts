@@ -73,10 +73,12 @@ export const busyOf = (s: {
   live: boolean;
   status: ChatStatus;
   runningTasks: number;
+  runningCommand: boolean;
   pendingRequests(): unknown[];
 }): MoveBusy | null => {
   if (s.live && (s.status === 'working' || s.status === 'unknown')) return 'turn';
   if (s.pendingRequests().length > 0 || s.status === 'needsYou') return 'prompt';
+  if (s.runningCommand) return 'command';
   if (s.runningTasks > 0) return 'subagents';
   return null;
 };
@@ -443,6 +445,7 @@ const BUSY_TEXT: Record<MoveBusy, string> = {
   prompt: 'This chat is waiting for an answer',
   subagents: 'This chat has background tasks running',
   terminal: 'This chat is running in a terminal',
+  command: 'This chat is running a ! command',
 };
 
 /**

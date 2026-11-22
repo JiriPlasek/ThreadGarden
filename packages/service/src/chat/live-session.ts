@@ -33,11 +33,19 @@
  * (`withdraw`); one Claude will never read (Stop cancelled it, the process
  * ended) is given back (`onReturned`, `messagesReturned`), as the terminal puts
  * queued messages back into its input.
+ *
+ * `!` commands: the chat runs one at a time in its own PTY (`PtyRun`). The run
+ * belongs to the chat: ending, pausing or losing the process kills it, and a run
+ * ended that way is not appended. A finished run's command and output go to
+ * Claude Code as the CLI's own entries with `shouldQuery: false`: no turn, no
+ * status change, no queue. Each such message makes Claude Code answer with a
+ * `system/init` and an empty `result` (`num_turns` 0), which are not a turn either.
  */
 import { randomUUID } from 'node:crypto';
 import { basename } from 'node:path';
 import {
   PermissionModeSchema,
+  SHELL_ERRORS,
   unwrapPastes,
   type ChatHeaderInfo,
   type ChatItem,
@@ -48,6 +56,8 @@ import {
   type PromptSuggestion,
   type QueuedMessage,
   type ReturnedMessage,
+  type ShellRun,
+  type ShellView,
 } from '@threadgarden/protocol';
 import type {
   AccountInfo,
@@ -68,8 +78,12 @@ import type {
 } from '../sdk/adapter.js';
 import { startupFailureMessage, type StartupFailureMessage } from '../sdk/startup-failure.js';
 import { ServiceError } from '../server/router.js';
-import { isCodexModel } from '../sdk/providers.js';
+import { isCodexModel, isCodexSession } from '../sdk/providers.js';
 import { isMcpStatusMessage } from '../mcp/state.js';
+import type { PtyFactory } from '../shell/pty.js';
+import { PtyRun, type ShellRunEnd } from '../shell/run.js';
+import type { ShellLine } from '../shell/shell-line.js';
+import { ECHOES, bashEntry } from '../shell/terminal-text.js';
 import { EventLog, type ChatEvent, type ChatEventDraft } from './event-log.js';
 import { Normalizer, deriveStatus } from './normalize.js';
 import { TaskTracker, runningCount, taskEnded, taskRunning } from './tasks.js';
@@ -147,7 +161,8 @@ export type LiveSessionDeps = {
   onTurnEnded?: (sessionId: string, at: number) => void;
   /**
    * Ruling R29: the number of running background tasks changed (published
-   * with the `chat.tasks` event that changed it). A throw is reported and
+   * with the `chat.tasks` event that changed it), or a `!` command started or
+   * ended; `count` includes a running command. A throw is reported and
    * changes nothing.
    */
   onRunningTasks?: (sessionId: string, count: number) => void;
@@ -191,6 +206,9 @@ export type LiveSessionDeps = {
   // ── MCP servers ──
   /** A process started (`system/init`): its MCP servers may have changed. A throw is reported. */
   onMcpChange?: (sessionId: string) => void;
+  // ── ! commands ──
+  /** The PTY and the shell line `!` commands run with; without it a chat has none. */
+  shell?: { pty: PtyFactory; line: (command: string) => ShellLine };
 };
 
 export const defaultOnError = (err: unknown, context: string): void => {
@@ -357,6 +375,13 @@ export class LiveSession {
   private publishedTasks = '[]';
   /** How many of the published tasks are running (Ruling R29). */
   private publishedRunning = 0;
+  /** The `!` command running, or the last one that ended, in this instance. */
+  private run: PtyRun | undefined;
+  /**
+   * Uuids of the `shouldQuery: false` entries sent whose empty `result` has not
+   * arrived yet: the frames Claude Code answers them with are not a turn.
+   */
+  private readonly appended = new Set<string>();
 
   constructor(private readonly deps: LiveSessionOptions) {
     this.log = deps.log ?? new EventLog();
@@ -467,14 +492,37 @@ export class LiveSession {
     return this.tracker.list();
   }
 
-  /** How many published tasks are running (Ruling R29: such a chat counts as Running). */
+  /**
+   * How many published tasks are running, plus a running `!` command (Ruling R29:
+   * such a chat counts as Running).
+   */
   get runningTasks(): number {
-    return this.publishedRunning;
+    return this.publishedRunning + (this.runningCommand ? 1 : 0);
   }
 
-  /** Running tasks that are not background shells (dev servers, watchers): they do not keep a machine awake. */
+  /**
+   * Running tasks that are not background shells (dev servers, watchers): they do not
+   * keep a machine awake. A running `!` command does.
+   */
   get runningAgents(): number {
-    return this.tracker.list().filter((t) => taskRunning(t) && t.kind !== 'shell').length;
+    const agents = this.tracker.list().filter((t) => taskRunning(t) && t.kind !== 'shell').length;
+    return agents + (this.runningCommand ? 1 : 0);
+  }
+
+  /** A `!` command is running in this chat. */
+  get runningCommand(): boolean {
+    return this.run?.running === true;
+  }
+
+  /** The `!` command running, or the last one that ended in this instance, with its scrollback. */
+  command(): ShellView | undefined {
+    const run = this.run;
+    return run ? { run: run.info, ...run.view() } : undefined;
+  }
+
+  /** This chat's `!` run with id `runId` (for input, resize and stop). */
+  commandRun(runId: string): PtyRun | undefined {
+    return this.run?.info.runId === runId ? this.run : undefined;
   }
 
   pendingRequests(): ChatItem[] {
@@ -650,6 +698,45 @@ export class LiveSession {
     }
   }
 
+  /**
+   * Runs a `!` command in the chat's folder, with the environment of its Claude
+   * Code process; one at a time. Its output is appended to the chat when it ends
+   * (see the module doc). Errors: `SHELL_UNSUPPORTED` (no PTY, or a Codex chat),
+   * `NOT_LIVE`, `SHELL_BUSY`, `SHELL_FAILED`.
+   */
+  startCommand(command: string, size: { cols: number; rows: number }): ShellRun {
+    const shell = this.deps.shell;
+    if (!shell || isCodexSession(this.id)) {
+      throw new ServiceError(SHELL_ERRORS.unsupported, '! commands are for Claude chats');
+    }
+    if (!this.session) throw new ServiceError('NOT_LIVE', `Chat ${this.id} is not running`);
+    if (this.runningCommand) {
+      throw new ServiceError(SHELL_ERRORS.busy, 'A command is already running in this chat');
+    }
+    const run: PtyRun = new PtyRun(
+      {
+        runId: randomUUID(),
+        sessionId: this.id,
+        command,
+        cwd: this.dir,
+        cols: size.cols,
+        rows: size.rows,
+        env: this.deps.env,
+      },
+      {
+        pty: shell.pty,
+        line: shell.line,
+        emit: (e) => this.out(e),
+        now: this.deps.now,
+        timers: this.timers,
+        onEnd: (end) => this.commandEnded(run, end),
+      },
+    );
+    this.run = run;
+    this.noteRunning();
+    return run.info;
+  }
+
   /** Closes the process; the chat returns to history (§4.3 End session). */
   end(): void {
     this.stop('history');
@@ -804,6 +891,7 @@ export class LiveSession {
       failed = true;
     }
     if (this.session !== session) return; // closed on purpose (end / pause / stop all)
+    this.run?.kill(); // first, so nothing is appended
     this.session = null;
     this.cancelAllPending();
     this.forgetTasks();
@@ -822,6 +910,7 @@ export class LiveSession {
   }
 
   private stop(final: ChatStatus): void {
+    this.run?.kill(); // first, so nothing is appended
     const session = this.session;
     if (session) {
       this.session = null;
@@ -844,6 +933,7 @@ export class LiveSession {
   }
 
   private handle(m: SDKMessage): void {
+    if (this.isAppendEcho(m)) return;
     // Task tracking does not depend on rendering: a message the normalizer
     // cannot handle still updates the task list.
     this.guard('task tracking', () => {
@@ -1120,6 +1210,66 @@ export class LiveSession {
       title: d.title ?? titleFrom(this.firstText),
       projectName: d.projectName ?? (basename(this.dir) || this.dir),
     };
+  }
+
+  // ── ! commands ──────────────────────────────────────────────────────────
+
+  /**
+   * A `!` command ended. Unless the session ended it, its entries go to Claude
+   * Code without starting a turn, and into the chat (the stream does not echo
+   * them, `ECHOES`). Status, the queue and turn ends stay as they are.
+   */
+  private commandEnded(run: PtyRun, end: ShellRunEnd): void {
+    this.noteRunning();
+    const session = this.session;
+    if (end.reason === 'session' || !session || this.run !== run) return;
+    let entryId: string | undefined;
+    for (const text of bashEntry(run.info.command, end.transcript)) {
+      const uuid = randomUUID();
+      entryId ??= uuid;
+      const m: SDKUserMessage = {
+        type: 'user',
+        message: { role: 'user', content: [{ type: 'text', text }] },
+        parent_tool_use_id: null,
+        uuid,
+        shouldQuery: false,
+      };
+      this.appended.add(uuid);
+      session.send(m);
+      if (!ECHOES) {
+        const r = this.normalizer.push(m);
+        if (r.items.length > 0) this.pushItems(r.items, r.replace);
+      }
+    }
+    this.noteActivity();
+    if (entryId !== undefined) run.markAppended(entryId);
+  }
+
+  /** Tells `onRunningTasks` the running count (tasks and a `!` command). */
+  private noteRunning(): void {
+    const count = this.runningTasks;
+    this.guard('onRunningTasks', () => this.deps.onRunningTasks?.(this.id, count));
+  }
+
+  /**
+   * The `system/init` or empty `result` (`num_turns` 0) Claude Code answers
+   * `shouldQuery: false` entries with, listing only such entries: not a turn,
+   * so it changes nothing (no status, no result line, no cost, no turn end).
+   * Any `result` listing entries ends their wait (one taken into a running turn
+   * is listed by that turn's own `result`).
+   */
+  private isAppendEcho(m: SDKMessage): boolean {
+    if (this.appended.size === 0) return false;
+    const x: unknown = m;
+    if (!isRec(x) || !Array.isArray(x.user_message_uuids)) return false;
+    const isInit = x.type === 'system' && x.subtype === 'init';
+    const isResult = x.type === 'result';
+    if (!isInit && !isResult) return false;
+    const uuids: unknown[] = x.user_message_uuids;
+    const onlyAppends =
+      uuids.length > 0 && uuids.every((u) => typeof u === 'string' && this.appended.has(u));
+    if (isResult) for (const u of uuids) if (typeof u === 'string') this.appended.delete(u);
+    return onlyAppends && (isInit || x.num_turns === 0);
   }
 
   // ── v1.1 T2: turn ends and activity ─────────────────────────────────────
@@ -1400,7 +1550,7 @@ export class LiveSession {
     const running = runningCount(tasks);
     if (running !== this.publishedRunning) {
       this.publishedRunning = running;
-      this.guard('onRunningTasks', () => this.deps.onRunningTasks?.(this.id, running));
+      this.noteRunning();
     }
   }
 

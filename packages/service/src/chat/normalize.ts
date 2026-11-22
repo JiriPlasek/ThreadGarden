@@ -42,6 +42,7 @@ import {
   type ImageRef,
 } from '@threadgarden/protocol';
 import type { SDKMessage, SessionMessage } from '../sdk/adapter.js';
+import { TAGS_ESCAPED } from '../shell/terminal-text.js';
 import {
   NON_VISUAL_SYSTEM_SUBTYPES,
   NON_VISUAL_TYPES,
@@ -427,7 +428,8 @@ export class Normalizer {
    *   boundary message) → the boundary divider, shown once;
    * - a slash command entry (`<command-name>/x</command-name>…<command-args>`)
    *   → the user's `/x args`;
-   * - `<bash-input>` (a `!` shell command) → `! command`;
+   * - `<bash-input>` (a `!` shell command) → `! command`; with its output in the same
+   *   message, also the output line (`<id>:out`);
    * - local command and `!` shell output (`<local-command-stdout>`,
    *   `<bash-stderr>`, …) → a system line, or nothing when empty;
    * - a loaded skill's instructions (`isSynthetic` live; `isMeta` in the
@@ -463,6 +465,22 @@ export class Normalizer {
     }
     const command = parseCommand(text);
     if (command !== undefined) return this.one(this.userItem(m, id, command, []));
+    const entry = parseShellEntry(text);
+    if (entry) {
+      const items: ChatItem[] = [];
+      if (entry.command !== undefined) {
+        items.push(this.userItem(m, id, `! ${entry.command}`, []));
+      }
+      if (entry.output.text !== '') {
+        items.push({
+          kind: 'system',
+          id: entry.command === undefined ? id : `${id}:out`,
+          level: entry.output.error ? 'warning' : 'info',
+          text: entry.output.text,
+        });
+      }
+      return { items, replace: false };
+    }
     const shell = /^\s*<bash-input>([\s\S]*)<\/bash-input>\s*$/.exec(text);
     if (shell) return this.one(this.userItem(m, id, `! ${shell[1]!.trim()}`, []));
     const output = parseCommandOutput(text);
@@ -820,6 +838,37 @@ const parseCommandOutput = (text: string): { text: string; error: boolean } | un
       .map((p) => p.text)
       .join('\n'),
     error: parts.some((p) => p.error && p.text),
+  };
+};
+
+/**
+ * A `!` command's output as the CLI writes it (`<bash-stdout>…</bash-stdout>`, then an optional
+ * `<bash-stderr>…</bash-stderr>`), optionally after its `<bash-input>` in the same message.
+ * The stdout match runs to the last `</bash-stdout>`, so output holding that tag stays whole.
+ */
+const SHELL_ENTRY =
+  /^\s*(?:<bash-input>([\s\S]*?)<\/bash-input>\s*)?<bash-stdout>([\s\S]*)<\/bash-stdout>\s*(?:<bash-stderr>([\s\S]*)<\/bash-stderr>)?\s*$/;
+
+/** Output text as shown: the CLI's `&lt;` / `&gt;` escapes undone, ANSI colours removed. */
+const shellText = (raw: string | undefined): string => {
+  const text = TAGS_ESCAPED ? (raw ?? '').replace(/&lt;/g, '<').replace(/&gt;/g, '>') : (raw ?? '');
+  return text.replace(ANSI, '').trim();
+};
+
+/**
+ * A `!` entry: its command when the message holds it, and its output (stdout and stderr
+ * joined; `error` when stderr has text); else undefined.
+ */
+const parseShellEntry = (
+  text: string,
+): { command?: string; output: { text: string; error: boolean } } | undefined => {
+  const match = SHELL_ENTRY.exec(text);
+  if (!match) return undefined;
+  const stdout = shellText(match[2]);
+  const stderr = shellText(match[3]);
+  return {
+    ...(match[1] === undefined ? {} : { command: match[1].trim() }),
+    output: { text: [stdout, stderr].filter(Boolean).join('\n'), error: stderr !== '' },
   };
 };
 

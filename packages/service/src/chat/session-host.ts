@@ -18,6 +18,7 @@ import { resolve } from 'node:path';
 import type { ChatPermissionMode, ChatStatus, EventMsg, Settings } from '@threadgarden/protocol';
 import type { AgentAdapter, SessionStore } from '../sdk/adapter.js';
 import { isCodexSession } from '../sdk/providers.js';
+import type { PtyRun } from '../shell/run.js';
 import { EventLog, type ChatEvent } from './event-log.js';
 import {
   LiveSession,
@@ -93,6 +94,8 @@ export type SessionHostDeps = {
   onReturned?: LiveSessionDeps['onReturned'];
   /** Handed to every session (see `LiveSessionDeps.onMcpChange`). */
   onMcpChange?: LiveSessionDeps['onMcpChange'];
+  /** Handed to every session (see `LiveSessionDeps.shell`). */
+  shell?: LiveSessionDeps['shell'];
 };
 
 const folderKey = (cwd: string): string =>
@@ -220,8 +223,9 @@ export class SessionHost {
 
   /**
    * Closes live chats idle for at least `idleReclaimMinutes` (never pinned,
-   * never waiting on the user, never with running background tasks: closing
-   * the process would kill them, Ruling R29); they become `paused`. Returns
+   * never waiting on the user, never with running background tasks or a
+   * running `!` command: closing the process would kill them, Ruling R29);
+   * they become `paused`. Returns
    * how many. A failure for one session is reported and the pass continues.
    */
   reclaimIdle(now: number): number {
@@ -349,6 +353,15 @@ export class SessionHost {
     );
   }
 
+  /** The `!` run with id `runId`, in whichever chat holds it. */
+  commandRun(runId: string): PtyRun | undefined {
+    for (const s of this.sessions.values()) {
+      const run = s.commandRun(runId);
+      if (run) return run;
+    }
+    return undefined;
+  }
+
   liveCount(): number {
     let n = 0;
     for (const s of this.sessions.values()) if (s.live) n++;
@@ -403,6 +416,7 @@ export class SessionHost {
       sentImages,
       onReturned,
       onMcpChange,
+      shell,
     } = this.deps;
     return {
       adapter,
@@ -427,6 +441,7 @@ export class SessionHost {
       ...(sentImages ? { sentImages } : {}),
       ...(onReturned ? { onReturned } : {}),
       ...(onMcpChange ? { onMcpChange } : {}),
+      ...(shell ? { shell } : {}),
       ...extra,
       log: extra.log ?? new EventLog(undefined, this.seqBase),
     };

@@ -1,15 +1,18 @@
 import { describe, expect, it, vi } from 'vitest';
-import type { ChatItem, ChatTask, EventMsg } from '@threadgarden/protocol';
+import type { ChatItem, ChatTask, EventMsg, ShellRun } from '@threadgarden/protocol';
 import { LiveSession, authLabel, type LiveSessionOptions } from '../../src/chat/live-session.js';
 import { Normalizer } from '../../src/chat/normalize.js';
 import { ServiceError } from '../../src/server/router.js';
 import type { PermissionUpdate, SDKMessage } from '../../src/sdk/adapter.js';
+import { bashEntry } from '../../src/shell/terminal-text.js';
 import { FakeAdapter } from '../../src/testing/fake-adapter.js';
+import { fakePtyFactory } from '../../src/testing/fake-pty.js';
 import {
   ManualTimers,
   MemoryRegistry,
   assistantText,
   init,
+  lifecycle,
   result,
   level,
   notification,
@@ -1683,5 +1686,246 @@ describe('LiveSession MCP', () => {
     expect(() => s.mcpControls()).toThrowError(
       expect.objectContaining({ code: 'NOT_LIVE' }) as Error,
     );
+  });
+});
+
+describe('LiveSession: ! commands', () => {
+  const SIZE = { cols: 80, rows: 24 };
+  const shellSetup = (over: Partial<LiveSessionOptions> = {}) => {
+    const pty = fakePtyFactory();
+    const ctx = setup({
+      shell: { pty: pty.factory, line: (c) => ({ file: 'sh', args: ['-c', c] }) },
+      ...over,
+    });
+    return { ...ctx, pty };
+  };
+  /** A chat whose first turn has ended. */
+  const idleChat = async (ctx: ReturnType<typeof shellSetup>) => {
+    const s = LiveSession.create('/p', { text: 'hi' }, ctx.opts);
+    const fake = ctx.adapter.lastSession();
+    fake.emit(init(s.sessionId));
+    fake.emit(result('r1'));
+    await settle();
+    expect(s.status).toBe('idle');
+    return { s, fake };
+  };
+  const appended = (fake: ReturnType<FakeAdapter['lastSession']>) =>
+    fake.sent.filter((m) => m.shouldQuery === false);
+  /** What Claude Code sends back for each `shouldQuery: false` message (spike: ECHOES). */
+  const echo = (sessionId: string, uuid: string): SDKMessage[] => [
+    lifecycle(uuid, 'queued'),
+    lifecycle(uuid, 'started'),
+    init(sessionId, { uuid: `init-${uuid}`, user_message_uuids: [uuid] }),
+    result(`echo-${uuid}`, {
+      num_turns: 0,
+      duration_api_ms: 0,
+      stop_reason: null,
+      total_cost_usd: 9,
+      user_message_uuids: [uuid],
+    }),
+    lifecycle(uuid, 'completed'),
+  ];
+  const runEvents = (events: EventMsg[]) =>
+    events.filter((e) => e.event === 'shell.run').map((e) => e.data as ShellRun);
+
+  it("a command's end appends its entries as shouldQuery false messages, and no turn", async () => {
+    const turnEnds: string[] = [];
+    const turnResults: string[] = [];
+    const ctx = shellSetup({
+      onTurnEnded: (id) => turnEnds.push(id),
+      onTurnResult: (id) => turnResults.push(id),
+    });
+    const { s, fake } = await idleChat(ctx);
+    const cost = s.header.costUsd;
+    const before = ctx.events.length;
+    const sentBefore = fake.sent.length;
+    s.startCommand('ls', SIZE);
+    ctx.pty.last().emit('a.txt\r\n');
+    ctx.pty.last().exit(0);
+
+    const entries = fake.sent.slice(sentBefore);
+    expect(entries.map((m) => m.message.content)).toEqual(
+      bashEntry('ls', 'a.txt').map((text) => [{ type: 'text', text }]),
+    );
+    for (const m of entries) {
+      expect(m).toMatchObject({ type: 'user', parent_tool_use_id: null, shouldQuery: false });
+      expect(m).not.toHaveProperty('priority');
+    }
+    for (const m of entries) for (const frame of echo(s.sessionId, m.uuid!)) fake.emit(frame);
+    await settle();
+    ctx.timers.advance(100);
+
+    const after = ctx.events.slice(before);
+    expect(s.status).toBe('idle');
+    expect(statuses(after)).not.toContain('working');
+    expect(after.some((e) => e.event === 'chatFinished')).toBe(false);
+    expect(turnEnds).toEqual([s.sessionId]); // the first turn only
+    expect(turnResults).toEqual([s.sessionId]);
+    expect(itemsOf(after).some((i) => i.kind === 'result')).toBe(false);
+    expect(s.header.costUsd).toBe(cost);
+    expect(s.queued()).toEqual([]);
+  });
+
+  it('the appended entry renders as ! command and an output line', async () => {
+    const ctx = shellSetup();
+    const { s, fake } = await idleChat(ctx);
+    const run = s.startCommand('ls', SIZE);
+    ctx.pty.last().emit('a.txt\r\nb.txt\r\n');
+    ctx.pty.last().exit(0);
+    ctx.timers.advance(100);
+    const [input, output] = appended(fake);
+    expect(latest(ctx.events, input!.uuid!)).toMatchObject({ kind: 'user', text: '! ls' });
+    expect(latest(ctx.events, output!.uuid!)).toEqual({
+      kind: 'system',
+      id: output!.uuid,
+      level: 'info',
+      text: 'a.txt\nb.txt',
+    });
+    expect(s.command()?.run).toMatchObject({
+      runId: run.runId,
+      state: 'ended',
+      exitCode: 0,
+      endReason: 'exit',
+      entryId: input!.uuid,
+    });
+    expect(runEvents(ctx.events).at(-1)?.entryId).toBe(input!.uuid);
+    // History reads the same messages back the same way.
+    const history = new Normalizer();
+    const again = [input!, output!].flatMap((m) => history.push(m).items);
+    expect(again.map((i) => [i.id, i.kind])).toEqual([
+      [input!.uuid, 'user'],
+      [output!.uuid, 'system'],
+    ]);
+  });
+
+  it("runs in the chat's folder with the chat's environment, and shows its view", async () => {
+    const ctx = shellSetup();
+    const { s } = await idleChat(ctx);
+    const run = s.startCommand('make', { cols: 90, rows: 30 });
+    const { spawned } = ctx.pty.last();
+    expect(spawned).toMatchObject({ file: 'sh', args: ['-c', 'make'] });
+    expect(spawned.o).toMatchObject({ cwd: '/p', cols: 90, rows: 30 });
+    expect(spawned.o.env.FOO).toBe('bar');
+    expect(run).toMatchObject({ sessionId: s.sessionId, command: 'make', state: 'running' });
+    ctx.pty.last().emit('building');
+    ctx.timers.advance(100);
+    expect(s.command()).toEqual({
+      run: s.commandRun(run.runId)!.info,
+      output: 'building',
+      offset: 0,
+    });
+    expect(s.commandRun('other')).toBeUndefined();
+  });
+
+  it('a command during a turn leaves the turn alone', async () => {
+    const turnEnds: string[] = [];
+    const ctx = shellSetup({ onTurnEnded: (id) => turnEnds.push(id) });
+    const s = LiveSession.create('/p', { text: 'hi' }, ctx.opts);
+    const fake = ctx.adapter.lastSession();
+    const prompt = fake.sent[0]!.uuid!;
+    expect(s.status).toBe('working');
+    s.startCommand('ls', SIZE);
+    ctx.pty.last().exit(0);
+    const entries = appended(fake).map((m) => m.uuid!);
+    expect(entries).toHaveLength(2);
+    expect(s.status).toBe('working');
+    expect(s.queued()).toEqual([]);
+    for (const id of entries) fake.emit(lifecycle(id, 'queued'));
+    await settle();
+    expect(s.status).toBe('working');
+    expect(s.queued()).toEqual([]);
+    // Claude Code folds them into the running turn, whose one result lists them.
+    for (const id of entries) fake.emit(lifecycle(id, 'started'));
+    fake.emit(result('r1', { num_turns: 2, user_message_uuids: [prompt, ...entries] }));
+    await settle();
+    expect(s.status).toBe('idle');
+    expect(turnEnds).toEqual([s.sessionId]);
+    expect(ctx.events.filter((e) => e.event === 'chatFinished')).toHaveLength(1);
+  });
+
+  it('a running command counts as a running task and agent', async () => {
+    const counts: number[] = [];
+    const ctx = shellSetup({ onRunningTasks: (_id, n) => counts.push(n) });
+    const { s } = await idleChat(ctx);
+    expect(s.runningCommand).toBe(false);
+    s.startCommand('sleep 9', SIZE);
+    expect(s.runningCommand).toBe(true);
+    expect(s.runningTasks).toBe(1);
+    expect(s.runningAgents).toBe(1);
+    expect(counts).toEqual([1]);
+    ctx.pty.last().exit(0);
+    expect(s.runningCommand).toBe(false);
+    expect(s.runningTasks).toBe(0);
+    expect(s.runningAgents).toBe(0);
+    expect(counts).toEqual([1, 0]);
+  });
+
+  it('a running command adds to the background task count', async () => {
+    const counts: number[] = [];
+    const ctx = shellSetup({ onRunningTasks: (_id, n) => counts.push(n) });
+    const { s, fake } = await idleChat(ctx);
+    s.startCommand('sleep 9', SIZE);
+    fake.emit(started('b1', { task_type: 'local_bash', is_backgrounded: true }));
+    await settle();
+    ctx.timers.advance(33);
+    expect(s.runningTasks).toBe(2);
+    expect(s.runningAgents).toBe(1); // a background shell does not count
+    ctx.pty.last().exit(0);
+    expect(counts).toEqual([1, 2, 1]);
+  });
+
+  it('one command at a time', async () => {
+    const ctx = shellSetup();
+    const { s } = await idleChat(ctx);
+    s.startCommand('sleep 9', SIZE);
+    expect(() => s.startCommand('ls', SIZE)).toThrowError(
+      expect.objectContaining({
+        code: 'SHELL_BUSY',
+        message: 'A command is already running in this chat',
+      }) as Error,
+    );
+    ctx.pty.last().exit(0);
+    expect(s.startCommand('ls', SIZE).command).toBe('ls');
+  });
+
+  it('Codex chats and services without a PTY refuse', () => {
+    const refused = expect.objectContaining({
+      code: 'SHELL_UNSUPPORTED',
+      message: '! commands are for Claude chats',
+    }) as Error;
+    const id = '11111111-2222-3333-4444-555555555555';
+    const plain = setup();
+    const s = LiveSession.resume(id, '/p', plain.opts);
+    expect(() => s.startCommand('ls', SIZE)).toThrowError(refused);
+    const ctx = shellSetup();
+    const codex = LiveSession.resume(`codex-${id}`, '/p', ctx.opts);
+    expect(() => codex.startCommand('ls', SIZE)).toThrowError(refused);
+    const gone = LiveSession.restore(id, '/p', 'paused', ctx.opts);
+    expect(() => gone.startCommand('ls', SIZE)).toThrowError(
+      expect.objectContaining({ code: 'NOT_LIVE' }) as Error,
+    );
+  });
+
+  it('end stops the command and appends nothing', async () => {
+    const ctx = shellSetup();
+    const { s, fake } = await idleChat(ctx);
+    s.startCommand('sleep 9', SIZE);
+    s.end();
+    expect(ctx.pty.last().kills).toHaveLength(1);
+    expect(runEvents(ctx.events).at(-1)).toMatchObject({ state: 'ended', endReason: 'session' });
+    expect(appended(fake)).toEqual([]);
+    expect(s.runningCommand).toBe(false);
+  });
+
+  it('a crashed session stops its command', async () => {
+    const ctx = shellSetup();
+    const { s, fake } = await idleChat(ctx);
+    s.startCommand('sleep 9', SIZE);
+    fake.end(new Error('boom'));
+    await settle();
+    expect(s.status).toBe('failed');
+    expect(ctx.pty.last().kills).toHaveLength(1);
+    expect(runEvents(ctx.events).at(-1)).toMatchObject({ state: 'ended', endReason: 'session' });
+    expect(appended(fake)).toEqual([]);
   });
 });

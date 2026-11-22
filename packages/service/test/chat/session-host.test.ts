@@ -12,6 +12,7 @@ import {
   type SessionHostDeps,
 } from '../../src/chat/session-host.js';
 import { FakeAdapter } from '../../src/testing/fake-adapter.js';
+import { fakePtyFactory } from '../../src/testing/fake-pty.js';
 import {
   init,
   ManualTimers,
@@ -595,6 +596,62 @@ describe('SessionHost', () => {
       [s.sessionId, 1],
       [s.sessionId, 0],
     ]);
+  });
+});
+
+describe('SessionHost: ! commands', () => {
+  const SIZE = { cols: 80, rows: 24 };
+  const shellSetup = () => {
+    const pty = fakePtyFactory();
+    const ctx = setup({
+      shell: { pty: pty.factory, line: (c) => ({ file: 'sh', args: ['-c', c] }) },
+    });
+    return { ...ctx, pty };
+  };
+
+  it('reclaim spares a chat running a command', async () => {
+    const ctx = shellSetup();
+    const { host, timers } = ctx;
+    const { s, fake } = await idleChat(ctx);
+    s.startCommand('sleep 100', SIZE);
+    expect(host.reclaimIdle(timers.now() + 60 * MIN)).toBe(0);
+    expect(fake.closed).toBe(false);
+
+    ctx.pty.last().exit(0);
+    expect(host.reclaimIdle(timers.now() + 60 * MIN)).toBe(1);
+    expect(fake.closed).toBe(true);
+  });
+
+  it('list counts a running command in runningTasks and runningAgents', async () => {
+    const ctx = shellSetup();
+    const { s } = await idleChat(ctx);
+    s.startCommand('sleep 100', SIZE);
+    expect(ctx.host.list()).toEqual([
+      expect.objectContaining({ sessionId: s.sessionId, runningTasks: 1, runningAgents: 1 }),
+    ]);
+    ctx.pty.last().exit(0);
+    expect(ctx.host.list()[0]).not.toHaveProperty('runningTasks');
+    expect(ctx.host.list()[0]).not.toHaveProperty('runningAgents');
+  });
+
+  it('stopAll stops commands', async () => {
+    const ctx = shellSetup();
+    const { s, fake } = await idleChat(ctx);
+    const run = s.startCommand('sleep 100', SIZE);
+    expect(ctx.host.stopAll()).toBe(1);
+    expect(ctx.pty.last().kills).toHaveLength(1);
+    expect(s.command()?.run).toMatchObject({ runId: run.runId, endReason: 'session' });
+    expect(fake.sent.filter((m) => m.shouldQuery === false)).toEqual([]);
+  });
+
+  it('commandRun finds a run by id', async () => {
+    const ctx = shellSetup();
+    const { s } = await idleChat(ctx, '/a');
+    await idleChat(ctx, '/b');
+    const run = s.startCommand('sleep 100', SIZE);
+    expect(ctx.host.commandRun(run.runId)).toBe(s.commandRun(run.runId));
+    expect(ctx.host.commandRun(run.runId)?.info.runId).toBe(run.runId);
+    expect(ctx.host.commandRun('nope')).toBeUndefined();
   });
 });
 
