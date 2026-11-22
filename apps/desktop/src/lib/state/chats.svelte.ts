@@ -447,6 +447,12 @@ export class ChatsState {
     if (this.byId.get(sessionId) === chat) chat.models = models;
   };
 
+  /** Starts a chat's Claude Code process without sending a message (MCP dialog's Wake the chat). */
+  wake = async (sessionId: string): Promise<void> => {
+    if (!this.api) throw new Error('Not connected to the Threadgarden service');
+    await this.api.request('chat.wake', { sessionId });
+  };
+
   /** Stops one background task (Activity panel); its `stopped` status arrives as `chat.tasks`. */
   stopTask = async (sessionId: string, taskId: string): Promise<void> => {
     if (!this.api) throw new Error('Not connected to the Threadgarden service');
