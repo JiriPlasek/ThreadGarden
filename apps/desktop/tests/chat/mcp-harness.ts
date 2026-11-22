@@ -16,7 +16,7 @@ export type Options = {
   configure?: (server: FakeServer) => void;
 };
 
-const mcpState = (sessionId: string, waiting: string[], live = true): McpState => ({
+export const mcpState = (sessionId: string, waiting: string[], live = true): McpState => ({
   sessionId,
   live,
   waiting,

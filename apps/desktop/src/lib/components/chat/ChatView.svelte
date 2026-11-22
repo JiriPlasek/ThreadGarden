@@ -732,7 +732,8 @@
 
   /** Wake the chat (the dialog's button): a resume like sending one, behind the same check. */
   const wakeChat = async (): Promise<void> => {
-    await withResumeCheck(async () => {
+    let failure: string | null = null;
+    const ok = await withResumeCheck(async () => {
       try {
         await chats.wake(sessionId);
         blocked = null;
@@ -740,12 +741,20 @@
       } catch (err) {
         if (err instanceof RequestError && err.code === 'RESUME_BLOCKED') {
           blocked = { reason: err.message, command: null, copied: false };
-          mcpOpen = false;
-          return false;
+        } else {
+          failure = err instanceof Error ? err.message : String(err);
         }
-        throw err;
+        return false;
       }
     });
+    if (ok) return;
+    // A failure shows in the dialog (`wakeError`); a block shows as the banner behind it.
+    const problem = failure ?? sendError;
+    if (problem !== null) {
+      sendError = null;
+      throw new Error(problem);
+    }
+    if (blocked) mcpOpen = false;
   };
 
   // ── /model, /effort, /permissions (ruling R25) ──────────────────────────

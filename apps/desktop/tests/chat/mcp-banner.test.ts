@@ -1,7 +1,8 @@
 import { screen, waitFor, within } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it } from 'vitest';
-import { openStateMenu, renderChat } from './mcp-harness';
+import { RpcFail } from '../service/fake-ws';
+import { mcpState, openStateMenu, renderChat } from './mcp-harness';
 
 const banner = (): HTMLElement | null => screen.queryByRole('status', { name: /MCP server not/ });
 
@@ -69,6 +70,19 @@ describe('the MCP banner', () => {
     expect(banner()).toBeNull();
   });
 
+  it('returns after a dismissal when the set of waiting names changes', async () => {
+    const env = await renderChat({ waiting: ['files'] });
+    const b = await screen.findByRole('status', { name: /MCP server not/ });
+    await userEvent.click(within(b).getByRole('button', { name: 'Dismiss' }));
+    expect(banner()).toBeNull();
+    env.server.push('mcp.changed', { ...mcpState('s1', ['files']) });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(banner()).toBeNull();
+    env.server.push('mcp.changed', { ...mcpState('s1', ['files', 'db']) });
+    const again = await screen.findByRole('status', { name: /MCP server not/ });
+    expect(again.textContent).toContain('"files" and 1 more');
+  });
+
   it('the header menu opens the dialog', async () => {
     await renderChat({ waiting: [] });
     await openMenu();
@@ -104,7 +118,39 @@ describe('Wake the chat', () => {
     });
     await wakeFromDialog();
     await screen.findByText("This chat can't be continued here.");
+    await waitFor(() => expect(screen.queryByText('MCP servers (this chat)')).toBeNull());
     expect(env.server.calls('chat.wake')).toHaveLength(0);
+  });
+
+  it('shows a resume-check request error in the dialog', async () => {
+    const env = await renderChat({
+      live: false,
+      configure: (server) => {
+        server.handlers['chat.resumeCheck'] = () => {
+          throw new RpcFail('INTERNAL', 'check broke');
+        };
+      },
+    });
+    await wakeFromDialog();
+    expect(await screen.findByText(/check broke/)).toBeTruthy();
+    expect(screen.getByText('MCP servers (this chat)')).toBeTruthy();
+    expect(env.server.calls('chat.wake')).toHaveLength(0);
+  });
+
+  it('shows a failing wake after the confirmation in the dialog', async () => {
+    await renderChat({
+      live: false,
+      resumeCheck: { status: 'unverified', reason: 'no lock', recentlyModified: false },
+      configure: (server) => {
+        server.handlers['chat.wake'] = () => {
+          throw new RpcFail('INTERNAL', 'wake broke');
+        };
+      },
+    });
+    await wakeFromDialog();
+    await userEvent.click(await screen.findByRole('button', { name: 'Continue here' }));
+    expect(await screen.findByText(/wake broke/)).toBeTruthy();
+    expect(screen.getByText('MCP servers (this chat)')).toBeTruthy();
   });
 
   it('wakes at once when the check is ok', async () => {
