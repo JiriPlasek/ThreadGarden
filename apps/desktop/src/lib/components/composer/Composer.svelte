@@ -832,8 +832,9 @@
       : null,
   );
   const empty = $derived(!text.trim() && images.length === 0);
+  // A command runs at once, even while a turn runs: it is never queued.
   const sendLabel = $derived(
-    editing ? 'Save scheduled message' : working ? 'Queue message' : 'Send',
+    editing ? 'Save scheduled message' : working && !commandMode ? 'Queue message' : 'Send',
   );
 </script>
 

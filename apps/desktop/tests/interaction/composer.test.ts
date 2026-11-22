@@ -541,6 +541,17 @@ describe('! command mode', () => {
     );
   });
 
+  it('while Claude works, the button is Send for a command and Queue message for a message', async () => {
+    const env = await shellChat();
+    pushStatus(env.server, 2, 'working');
+    await fill(field(), 'next step');
+    expect(await screen.findByRole('button', { name: 'Queue message' })).toBeTruthy();
+    await fill(field(), '! ls');
+    await waitFor(() => expect(field().closest('[data-command-mode]')).not.toBeNull());
+    expect(screen.getByRole('button', { name: 'Send' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Queue message' })).toBeNull();
+  });
+
   it('! alone says Type a command after !', async () => {
     const env = await shellChat();
     await userEvent.type(field(), '!{Enter}');
