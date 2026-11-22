@@ -50,7 +50,7 @@ Other things the spike showed:
 |---|---|---|
 | C1 the CLI's own `!` entries | **recorded: two entries** | `! echo tg-c1` writes `<bash-input>echo tg-c1</bash-input>`, then a second user entry `<bash-stdout>tg-c1</bash-stdout><bash-stderr>…</bash-stderr>`. See `ENTRY_FORMAT`. Same on 2.1.318 and 2.1.330. |
 | C1 (stderr) | **recorded** | `! ls /nonexistent-tg`: `<bash-stdout></bash-stdout><bash-stderr>ls: cannot access '/nonexistent-tg': No such file or directory\n</bash-stderr>`. Both tags are always written, empty or not. |
-| C2 limit | **recorded: 30 000 characters, the start is kept** | 30 000 characters of output pass through unchanged; 30 001 and more become a `<persisted-output>` wrapper holding the first 2 KB. See `OUTPUT_LIMIT`. |
+| C2 limit | **recorded: 30 000 characters; the CLI keeps the start** | 30 000 characters of output pass through unchanged; 30 001 and more become a `<persisted-output>` wrapper holding the first 2 KB. See `OUTPUT_LIMIT`. |
 | C2 tags in output | **escaped** | `printf '</bash-stdout>x'` is stored as `<bash-stdout>&lt;/bash-stdout&gt;x</bash-stdout>`. |
 | C3 `shouldQuery: false` between turns | **pass** (with a correction to the brief) | No assistant output within 5 s. But the stream does carry frames (`ECHOES`), including one `result` per appended message. The next question was answered with the nonce. |
 | C4 `shouldQuery: false` mid-turn | **recorded: the running turn sees it** | Appended 2 s into a `sleep 8` turn. The CLI merged both entries into the running turn after the tool result, and that turn's text quoted the nonce. See `MID_TURN`. |
@@ -73,12 +73,13 @@ Other things the spike showed:
   - Entry 2 always holds both tags: an empty stdout or stderr is still written, e.g. `<bash-stdout></bash-stdout>` for the failing `ls`.
   - Neither entry has `isMeta` (the CLI's `<local-command-caveat>` and `/exit` entries around them do). Entry 1 has no `turnOrigin`; entry 2 has `turnOrigin: "human"` and a `turnPosition`. Both carry `promptId`, `userType: "external"`, `entrypoint: "cli"`.
   - Output text is HTML-escaped inside the tags: `<` becomes `&lt;` and `>` becomes `&gt;` (`TAGS_ESCAPED` = **yes**; `&` was not tested).
-  - On Windows, the CLI appends `
-Shell cwd was reset to <project folder>` to `<bash-stderr>` of a successful command in these runs (not for the failing `ls`). That note is the CLI's own cwd tracking, not output.
+  - On Windows, the CLI appends `\nShell cwd was reset to <project folder>` to `<bash-stderr>` of a successful command in these runs (not for the failing `ls`). That note is the CLI's own cwd tracking, not output.
   - **Constant: the build's own entries omit that Windows-only "Shell cwd was reset" stderr note**; `<bash-stderr>` holds only what the command wrote to stderr.
   - The `getSessionMessages` view of both entries is the same two user messages with those strings as `message.content`.
   - Entries appended through the SDK with `shouldQuery: false` (C3) land as user entries with the content exactly as sent, plus `queueTranscriptOnly: true`, `promptSource: "sdk"`, `entrypoint: "sdk-ts"` and no `isMeta`. They chain by `parentUuid` into the next turn.
-- **`OUTPUT_LIMIT`:** 30 000 characters (the Bash tool's own limit): exactly 30 000 passed, 30 001 was wrapped. **`CUT_NOTE`:** not a note inside the text but a wrapper, and it keeps the **start**:
+- **`OUTPUT_LIMIT`:** 30 000 characters (the CLI's own limit). **The build keeps the END** (controller ruling, see the findings).
+  **`CUT_NOTE`:** `Output too large (‹N› characters); only the last 30000 are kept.` It goes at the top of the stdout text, before the kept end, inside `<bash-stdout>`.
+- **What the CLI does** (for reference, not what the build does): exactly 30 000 characters passed unchanged, 30 001 was wrapped. The wrapper keeps the **start**:
   ```
   <persisted-output>
   Output too large (39.1KB). Full output saved to: <config dir>\projects\<project>\<session id>\tool-results\<id>.txt
@@ -88,7 +89,7 @@ Shell cwd was reset to <project folder>` to `<bash-stderr>` of a successful comm
   ...
   </persisted-output>
   ```
-  (all inside `<bash-stdout>`). The "2KB" preview was 2 268 characters for `seq` output in the wrapper, and the size reads `1.2MB`, `39.1KB`, `29.3KB` (units in KB or MB). The CLI saves the full output to a file under its own config dir, which Threadgarden must not do (hard rule: never write under `~/.claude`); see finding 2.
+  (all inside `<bash-stdout>`; the preview was 2 268 characters in the wrapper, the size reads `1.2MB`, `39.1KB`, `29.3KB`). The CLI saves the full output to a file under its own config dir, which Threadgarden must not do (hard rule: never write under `~/.claude`).
 - **`ECHOES`:** a `shouldQuery: false` message is **not** echoed back as a `user` message on the SDK stream. It does cause these frames, per message, in this order (the `uuid` of the appended message is `command_uuid` on the lifecycle frames and the sole `user_message_uuids` entry):
   1. `command_lifecycle` `state: "queued"` (`command_uuid` = the message's uuid)
   2. `command_lifecycle` `state: "started"`
@@ -110,7 +111,7 @@ The build follows the CLI in each case unless the owner says otherwise.
 **Controller ruling (after review):** output over 30000 characters keeps the **end**, with the note `Output too large (‹N› characters); only the last 30000 are kept.` (Threadgarden cannot write the CLI's saved file under `~/.claude`, so the CLI's wrapper wording does not apply). The two-entry format follows the CLI. This overrides the "follows the CLI" default in findings 1 and 2 for the cut only.
 
 1. **The CLI writes two entries, not one** (spec: "one user message … in the same format the CLI writes"). The input entry and the output entry are separate user messages. `normalize.ts` already handles both (`! command`, then a system line). Appending two `shouldQuery: false` messages per command also works as shown in C3. The build writes two entries.
-2. **The CLI keeps the start of long output, not the end** (spec: "only its end is kept … following the CLI's limit"). Past 30 000 characters it keeps the first 2 KB inside a `<persisted-output>` wrapper and saves the full output to a file under `~/.claude/projects/...`. The build follows the CLI's *limit* (30 000) and keeps the start, with a cut note in the wrapper's wording but **without** the saved file, because writing under `~/.claude` breaks the hard rule. That makes the note's "Full output saved to" line untrue; the owner may prefer a different line, for example keeping the start and saying "Output too large (N): showing the first 2KB".
+2. **What the CLI does with long output** (spec: "only its end is kept … following the CLI's limit"): past 30 000 characters it keeps the **start** (first 2 KB inside a `<persisted-output>` wrapper) and saves the full output to a file under `~/.claude/projects/...`. The ruling for the build: same 30 000 limit, but keep the **end** with the note `Output too large (‹N› characters); only the last 30000 are kept.`, and write no file. So the spec's wording stands; only the limit and the existence of a cut note follow the CLI.
 3. **Claude Code runs the user's zsh for a zsh user** (spec: "the user's bash on Linux and macOS" and "the one Claude Code's own Bash tool uses"). From the documentation; not measured on Linux here. If it is confirmed on kumbal (the owner's `$SHELL` there is unknown to this spike; the WSL one here is `/usr/bin/zsh`), the build uses `$SHELL` when it is bash or zsh.
 4. **Step 6 (owner's `claude --resume`):** open, deferred to the joint test. See below.
 5. **The CLI's own `!` started a model turn on this machine.** In both interactive runs (permission mode `default` and the owner's `auto`), an `api-request` and an assistant reply followed each `!` entry pair, and the reply discussed the output. That contradicts the design's "exactly as with the CLI's `!`" only if that is the CLI's normal behaviour; here the user's settings, hooks (a SessionStart hook is active) or the PTY typing could be involved, and this was not isolated. It does not affect the SDK path: C3 showed `shouldQuery: false` starts no turn.
