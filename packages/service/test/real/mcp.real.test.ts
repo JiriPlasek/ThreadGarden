@@ -1,6 +1,6 @@
 /**
  * Opt-in spike against the installed `claude` and the user's own login
- * (`pnpm --filter @threadgarden/service test:real -- mcp`, which sets THREADGARDEN_REAL=1).
+ * (`pnpm --filter @threadgarden/service test:real mcp.real`, which sets THREADGARDEN_REAL=1).
  * It sends no prompt, only control requests, in fresh temp folders `claude` has never opened.
  *
  * Kept as the "recheck on every SDK update" check for the Query methods SDK 0.3.314 has but
@@ -59,11 +59,48 @@ const report = (label: string, value: unknown): void => {
 
 const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
-const withTimeout = <T>(p: Promise<T>, ms: number, what: string): Promise<T> =>
-  Promise.race([
-    p,
-    new Promise<T>((_, rej) => setTimeout(() => rej(new Error(`timeout: ${what}`)), ms)),
-  ]);
+const withTimeout = <T>(p: Promise<T>, ms: number, what: string): Promise<T> => {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_, rej) => {
+    timer = setTimeout(() => rej(new Error(`timeout: ${what}`)), ms);
+  });
+  return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
+};
+
+/** Values of these sign-in link parameters are secrets or per-attempt: only their names are kept. */
+const KEEP_PARAMS = new Set([
+  'response_type',
+  'code_challenge_method',
+  'scope',
+  'resource',
+  'redirect_uri',
+]);
+const redactAuthUrl = (u: string): string => {
+  try {
+    const url = new URL(u);
+    for (const k of [...url.searchParams.keys()]) {
+      if (!KEEP_PARAMS.has(k)) url.searchParams.set(k, '<redacted>');
+    }
+    return decodeURIComponent(url.toString());
+  } catch {
+    return '<unparsable>';
+  }
+};
+/** A `mcpAuthenticate` / callback result with `state` and the link's secret parts removed. */
+const redactAuthResult = (v: unknown): unknown => {
+  if (Array.isArray(v)) return v.map(redactAuthResult);
+  if (v === null || typeof v !== 'object') return v;
+  return Object.fromEntries(
+    Object.entries(v as Record<string, unknown>).map(([k, val]) => [
+      k,
+      k === 'state' || k === 'code' || k === 'client_id'
+        ? '<redacted>'
+        : k === 'authUrl' && typeof val === 'string'
+          ? redactAuthUrl(val)
+          : redactAuthResult(val),
+    ]),
+  );
+};
 
 /** The call's value, or its error text verbatim, so a refusal is evidence rather than a failure. */
 const attempt = async (what: string, fn: () => Promise<unknown>): Promise<unknown> => {
@@ -113,6 +150,28 @@ const withoutClaudeVars = (env: NodeJS.ProcessEnv): NodeJS.ProcessEnv =>
   Object.fromEntries(
     Object.entries(env).filter(([k]) => !/^CLAUDE(CODE|_CODE|_AGENT|_PID|_EFFORT)/i.test(k)),
   );
+
+const APPROVAL_KEYS = [
+  'enableAllProjectMcpServers',
+  'enabledMcpjsonServers',
+  'disabledMcpjsonServers',
+];
+/** Which approval keys a settings file has (key names only, never values); 'no file' if absent. */
+const approvalKeysIn = (file: string): unknown => {
+  if (!existsSync(file)) return 'no file';
+  try {
+    const j = JSON.parse(readFileSync(file, 'utf8')) as Record<string, unknown>;
+    return Object.fromEntries(APPROVAL_KEYS.map((k) => [k, k in j]));
+  } catch {
+    return 'unreadable';
+  }
+};
+const MANAGED_SETTINGS = [
+  'C:/Program Files/ClaudeCode/managed-settings.json',
+  'C:/ProgramData/ClaudeCode/managed-settings.json',
+  '/etc/claude-code/managed-settings.json',
+  '/Library/Application Support/ClaudeCode/managed-settings.json',
+];
 
 type Open = {
   session: AgentSession;
@@ -244,6 +303,29 @@ describe.skipIf(!REAL)('MCP controls on the real Claude Code (THREADGARDEN_REAL=
     report('S1 echo (before any approval)', summary(entry(all, 'echo')));
     report('S1 oauthy (before any approval)', summary(entry(all, 'oauthy')));
     report('S1 total servers', all.length);
+    // Is "connects without approval" the default, or something in this machine's config?
+    report(
+      'S1 approval keys in ~/.claude/settings.json',
+      approvalKeysIn(path.join(os.homedir(), '.claude', 'settings.json')),
+    );
+    report(
+      'S1 approval keys in ~/.claude/settings.local.json',
+      approvalKeysIn(path.join(os.homedir(), '.claude', 'settings.local.json')),
+    );
+    report(
+      'S1 approval keys in managed settings',
+      Object.fromEntries(MANAGED_SETTINGS.map((f) => [f, approvalKeysIn(f)])),
+    );
+    report(
+      'S1 the temp folder in ~/.claude.json (MCP and trust keys; values of the lists as counts)',
+      Object.values(claudeJsonEntries([dir])).map((e) =>
+        Object.fromEntries(
+          Object.entries(e as Record<string, unknown>)
+            .filter(([k]) => /mcp|trust/i.test(k) && k !== 'mcpServers')
+            .map(([k, v]) => [k, Array.isArray(v) ? `list of ${v.length}` : v]),
+        ),
+      ),
+    );
     await sleep(2_000);
     report('S1 system/init arrived without a prompt', main.inits.length > 0);
     report(
@@ -307,6 +389,10 @@ describe.skipIf(!REAL)('MCP controls on the real Claude Code (THREADGARDEN_REAL=
 
   it('S4 sign-in', async () => {
     phase = 'S4';
+    // The undeclared methods must exist on the query: a TypeError would otherwise read as a refusal.
+    for (const m of ['mcpAuthenticate', 'mcpClearAuth', 'mcpSubmitOAuthCallbackUrl'] as const) {
+      expect(typeof main.ctl[m], `Query.${m}`).toBe('function');
+    }
     writeLocal(dir, { enabledMcpjsonServers: ['echo', 'oauthy'] });
     await sleep(500);
     await attempt('reconnect(oauthy)', () => main.ctl.reconnectMcpServer('oauthy'));
@@ -314,35 +400,34 @@ describe.skipIf(!REAL)('MCP controls on the real Claude Code (THREADGARDEN_REAL=
       'S4 oauthy after approval + reconnect',
       summary(entry(await list(main, ['oauthy'], 15_000), 'oauthy')),
     );
-    report(
-      'S4 authenticate(oauthy)',
-      await attempt('authenticate', () => main.ctl.mcpAuthenticate('oauthy')),
-    );
-    report(
-      "S4 authenticate(oauthy, 'http://localhost:1/cb')",
-      await attempt('authenticate+uri', () =>
-        main.ctl.mcpAuthenticate('oauthy', 'http://localhost:1/cb'),
-      ),
-    );
-    report(
-      'S4 submitCallback(no code)',
-      await attempt('submit', () =>
-        main.ctl.mcpSubmitOAuthCallbackUrl('oauthy', 'http://localhost/callback'),
-      ),
-    );
-    report(
-      'S4 submitCallback(code=x&state=wrong)',
-      await attempt('submit2', () =>
-        main.ctl.mcpSubmitOAuthCallbackUrl(
-          'oauthy',
-          'http://localhost/callback?code=x&state=wrong',
-        ),
-      ),
-    );
-    report(
-      'S4 clearAuth(oauthy)',
-      await attempt('clearAuth', () => main.ctl.mcpClearAuth('oauthy')),
-    );
+    const auth = (await attempt('authenticate', () => main.ctl.mcpAuthenticate('oauthy'))) as {
+      ok?: { authUrl?: unknown };
+      error?: string;
+    };
+    report('S4 authenticate(oauthy)', redactAuthResult(auth));
+    expect(typeof auth.ok?.authUrl, JSON.stringify(redactAuthResult(auth))).toBe('string');
+    const custom = (await attempt('authenticate+uri', () =>
+      main.ctl.mcpAuthenticate('oauthy', 'http://localhost:1/cb'),
+    )) as { ok?: { authUrl?: unknown }; error?: string };
+    report("S4 authenticate(oauthy, 'http://localhost:1/cb')", redactAuthResult(custom));
+    expect(typeof custom.ok?.authUrl).toBe('string');
+    const noCode = (await attempt('submit', () =>
+      main.ctl.mcpSubmitOAuthCallbackUrl('oauthy', 'http://localhost/callback'),
+    )) as { ok?: unknown; error?: string };
+    report('S4 submitCallback(no code)', noCode);
+    const wrong = (await attempt('submit2', () =>
+      main.ctl.mcpSubmitOAuthCallbackUrl('oauthy', 'http://localhost/callback?code=x&state=wrong'),
+    )) as { ok?: unknown; error?: string };
+    report('S4 submitCallback(code=x&state=wrong)', wrong);
+    for (const r of [noCode, wrong]) {
+      expect(typeof r.error, 'a bad callback must be rejected').toBe('string');
+      expect(r.error).not.toMatch(/is not a function|timeout:/);
+    }
+    const cleared = (await attempt('clearAuth', () => main.ctl.mcpClearAuth('oauthy'))) as {
+      error?: string;
+    };
+    report('S4 clearAuth(oauthy)', cleared);
+    expect(cleared.error).toBeUndefined();
     report(
       'S4 oauthy after clearAuth',
       summary(entry(await list(main, ['oauthy'], 3_000), 'oauthy')),
@@ -373,7 +458,16 @@ describe.skipIf(!REAL)('MCP controls on the real Claude Code (THREADGARDEN_REAL=
       userSettings: before.userSettings !== after.userSettings,
       claudeJsonEntry: before.claudeJsonEntry !== after.claudeJsonEntry,
     });
-    report('S6 ~/.claude.json project entry after', JSON.parse(after.claudeJsonEntry!));
+    report(
+      'S6 ~/.claude.json project entry after (MCP keys only)',
+      Object.values(
+        JSON.parse(after.claudeJsonEntry!) as Record<string, Record<string, unknown>>,
+      ).map((e) =>
+        Object.fromEntries(
+          Object.entries(e).filter(([k]) => /mcp|trust/i.test(k) && k !== 'mcpServers'),
+        ),
+      ),
+    );
     if (existsSync(local))
       report('S6 settings.local.json after', JSON.parse(readFileSync(local, 'utf8')));
     report('S6 echo in this process', summary(entry(await list(main, [], 1_000), 'echo')));
@@ -435,6 +529,42 @@ describe.skipIf(!REAL)('MCP controls on the real Claude Code (THREADGARDEN_REAL=
       summary(entry(await list(clean, ['echo'], 10_000), 'echo')),
     );
     clean.session.close();
+  });
+
+  it('S10 one trivial turn: which system messages arrive', async () => {
+    phase = 'S10';
+    const d = mkproj();
+    const o = open(d);
+    o.session.send({
+      type: 'user',
+      message: { role: 'user', content: 'Reply with OK. Do not use any tools.' },
+      parent_tool_use_id: null,
+    });
+    const deadline = Date.now() + 150_000;
+    while (![...(phaseSeen.get('S10') ?? [])].some((k) => k.startsWith('result/'))) {
+      if (Date.now() > deadline) throw new Error('no result for the trivial turn');
+      await sleep(250);
+    }
+    await sleep(1_000);
+    report('S10 system/init arrived', o.inits.length > 0);
+    report(
+      'S10 system/init.mcp_servers (counts per status; echo and oauthy by name)',
+      o.inits.map((m) => {
+        const servers = (m as { mcp_servers?: { name: string; status: string }[] }).mcp_servers;
+        if (servers === undefined) return 'no mcp_servers field';
+        const byStatus: Record<string, number> = {};
+        for (const sv of servers) byStatus[sv.status] = (byStatus[sv.status] ?? 0) + 1;
+        return {
+          total: servers.length,
+          byStatus,
+          echo: servers.find((sv) => sv.name === 'echo')?.status ?? 'absent',
+          oauthy: servers.find((sv) => sv.name === 'oauthy')?.status ?? 'absent',
+        };
+      }),
+    );
+    report('S10 every non-init message type/subtype', [...(phaseSeen.get('S10') ?? [])]);
+    o.session.close();
+    expect(o.inits.length).toBeGreaterThan(0);
   });
 
   it('S5 status messages', () => {
