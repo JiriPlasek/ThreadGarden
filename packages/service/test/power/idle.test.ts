@@ -372,6 +372,7 @@ describe('power on a service', () => {
       'projects',
       'move',
       'away',
+      'mcp',
       'power',
     ]);
     await h.close();
@@ -382,6 +383,7 @@ describe('power on a service', () => {
       'projects',
       'move',
       'away',
+      'mcp',
     ]);
     await d.close();
   });
@@ -394,7 +396,13 @@ describe('power on a service', () => {
         { clientId: 't', origin: 'local' },
       )) as { result: { machine: { platform: string; capabilities: string[] } } };
       expect(hello.result.machine.platform).toBe('win32');
-      expect(hello.result.machine.capabilities).toEqual(['remote', 'projects', 'move', 'away']);
+      expect(hello.result.machine.capabilities).toEqual([
+        'remote',
+        'projects',
+        'move',
+        'away',
+        'mcp',
+      ]);
       const power = await svc.router.dispatch(
         { id: 2, method: 'power.status', params: {} },
         { clientId: 't', origin: 'local' },

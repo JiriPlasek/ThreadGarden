@@ -1179,6 +1179,35 @@ describe('ids from a client that retries (a machine that is away)', () => {
     expect(adapter.started).toHaveLength(1);
   });
 
+  it('chat.wake resumes without sending', async () => {
+    const adapter = new FakeAdapter();
+    addHistory(adapter, 'h1', 1);
+    await start(adapter);
+    expect(await ok('chat.wake', { sessionId: 'h1' })).toEqual({});
+    expect(adapter.lastSession().options.resume).toBe('h1');
+    expect(adapter.lastSession().sent).toEqual([]);
+  });
+
+  it('chat.wake honours a blocked resume check', async () => {
+    const adapter = new FakeAdapter();
+    addHistory(adapter, 'held', 1);
+    await start(adapter, {
+      externalRun: async () =>
+        JSON.stringify([
+          {
+            pid: 7,
+            cwd: dir,
+            kind: 'interactive',
+            startedAt: 1,
+            sessionId: 'held',
+            status: 'busy',
+          },
+        ]),
+    });
+    expect(await code('chat.wake', { sessionId: 'held' })).toBe('RESUME_BLOCKED');
+    expect(adapter.started).toHaveLength(0);
+  });
+
   it('the away capability is offered', async () => {
     await start(new FakeAdapter());
     const hello = await ok<{ machine: { capabilities: string[] } }>('hello', {
