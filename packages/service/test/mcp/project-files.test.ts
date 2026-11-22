@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -82,33 +82,22 @@ describe('approve', () => {
       expect(await readFile(local(), 'utf8')).toBe(text);
     }
   });
-});
-
-describe('approvals', () => {
-  it('merges the lists it reads', async () => {
-    await write(
-      local(),
-      JSON.stringify({ enabledMcpjsonServers: ['a'], disabledMcpjsonServers: ['d'] }),
-    );
-    await write(
-      path.join(dir, '.claude', 'settings.json'),
-      JSON.stringify({ enabledMcpjsonServers: ['b', 'a'] }),
-    );
-    await write(
-      path.join(dir, 'userconfig', 'settings.json'),
-      JSON.stringify({ enabledMcpjsonServers: ['c'], enableAllProjectMcpServers: true }),
-    );
-    expect(await diskProjectFiles.approvals(dir)).toEqual({
-      enabled: ['a', 'b', 'c'],
-      disabled: ['d'],
-      enableAll: true,
+  it('leaves no temp file behind when the rename fails', async () => {
+    await mkdir(local(), { recursive: true }); // a directory where the file should go
+    await expect(diskProjectFiles.approve(dir, 'etoro')).rejects.toBeDefined();
+    const left = (await readdir(path.join(dir, '.claude'))).filter((f) => f.endsWith('.tmp'));
+    expect(left).toEqual([]);
+  });
+  it('refuses a settings file it cannot read, without touching it', async () => {
+    await mkdir(local(), { recursive: true });
+    await expect(diskProjectFiles.approve(dir, 'etoro')).rejects.toMatchObject({
+      code: 'SETTINGS_UNREADABLE',
     });
   });
-  it('is empty when no file exists', async () => {
-    expect(await diskProjectFiles.approvals(dir)).toEqual({
-      enabled: [],
-      disabled: [],
-      enableAll: false,
-    });
+  it('approves a file that starts with a byte-order mark', async () => {
+    await write(local(), '﻿' + JSON.stringify({ x: 1 }));
+    await diskProjectFiles.approve(dir, 'etoro');
+    const obj = JSON.parse(await readFile(local(), 'utf8'));
+    expect(obj).toEqual({ x: 1, enabledMcpjsonServers: ['etoro'] });
   });
 });

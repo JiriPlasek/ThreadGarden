@@ -23,9 +23,6 @@ class Files implements McpProjectFiles {
   async mcpJsonNames(): Promise<string[]> {
     return this.names;
   }
-  async approvals() {
-    return { enabled: [], disabled: [], enableAll: false };
-  }
   async approve(cwd: string, name: string): Promise<void> {
     this.approved.push({ cwd, name });
   }

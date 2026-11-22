@@ -142,10 +142,13 @@ describe('away chats', () => {
   });
 
   it('chat.send to a locked chat answers MOVING, to an away chat MOVED', async () => {
-    await start(['gone']);
+    const { adapter } = await start(['gone']);
     svc!.moveLocks.lock('kept', 'x1');
     expect((await call('chat.send', { sessionId: 'kept', text: 'hi' })).error?.code).toBe('MOVING');
     expect((await call('chat.send', { sessionId: 'gone', text: 'hi' })).error?.code).toBe('MOVED');
+    expect((await call('chat.wake', { sessionId: 'kept' })).error?.code).toBe('MOVING');
+    expect((await call('chat.wake', { sessionId: 'gone' })).error?.code).toBe('MOVED');
+    expect(adapter.started).toHaveLength(0);
     svc!.moveLocks.unlock('kept');
     await ok('chat.send', { sessionId: 'kept', text: 'hi' });
   });

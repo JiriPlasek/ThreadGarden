@@ -87,19 +87,25 @@ export const registerMcpHandlers = (
       );
     }
     await files.approve(s.cwd, p.name);
-    await control(() => controls.reconnect(p.name));
     const affected = [s.sessionId];
-    for (const other of host.liveIn(s.cwd)) {
-      if (other.sessionId === s.sessionId) continue;
-      affected.push(other.sessionId);
-      try {
-        await other.mcpControls().reconnect(p.name);
-      } catch {
-        // Only the chat and the server: Claude Code's message may carry more.
-        deps.onError(new Error(`reconnect failed in chat ${other.sessionId} for ${p.name}`), 'mcp');
+    try {
+      await control(() => controls.reconnect(p.name));
+    } finally {
+      for (const other of host.liveIn(s.cwd)) {
+        if (other.sessionId === s.sessionId) continue;
+        affected.push(other.sessionId);
+        try {
+          await other.mcpControls().reconnect(p.name);
+        } catch {
+          // Only the chat and the server: Claude Code's message may carry more.
+          deps.onError(
+            new Error(`reconnect failed in chat ${other.sessionId} for ${p.name}`),
+            'mcp',
+          );
+        }
       }
+      await Promise.all(affected.map((id) => refresh(id)));
     }
-    await Promise.all(affected.map((id) => refresh(id)));
     return {};
   });
 

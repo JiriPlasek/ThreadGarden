@@ -10,10 +10,12 @@
   import CheckIcon from '@lucide/svelte/icons/check';
   import GaugeIcon from '@lucide/svelte/icons/gauge';
   import HandIcon from '@lucide/svelte/icons/hand';
+  import ServerIcon from '@lucide/svelte/icons/server';
   import SquareIcon from '@lucide/svelte/icons/square';
   import XIcon from '@lucide/svelte/icons/x';
   import { tick, untrack } from 'svelte';
   import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
+  import { type Control } from '#lib/components/composer/commands.js';
   import { agentNameOf, isCodexChat, runtimeOfChat } from '#lib/runtime.js';
   import Composer from '#lib/components/composer/Composer.svelte';
   import SetupScreen from '#lib/components/SetupScreen.svelte';
@@ -22,10 +24,13 @@
   import { rowPx } from '#lib/interface-scale.js';
   import { ariaKeyShortcuts, formatCombos, shortcut } from '#lib/shortcuts.js';
   import { retryOldCopy } from '#lib/move/move-chat.svelte.js';
+  import { supportsMcp } from '#lib/projects.js';
   import { copyText } from '#lib/native.js';
   import { RequestError } from '#lib/service/client.js';
   import type { ResumeCheck } from '#lib/state/chats.svelte.js';
+  import { quietly } from '#lib/state/api.js';
   import { useApp, useScope } from '#lib/state/context.js';
+  import { ChatMcp } from '#lib/state/mcp.svelte.js';
   import { holdsBack } from '#lib/state/away.svelte.js';
   import { awayRefusal } from '#lib/state/copy-api.js';
   import { machineAway as isAway, machineNameOf } from '#lib/state/machines.svelte.js';
@@ -34,6 +39,7 @@
   import ActivityPanel from './ActivityPanel.svelte';
   import { cacheExpiresAt, cacheWarning } from './cache-warning';
   import ChatHeader from './ChatHeader.svelte';
+  import McpServersDialog from './McpServersDialog.svelte';
   import { setChatActions, type RequestActions } from './context';
   import { END_OTHER_DESCRIPTION, END_OTHER_TITLE } from './end-other';
   import RequestCard from './items/RequestCard.svelte';
@@ -302,7 +308,7 @@
 
   let confirmOpen = $state(false);
   let confirmText = $state('');
-  let pendingSend: { text: string; images: ImageRef[] } | null = null;
+  let pendingRun: (() => Promise<boolean>) | null = null;
   let settle: ((sent: boolean) => void) | null = null;
 
   const describe = (check: ResumeCheck): string => {
@@ -323,21 +329,26 @@
     return parts.join(' ');
   };
 
-  /** Resolves once the user confirmed (and the message went out) or cancelled. */
-  const askToResume = (check: ResumeCheck, text: string, images: ImageRef[]): Promise<boolean> =>
+  /** Resolves once the user confirmed (and `run` went through) or cancelled. */
+  const askToResume = (check: ResumeCheck, run: () => Promise<boolean>): Promise<boolean> =>
     new Promise((resolve) => {
       settle?.(false);
       settle = resolve;
-      pendingSend = { text, images };
+      pendingRun = run;
       confirmText = describe(check);
       confirmOpen = true;
     });
 
   const confirmResume = async (): Promise<void> => {
-    const p = pendingSend;
-    pendingSend = null;
-    const sent = p ? await deliver(p.text, p.images) : false;
-    settle?.(sent);
+    const run = pendingRun;
+    pendingRun = null;
+    let done = false;
+    try {
+      done = run ? await run() : false;
+    } catch (err) {
+      sendError = err instanceof Error ? err.message : String(err);
+    }
+    settle?.(done);
     settle = null;
   };
 
@@ -345,15 +356,19 @@
     if (!confirmOpen && settle) {
       settle(false);
       settle = null;
-      pendingSend = null;
+      pendingRun = null;
     }
   });
 
-  const submit = async (text: string, images: ImageRef[]): Promise<boolean> => {
+  /**
+   * Runs `run` (a send, or Wake the chat) in this chat: at once while
+   * Threadgarden's own process runs it, else behind the resume-safety check.
+   */
+  const withResumeCheck = async (run: () => Promise<boolean>): Promise<boolean> => {
     sendError = null;
     const c = chats.get(sessionId);
     if (!c) return false;
-    if (c.ownedLive) return deliver(text, images);
+    if (c.ownedLive) return run();
     let check: ResumeCheck;
     try {
       check = await chats.resumeCheck(sessionId);
@@ -367,10 +382,13 @@
     }
     blocked = null;
     if (check.status === 'unverified' || check.recentlyModified) {
-      return askToResume(check, text, images);
+      return askToResume(check, run);
     }
-    return deliver(text, images);
+    return run();
   };
+
+  const submit = (text: string, images: ImageRef[]): Promise<boolean> =>
+    withResumeCheck(() => deliver(text, images));
 
   const copyResume = async (): Promise<void> => {
     if (!blocked) return;
@@ -667,6 +685,77 @@
     if (item) list?.scrollToItem(item.id);
   };
 
+  // ── MCP servers ─────────────────────────────────────────────────────────
+
+  /** A Claude chat on a machine that manages MCP servers, and is run from here. */
+  const mcpOn = $derived(!isCodexChat(sessionId) && supportsMcp(entry) && !readOnly);
+  let mcp = $state.raw<ChatMcp | null>(null);
+  let mcpOpen = $state(false);
+  /** The waiting names the banner was dismissed for, by chat (a different set shows it again). */
+  let mcpDismissed = $state<Record<string, string>>({});
+
+  $effect(() => {
+    if (!mcpOn) return;
+    const made = new ChatMcp(scope.api, sessionId);
+    mcp = made;
+    return () => {
+      made.stop();
+      mcp = null;
+    };
+  });
+
+  // The banner needs the servers once the chat runs, with the dialog closed.
+  $effect(() => {
+    if (mcp && chat?.ownedLive) quietly(mcp.load());
+  });
+
+  const mcpWaiting = $derived(mcpOn && chat?.ownedLive ? (mcp?.state?.waiting ?? []) : []);
+  const mcpBanner = $derived(
+    mcpWaiting.length > 0 && mcpDismissed[sessionId] !== mcpWaiting.join('\n'),
+  );
+  const mcpBannerText = $derived(
+    mcpWaiting.length === 1
+      ? `MCP server "${mcpWaiting[0]}" (from this project) isn't approved.`
+      : `MCP server "${mcpWaiting[0]}" and ${mcpWaiting.length - 1} more (from this project) aren't approved.`,
+  );
+
+  const approveWaiting = async (): Promise<void> => {
+    const name = mcpWaiting[0];
+    if (!mcp || name === undefined) return;
+    sendError = null;
+    try {
+      await mcp.approve(name);
+    } catch (err) {
+      sendError = err instanceof Error ? err.message : String(err);
+    }
+  };
+
+  /** Wake the chat (the dialog's button): a resume like sending one, behind the same check. */
+  const wakeChat = async (): Promise<void> => {
+    let failure: string | null = null;
+    const ok = await withResumeCheck(async () => {
+      try {
+        await chats.wake(sessionId);
+        return true;
+      } catch (err) {
+        if (err instanceof RequestError && err.code === 'RESUME_BLOCKED') {
+          blocked = { reason: err.message, command: null, copied: false };
+        } else {
+          failure = err instanceof Error ? err.message : String(err);
+        }
+        return false;
+      }
+    });
+    if (ok) return;
+    // A failure shows in the dialog (`wakeError`); a block shows as the banner behind it.
+    const problem = failure ?? sendError;
+    if (problem !== null) {
+      sendError = null;
+      throw new Error(problem);
+    }
+    if (blocked) mcpOpen = false;
+  };
+
   // ── /model, /effort, /permissions (ruling R25) ──────────────────────────
 
   const CONTROL_LABELS = {
@@ -676,7 +765,14 @@
   } as const;
 
   /** Focuses (and opens, where the webview allows) the header picker; else says why not. */
-  const onControl = (control: keyof typeof CONTROL_LABELS): string | null => {
+  const onControl = (control: Control): string | null => {
+    if (control === 'mcp') {
+      if (isCodexChat(sessionId)) return 'MCP servers are for Claude chats.';
+      if (!supportsMcp(entry)) return `Update ${machineName} to manage MCP servers from here.`;
+      if (readOnly) return `MCP servers can't be managed while ${machineName} is away.`;
+      mcpOpen = true;
+      return null;
+    }
     const label = CONTROL_LABELS[control];
     const select = root?.querySelector<HTMLSelectElement>(`select[aria-label="${label}"]`);
     if (!select) {
@@ -703,7 +799,13 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="flex min-h-0 flex-1 flex-col" bind:this={root} {onkeydown}>
   {#if chat}
-    <ChatHeader {chat} {readOnly} activityOpen={activityShown} onToggleActivity={toggleActivity} />
+    <ChatHeader
+      {chat}
+      {readOnly}
+      activityOpen={activityShown}
+      onToggleActivity={toggleActivity}
+      onOpenMcp={mcpOn ? () => (mcpOpen = true) : undefined}
+    />
   {/if}
   {#if forkError}
     <div class="bg-destructive/10 text-destructive shrink-0 px-4 py-1 text-xs" role="alert">
@@ -928,6 +1030,33 @@
                 </div>
               </div>
             {/if}
+            {#if mcpBanner}
+              <div
+                class="flex items-center gap-2 rounded-md bg-amber-500/10 px-3 py-1 text-xs text-amber-900 dark:text-amber-200"
+                role="status"
+                aria-label="MCP server not approved"
+              >
+                <ServerIcon class="size-4 shrink-0" aria-hidden="true" />
+                <span class="min-w-0 flex-1">{mcpBannerText}</span>
+                <button
+                  type="button"
+                  class="font-medium underline-offset-2 hover:underline"
+                  onclick={() => void approveWaiting()}>Approve</button
+                >
+                <button
+                  type="button"
+                  class="font-medium underline-offset-2 hover:underline"
+                  onclick={() => (mcpOpen = true)}>MCP servers…</button
+                >
+                <button
+                  type="button"
+                  class="hover:bg-muted inline-flex size-5 shrink-0 items-center justify-center rounded"
+                  aria-label="Dismiss"
+                  onclick={() => (mcpDismissed[sessionId] = mcpWaiting.join('\n'))}
+                  ><XIcon class="size-3.5" aria-hidden="true" /></button
+                >
+              </div>
+            {/if}
             {#if refusal}
               <div
                 class="flex items-center gap-2 rounded-md bg-red-500/10 px-3 py-1 text-xs text-red-900 dark:text-red-200"
@@ -1079,6 +1208,17 @@
     {/if}
   </div>
 </div>
+
+{#if mcp}
+  <McpServersDialog
+    bind:open={mcpOpen}
+    {mcp}
+    live={chat?.ownedLive === true}
+    remote={!entry?.local}
+    {machineName}
+    onWake={wakeChat}
+  />
+{/if}
 
 <ConfirmDialog
   bind:open={confirmEndHolder}
