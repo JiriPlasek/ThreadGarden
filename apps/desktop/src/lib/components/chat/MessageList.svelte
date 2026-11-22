@@ -214,7 +214,9 @@
 
   const estimate = (row: ListRow): number => {
     if (row.kind === 'queued') return userHeight(row.message.text) + 16;
-    if (row.kind === 'shell') return 120 + 17 * Math.min(row.run.rows, 24);
+    if (row.kind === 'shell')
+      // Title and footer, and a few lines of output (the block follows its content).
+      return 60 + 17 * 3 + 16;
     if (row.kind !== 'item') return 28;
     const it = row.item;
     switch (it.kind) {

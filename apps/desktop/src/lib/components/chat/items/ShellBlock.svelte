@@ -1,10 +1,11 @@
 <script lang="ts">
   import type { ShellRun } from '@threadgarden/protocol';
   import { FitAddon } from '@xterm/addon-fit';
-  import { Terminal, type ITheme } from '@xterm/xterm';
+  import { Terminal } from '@xterm/xterm';
   import '@xterm/xterm/css/xterm.css';
   import { onMount, untrack } from 'svelte';
   import type { ShellOutput } from '#lib/state/shell-output.js';
+  import { terminalLook } from '../shell-theme';
   import {
     SHELL_BLOCK_ROWS,
     SHELL_SCROLLBACK_LINES,
@@ -39,9 +40,6 @@
     onStop: () => void;
   } = $props();
 
-  const FALLBACK_FONT =
-    'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
-
   let host = $state<HTMLDivElement | null>(null);
   let term = $state.raw<Terminal | null>(null);
   let fit: FitAddon | null = null;
@@ -56,21 +54,22 @@
   const footer = $derived(shellFooter(run, now));
   const rowsShown = (r: ShellRun): number => Math.min(r.rows, SHELL_BLOCK_ROWS);
 
-  /** The app's mono font and colours as they are now (they change with the theme). */
-  const look = (): { fontFamily: string; theme: ITheme } => {
-    const css = getComputedStyle(document.documentElement);
-    const v = (name: string): string | undefined => css.getPropertyValue(name).trim() || undefined;
-    return {
-      fontFamily: v('--font-mono') ?? FALLBACK_FONT,
-      theme: {
-        background: v('--background'),
-        foreground: v('--foreground'),
-        cursor: v('--foreground'),
-        cursorAccent: v('--background'),
-        selectionBackground: v('--accent'),
-        selectionForeground: v('--accent-foreground'),
-      },
-    };
+  let lineHeight = $state(17);
+  /** Rows of content to show: the last used line of the buffer, 2 at least, 24 at most. */
+  let usedRows = $state(2);
+
+  const measure = (t: Terminal): void => {
+    const h = t.element?.clientHeight;
+    if (h && t.rows) lineHeight = h / t.rows;
+    const buf = t.buffer.active;
+    let last = 0;
+    for (let i = buf.length - 1; i >= 0; i--) {
+      if (buf.getLine(i)?.translateToString(true).trim()) {
+        last = i + 1;
+        break;
+      }
+    }
+    usedRows = Math.min(SHELL_BLOCK_ROWS, Math.max(2, last, buf.baseY > 0 ? t.rows : 0));
   };
 
   /** Tells the service how big the terminal is here (same size twice is skipped). */
@@ -92,7 +91,7 @@
       scrollback: SHELL_SCROLLBACK_LINES,
       disableStdin: run.state !== 'running',
       convertEol: false,
-      ...look(),
+      ...terminalLook(),
     });
     fit = new FitAddon();
     t.loadAddon(fit);
@@ -108,7 +107,7 @@
     }
 
     const watchLook = new MutationObserver(() => {
-      const l = look();
+      const l = terminalLook();
       t.options.fontFamily = l.fontFamily;
       t.options.theme = l.theme;
     });
@@ -140,10 +139,11 @@
     if (drawnOn === t) t.reset();
     drawnOn = t;
     const text = out.text();
-    if (text) t.write(text);
+    if (text) t.write(text, () => measure(t));
+    else measure(t);
     return out.listen((data, reset) => {
       if (reset) t.reset();
-      t.write(data);
+      t.write(data, () => measure(t));
     });
   });
 
@@ -156,7 +156,10 @@
     const t = term;
     const cols = run.cols;
     const rows = rowsShown(run);
-    if (t && (t.cols !== cols || t.rows !== rows)) t.resize(cols, rows);
+    if (t && (t.cols !== cols || t.rows !== rows)) {
+      t.resize(cols, rows);
+      measure(t);
+    }
   });
 
   $effect(() => {
@@ -194,6 +197,13 @@
       >
     {/if}
   </div>
-  <div bind:this={host} {onfocusin} {onfocusout} data-terminal class="overflow-x-auto p-1"></div>
+  <div
+    bind:this={host}
+    {onfocusin}
+    {onfocusout}
+    data-terminal
+    class="overflow-x-auto overflow-y-hidden p-1"
+    style:height="{usedRows * lineHeight + 8}px"
+  ></div>
   <div class="text-muted-foreground border-t px-2 py-1 tabular-nums">{footer}</div>
 </div>

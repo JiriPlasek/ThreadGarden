@@ -1,7 +1,7 @@
 import type { ShellRun } from '@threadgarden/protocol';
-import { render, screen } from '@testing-library/svelte';
+import { fireEvent, render, screen } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
-import { fireEvent } from '@testing-library/svelte';
+import { tick } from 'svelte';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ShellOutput } from '../../src/lib/state/shell-output';
 
@@ -16,6 +16,7 @@ const h = vi.hoisted(() => {
   return {
     terms: [] as Fake[],
     dims: { cols: 80, rows: 24 } as { cols: number; rows: number } | undefined,
+    lines: null as string[] | null,
   };
 });
 
@@ -25,10 +26,24 @@ vi.mock('@xterm/xterm', () => ({
     options: Record<string, unknown>;
     data: ((d: string) => void) | null = null;
     disposed = false;
+    lines: string[] = [];
+    element: { clientHeight: number };
+    buffer: { active: object };
     cols: number;
     rows: number;
     constructor(public opts: Record<string, unknown>) {
       this.options = { ...opts };
+      this.element = { clientHeight: (opts.rows as number) * 20 };
+      const lines = () => this.lines;
+      this.buffer = {
+        active: {
+          get length() {
+            return lines().length;
+          },
+          baseY: 0,
+          getLine: (i: number) => ({ translateToString: () => lines()[i] ?? '' }),
+        },
+      };
       this.cols = opts.cols as number;
       this.rows = opts.rows as number;
       h.terms.push(this);
@@ -39,8 +54,10 @@ vi.mock('@xterm/xterm', () => ({
     reset() {
       this.ops.push(['reset']);
     }
-    write(d: string) {
+    write(d: string, cb?: () => void) {
       this.ops.push(['write', d]);
+      if (h.lines) this.lines = h.lines.slice();
+      cb?.();
     }
     resize(c: number, r: number) {
       this.ops.push(['resize', c, r]);
@@ -109,6 +126,9 @@ beforeEach(() => {
   observers.length = 0;
   h.terms.length = 0;
   h.dims = { cols: 80, rows: 24 };
+  h.lines = null;
+  document.documentElement.style.removeProperty('--background');
+  vi.restoreAllMocks();
 });
 
 describe('ShellBlock', () => {
@@ -203,5 +223,81 @@ describe('ShellBlock', () => {
     const startedAt = 1_000_000;
     mount({ run: run({ ...over, state: 'ended', startedAt, endedAt: startedAt + 14_000 }) });
     expect(screen.getByText(text)).toBeTruthy();
+  });
+
+  it('does not resize at start when the size is not known yet', () => {
+    h.dims = undefined;
+    const { props } = mount({ autofocus: true });
+    expect(props.onResize).not.toHaveBeenCalled();
+  });
+
+  describe('height follows the content', () => {
+    const hostHeight = (c: HTMLElement) =>
+      (c.querySelector('[data-terminal]') as HTMLElement).style.height;
+
+    it('a short output shows its lines, at least two rows', async () => {
+      h.lines = ['hello'];
+      const output = new ShellOutput();
+      output.reset('hello', 0);
+      const { container } = mount({ output });
+      expect(hostHeight(container)).toBe('48px'); // 2 rows * 20px + 8px padding
+      h.lines = ['a', 'b', 'c', 'd'];
+      output.push(5, 'x');
+      await tick();
+      expect(hostHeight(container)).toBe('88px');
+    });
+
+    it('a long output stops at 24 rows', () => {
+      h.lines = Array.from({ length: 80 }, (_, i) => `line ${i}`);
+      const output = new ShellOutput();
+      output.reset('x', 0);
+      const { container } = mount({ output });
+      expect(hostHeight(container)).toBe('488px'); // 24 * 20 + 8
+    });
+  });
+
+  describe('theme colours', () => {
+    const canvas = (accepts: boolean) => {
+      let fill = '';
+      vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation((() => ({
+        get fillStyle() {
+          return fill;
+        },
+        set fillStyle(v: string) {
+          if (accepts || v.startsWith('#')) fill = v;
+        },
+        clearRect() {},
+        fillRect() {},
+        getImageData: () => ({ data: [10, 20, 30, 255] }),
+      })) as never);
+    };
+    const bg = () => document.documentElement.style.setProperty('--background', 'oklch(0.145 0 0)');
+
+    it('reach xterm as rgb(), never oklch()', () => {
+      bg();
+      canvas(true);
+      const { term } = mount();
+      const theme = term.opts.theme as Record<string, string>;
+      expect(theme.background).toBe('rgb(10, 20, 30)');
+      expect(JSON.stringify(theme)).not.toContain('oklch(');
+    });
+
+    it('fall back to fixed colours when the browser cannot parse them', () => {
+      bg();
+      canvas(false);
+      const { term } = mount();
+      const theme = term.opts.theme as Record<string, string>;
+      expect(theme.background).toMatch(/^#[0-9a-f]{6}$/);
+      expect(JSON.stringify(theme)).not.toContain('oklch(');
+    });
+
+    it('fall back when the probe throws', () => {
+      bg();
+      vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockImplementation(() => {
+        throw new Error('no canvas');
+      });
+      const { term } = mount();
+      expect((term.opts.theme as Record<string, string>).background).toMatch(/^#[0-9a-f]{6}$/);
+    });
   });
 });
