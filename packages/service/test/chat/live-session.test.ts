@@ -1643,3 +1643,45 @@ describe('LiveSession usage limits', () => {
     });
   });
 });
+
+describe('LiveSession MCP', () => {
+  it('onMcpChange is called for each system/init, a throw is reported', async () => {
+    const changed: string[] = [];
+    const errors: string[] = [];
+    let boom = false;
+    const { adapter, opts } = setup({
+      onMcpChange: (id) => {
+        changed.push(id);
+        if (boom) throw new Error('nope');
+      },
+      onError: (_e, context) => errors.push(context),
+    });
+    LiveSession.create('/proj', { text: 'hi' }, { ...opts, sessionId: 's' });
+    const fake = adapter.lastSession();
+    fake.emit(init('s'));
+    fake.emit(result('r1'));
+    fake.emit(init('s'));
+    await settle();
+    expect(changed).toEqual(['s', 's']);
+    boom = true;
+    fake.emit(init('s'));
+    await settle();
+    expect(changed).toHaveLength(3);
+    expect(errors).toEqual(['onMcpChange (session s)']);
+  });
+
+  it('mcpControls refuses without a process and for a session without mcp', () => {
+    const { adapter, opts } = setup();
+    const s = LiveSession.create('/proj', { text: 'hi' }, { ...opts, sessionId: 's' });
+    const fake = adapter.lastSession();
+    expect(s.mcpControls()).toBe(fake.mcp);
+    delete (fake as { mcp?: unknown }).mcp;
+    expect(() => s.mcpControls()).toThrowError(
+      expect.objectContaining({ code: 'MCP_UNSUPPORTED' }) as Error,
+    );
+    s.end();
+    expect(() => s.mcpControls()).toThrowError(
+      expect.objectContaining({ code: 'NOT_LIVE' }) as Error,
+    );
+  });
+});

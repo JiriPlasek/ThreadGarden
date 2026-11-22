@@ -274,7 +274,7 @@ fn an_already_paired_machine_is_refused_before_the_code_goes() {
             &mut ws,
             3,
             "hello",
-            json!({ "protocolVersion": 11, "client": "t" }),
+            json!({ "protocolVersion": 12, "client": "t" }),
         )
         .await;
         let my_id = me["result"]["machine"]["id"].as_str().unwrap().to_string();

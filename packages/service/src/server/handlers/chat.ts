@@ -667,6 +667,16 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
     return s;
   };
   router.register('chat.send', send);
+  // Protocol 12: starts the chat's process without a message (the MCP panel needs one to ask).
+  router.register('chat.wake', async (p) => {
+    if (deps.isMoving?.(p.sessionId)) {
+      throw new ServiceError(MOVE_ERRORS.moving, 'This chat is being moved to another machine');
+    }
+    const away = deps.awayTo?.(p.sessionId);
+    if (away) throw new ServiceError(MOVE_ERRORS.moved, `This chat moved to ${away.name}`);
+    await resumedOrLive(p.sessionId);
+    return {};
+  });
 
   router.register('chat.markSeen', async (p) => {
     markSeen(p.sessionId);

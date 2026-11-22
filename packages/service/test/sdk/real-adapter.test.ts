@@ -21,6 +21,16 @@ const fakeQuery = (messages: SDKMessage[]) => {
     supportedModels: vi.fn(async () => []),
     accountInfo: vi.fn(async () => ({ apiProvider: 'firstParty' as const })),
     stopTask: vi.fn<(taskId: string) => Promise<void>>(async () => {}),
+    mcpServerStatus: vi.fn(async () => [{ name: 'a', status: 'connected' as const }]),
+    reconnectMcpServer: vi.fn<(name: string) => Promise<void>>(async () => {}),
+    toggleMcpServer: vi.fn<(name: string, enabled: boolean) => Promise<void>>(async () => {}),
+    mcpAuthenticate: vi.fn<(name: string, redirectUri?: string) => Promise<unknown>>(async () => ({
+      authUrl: 'http://auth/x',
+    })),
+    mcpSubmitOAuthCallbackUrl: vi.fn<(name: string, url: string) => Promise<unknown>>(async () => ({
+      ok: true,
+    })),
+    mcpClearAuth: vi.fn<(name: string) => Promise<unknown>>(async () => ({})),
     close: vi.fn(),
   });
 };
@@ -114,6 +124,22 @@ describe('RealAdapter.start', () => {
     ]);
     await expect(s.supportedModels()).resolves.toEqual([]);
     await expect(s.accountInfo()).resolves.toEqual({ apiProvider: 'firstParty' });
+  });
+
+  it('forwards MCP controls to the query', async () => {
+    const { q, adapter } = setup();
+    const s = adapter.start(startOptions);
+    await expect(s.mcp!.status()).resolves.toEqual([{ name: 'a', status: 'connected' }]);
+    await s.mcp!.reconnect('a');
+    expect(q.reconnectMcpServer).toHaveBeenCalledWith('a');
+    await s.mcp!.toggle('a', false);
+    expect(q.toggleMcpServer).toHaveBeenCalledWith('a', false);
+    await expect(s.mcp!.authenticate('a')).resolves.toEqual({ authUrl: 'http://auth/x' });
+    expect(q.mcpAuthenticate).toHaveBeenCalledWith('a', undefined);
+    await expect(s.mcp!.submitCallback('a', 'http://x/cb?code=1')).resolves.toEqual({ ok: true });
+    expect(q.mcpSubmitOAuthCallbackUrl).toHaveBeenCalledWith('a', 'http://x/cb?code=1');
+    await expect(s.mcp!.clearAuth('a')).resolves.toEqual({});
+    expect(q.mcpClearAuth).toHaveBeenCalledWith('a');
   });
 
   it('close ends the input stream and closes the query; later sends are dropped', async () => {

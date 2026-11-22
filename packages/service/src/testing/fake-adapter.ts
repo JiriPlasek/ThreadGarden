@@ -19,6 +19,8 @@ import type {
   CanUseTool,
   HistoryOptions,
   ImportOptions,
+  McpControls,
+  McpServerStatus,
   ModelInfo,
   OneShotOptions,
   PageOptions,
@@ -97,6 +99,39 @@ export class FakeSession implements AgentSession {
   account: AccountInfo = {};
   /** v1.3 B: the experimental usage reading; absent unless a test (or the mock) sets one. */
   usage?: () => Promise<unknown>;
+  /** Protocol 12: what `mcp.status()` answers. */
+  mcpServers: McpServerStatus[] = [];
+  /** Every MCP control call, in order (`status` has no name: ''). */
+  readonly mcpCalls: { op: string; name: string; arg?: unknown }[] = [];
+  /** What `mcp.authenticate` / `submitCallback` / `clearAuth` resolve with. */
+  authResult: unknown = {};
+  /** When set, every MCP control call rejects with it (after recording). */
+  mcpError: Error | undefined;
+  readonly mcp: McpControls = {
+    status: async () => {
+      this.recordMcp('status', '');
+      return this.mcpServers;
+    },
+    reconnect: async (name) => this.recordMcp('reconnect', name),
+    toggle: async (name, enabled) => this.recordMcp('toggle', name, enabled),
+    authenticate: async (name, redirectUri) => {
+      this.recordMcp('authenticate', name, redirectUri);
+      return this.authResult;
+    },
+    submitCallback: async (name, url) => {
+      this.recordMcp('submitCallback', name, url);
+      return this.authResult;
+    },
+    clearAuth: async (name) => {
+      this.recordMcp('clearAuth', name);
+      return this.authResult;
+    },
+  };
+
+  private recordMcp(op: string, name: string, arg?: unknown): void {
+    this.mcpCalls.push(arg === undefined ? { op, name } : { op, name, arg });
+    if (this.mcpError) throw this.mcpError;
+  }
 
   private readonly queue: SDKMessage[] = [];
   private waiter: (() => void) | undefined;
