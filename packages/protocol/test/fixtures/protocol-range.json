@@ -1,13 +1,13 @@
 {
-  "min": 11,
-  "max": 13,
+  "min": 12,
+  "max": 14,
   "samples": [
-    { "version": 10, "accepts": false },
-    { "version": 11, "accepts": true },
+    { "version": 11, "accepts": false },
     { "version": 12, "accepts": true },
     { "version": 13, "accepts": true },
-    { "version": 14, "accepts": false },
-    { "version": 11.5, "accepts": false },
+    { "version": 14, "accepts": true },
+    { "version": 15, "accepts": false },
+    { "version": 12.5, "accepts": false },
     { "version": -1, "accepts": false }
   ]
 }

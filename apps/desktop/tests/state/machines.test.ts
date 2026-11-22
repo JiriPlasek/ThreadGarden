@@ -194,7 +194,7 @@ describe('MachinesState', () => {
   });
 
   it('accepts a hello without a machine (an older service) and the right id', async () => {
-    remote(M1).handlers.hello = () => ({ serviceVersion: 'x', protocolVersion: 11 });
+    remote(M1).handlers.hello = () => ({ serviceVersion: 'x', protocolVersion: 12 });
     await setup([paired(M1, 'A'), paired(M2, 'B')], { [M1]: 't1', [M2]: 't2' });
     await vi.advanceTimersByTimeAsync(0);
     expect(machines.get(M1)?.status).toBe('on');
@@ -213,31 +213,31 @@ describe('MachinesState', () => {
     expect(remote(M2).sockets).toHaveLength(1);
   });
 
-  it('accepts a remote on protocol 11 or 13 but not 10 or 14', async () => {
+  it('accepts a remote on protocol 12 or 14 but not 11 or 15', async () => {
     const proto = (id: string, v: number) => {
       remote(id).handlers.hello = () => ({ serviceVersion: 'x', protocolVersion: v });
     };
-    proto('m11', 11);
-    proto('m13', 13);
-    proto('m10', 10);
+    proto('m12', 12);
     proto('m14', 14);
-    await setup([paired('m11', 'a'), paired('m13', 'b'), paired('m10', 'c'), paired('m14', 'd')], {
-      m11: 't',
-      m13: 't',
-      m10: 't',
+    proto('m11', 11);
+    proto('m15', 15);
+    await setup([paired('m12', 'a'), paired('m14', 'b'), paired('m11', 'c'), paired('m15', 'd')], {
+      m12: 't',
       m14: 't',
+      m11: 't',
+      m15: 't',
     });
     await vi.advanceTimersByTimeAsync(0);
-    expect(machines.get('m11')?.status).toBe('on');
-    expect(machines.get('m13')?.status).toBe('on');
-    expect(machines.get('m10')?.status).toBe('incompatible');
-    expect(machines.get('m14')?.status).toBe('incompatible');
+    expect(machines.get('m12')?.status).toBe('on');
+    expect(machines.get('m14')?.status).toBe('on');
+    expect(machines.get('m11')?.status).toBe('incompatible');
+    expect(machines.get('m15')?.status).toBe('incompatible');
   });
 
   it('an incompatible hello still records version and updatability', async () => {
     remote(M1).handlers.hello = () => ({
       serviceVersion: '0.9.0',
-      protocolVersion: 14,
+      protocolVersion: 15,
       machine: { ...info(M1, M1), capabilities: ['remote', UPDATE_CAPABILITY] },
     });
     await setup([paired(M1, 'Ubuntu PC')], { [M1]: 'tok' });
@@ -285,7 +285,7 @@ describe('MachinesState', () => {
   it('openForUpdate connects despite an out-of-range protocol, apart from the entry', async () => {
     remote(M1).handlers.hello = () => ({
       serviceVersion: '0.9.0',
-      protocolVersion: 14,
+      protocolVersion: 15,
       machine: info(M1, M1),
     });
     await setup([paired(M1, 'Ubuntu PC')], { [M1]: 'tok' });
@@ -319,7 +319,7 @@ describe('MachinesState', () => {
       protocolVersion,
       machine: { ...info(M1, M1), capabilities: ['remote', UPDATE_CAPABILITY] },
     });
-    remote(M1).handlers.hello = hello(14, '0.9.0');
+    remote(M1).handlers.hello = hello(15, '0.9.0');
     await setup([paired(M1, 'Ubuntu PC')], { [M1]: 'tok' });
     await vi.advanceTimersByTimeAsync(0);
     expect(machines.get(M1)?.status).toBe('incompatible');

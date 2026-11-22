@@ -426,6 +426,12 @@ pub const REFUSED: &[&str] = &[
     "mcp.submitCallback",
     "mcp.act",
     "chat.wake",
+    // A chat's `!` commands: the phone's own core has no chats.
+    "shell.start",
+    "shell.input",
+    "shell.resize",
+    "shell.stop",
+    "shell.get",
     // The desktop's plug setup dialog (finding and naming a plug): the phone takes typed details.
     "power.probe",
     "power.pairPlug",

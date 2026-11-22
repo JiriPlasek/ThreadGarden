@@ -12,10 +12,10 @@ import {
 } from '../src/index.js';
 
 describe('protocol 10 (update)', () => {
-  it('PROTOCOL_VERSION is 12 and the remote range is 11..13', () => {
-    expect(PROTOCOL_VERSION).toBe(12);
-    expect(REMOTE_PROTOCOL_RANGE).toEqual({ min: 11, max: 13 });
-    expect([10, 11, 12, 13, 14].map(acceptsRemoteProtocol)).toEqual([false, true, true, true, false]);
+  it('PROTOCOL_VERSION is 13 and the remote range is 12..14', () => {
+    expect(PROTOCOL_VERSION).toBe(13);
+    expect(REMOTE_PROTOCOL_RANGE).toEqual({ min: 12, max: 14 });
+    expect([11, 12, 13, 14, 15].map(acceptsRemoteProtocol)).toEqual([false, true, true, true, false]);
   });
 
   it('has the update capability and error codes', () => {

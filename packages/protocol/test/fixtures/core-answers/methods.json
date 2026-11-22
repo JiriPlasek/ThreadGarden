@@ -40,7 +40,7 @@
     "work.stopAll"
   ],
   "maxRequestBytes": 33554432,
-  "protocolVersion": 12,
+  "protocolVersion": 13,
   "refused": [
     "analytics.get",
     "auth.setApiKey",
@@ -119,6 +119,11 @@
     "scheduled.sendNow",
     "scheduled.update",
     "service.shutdown",
+    "shell.get",
+    "shell.input",
+    "shell.resize",
+    "shell.start",
+    "shell.stop",
     "update.start",
     "update.status"
   ]
