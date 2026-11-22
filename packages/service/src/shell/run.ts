@@ -154,8 +154,10 @@ export class PtyRun {
     this.finish(null, 'session');
   }
 
-  markAppended(entryId: string): void {
+  /** The appended entries' item ids: the `! command` line and its output. */
+  markAppended(entryId: string, outputId?: string): void {
     this.run.entryId = entryId;
+    if (outputId !== undefined) this.run.outputId = outputId;
     this.emitRun();
   }
 

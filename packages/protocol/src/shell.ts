@@ -43,6 +43,8 @@ export const ShellRunSchema = z.object({
   endReason: z.enum(['exit', 'stopped', 'session']).optional(),
   /** The item id of the appended `! command` line, set once it's appended. */
   entryId: z.string().optional(),
+  /** The item id of the appended output entry, set once it's appended. */
+  outputId: z.string().optional(),
 });
 export type ShellRun = z.infer<typeof ShellRunSchema>;
 

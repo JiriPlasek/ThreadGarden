@@ -1223,10 +1223,10 @@ export class LiveSession {
     this.noteRunning();
     const session = this.session;
     if (end.reason === 'session' || !session || this.run !== run) return;
-    let entryId: string | undefined;
+    const ids: string[] = [];
     for (const text of bashEntry(run.info.command, end.transcript)) {
       const uuid = randomUUID();
-      entryId ??= uuid;
+      ids.push(uuid);
       const m: SDKUserMessage = {
         type: 'user',
         message: { role: 'user', content: [{ type: 'text', text }] },
@@ -1242,7 +1242,8 @@ export class LiveSession {
       }
     }
     this.noteActivity();
-    if (entryId !== undefined) run.markAppended(entryId);
+    const [entryId, outputId] = ids;
+    if (entryId !== undefined) run.markAppended(entryId, outputId);
   }
 
   /** Tells `onRunningTasks` the running count (tasks and a `!` command). */

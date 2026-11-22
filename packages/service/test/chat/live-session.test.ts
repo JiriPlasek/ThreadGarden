@@ -1787,8 +1787,12 @@ describe('LiveSession: ! commands', () => {
       exitCode: 0,
       endReason: 'exit',
       entryId: input!.uuid,
+      outputId: output!.uuid,
     });
-    expect(runEvents(ctx.events).at(-1)?.entryId).toBe(input!.uuid);
+    expect(runEvents(ctx.events).at(-1)).toMatchObject({
+      entryId: input!.uuid,
+      outputId: output!.uuid,
+    });
     // History reads the same messages back the same way.
     const history = new Normalizer();
     const again = [input!, output!].flatMap((m) => history.push(m).items);

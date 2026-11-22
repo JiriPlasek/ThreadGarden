@@ -130,8 +130,9 @@ export const buildRows = (items: readonly ChatItem[]): Row[] => {
 /**
  * Adds the chat's `!` command to `rows`. Once its lines are in the chat
  * (`run.entryId` is among `itemIds`) the block sits right after the `! command`
- * line and the output line (`<entryId>:out`) is hidden: the block shows it. Until
- * then, or when the run ended without being appended, the block comes last.
+ * line and the output entry (`run.outputId`, else `<entryId>:out`) is hidden: the
+ * block shows it. Until then, or when the run ended without being appended, the
+ * block comes last.
  */
 export const withShell = (
   rows: Row[],
@@ -141,7 +142,7 @@ export const withShell = (
   const block: ShellRow = { kind: 'shell', key: `shell:${run.runId}`, run, itemIds: [] };
   const entry = run.entryId;
   if (entry === undefined || !itemIds.includes(entry)) return [...rows, block];
-  const out = `${entry}:out`;
+  const out = run.outputId ?? `${entry}:out`;
   const shown = rows.filter((r) => !(r.kind === 'item' && r.item.id === out));
   const i = shown.findIndex((r) => r.kind === 'item' && r.item.id === entry);
   if (i < 0) return [...shown, block];

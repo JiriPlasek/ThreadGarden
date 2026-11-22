@@ -71,7 +71,7 @@ test('! sudo apt upgrade takes a password and y, and ends with exit 0', async ({
   await page.reload();
   await expect(page.getByRole('tab', { selected: true })).toHaveAttribute('data-tab', CHATS[0]!);
   await expect(page.getByText('! sudo apt upgrade', { exact: true })).toBeVisible();
-  await expect(page.getByText(/Reading package lists/).first()).toBeVisible();
+  await expect(page.getByText(/Reading package lists/)).toBeVisible();
   await expect(page.locator('body')).not.toContainText(SUDO_INPUT);
 });
 

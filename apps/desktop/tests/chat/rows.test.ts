@@ -133,15 +133,22 @@ describe('withShell', () => {
     expect(kinds(rows)).toEqual(['u1', 'a1', 'shell']);
   });
 
-  it("an appended run's block follows its ! line and hides the output line", () => {
-    const items = [
-      user('u1'),
-      user('e1', '<bash-input>ls</bash-input>'),
-      user('e1:out'),
-      text('a1'),
-    ];
-    const rows = withShell(buildRows(items), run({ state: 'ended', entryId: 'e1' }), ids(items));
+  it("an appended run's block follows its ! line and hides the output entry", () => {
+    // As appended: two entries, each with its own id; the output is an info line.
+    const output: ChatItem = { kind: 'system', id: 'e2', level: 'info', text: 'a.txt' };
+    const items = [user('u1'), user('e1', '<bash-input>ls</bash-input>'), output, text('a1')];
+    const rows = withShell(
+      buildRows(items),
+      run({ state: 'ended', entryId: 'e1', outputId: 'e2' }),
+      ids(items),
+    );
     expect(kinds(rows)).toEqual(['u1', 'e1', 'shell', 'a1']);
+  });
+
+  it('without an outputId, the output line is the one-entry `<entryId>:out`', () => {
+    const items = [user('e1', '<bash-input>ls</bash-input>'), user('e1:out'), text('a1')];
+    const rows = withShell(buildRows(items), run({ state: 'ended', entryId: 'e1' }), ids(items));
+    expect(kinds(rows)).toEqual(['e1', 'shell', 'a1']);
   });
 
   it('an ended run that was not appended stays last', () => {

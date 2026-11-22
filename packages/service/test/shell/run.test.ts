@@ -216,12 +216,15 @@ describe('PtyRun', () => {
     expect(t.ends).toHaveLength(1);
   });
 
-  it('markAppended sets the entry id and re-emits the run', () => {
+  it('markAppended sets the entry and output ids and re-emits the run', () => {
     const t = setup();
     t.pty.last().exit(0);
-    t.run.markAppended('item-1');
-    expect(t.run.info.entryId).toBe('item-1');
-    expect(t.events.at(-1)).toMatchObject({ event: 'shell.run', data: { entryId: 'item-1' } });
+    t.run.markAppended('item-1', 'item-2');
+    expect(t.run.info).toMatchObject({ entryId: 'item-1', outputId: 'item-2' });
+    expect(t.events.at(-1)).toMatchObject({
+      event: 'shell.run',
+      data: { entryId: 'item-1', outputId: 'item-2' },
+    });
   });
 
   it('a spawn failure is SHELL_FAILED', () => {
