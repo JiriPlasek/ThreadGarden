@@ -736,7 +736,6 @@
     const ok = await withResumeCheck(async () => {
       try {
         await chats.wake(sessionId);
-        blocked = null;
         return true;
       } catch (err) {
         if (err instanceof RequestError && err.code === 'RESUME_BLOCKED') {

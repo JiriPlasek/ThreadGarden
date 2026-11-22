@@ -135,7 +135,7 @@ import {
   normalisePairingCode,
 } from '../machine/devices.js';
 import { startService, type ServiceHandle } from '../main.js';
-import type { Approvals, McpProjectFiles } from '../mcp/project-files.js';
+import type { McpProjectFiles } from '../mcp/project-files.js';
 import { CREATE_IN_KEY } from '../projects/maker.js';
 import { startFakeTasmota, type FakeDevice, type FakeTasmota } from './fake-tasmota.js';
 import type { MoveGit } from '../server/handlers/move.js';
@@ -305,10 +305,6 @@ class MockMcpFiles implements McpProjectFiles {
 
   async mcpJsonNames(cwd: string): Promise<string[]> {
     return hasProjectServer(cwd) ? [MOCK_PROJECT_SERVER] : [];
-  }
-
-  async approvals(cwd: string): Promise<Approvals> {
-    return { enabled: [...(this.enabled.get(cwd) ?? [])], disabled: [], enableAll: false };
   }
 
   async approve(cwd: string, name: string): Promise<void> {

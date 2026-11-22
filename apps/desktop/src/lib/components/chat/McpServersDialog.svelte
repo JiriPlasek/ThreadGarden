@@ -57,6 +57,15 @@
   });
 
   $effect(() => {
+    // The paste field belongs to a sign-in that is still waiting.
+    const waiting = mcp.state?.servers.find((s) => s.name === pasting)?.status === 'needs-auth';
+    if (pasting !== null && !waiting) {
+      pasting = null;
+      pasted = '';
+    }
+  });
+
+  $effect(() => {
     if (open) return;
     errors = {};
     pasting = null;
@@ -207,7 +216,7 @@
                 </DropdownMenu.Root>
               {/if}
             </div>
-            {#if pasting === s.name}
+            {#if pasting === s.name && s.status === 'needs-auth'}
               <label class="flex flex-col gap-1 text-xs">
                 Paste the address from your browser's address bar
                 <input

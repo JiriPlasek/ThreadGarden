@@ -88,6 +88,16 @@ describe('McpServersDialog', () => {
     expect(mcp.submitCallback).toHaveBeenCalledWith('api', 'http://localhost:1234/cb?code=x');
   });
 
+  it('the paste field goes away once the server is no longer waiting for sign-in', async () => {
+    const mcp = fakeMcp([server({ name: 'api', status: 'needs-auth', canSignIn: true })]);
+    const { rerender } = show(mcp, { remote: true });
+    await userEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await screen.findByLabelText(/Paste the address/);
+    mcp.state.servers = [server({ name: 'api', status: 'connected' })];
+    await rerender({ mcp: { ...mcp, state: { ...mcp.state } } as unknown as ChatMcp });
+    await waitFor(() => expect(screen.queryByLabelText(/Paste the address/)).toBeNull());
+  });
+
   it('on This PC no paste field', async () => {
     const mcp = fakeMcp([server({ name: 'api', status: 'needs-auth', canSignIn: true })]);
     show(mcp, { remote: false });

@@ -168,16 +168,15 @@ keeps running.
 
 **MCP servers** (protocol 12; the design is
 `docs/superpowers/specs/2026-11-22-mcp-servers-design.md`, with what the spike
-found in `...-spike-results.md`). A Claude chat's dialog ("MCP servers (this
+found in [the spike results](superpowers/specs/2026-11-22-mcp-servers-spike-results.md)). A Claude chat's dialog ("MCP servers (this
 chat)", also `/mcp` and the chat menu) lists the servers the live session
 reports (`mcpServerStatus`) and drives them with `reconnectMcpServer` and
 `toggleMcpServer`. An SDK session has no "waiting for approval" state: a
 project server it has never been asked about just connects, and the only one
 it hides is one rejected earlier in the CLI. So **Not approved** means named in
 `<cwd>/.mcp.json` and absent from the status list, and only that raises the
-banner. What Threadgarden reads: `.mcp.json` (names only) and the
-`enabledMcpjsonServers` / `disabledMcpjsonServers` lists of the project's
-settings files. The one file it writes is `<cwd>/.claude/settings.local.json`:
+banner. Threadgarden reads only the server names in `.mcp.json`. The one file it
+writes is `<cwd>/.claude/settings.local.json` (the two approval lists):
 **Approve** adds the name to `enabledMcpjsonServers` and removes it from
 `disabledMcpjsonServers` (merging, keeping every other key; the file and
 folder are made when missing), then reconnects the server in this chat and in

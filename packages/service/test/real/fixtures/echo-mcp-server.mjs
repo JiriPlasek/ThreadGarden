@@ -1,6 +1,7 @@
 // A minimal stdio MCP server for the opt-in real tests: newline-delimited JSON-RPC,
 // one `echo` tool, no dependencies beyond node:readline.
 import readline from 'node:readline';
+import process from 'node:process';
 
 const send = (msg) => process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', ...msg })}\n`);
 

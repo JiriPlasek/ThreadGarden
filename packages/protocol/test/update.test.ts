@@ -15,7 +15,13 @@ describe('protocol 10 (update)', () => {
   it('PROTOCOL_VERSION is 12 and the remote range is 11..13', () => {
     expect(PROTOCOL_VERSION).toBe(12);
     expect(REMOTE_PROTOCOL_RANGE).toEqual({ min: 11, max: 13 });
-    expect([10, 11, 12, 13, 14].map(acceptsRemoteProtocol)).toEqual([false, true, true, true, false]);
+    expect([10, 11, 12, 13, 14].map(acceptsRemoteProtocol)).toEqual([
+      false,
+      true,
+      true,
+      true,
+      false,
+    ]);
   });
 
   it('has the update capability and error codes', () => {
@@ -38,9 +44,9 @@ describe('protocol 10 (update)', () => {
   });
 
   it('frozen: v10 update.start and update.status payloads keep parsing', () => {
-    expect(methods['update.start'].params.safeParse({ version: '0.7.1', force: false }).success).toBe(
-      true,
-    );
+    expect(
+      methods['update.start'].params.safeParse({ version: '0.7.1', force: false }).success,
+    ).toBe(true);
     const started = methods['update.start'].result;
     expect(started.safeParse({ started: false, busy: 2 }).success).toBe(true);
     expect(started.safeParse({ started: true }).success).toBe(true);
@@ -69,7 +75,9 @@ describe('protocol 10 (update)', () => {
     expect(Object.keys(methods)).toEqual(
       expect.arrayContaining(['update.latest', 'update.start', 'update.status']),
     );
-    expect(methods['update.latest'].result.parse({ version: '0.7.1' })).toEqual({ version: '0.7.1' });
+    expect(methods['update.latest'].result.parse({ version: '0.7.1' })).toEqual({
+      version: '0.7.1',
+    });
   });
 
   it('events lists update.progress', () => {
