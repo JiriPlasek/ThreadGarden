@@ -609,6 +609,42 @@ describe('chat header: state menu and hold details', () => {
     await waitFor(() => expect(server.calls('chat.end')).toHaveLength(1));
     await waitFor(() => expect(setCalls(server)).toHaveLength(2));
   });
+  it('archiving the open chat with a running ! command says it is stopped', async () => {
+    const { app, context } = await withList([], {
+      skip: { s: 'LIVE' },
+      configure: (server) => {
+        server.handlers['chat.open'] = () => ({
+          summary: summary('s', { live: true, status: 'idle' }),
+          header: {},
+          items: [],
+          hasMore: false,
+          seq: 1,
+          shell: {
+            run: {
+              runId: 'r1',
+              sessionId: 's',
+              command: 'npm test',
+              cwd: '/home/me/app',
+              cols: 100,
+              rows: 24,
+              startedAt: 1,
+              state: 'running',
+            },
+            output: '',
+            offset: 0,
+          },
+        });
+      },
+    });
+    await app.chats.open('s');
+    render(BucketsHarness, { context, props: { chat: app.chats.get('s')! } });
+    await openStateMenu();
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Archive' }));
+    const dialog = await screen.findByRole('alertdialog');
+    expect(dialog.textContent).toContain(
+      '`! npm test` is still running; ending the session stops it.',
+    );
+  });
 });
 
 describe('Ctrl+K: archived matches', () => {

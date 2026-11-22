@@ -24,8 +24,8 @@
 
   /**
    * What ending the chat stops, worded as End session does (its running turn,
-   * its background tasks): from the open chat when it is loaded (tasks listed),
-   * else from its summary (tasks counted).
+   * its background tasks, its running `!` command): from the open chat when it
+   * is loaded (tasks listed), else from its summary (tasks counted).
    */
   const endingInfo = $derived.by(() => {
     const t = buckets.ending;
@@ -41,6 +41,8 @@
       tasks: loaded ? tasks.length : (t.runningTasks ?? 0),
       listed: loaded,
       after: ARCHIVE_AFTER,
+      command:
+        loaded && chat!.shell && chat!.shell.state !== 'ended' ? chat!.shell.command : undefined,
     });
     return {
       tasks,
