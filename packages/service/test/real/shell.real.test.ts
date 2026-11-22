@@ -363,7 +363,10 @@ describe.skipIf(!REAL)('shell commands spike (THREADGARDEN_REAL=1)', () => {
     // The whole wrapper of the first (seq) entry, its saved-file path shortened to its folder names only.
     report(
       'C2 the seq entry in full',
-      long?.replace(/\\\\Users\\\\[^\\\\]+/g, '\\\\Users\\\\<user>'),
+      long
+        ?.replace(/\\Users\\[^\\]+/g, '\\Users\\<user>')
+        .replace(/\/Users\/[^/]+/g, '/Users/<user>')
+        .replace(/\/home\/[^/]+/g, '/home/<user>'),
     );
     report(
       'C2 TAGS_ESCAPED entries',
