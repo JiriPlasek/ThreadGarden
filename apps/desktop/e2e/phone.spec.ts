@@ -496,3 +496,26 @@ test("the update notice opens the release's APK", async ({ page }) => {
     /^https:\/\/github\.com\/JiriPlasek\/ThreadGarden\/releases\/download\/v.+\/threadgarden-.+\.apk$/,
   );
 });
+
+test("the phone layout opens the MCP servers dialog from the chat's menu", async ({ page }) => {
+  await remoteCall('mock.mcpReset', {});
+  await openPhone(page);
+  await openChat(page, 'session-16');
+  await send(page, 'Hello from the MCP test');
+  await expect(page.getByText('This is the Threadgarden mock service answering.')).toBeVisible();
+  await page.getByRole('button', { name: 'Chat state' }).tap();
+  await page.getByRole('menuitem', { name: 'MCP servers…' }).tap();
+  const dialog = page.getByRole('dialog', { name: 'MCP servers (this chat)' });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByTestId('mcp-row').filter({ hasText: 'github' })).toContainText(
+    'Connected',
+  );
+  await expect(dialog.getByTestId('mcp-row').filter({ hasText: 'mock-etoro' })).toContainText(
+    'Not approved',
+  );
+  // Fits the screen.
+  const box = await dialog.boundingBox();
+  expect(box!.x + box!.width).toBeLessThanOrEqual(412);
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeHidden();
+});

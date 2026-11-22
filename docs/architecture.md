@@ -99,7 +99,7 @@ them to the service it starts (`THREADGARDEN_DATA_DIR`,
 `THREADGARDEN_LEGACY_DATA_DIR`), so the two never disagree. It looks for
 `service.json` in the new dir first, then in the old one: a pahub service
 still running there is reached (both subprotocols are offered), its `hello`
-reports an older protocol than the app's (11), so the UI shows the
+reports an older protocol than the app's (12), so the UI shows the
 incompatible screen, and **Restart service** stops it (the shell stops a
 service recorded in either dir). At start, before it takes its own lock, the
 service migrates once (`src/migrate-data-dir.ts`): when the new dir has no
@@ -124,10 +124,10 @@ a burst of more than 10 uncaught exceptions in a minute ends the process.
 Shutdown runs every step even if one fails, and always releases the lock.
 
 **Versions.** `hello` exchanges the protocol version and the service version.
-The local service must speak exactly the app's protocol (11); any other
+The local service must speak exactly the app's protocol (12); any other
 version is incompatible: the UI shows a blocking screen that offers to
 restart the service. A paired machine's service is accepted one version
-either way (9–11, `REMOTE_PROTOCOL_RANGE`; see Versions across machines
+either way (11–13, `REMOTE_PROTOCOL_RANGE`; see Versions across machines
 under [Protocol](#protocol)). The same protocol with a different
 service version (an app update while the old service still runs) shows a thin
 "older version" bar instead; Threadgarden never restarts the service on its own,
@@ -165,6 +165,36 @@ at a time from the Activity panel. Without the declaration the CLI would kill
 them on every interrupt. End session ends them with the process.
 **Stop all work** interrupts and closes every live Threadgarden session; the service
 keeps running.
+
+**MCP servers** (protocol 12; the design is
+`docs/superpowers/specs/2026-11-22-mcp-servers-design.md`, with what the spike
+found in `...-spike-results.md`). A Claude chat's dialog ("MCP servers (this
+chat)", also `/mcp` and the chat menu) lists the servers the live session
+reports (`mcpServerStatus`) and drives them with `reconnectMcpServer` and
+`toggleMcpServer`. An SDK session has no "waiting for approval" state: a
+project server it has never been asked about just connects, and the only one
+it hides is one rejected earlier in the CLI. So **Not approved** means named in
+`<cwd>/.mcp.json` and absent from the status list, and only that raises the
+banner. What Threadgarden reads: `.mcp.json` (names only) and the
+`enabledMcpjsonServers` / `disabledMcpjsonServers` lists of the project's
+settings files. The one file it writes is `<cwd>/.claude/settings.local.json`:
+**Approve** adds the name to `enabledMcpjsonServers` and removes it from
+`disabledMcpjsonServers` (merging, keeping every other key; the file and
+folder are made when missing), then reconnects the server in this chat and in
+every other live chat in that folder. There is no restart in place and
+nothing approves a server without a click. **Turn off** is saved per project
+by Claude Code itself in `~/.claude.json` (Threadgarden never writes to the
+Claude config dir). No SDK message reports a status change, so the dialog polls
+`mcp.list` while it is open and the service refreshes on `system/init`.
+Sign-in uses three methods the SDK implements but does not declare
+(`mcpAuthenticate`, `mcpSubmitOAuthCallbackUrl`, `mcpClearAuth`); they sit in
+one typed wrapper in `real-adapter.ts`, **recheck them on every SDK update**.
+Sign-in links, pasted addresses and tokens only pass through request params and
+results: never an event, the database or the log. On a remote machine the
+browser can't reach the sign-in callback, so the dialog asks for the address
+the browser ended up at ("Paste the address from your browser's address bar").
+A chat that isn't running offers **Wake the chat** (`chat.wake`), which goes
+through the same resume-safety check as sending. Codex chats have none of this.
 
 **Activity panel** (v1.1 §2, v1.3 §2). Each live session folds the SDK's
 `system/task_*` and `background_tasks_changed` messages into a task list
@@ -210,17 +240,18 @@ service and the UI; the service validates every request.
   `chat.since`); **1001** when the local service stops. The UI also checks
   that the relayed `hello` names the paired machine's id: another id counts
   as a mismatch, like 4409, and the client stops.
-- **Versions across machines.** The protocol is 11 (v1.4 was 5; 6 added power
+- **Versions across machines.** The protocol is 12 (v1.4 was 5; 6 added power
   control, 7 projects, 8 the usage state's account, 9 moving a chat, 10
-  updating a machine, 11 a machine that's away). The
+  updating a machine, 11 a machine that's away, 12 MCP servers in the chat). The
   desktop and its local service still need the exact version; a remote
-  service is accepted one version either way (10, 11 or 12 for a desktop on 11,
+  service is accepted one version either way (11, 12 or 13 for a desktop on 12,
   `REMOTE_PROTOCOL_RANGE`; the Rust shell keeps its own copy of the version in
   `src-tauri/src/service.rs`). What a machine can do is read from the
   capabilities in its `hello`, not from its version: the desktop offers power
   control only with `power`, New project, Clone and Browse… only with
   `projects`, a machine as a target of Move to… only with `move`, and a waiting message
-  for a machine only with `away`. A worker in WSL on a Windows PC also says
+  for a machine only with `away`, and the MCP servers banner, dialog and
+  menu item only with `mcp`. A worker in WSL on a Windows PC also says
   `host: 'wsl'` in its `machine` (an optional field, no new version; its
   platform stays `linux`), and the desktop shows it as Windows (WSL). On an
   older machine the New project and Clone tabs and Browse… show disabled with
@@ -256,7 +287,9 @@ service and the UI; the service validates every request.
   `.abort`, `.importPart`, `.commit` and `.markMoved`, `movedTo` on
   `chat.open`, an optional `id` on `scheduled.create`, and the error codes
   `MOVING`, `MOVED`, `BUSY`, `TOO_LARGE`, `EXPIRED` and `ALREADY_HERE`
-  ([Moving a chat](#moving-a-chat)).
+  ([Moving a chat](#moving-a-chat)). Protocol 12 adds `mcp.list`, `.approve`,
+  `.signIn`, `.submitCallback` and `.act`, `chat.wake`, the event `mcp.changed`
+  and the capability `mcp` ("MCP servers" under Lifecycle).
 - **Local-only methods** (v1.4). Every request is dispatched with its
   origin, `local` (the loopback server) or `remote` (the TLS listener), and
   a method registered `localOnly` answers `FORBIDDEN` to a remote caller
