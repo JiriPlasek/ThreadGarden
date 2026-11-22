@@ -4,11 +4,23 @@
 
 **Goal:** A Claude chat shows its MCP servers (source, status) in a dialog with Approve, Sign in, Reconnect, Turn off / on and Forget sign-in, and a banner when a project server waits for approval, the same on This PC, a paired machine and the phone.
 
-**Architecture:** The live session's SDK controls (`mcpServerStatus`, `reconnectMcpServer`, `toggleMcpServer`, plus the undeclared `mcpAuthenticate`, `mcpSubmitOAuthCallbackUrl`, `mcpClearAuth`) are wrapped once as `AgentSession.mcp`. A new `packages/service/src/mcp/` module reads `.mcp.json` and the approval lists, writes approvals into `<project>/.claude/settings.local.json`, and builds one `McpState` per chat. New `mcp.*` methods and an `mcp.changed` event (protocol 12, `mcp` capability) carry it to the UI, which adds a banner, a header menu item, a `/mcp` intercept and an `McpServersDialog`. When Claude Code does not pick an approval up live, the session restarts its process in place between turns (`LiveSession.restartWhenFree`).
+**Architecture:** The live session's SDK controls (`mcpServerStatus`, `reconnectMcpServer`, `toggleMcpServer`, plus the undeclared `mcpAuthenticate`, `mcpSubmitOAuthCallbackUrl`, `mcpClearAuth`) are wrapped once as `AgentSession.mcp`. A new `packages/service/src/mcp/` module reads `.mcp.json` and the approval lists, writes approvals into `<project>/.claude/settings.local.json`, and builds one `McpState` per chat. New `mcp.*` methods and an `mcp.changed` event (protocol 12, `mcp` capability) carry it to the UI, which adds a banner, a header menu item, a `/mcp` intercept and an `McpServersDialog`. Approve writes the approval lists and reconnects the server in every live chat in that folder.
 
 **Tech Stack:** TypeScript, zod (protocol), Node 22 service, Agent SDK 0.3.314 with Claude Code 2.1.318, Svelte 5 + Tailwind (desktop/phone UI), Rust (phone core constants), vitest, Playwright.
 
 **Spec:** `docs/superpowers/specs/2026-11-22-mcp-servers-design.md`
+
+## Amended after the spike (Task 1, 2026-11-22)
+
+The spike (`docs/superpowers/specs/2026-11-22-mcp-servers-spike-results.md`) found that an SDK session has **no
+"waiting for approval" state**: a never-approved project server just connects. The only project server Claude can't
+see is one **rejected earlier** in the CLI (`disabledMcpjsonServers`), which is absent from `mcpServerStatus`. Writing
+the approval and then calling `reconnectMcpServer` brings it up **in the same process**. So, by the controller's
+ruling: "unapproved" means *named in `<cwd>/.mcp.json` and absent from the status list*; **Approve = write the lists,
+then reconnect** in this chat and every other live chat in the folder; there is **no restart in place, no confirm
+step, no `mcp.restart`, no `McpRestart`**. Claude Code saves a toggle per project in `~/.claude.json` (its own write),
+so the label is always `Turn off in this project`. No SDK message reports MCP status changes: the UI polls while the
+dialog is open, and the service also refreshes on `system/init`. The task texts below are already amended.
 
 ## Global Constraints
 
@@ -16,20 +28,20 @@
 - Threadgarden never writes to the Claude config dir. The only project file it writes is `<cwd>/.claude/settings.local.json`, and only the `enabledMcpjsonServers` entry (add the name) and the `disabledMcpjsonServers` entry (remove the name). It merges, keeps every other key and its order, and creates the file and folder when they're missing.
 - Never store or log an OAuth token, auth code, sign-in link or callback URL. They pass through in method params and results only. They never go into `mcp.changed`, the database, `ui.error` or the service log.
 - No approval without a click. Nothing approves a server automatically, and the banner's Approve approves only the server it names.
-- Only project servers waiting for approval raise the banner. Needs sign-in and failed servers never do, from any source. The banner shows only once a session is live, and it can be dismissed for the session.
+- Only project servers that aren't approved (named in `<cwd>/.mcp.json`, absent from `mcpServerStatus`) raise the banner. Needs sign-in and failed servers never do, from any source. The banner shows only once a session is live, and it can be dismissed for the session.
 - No `needsYou`, notification or phone alert for MCP.
 - Nothing wakes a chat by itself. **Wake the chat** goes through the same resume-safety check as sending.
 - Protocol: `PROTOCOL_VERSION = 12`; `REMOTE_PROTOCOL_RANGE = { min: 11, max: 13 }` (own, one older, one newer, as for 10 and 11); capability `'mcp'` (`MCP_CAPABILITY`). A paired machine without `mcp` shows neither the banner nor the dialog.
 - The undeclared SDK methods live in one typed wrapper in `real-adapter.ts`, next to `QueueControls`, with the note "recheck on every SDK update".
-- Copy, fixed here: banner `MCP server "‹name›" (from this project) isn't approved yet.` (with more: `MCP server "‹name›" and ‹N› more (from this project) aren't approved yet.`); buttons `Approve`, `MCP servers…`; paste field label `Paste the address from your browser's address bar`; dialog title `MCP servers (this chat)`; statuses `Connected`, `Connecting…`, `Needs sign-in`, `Failed: ‹error›` (`Failed` with no error), `Off`, `Waiting for approval`, `Not approved` (rejected before).
+- Copy, fixed here: banner `MCP server "‹name›" (from this project) isn't approved.` (with more: `MCP server "‹name›" and ‹N› more (from this project) aren't approved.`); buttons `Approve`, `MCP servers…`; paste field label `Paste the address from your browser's address bar`; dialog title `MCP servers (this chat)`; statuses `Connected`, `Connecting…`, `Needs sign-in`, `Failed: ‹error›` (`Failed` with no error), `Off`, `Not approved`. Turn off label: `Turn off in this project`.
 - Run pnpm with `--config.verify-deps-before-run=false`, and don't reinstall node_modules (the no-links recipe). Commits carry no Claude attribution.
 
 ## Review Focus
 
 1. **The settings file isn't plain JSON.** A `settings.local.json` with comments, a trailing comma or a non-object value is never overwritten. Approve fails with a message naming the file. Task 4 test `refuses an unreadable settings file`.
 2. **`/mcp` reported as a supported command.** If the SDK lists `mcp` in `chat.commands`, `/mcp` must still open the dialog and never reach Claude (today an SDK-reported command beats the local table). Task 9 test `/mcp is intercepted even when the SDK reports it`.
-3. **Approve during a turn, or while background tasks run.** The process never restarts mid-turn or with a permission request open. Tasks stop only after **Restart now**. Task 5 tests `waits for the turn to end` and `keeps running tasks unless told`.
-4. **Another chat in the same project has running tasks.** Someone else's Approve must not kill them: that chat restarts only once it's idle with no running tasks. Task 6 test `other live chats in the project restart only when free`.
+3. **Approve half-fails.** The file is written but a reconnect fails (in this chat or another chat in the folder). This chat's failure comes back as `MCP_FAILED` in Claude Code's words; another chat's failure never fails this Approve; a second Approve is harmless. Task 6 tests `another chat's reconnect failure doesn't fail the approve` and `approving twice is harmless`.
+4. **Approve while a turn runs.** Reconnecting a server that wasn't loaded must not interrupt the turn (no interrupt, no status change). Task 6 test `approve during a turn doesn't interrupt it`.
 5. **An SDK error carries the callback URL.** For example `Invalid callback http://localhost:…?code=…`. It goes back to the caller as `MCP_FAILED` and is never logged by the router. Task 6 test `never logs a callback URL`.
 
 ---
@@ -77,14 +89,12 @@ Each check runs in a fresh temp folder that `claude` has never opened (so it's u
 - Produces:
   - `MCP_CAPABILITY = 'mcp'`.
   - `McpStatusSchema = z.enum(['connected', 'pending', 'needs-auth', 'failed', 'disabled', 'unapproved'])`.
-  - `McpServerSchema = z.object({ name: z.string(), source: z.string(), status: McpStatusSchema, error: z.string().optional(), rejected: z.boolean().optional(), claudeAi: z.boolean(), canSignIn: z.boolean() })`. `source` is the SDK's `source ?? scope ?? ''`. `rejected` is set only on `unapproved` servers in `disabledMcpjsonServers`. `canSignIn` is true for http/sse servers that aren't claude.ai connectors.
-  - `McpRestartSchema = z.object({ when: z.enum(['turn', 'tasks']), tasks: z.number().int().nonnegative() })`.
-  - Inferred types `McpStatus`, `McpServer`, `McpRestart`, `McpState` exported beside each schema.
-  - `McpStateSchema = z.object({ sessionId: z.string(), live: z.boolean(), servers: z.array(McpServerSchema), waiting: z.array(z.string()), restart: McpRestartSchema.nullable() })`. `waiting` holds the banner's names, in `.mcp.json` order, never including rejected ones.
+  - `McpServerSchema = z.object({ name: z.string(), source: z.string(), status: McpStatusSchema, error: z.string().optional(), claudeAi: z.boolean(), canSignIn: z.boolean() })`. `source` is the SDK's `source ?? scope ?? ''`. `canSignIn` is true for http/sse servers that aren't claude.ai connectors.
+  - Inferred types `McpStatus`, `McpServer`, `McpState` exported beside each schema.
+  - `McpStateSchema = z.object({ sessionId: z.string(), live: z.boolean(), servers: z.array(McpServerSchema), waiting: z.array(z.string()) })`. `waiting` holds the banner's names (the `unapproved` servers), in `.mcp.json` order.
   - Methods (none `localOnly`: a paired device has full control of chats):
     - `mcp.list {sessionId} → McpState`;
-    - `mcp.approve {sessionId, name} → { next: 'connected' | 'restarting' | 'confirm', tasks: number }`;
-    - `mcp.restart {sessionId, when: 'now' | 'whenFinished'} → {}`;
+    - `mcp.approve {sessionId, name} → {}`;
     - `mcp.signIn {sessionId, name} → { url: string | null }` (null: nothing to open, already signed in);
     - `mcp.submitCallback {sessionId, name, url: z.string().url()} → {}`;
     - `mcp.act {sessionId, name, action: z.enum(['reconnect', 'enable', 'disable', 'clearAuth'])} → {}`;
@@ -147,14 +157,14 @@ Each check runs in a fresh temp folder that `claude` has never opened (so it's u
   - `export type Approvals = { enabled: string[]; disabled: string[]; enableAll: boolean }`.
   - `export interface McpProjectFiles { mcpJsonNames(cwd: string): Promise<string[]>; approvals(cwd: string): Promise<Approvals>; approve(cwd: string, name: string): Promise<void> }`.
   - `export const diskProjectFiles: McpProjectFiles`. `mcpJsonNames` gives the keys of `<cwd>/.mcp.json`'s `mcpServers` (`[]` when the file is missing or unreadable). `approvals` merges the lists from every file in `APPROVALS_READ_FROM`, read-only. `approve` merges into `<cwd>/.claude/settings.local.json`: it writes a temp file in the same folder and renames it over the original, using `JSON.stringify(obj, null, 2) + '\n'`. Writes are serialised per file path, and an invalid file throws `ServiceError('SETTINGS_UNREADABLE', "‹path› isn't valid JSON, so Threadgarden left it alone. Fix it, then approve again.")`.
-  - `export const buildMcpState = (sessionId: string, statuses: McpServerStatus[], project: { names: string[]; approvals: Approvals }, restart: McpRestart | null) => McpState` (pure, `live: true`).
+  - `export const buildMcpState = (sessionId: string, statuses: McpServerStatus[], project: { names: string[]; approvals: Approvals }) => McpState` (pure, `live: true`).
   - `export const signInUrl = (raw: unknown): string | null` (parses `AUTH_START`).
   - `export const CLAUDE_AI_CONNECTORS_URL = 'https://claude.ai/settings/connectors'`.
-  - The spike's answers as code, in `state.ts`, each with a comment pointing at the results doc: `export const UNAPPROVED_SHOWS_AS: 'absent' | McpServerStatus['status']`, `export const APPROVAL_IS_LIVE: boolean`, `export const TOGGLE_SAVED_IN: 'none' | 'project' | 'user'`, and `export const isMcpStatusMessage = (m: SDKMessage): boolean` (true for `system/init` and the `MCP_STATUS_MESSAGES` kinds).
+  - `export const isMcpStatusMessage = (m: SDKMessage): boolean`: true for `system/init` only (the spike observed no MCP status messages; a comment points at the results doc).
 
 The rules for `buildMcpState`:
-- A project server is unapproved when it's in `names`, isn't in `approvals.enabled`, `enableAll` is false, and (per `UNAPPROVED_SHOWS_AS`) it's absent from `statuses` or reports that status.
-- An unapproved server appears in `servers` as `status: 'unapproved'`, `source: 'project'`, with `rejected` true when it's in `approvals.disabled`. It goes into `waiting` only when it isn't rejected.
+- A project server is unapproved when it's in `names` and absent from `statuses` (the spike: in an SDK session that is a server rejected earlier; a never-approved one connects like any other).
+- An unapproved server appears in `servers` as `status: 'unapproved'`, `source: 'project'`, and goes into `waiting`.
 - Every other status keeps the SDK's status, error and source.
 - `claudeAi` is set when source/scope is `claudeai` or `config.type === 'claudeai-proxy'` (adjust to `SOURCE_VALUES`). `canSignIn` is set when `config.type` is `http` or `sse` and the server isn't a claude.ai connector.
 - Order: unapproved first (in `.mcp.json` order), then needs-auth, failed, pending, connected, off, each sorted by name.
@@ -170,48 +180,39 @@ The rules for `buildMcpState`:
     - `refuses an unreadable settings file`: `{ // comment` and `[]` make it throw `SETTINGS_UNREADABLE`, and the file's bytes don't change;
     - `approvals merges the lists it reads` (per `APPROVALS_READ_FROM`).
   - `state.test.ts`:
-    - `an unapproved project server is waiting`;
-    - `a rejected one is listed as rejected and not waiting`;
-    - `enableAllProjectMcpServers approves every project server`;
-    - `a turned-off approved server is Off, not waiting`;
+    - `a .mcp.json server missing from the status list is unapproved and waiting`;
+    - `a project server in the status list keeps its status and isn't waiting`;
+    - `a turned-off project server is Off, not waiting`;
     - `claude.ai connectors can't sign in here; http servers can; stdio servers can't`;
     - `failed keeps Claude Code's error`;
     - `orders unapproved, needs sign-in, failed, connecting, connected, off`;
-    - `signInUrl reads the link` (the `AUTH_START` shape, and null without a link).
+    - `signInUrl reads the link` (`authUrl` from `{ authUrl, requiresUserAction, callbackExpected, redirectScheme, state, callbackPort }`, and null without one).
 - [ ] **Step 2: Run** `pnpm --config.verify-deps-before-run=false --filter @threadgarden/service exec vitest run test/mcp`. Expect FAIL.
 - [ ] **Step 3: Implement** both modules.
 - [ ] **Step 4: Run** the tests. Expect PASS.
 - [ ] **Step 5: Commit** `feat(service): read and approve a project's MCP servers`.
 
-### Task 5: Restart between turns, and the MCP hook
+### Task 5: The MCP hook and live sessions by folder
 
 **Files:**
 - Modify: `packages/service/src/chat/live-session.ts`, `packages/service/src/chat/session-host.ts`
 - Test: `packages/service/test/chat/live-session.test.ts`, `packages/service/test/chat/session-host.test.ts`
 
 **Interfaces:**
-- Consumes: `McpControls` (Task 3); `isMcpStatusMessage`, `McpRestart` (Tasks 4, 2).
+- Consumes: `McpControls` (Task 3); `isMcpStatusMessage` (Task 4).
 - Produces:
-  - `LiveSessionDeps.onMcpChange?: (sessionId: string) => void`. It's called for every message where `isMcpStatusMessage(m)` is true (Task 4), so on every `system/init` of a process and on the MCP status messages the spike found. A throw is reported. `SessionHost.options()` passes it through like the other hooks.
+  - `LiveSessionDeps.onMcpChange?: (sessionId: string) => void`. It's called for every message where `isMcpStatusMessage(m)` is true (Task 4), so on every `system/init` of a process. A throw is reported. `SessionHost.options()` passes it through like the other hooks.
   - `LiveSession.mcpControls(): McpControls`. It throws `ServiceError('NOT_LIVE', …)` without a process, and `ServiceError('MCP_UNSUPPORTED', 'MCP servers are for Claude chats')` when the session has no `mcp`.
-  - `LiveSession.restartWhenFree(o: { stopTasks: boolean }): void` and `get pendingRestart(): McpRestart | null`. The process restarts in place once all of these hold: status is `idle`, no request is pending, nothing is queued, and either `stopTasks` is set or `runningTasks === 0`. It's checked on each status change and each running-task change. In place means closing the current process without the "ended unexpectedly" line or a `paused` status, then `startProcess({ resume: id, sessionStore })` on the same object. The status stays `idle`, `seq` continues, and items and the history cache owner are kept. `stopTasks: true` beats an earlier `false`. `end()`/`pause()`/a crash drop the pending restart. `pendingRestart` reports `when: 'turn'` while a turn or request holds it and `when: 'tasks'` while tasks hold it.
   - `SessionHost.liveIn(cwd: string): LiveSession[]` returns the live Claude sessions whose cwd is the same folder (`path.resolve`, case-insensitive on win32).
 
 - [ ] **Step 1: Write the failing tests** (FakeAdapter):
-  - `restartWhenFree restarts at once when idle`: `adapter.started` has a second session with `resume: <id>`, the first is `closed`, no system error item is pushed, no `chat.status` with `paused` or `failed` is emitted, and `seq` keeps rising;
-  - `waits for the turn to end`: during a turn nothing restarts, and after the `result` it does;
-  - `waits while a permission request is open`;
-  - `keeps running tasks unless told`: with a running task, `{ stopTasks: false }` waits until the task ends, and `{ stopTasks: true }` restarts at the next idle;
-  - `pendingRestart says what it waits for`;
-  - `end drops a pending restart`;
-  - `a moved chat restarts from its store` (`sessionStore` is passed again);
-  - `onMcpChange is called for each system/init and MCP status message, a throw is reported`;
+  - `onMcpChange is called for each system/init, a throw is reported`;
   - `mcpControls refuses without a process and for a session without mcp`;
   - `session-host.test.ts` `liveIn lists live Claude chats in the same folder` (not other folders, not paused, not Codex; `C:\P` matches `c:\p\` on win32).
 - [ ] **Step 2: Run** the chat tests. Expect FAIL.
 - [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run** the whole service suite (idle reclaim, queued messages and tasks tests must still pass). Expect PASS.
-- [ ] **Step 5: Commit** `feat(service): a chat can restart its process between turns`.
+- [ ] **Step 4: Run** the whole service suite. Expect PASS.
+- [ ] **Step 5: Commit** `feat(service): MCP hook and live sessions by folder`.
 
 ### Task 6: The `mcp.*` handlers and `chat.wake`
 
@@ -225,10 +226,9 @@ The rules for `buildMcpState`:
 - Produces: `registerMcpHandlers(router: Router, deps: { host: SessionHost; files: McpProjectFiles; emit: (e: EventMsg) => void; onError: (err: unknown, context: string) => void }): { refresh(sessionId: string): Promise<void> }`. `refresh` builds the state and emits `mcp.changed`. `main.ts` calls it from `onMcpChange`, and does nothing for Codex.
 
 Behaviour:
-- `mcp.list`: for a chat with no live process, `{ live: false, servers: [], waiting: [], restart: null }`. A Codex chat gets `MCP_UNSUPPORTED`. Otherwise `buildMcpState` from `mcpControls().status()`, the files and `pendingRestart`.
-- `mcp.approve`: the name must be in `mcpJsonNames(cwd)`, else `INVALID_PARAMS` (`"‹name›" isn't a server in this project's .mcp.json`). Then `files.approve`. If `APPROVAL_IS_LIVE`, reconnect it in this chat and in every other `liveIn(cwd)` chat, and answer `next: 'connected'`. Otherwise this chat answers `confirm` with `tasks: runningTasks` when tasks run, else calls `restartWhenFree({ stopTasks: false })` and answers `restarting`. Every other `liveIn(cwd)` chat gets `restartWhenFree({ stopTasks: false })` (it never loses tasks to this click). Then `refresh` each affected chat.
-- `mcp.restart`: `now` → `restartWhenFree({ stopTasks: true })`; `whenFinished` → `{ stopTasks: false }`; then `refresh`.
-- `mcp.signIn`: a claude.ai connector gets `INVALID_PARAMS` (the UI links to claude.ai instead). Otherwise `signInUrl(await authenticate(name))`, passing `redirectUri` only if `AUTH_START` showed it helps, then `refresh`.
+- `mcp.list`: for a chat with no live process, `{ live: false, servers: [], waiting: [] }`. A Codex chat gets `MCP_UNSUPPORTED`. Otherwise `buildMcpState` from `mcpControls().status()` and the files.
+- `mcp.approve`: the name must be in `mcpJsonNames(cwd)`, else `INVALID_PARAMS` (`"‹name›" isn't a server in this project's .mcp.json`). Then `files.approve`, then `reconnect(name)` in this chat (a failure → `MCP_FAILED`) and in every other `liveIn(cwd)` chat (a failure there goes to `onError` with only the chat id and server name, and never fails this call). Then `refresh` each affected chat. Answers `{}`.
+- `mcp.signIn`: a claude.ai connector gets `INVALID_PARAMS` (the UI links to claude.ai instead). Otherwise `signInUrl(await authenticate(name))` with no `redirectUri` (the spike: Claude Code's own listener finishes a sign-in on its machine; for a remote machine the user pastes the localhost address the browser lands on), then `refresh`.
 - `mcp.submitCallback`, `mcp.act`: they call the matching control, then `refresh`.
 - Every control failure becomes `ServiceError('MCP_FAILED', <Claude Code's message as is>)`, so the router never logs it, and no handler passes params or results to `onError`.
 - `chat.wake`: `await resumedOrLive(sessionId)` (requires runnable, resume check `blocked` → `RESUME_BLOCKED`, the same moved/moving refusals as `chat.send`), returns `{}`, sends nothing.
@@ -237,10 +237,10 @@ Behaviour:
   - `list says not live for a paused chat`;
   - `list builds the state from the session and the files`;
   - `list refuses a Codex chat`;
-  - `approve writes and restarts an idle chat` (`next: 'restarting'`, the file has the name, a second process starts, `mcp.changed` is emitted);
-  - `approve asks first when tasks run` (`next: 'confirm', tasks: 2`, nothing restarts until `mcp.restart {when: 'now'}`);
-  - `other live chats in the project restart only when free` (another chat in the same cwd with a running task doesn't restart until it ends; a chat in another cwd is untouched);
-  - if `APPROVAL_IS_LIVE`: `approve reconnects instead of restarting`;
+  - `approve writes and reconnects in every live chat of the project` (the file has the name; `reconnect` is recorded in this chat and in another chat in the same cwd, not in a chat in another cwd; no new process starts; `mcp.changed` is emitted for both);
+  - `another chat's reconnect failure doesn't fail the approve`;
+  - `approving twice is harmless`;
+  - `approve during a turn doesn't interrupt it` (no interrupt recorded, status stays `working`);
   - `approve refuses a name not in .mcp.json`;
   - `signIn returns the link and refreshes`;
   - `act maps reconnect, enable, disable and clearAuth`;
@@ -267,8 +267,8 @@ Behaviour:
   - `context7` (plugin, Failed: `timeout`);
   - `mock-slow` (user, Connecting…);
   - `mock-off` (local, Off).
-  - Chats in `/work/proj-0` (and the remote mock's `tg-cli`) also have `.mcp.json` names `mock-etoro` (waiting) and `mock-old` (rejected).
-  - Approve on the in-memory files makes the restarted process report `mock-etoro` as Connected.
+  - Chats in `/work/proj-0` (and the remote mock's `tg-cli`) also have the `.mcp.json` name `mock-etoro`, absent from the status list (so Not approved and waiting).
+  - Approve on the in-memory files, then `reconnect('mock-etoro')`, makes it report Connecting… then Connected.
   - `authenticate` returns the `AUTH_START` shape with `http://127.0.0.1:‹mock port›/mock-oauth?server=‹name›`. On This PC's mock the server turns Connected about 500 ms later. On the remote mock it waits for `submitCallback` with a URL containing `code=`, and any other URL rejects with `Missing authorization code`.
   - `reconnect` turns a failed server Connecting… then Connected. `toggle` sets Off/Connecting…. `clearAuth` turns an http server Needs sign-in.
   - `mock.mcpReset` (local callers only) puts every chat's servers and the files back to the start, so e2e specs don't leak into each other.
@@ -293,13 +293,13 @@ Behaviour:
 **Interfaces:**
 - Consumes: the Task 2 schemas and methods, `openExternal` (`#lib/native.js`).
 - Produces:
-  - `export class ChatMcp { state = $state.raw<McpState | null>(null); constructor(api: Api, sessionId: string); load(): Promise<void>; startPolling(): () => void; approve(name): Promise<Result<'mcp.approve'>>; restart(when): Promise<void>; signIn(name): Promise<string | null>; submitCallback(name, url): Promise<void>; act(name, action): Promise<void>; stop(): void }`. It subscribes to `mcp.changed` for its session, loads on open and on reconnect, and `startPolling` re-reads `mcp.list` every `MCP_POLL_MS = 3000` until the returned stop is called.
+  - `export class ChatMcp { state = $state.raw<McpState | null>(null); constructor(api: Api, sessionId: string); load(): Promise<void>; startPolling(): () => void; approve(name): Promise<void>; signIn(name): Promise<string | null>; submitCallback(name, url): Promise<void>; act(name, action): Promise<void>; stop(): void }`. It subscribes to `mcp.changed` for its session, loads on open and on reconnect, and `startPolling` re-reads `mcp.list` every `MCP_POLL_MS = 3000` until the returned stop is called.
   - `mcp.ts`:
     - `statusLabel(s: McpServer): string` (the Global Constraints copy);
     - `sourceLabel(source: string): string`: `project`, `user`, `local`, `plugin` as they are; `claudeai` → `claude.ai`; `managed`/`enterprise` → `managed`; anything else as is;
     - `primaryAction(s): 'approve' | 'signIn' | 'claudeAiSignIn' | 'reconnect' | 'turnOn' | null`;
     - `menuActions(s): ('reconnect' | 'turnOff' | 'clearAuth')[]`;
-    - `turnOffLabel`: per `TOGGLE_SAVED_IN`, `'Turn off in this project'`, `'Turn off for this chat'` or `'Turn off on this machine'`;
+    - `TURN_OFF_LABEL = 'Turn off in this project'` (the spike: Claude Code saves the toggle per project);
     - `clearAuthLabel(machine: string): string` = `` `Forget sign-in on ${machine}` ``.
 
     The action table:
@@ -315,17 +315,15 @@ Behaviour:
   - `McpServersDialog.svelte` props: `{ open: boolean (bindable); mcp: ChatMcp; live: boolean; remote: boolean; machineName: string; onWake: () => Promise<void> }`. It renders:
     - a row per server: name, `sourceLabel`, `statusLabel`, the primary button, and a `⋯` menu;
     - a not-live state: text `This chat isn't running. Wake it to see its MCP servers.` and a `Wake the chat` button;
-    - after Approve answers `confirm`, a confirm step: `Restart now (stops ‹N› task‹s›)` / `When they finish`;
-    - while `restart` is pending, a line `Restarts when this turn ends` / `Restarts when its tasks finish`;
     - after Sign in on a `remote` machine, the paste field with its label and a `Finish sign-in` button;
     - for a claude.ai connector, Sign in opens `CLAUDE_AI_CONNECTORS_URL`;
     - errors from any action appear under the row, word for word.
 
 - [ ] **Step 1: Write the failing tests.**
-  - `mcp.test.ts`: `statusLabel` for each status (including `Failed` with no error, and `Not approved` when rejected); `sourceLabel('claudeai')` is `claude.ai`; the action table, row by row; `ChatMcp` `polls while open and stops after` (fake timers, fake Api counts `mcp.list` calls); `ChatMcp` `ignores mcp.changed of other chats`.
+  - `mcp.test.ts`: `statusLabel` for each status (including `Failed` with no error, and `Not approved`); `sourceLabel('claudeai')` is `claude.ai`; the action table, row by row; `ChatMcp` `polls while open and stops after` (fake timers, fake Api counts `mcp.list` calls); `ChatMcp` `ignores mcp.changed of other chats`.
   - `mcp-dialog.test.ts` (testing-library, fake ChatMcp state):
     - `lists every server with source and status`;
-    - `Approve, then confirm names the tasks` (`Restart now (stops 2 tasks)`, and `When they finish` calls `restart('whenFinished')`);
+    - `Approve calls approve with the server's name`;
     - `Sign in opens the link; on a remote machine the paste field appears and sends what was pasted`;
     - `on This PC no paste field`;
     - `claude.ai Sign in opens claude.ai's connector settings`;
@@ -347,12 +345,12 @@ Behaviour:
 - Produces:
   - `Control` gains `'mcp'`. The `mapped` table gains `{ name: 'mcp', description: 'Manage MCP servers (opens the MCP servers dialog)', control: 'mcp' }`, and `localCommand` returns it even when the SDK reports `mcp` (`ALWAYS_LOCAL = ['mcp']`). `menuCommands` lists the local `mcp` entry in place of a reported one.
   - Where it shows: a chat shows MCP (`mcpOn`) when `!isCodexChat(sessionId) && supportsMcp(entry) && !readOnly`. Without it, `onControl('mcp')` returns `MCP servers are for Claude chats.` for Codex, and `Update ‹machine› to manage MCP servers from here.` for an old machine.
-  - The banner shows when `mcpOn`, the chat is `ownedLive`, `state.waiting.length > 0`, and it isn't dismissed (dismissal is held per `sessionId` in component state, cleared when the process restarts). It has `Approve` (approves `waiting[0]`, then follows the same confirm flow as the dialog), `MCP servers…`, and a dismiss ×.
+  - The banner shows when `mcpOn`, the chat is `ownedLive`, `state.waiting.length > 0`, and it isn't dismissed (dismissal is held per `sessionId` in component state, cleared when the set of waiting names changes). It has `Approve` (approves `waiting[0]` only), `MCP servers…`, and a dismiss ×.
   - `remote` for the dialog is `!entry.local` (always true on the phone).
 
 - [ ] **Step 1: Write the failing tests.**
   - `mcp-banner.test.ts` (ChatView harness as in `remote-chat.test.ts`):
-    - `shows the banner for a waiting project server`, with the copy for one server, and `and 2 more … aren't approved yet` for three;
+    - `shows the banner for a waiting project server`, with the copy for one server, and `and 2 more (from this project) aren't approved.` for three;
     - `no banner for needs sign-in or failed servers`;
     - `no banner and no mcp request for a Codex chat`;
     - `no banner, no menu item, no request on a machine without mcp`;
@@ -374,7 +372,7 @@ Behaviour:
 
 **Files:**
 - Create: `apps/desktop/e2e/mcp.spec.ts`
-- Modify: `docs/architecture.md` (protocol 12 in Lifecycle → Versions and Protocol; a short "MCP servers" paragraph under Live chats: what's read, the one file written, restart between turns, the undeclared SDK methods), `README.md` (a feature line), `packages/service/README.md` if it lists handlers
+- Modify: `docs/architecture.md` (protocol 12 in Lifecycle → Versions and Protocol; a short "MCP servers" paragraph under Live chats: what's read, the one file written, Approve = write + reconnect, the undeclared SDK methods), `README.md` (a feature line), `packages/service/README.md` if it lists handlers
 
 - [ ] **Step 1: Write `mcp.spec.ts`** against the mock (call `mock.mcpReset` in `beforeEach`):
   - `banner → Approve → mock-etoro connects` in a `proj-0` chat;

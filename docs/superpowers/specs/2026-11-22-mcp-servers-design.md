@@ -125,3 +125,21 @@ OAuth), then build to what they show:
   status messages the session already receives.
 - Whether `toggleMcpServer` is saved by Claude Code (and where), so the Turn off label is accurate.
 - The wording of statuses, the banner and the paste field, in the app's plain style.
+
+## After the spike (2026-11-22)
+
+The spike (`2026-11-22-mcp-servers-spike-results.md`) found that in an SDK session a project server that was never
+approved simply connects: there is no "waiting for approval" state. The only project server Claude can't see is one
+**rejected earlier** in the CLI (`disabledMcpjsonServers`), which doesn't appear in the status list at all. Writing
+the approval and reconnecting brings it up in the same process. So, by the controller's ruling while building:
+
+- "Not approved" means named in the project's `.mcp.json` and missing from the status list; the banner shows for
+  those (copy: `MCP server "‹name›" (from this project) isn't approved.`).
+- **Approve** writes the lists (add to `enabledMcpjsonServers`, remove from `disabledMcpjsonServers`) and reconnects
+  the server in this chat and in every other live chat in the folder. No restart, no "Restart now / When they
+  finish" step.
+- Claude Code saves **Turn off** per project in its own `~/.claude.json`, so the label is "Turn off in this project".
+- No SDK message reports MCP status changes, so the dialog polls while it's open.
+
+What failed in the original kumbal chat is therefore not certain: a rejected server, a server that failed to start,
+or one needing sign-in. The dialog covers all three.
