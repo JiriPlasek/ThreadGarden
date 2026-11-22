@@ -34,6 +34,11 @@ folder with `VERSION`, `install.ps1`, `bin/node.exe`, `bin/threadgarden.cmd` and
 elevation. The stable installed `bin/threadgarden.cmd` and `node/node.exe`, the
 `current` junction, and apply-script arguments (installer, version, from,
 installBase, updateDir, timeoutS) must remain compatible with older updaters.
+Both headless packages also carry `lib/node_modules/` (the PTY module for `!`
+commands), an addition from protocol 13: the zip's contents are `VERSION`,
+`install.ps1`, `bin/node.exe`, `bin/threadgarden.cmd`, `lib/service.mjs` and
+`lib/node_modules/`. The module is native, so a package is built on the OS it
+targets, where pnpm installed that platform's prebuilt binaries.
 The per-user startup entry "Threadgarden headless" names that stable launcher,
 so it must stay where it is.
 

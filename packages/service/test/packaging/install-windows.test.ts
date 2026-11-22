@@ -190,6 +190,34 @@ describe.skipIf(process.platform !== 'win32')('headless install.ps1', { timeout:
     expect(r.stdout).toContain('Installed. Pair this machine with your desktop: threadgarden pair');
   });
 
+  it('install keeps lib/node_modules beside service.mjs', async () => {
+    const dir = await release('9.9.9');
+    const pkg = join(dir, 'lib', 'node_modules', '@lydell', 'node-pty-win32-x64');
+    await mkdir(join(pkg, 'prebuilds', 'win32-x64'), { recursive: true });
+    await writeFile(join(pkg, 'prebuilds', 'win32-x64', 'x.node'), 'binary');
+    const r = await install(dir);
+    expect(r.code).toBe(0);
+    const kept = join(base, '9.9.9', 'lib', 'node_modules', '@lydell', 'node-pty-win32-x64');
+    expect(await readFile(join(kept, 'prebuilds', 'win32-x64', 'x.node'), 'utf8')).toBe('binary');
+    // Through the stable junction too, which is where the launcher runs it from.
+    expect(
+      await readFile(
+        join(
+          base,
+          'current',
+          'lib',
+          'node_modules',
+          '@lydell',
+          'node-pty-win32-x64',
+          'prebuilds',
+          'win32-x64',
+          'x.node',
+        ),
+        'utf8',
+      ),
+    ).toBe('binary');
+  });
+
   it('stops the service before replacing node.exe and starts it after', async () => {
     expect((await install(await release('9.9.8'))).code).toBe(0);
     expect((await install(await release('9.9.9'))).code).toBe(0);

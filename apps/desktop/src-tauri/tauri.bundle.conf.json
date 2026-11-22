@@ -6,7 +6,8 @@
   "bundle": {
     "externalBin": ["binaries/threadgarden-node"],
     "resources": {
-      "../../../packages/service/dist/service.mjs": "service/service.mjs"
+      "../../../packages/service/dist/service.mjs": "service/service.mjs",
+      "../../../packages/service/dist/node_modules/": "service/node_modules/"
     }
   }
 }

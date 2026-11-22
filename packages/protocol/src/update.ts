@@ -16,6 +16,9 @@ import { z } from 'zod';
  *   THREADGARDEN_UNATTENDED=1 (no elevation); the installed stable bin/threadgarden.cmd,
  *   node/node.exe and current junction; apply arguments: installer, version, from,
  *   installBase, updateDir, timeoutS;
+ * - Additions to that layout (protocol 13): `lib/node_modules/` beside `lib/service.mjs`
+ *   in both packages, holding the PTY module for `!` commands. The installers copy the
+ *   whole release folder, so an old updater's installer carries it along;
  * - `last.json`'s keys, those of `UpdateStatus`: `apply.sh` reads `state` and
  *   `version` from what the new version writes, and an old service reads what `apply.sh` writes;
  * - `hello`'s `serviceVersion`, `protocolVersion`, `machine.id` and `machine.capabilities`.
