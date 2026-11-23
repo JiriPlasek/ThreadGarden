@@ -8,6 +8,8 @@ import { LOCAL } from '../layout/harness';
 import { fill, renderChat, SID } from './helpers';
 
 beforeEach(() => {
+  // jsdom does not load the image data used by preview interaction tests.
+  vi.spyOn(HTMLImageElement.prototype, 'complete', 'get').mockReturnValue(true);
   // jsdom has no layout; preview visibility now follows the anchor's actual bounds.
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(
     new DOMRect(10, 350, 100, 20),
