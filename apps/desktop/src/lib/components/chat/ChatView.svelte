@@ -22,6 +22,7 @@
   import { rowPx } from '#lib/interface-scale.js';
   import { ariaKeyShortcuts, formatCombos, shortcut } from '#lib/shortcuts.js';
   import { retryOldCopy } from '#lib/move/move-chat.svelte.js';
+  import { isThreadgardenNote } from '#lib/move/note.js';
   import { copyText } from '#lib/native.js';
   import { RequestError } from '#lib/service/client.js';
   import type { ResumeCheck } from '#lib/state/chats.svelte.js';
@@ -501,6 +502,31 @@
   const recallQueued = async (): Promise<ReturnedMessage | null> => {
     const last = chat?.queuedMessages.at(-1);
     return last ? chats.withdraw(sessionId, last.id) : null;
+  };
+
+  /** Walks the chat's canonical user messages; older pages load only when needed. */
+  const recallPrevious = async (
+    beforeId?: string,
+  ): Promise<(ReturnedMessage & { id: string }) | null> => {
+    const id = sessionId;
+    const currentChat = chats.get(id);
+    if (!currentChat) return null;
+    while (chats.get(id) === currentChat) {
+      const end = beforeId
+        ? currentChat.items.findIndex((item) => item.id === beforeId)
+        : currentChat.items.length;
+      for (let i = end - 1; i >= 0; i--) {
+        const item = currentChat.items[i]!;
+        if (item.kind === 'user' && !item.parentToolUseId && !isThreadgardenNote(item.text)) {
+          return { id: item.id, text: item.text, images: item.images };
+        }
+      }
+      if (!currentChat.hasMore) return null;
+      const first = currentChat.items[0]?.id;
+      await chats.loadOlder(id);
+      if (currentChat.items[0]?.id === first) return null;
+    }
+    return null;
   };
 
   const removeQueued = (messageId: string): void => {
@@ -1044,6 +1070,7 @@
                 onSubmit={submit}
                 onInterrupt={interrupt}
                 onRecall={recallQueued}
+                onRecallPrevious={recallPrevious}
                 {onControl}
                 onSchedule={machineAway || heldBack ? undefined : schedule}
                 {resetAt}

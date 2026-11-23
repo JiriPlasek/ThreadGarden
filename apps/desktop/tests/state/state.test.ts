@@ -292,6 +292,27 @@ describe('chats', () => {
     expect(chats.get('s1')!.items.map((i) => i.id)).toEqual(['o1', 'a']);
     expect(chats.get('s1')!.hasMore).toBe(false);
   });
+
+  it('concurrent loadOlder callers wait for the same page', async () => {
+    const { chats } = setup();
+    await chats.open('s1');
+    let finish!: (value: unknown) => void;
+    server.handlers['chat.older'] = () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      });
+    const first = chats.loadOlder('s1');
+    let secondFinished = false;
+    const second = chats.loadOlder('s1').then(() => {
+      secondFinished = true;
+    });
+    await flushAsync();
+    expect(server.calls('chat.older')).toHaveLength(1);
+    expect(secondFinished).toBe(false);
+    finish({ items: [text('old', 'Older')], hasMore: false });
+    await Promise.all([first, second]);
+    expect(chats.get('s1')!.items[0]?.id).toBe('old');
+  });
 });
 
 describe('interaction', () => {

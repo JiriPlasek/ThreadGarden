@@ -110,6 +110,7 @@
     onSubmit,
     onInterrupt,
     onRecall,
+    onRecallPrevious,
     onControl,
     onSchedule,
     resetAt,
@@ -141,6 +142,8 @@
     onInterrupt?: () => void;
     /** Up in an empty box while messages are queued: takes the last one back (null: none). */
     onRecall?: () => Promise<ReturnedMessage | null>;
+    /** Previous sent message, before this id; omitting the id starts at the newest. */
+    onRecallPrevious?: (beforeId?: string) => Promise<(ReturnedMessage & { id: string }) | null>;
     /** Opens a Threadgarden control for `/model`, `/effort`, `/permissions`; returns a notice when it cannot. */
     onControl?: (control: Control) => string | null;
     /** v1.3 B: schedules the message instead; resolves true when it was scheduled (the box clears). */
@@ -224,6 +227,15 @@
   let root = $state<HTMLDivElement | null>(null);
   /** Why the last command was not sent (terminal-only, or no matching control). */
   let notice = $state<string | null>(null);
+  let recalled: (ReturnedMessage & { id: string })[] = [];
+  let recallIndex = -1;
+  let recallEpoch = 0;
+  let recalling = false;
+  const stopRecalling = (): void => {
+    recalled = [];
+    recallIndex = -1;
+    recallEpoch++;
+  };
   let picker = $state.raw<{ kind: 'mention' | 'slash'; token: Token } | null>(null);
   const visibleSuggestion = $derived(
     !text && images.length === 0 && !working && !sending && !disabled && !editing && !picker
@@ -328,6 +340,7 @@
 
   /** Re-reads which picker the caret is in (after typing, clicking or picking). */
   const updatePicker = (): void => {
+    if (recallIndex >= 0) return closePicker();
     const el = editorElement;
     if (!el) return;
     const selection = editor?.selection();
@@ -388,6 +401,7 @@
   // ── typing ──────────────────────────────────────────────────────────────
 
   const oninput = (value: string, typed: boolean): void => {
+    stopRecalling();
     text = value;
     if (typed) {
       notice = null;
@@ -400,8 +414,7 @@
   /** What the box holds now (kept while a scheduled message is edited in it). */
   export const current = (): { text: string; images: ImageRef[] } => outgoing(text, attachments);
 
-  /** Puts a message back into the box (Edit of a scheduled message), replacing what is there. */
-  export const load = async (value: string, imgs: ImageRef[]): Promise<void> => {
+  const setMessage = async (value: string, imgs: ImageRef[]): Promise<void> => {
     editor?.resetHistory();
     const restored = restoreMessage(value, imgs);
     text = restored.text;
@@ -414,6 +427,51 @@
     editor?.select(text.length);
   };
 
+  /** Puts a message back into the box (Edit of a scheduled message), replacing what is there. */
+  export const load = async (value: string, imgs: ImageRef[]): Promise<void> => {
+    stopRecalling();
+    await setMessage(value, imgs);
+  };
+
+  const browseHistory = async (step: 1 | -1): Promise<void> => {
+    if (!onRecallPrevious || recalling || sending || disabled || editing) return;
+    const epoch = recallEpoch;
+    const key = draftKey;
+    recalling = true;
+    try {
+      const next = recallIndex + step;
+      if (next < 0) {
+        stopRecalling();
+        await setMessage('', []);
+        return;
+      }
+      let message = recalled[next];
+      if (!message) {
+        const previous = await onRecallPrevious(recalled.at(-1)?.id);
+        // Typing while an older page loads must win over the recall result.
+        if (
+          epoch !== recallEpoch ||
+          key !== draftKey ||
+          disabled ||
+          editing ||
+          document.activeElement !== editorElement
+        )
+          return;
+        if (!previous) return;
+        message = previous;
+        recalled.push(message);
+      }
+      recallIndex = next;
+      closePicker();
+      onDismissSuggestion?.();
+      await setMessage(message.text, message.images ?? []);
+    } catch (err) {
+      if (epoch === recallEpoch) notice = err instanceof Error ? err.message : String(err);
+    } finally {
+      recalling = false;
+    }
+  };
+
   /**
    * Puts messages Claude never read back in front of what the box holds, as
    * `withReturned` does: their images and pastes come back as tags, numbered
@@ -422,6 +480,7 @@
    */
   const takeBack = async (messages: ReturnedMessage[], saved: boolean): Promise<void> => {
     if (saved && interaction.cachedDraft(draftKey) === undefined) return;
+    stopRecalling();
     const fit = fitImages(
       images,
       messages.flatMap((m) => m.images ?? []),
@@ -510,6 +569,7 @@
         return;
       }
       if (sent) {
+        stopRecalling();
         // Text typed while the message was on its way stays in the box.
         if (text === sentText) {
           text = '';
@@ -540,7 +600,7 @@
   };
 
   const onkeydown = (e: KeyboardEvent): void => {
-    if (e.isComposing || e.keyCode === 229) return;
+    if (e.isComposing || e.keyCode === 229 || disabled) return;
     if (picker) {
       if (e.key === 'Escape') {
         e.preventDefault();
@@ -582,6 +642,17 @@
       void recall();
       return;
     }
+    if (
+      plainKey &&
+      onRecallPrevious &&
+      !editing &&
+      (e.key === 'ArrowUp' || e.key === 'ArrowDown') &&
+      (recallIndex >= 0 || (e.key === 'ArrowUp' && !text && images.length === 0))
+    ) {
+      e.preventDefault();
+      void browseHistory(e.key === 'ArrowUp' ? 1 : -1);
+      return;
+    }
     if (e.key !== 'Enter' || e.isComposing || e.keyCode === 229) return;
     const mod = e.ctrlKey || e.metaKey;
     const sends = settings.value.enterToSend ? !e.shiftKey && !e.altKey : mod;
@@ -594,6 +665,7 @@
   // ── images ──────────────────────────────────────────────────────────────
 
   const attach = async (list: File[]): Promise<void> => {
+    stopRecalling();
     const problems: string[] = [];
     const ok: File[] = [];
     for (const f of list) {
@@ -613,6 +685,7 @@
   };
 
   const onpaste = (e: ClipboardEvent): void => {
+    stopRecalling();
     const list = imageFiles(e.clipboardData);
     if (list.length > 0) {
       e.preventDefault();
@@ -708,6 +781,7 @@
    * mentioned (in This PC's chats; another machine's cannot reach them).
    */
   const dropPaths = async (paths: string[]): Promise<void> => {
+    stopRecalling();
     const others = paths.filter((p) => !imageTypeOfPath(p));
     if (others.length > 0 && elsewhere) {
       notice = filesElsewhere();
@@ -768,6 +842,7 @@
   });
 
   onDestroy(() => {
+    stopRecalling();
     clearTimeout(suggestTimer);
     interaction.flushDraft(draftKey);
   });

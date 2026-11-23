@@ -110,6 +110,7 @@ export class ChatState {
   /** True while `chat.since` is in flight: live events are buffered until it is merged. */
   resyncing = false;
   loadingOlder = $state(false);
+  olderRequest: Promise<void> | null = null;
   error = $state<string | null>(null);
   /** `chat.models` for this chat; null until loaded. */
   models = $state.raw<ModelInfo[] | null>(null);
@@ -420,23 +421,31 @@ export class ChatsState {
 
   loadOlder = async (sessionId: string): Promise<void> => {
     const chat = this.byId.get(sessionId);
+    if (chat?.olderRequest) return chat.olderRequest;
+    const api = this.api;
     const first = chat?.items[0];
-    if (!this.api || !chat || !first || !chat.hasMore || chat.loadingOlder) return;
+    if (!api || !chat || !first || !chat.hasMore) return;
     chat.loadingOlder = true;
-    try {
-      const r = await this.api.request('chat.older', {
-        sessionId,
-        beforeItemId: first.id,
-        limit: OLDER_PAGE,
-      });
-      const known = new Set(chat.items.map((i) => i.id));
-      chat.items = [...r.items.filter((i) => !known.has(i.id)), ...chat.items];
-      chat.hasMore = r.hasMore;
-    } catch (err) {
-      chat.error = err instanceof Error ? err.message : String(err);
-    } finally {
-      chat.loadingOlder = false;
-    }
+    // List pagination and composer recall may need the same page concurrently.
+    chat.olderRequest = Promise.resolve().then(async () => {
+      try {
+        const r = await api.request('chat.older', {
+          sessionId,
+          beforeItemId: first.id,
+          limit: OLDER_PAGE,
+        });
+        if (this.byId.get(sessionId) !== chat) return;
+        const known = new Set(chat.items.map((i) => i.id));
+        chat.items = [...r.items.filter((i) => !known.has(i.id)), ...chat.items];
+        chat.hasMore = r.hasMore;
+      } catch (err) {
+        chat.error = err instanceof Error ? err.message : String(err);
+      } finally {
+        chat.loadingOlder = false;
+        chat.olderRequest = null;
+      }
+    });
+    return chat.olderRequest;
   };
 
   /** Loads the models a chat can switch to (once per chat; retried after a failure). */
