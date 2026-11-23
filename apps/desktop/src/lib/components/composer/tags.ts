@@ -105,6 +105,19 @@ export const activeImages = (text: string, state: AttachmentsState): [number, Im
     state.images[n] ? [[n, state.images[n]!] as [number, ImageRef]] : [],
   );
 
+/** Only referenced, valid pastes get tiles; retained undo payloads stay hidden. */
+export const activePastes = (
+  text: string,
+  state: AttachmentsState,
+): { number: number; text: string }[] => {
+  const active = new Map<number, string>();
+  for (const tag of tagsIn(text)) {
+    const paste = tag.kind === 'paste' ? state.pastes[tag.number] : undefined;
+    if (paste && tag.label === labelForPaste(tag.number, paste)) active.set(tag.number, paste.text);
+  }
+  return [...active].map(([number, text]) => ({ number, text }));
+};
+
 /** The message to send: pastes expanded, each image with its tag's number (once, ascending). */
 export const outgoing = (
   text: string,

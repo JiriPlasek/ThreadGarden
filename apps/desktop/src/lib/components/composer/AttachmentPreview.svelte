@@ -38,8 +38,11 @@
     const target = anchor;
     const fallback = { left, top, bottom: top + 24 };
     if (!node) return;
+    // Loading an image changes the measured height: never expose the interim box.
+    const media = image ? node.querySelector('img') : null;
     let frame = 0;
     const position = (): void => {
+      if (frame) cancelAnimationFrame(frame);
       frame = 0;
       const rect = target?.getBoundingClientRect() ?? fallback;
       let visible = !target || target.isConnected;
@@ -65,7 +68,6 @@
           rect.top < clipBottom &&
           rect.left < clipRight &&
           target.getBoundingClientRect().right > clipLeft;
-      node.style.visibility = visible ? 'visible' : 'hidden';
       const size = node.getBoundingClientRect();
       const placed = previewPosition(rect, size, {
         width: window.innerWidth,
@@ -73,10 +75,13 @@
       });
       node.style.left = `${placed.left}px`;
       node.style.top = `${placed.top}px`;
+      node.style.visibility = visible && (!media || media.complete) ? 'visible' : 'hidden';
     };
     const schedule = (): void => {
       if (!frame) frame = requestAnimationFrame(position);
     };
+    media?.addEventListener('load', position);
+    media?.addEventListener('error', position);
     const observer = new ResizeObserver(schedule);
     observer.observe(node);
     if (target) observer.observe(target);
@@ -86,6 +91,8 @@
     return () => {
       cancelAnimationFrame(frame);
       observer.disconnect();
+      media?.removeEventListener('load', position);
+      media?.removeEventListener('error', position);
       window.removeEventListener('resize', schedule);
       document.removeEventListener('scroll', schedule, true);
     };
@@ -101,7 +108,7 @@
   {onmouseenter}
   {onmouseleave}
   class="bg-popover text-popover-foreground fixed z-[100] overflow-auto rounded-md border p-2 text-xs shadow-lg"
-  style="width: min(20rem, calc(100vw - 1rem)); max-height: min(20rem, calc(100dvh - 1rem));"
+  style="visibility: hidden; width: min(20rem, calc(100vw - 1rem)); max-height: min(20rem, calc(100dvh - 1rem));"
 >
   {#if image}
     <img

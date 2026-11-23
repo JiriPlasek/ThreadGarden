@@ -7,11 +7,15 @@
     image,
     text,
     missing = false,
+    tile = false,
+    ariaLabel = label,
   }: {
     label: string;
     image?: ImageRef;
     text?: string;
     missing?: boolean;
+    tile?: boolean;
+    ariaLabel?: string;
   } = $props();
   let anchor = $state<{ left: number; top: number } | null>(null);
   let pinned = $state(false);
@@ -64,8 +68,10 @@
   bind:this={button}
   type="button"
   data-attachment-badge
-  class="rounded bg-sky-500/15 px-0.5 text-sky-900 dark:text-sky-200"
-  aria-label={label}
+  class={tile
+    ? 'relative block size-14 overflow-hidden rounded border bg-background text-left'
+    : 'rounded bg-sky-500/15 px-0.5 text-sky-900 dark:text-sky-200'}
+  aria-label={ariaLabel}
   onmouseenter={show}
   onmouseleave={hide}
   onfocus={show}
@@ -90,8 +96,21 @@
       e.preventDefault();
       scrollElement.scrollTop += e.deltaY;
     }
-  }}>{label}</button
+  }}
 >
+  {#if tile}
+    <span
+      aria-hidden="true"
+      class="pointer-events-none block h-full overflow-hidden p-1 font-mono text-[0.375rem] leading-tight whitespace-pre-wrap"
+      >{text?.slice(0, 180)}</span
+    >
+    <span
+      aria-hidden="true"
+      class="absolute inset-x-0 bottom-0 bg-background/95 px-1 text-[0.625rem] font-medium"
+      >{label}</span
+    >
+  {:else}{label}{/if}
+</button>
 {#if anchor}
   <AttachmentPreview
     {label}

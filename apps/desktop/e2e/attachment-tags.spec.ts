@@ -10,6 +10,63 @@ test.beforeEach(async () => {
   await serviceCall('drafts.set', { key: 'session-998', text: '' });
 });
 
+test('image and paste tiles coexist with inline badges before and after sending', async ({
+  page,
+}) => {
+  await openApp(page);
+  await page
+    .getByRole('region', { name: 'Chat list' })
+    .locator('[data-session-id="session-998"]')
+    .click();
+  const box = page.getByRole('textbox', { name: 'Message' });
+  await box.fill('Check these attachments: ');
+  await box.evaluate((el) => {
+    const data = new DataTransfer();
+    data.setData(
+      'text/plain',
+      Array.from({ length: 41 }, (_, i) => `log line ${i + 1}`).join('\n'),
+    );
+    el.dispatchEvent(
+      new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }),
+    );
+  });
+  await page.locator('input[type="file"]').setInputFiles({
+    name: 'screenshot.png',
+    mimeType: 'image/png',
+    buffer: Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l1sAAAAASUVORK5CYII=',
+      'base64',
+    ),
+  });
+  await expect(box).toContainText('[Pasted text #1 +41 lines]');
+  await expect(box).toContainText('[Image #1]');
+  await expect(page.getByRole('list', { name: 'Attached images' }).getByRole('img')).toBeVisible();
+  await expect(
+    page
+      .getByRole('list', { name: 'Attached pasted text' })
+      .getByRole('button', { name: 'Preview pasted text 1' }),
+  ).toBeVisible();
+  await page.screenshot({ path: 'test-results/attachment-tiles-draft.png' });
+  await box.press('Enter');
+  await expect(box).toHaveText('');
+  const messages = page.getByLabel('Messages', { exact: true });
+  await expect(messages.getByRole('button', { name: '[Image #1]', exact: true })).toBeVisible();
+  await expect(
+    messages.getByRole('button', { name: '[Pasted text #1 +41 lines]', exact: true }),
+  ).toBeVisible();
+  const image = messages.getByRole('img', { name: 'Attached image 1' });
+  await expect(image).toBeVisible();
+  expect(await image.evaluate((el: HTMLImageElement) => el.naturalWidth)).toBeGreaterThan(0);
+  const tile = messages.getByRole('button', { name: 'Preview pasted text 1' });
+  await expect(tile).toBeVisible();
+  await tile.click();
+  await expect(page.getByRole('tooltip', { name: 'Paste #1', exact: true })).toContainText(
+    'log line 41',
+  );
+  await box.click();
+  await page.screenshot({ path: 'test-results/attachment-tiles-sent.png' });
+});
+
 test('sent previews escape virtual-list clipping and follow badges near the top while scrolling', async ({
   page,
 }) => {

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { messagePreview, pasteBlocks } from '@threadgarden/protocol';
 import {
   activeImages,
+  activePastes,
   emptyAttachments,
   expandPastes,
   longPaste,
@@ -16,6 +17,17 @@ import {
 const image = { mediaType: 'image/png', data: 'YWJj' };
 
 describe('attachment text and wire forms', () => {
+  it('shows one tile per referenced paste and hides retained or edited references', () => {
+    const state = emptyAttachments();
+    state.pastes[1] = { text: 'one', id: 'abcd' };
+    state.pastes[2] = { text: 'two', id: 'abce' };
+    expect(activePastes('[Pasted text #1 +1 lines] [Pasted text #1 +1 lines]', state)).toEqual([
+      { number: 1, text: 'one' },
+    ]);
+    expect(activePastes('[Pasted text #1 +2 lines] [Pasted text #3 +1 lines]', state)).toEqual([]);
+    expect(activePastes('', state)).toEqual([]);
+  });
+
   it('renumbers copied attachments without changing the source draft', () => {
     const current = emptyAttachments();
     current.images[1] = image;

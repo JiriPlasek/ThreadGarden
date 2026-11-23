@@ -29,6 +29,8 @@
   import { pasteLabel } from '@threadgarden/protocol';
   import {
     activeImages,
+    activePastes,
+    labelForPaste,
     emptyAttachments,
     expandPastes,
     imageLabel,
@@ -191,6 +193,7 @@
   );
   let text = $state(initial.text);
   let attachments = $state.raw<AttachmentsState>(initial.attachments);
+  const pastes = $derived(activePastes(text, attachments));
   const numberedImages = $derived(activeImages(text, attachments));
   const images = $derived(numberedImages.map(([, image]) => image));
   const saveDraft = (): void => {
@@ -215,6 +218,12 @@
     const number = numberedImages[i]?.[0];
     if (number === undefined) return;
     const label = imageLabel(number);
+    await replaceSelection(0, text.length, text.split(label).join(''));
+  };
+  const removePaste = async (number: number): Promise<void> => {
+    const paste = attachments.pastes[number];
+    if (!paste) return;
+    const label = labelForPaste(number, paste);
     await replaceSelection(0, text.length, text.split(label).join(''));
   };
   let imageError = $state<string | null>(null);
@@ -813,11 +822,15 @@
       >
     </div>
   {/if}
-  <Attachments
-    {images}
-    numbers={numberedImages.map(([n]) => n)}
-    onRemove={(i) => void removeImage(i)}
-  />
+  {#if images.length || pastes.length}<div class="px-2 pt-2">
+      <Attachments
+        {images}
+        {pastes}
+        onRemovePaste={(number) => void removePaste(number)}
+        numbers={numberedImages.map(([n]) => n)}
+        onRemove={(i) => void removeImage(i)}
+      />
+    </div>{/if}
 
   <div class="relative grid">
     {#if picker}
