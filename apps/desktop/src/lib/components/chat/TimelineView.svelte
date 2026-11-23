@@ -167,6 +167,16 @@
   };
 </script>
 
+{#snippet gridLines()}
+  {#each layout.ticks as t}
+    <div
+      aria-hidden="true"
+      class="pointer-events-none absolute inset-x-0 border-t border-border/60"
+      style:top="{t.y}px"
+    ></div>
+  {/each}
+{/snippet}
+
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <section
   class="relative flex min-h-0 flex-1 flex-col"
@@ -248,7 +258,7 @@
           class="sticky left-0 z-20 w-20 shrink-0 bg-background/95 text-[0.625rem] text-muted-foreground"
         >
           {#each layout.ticks as t}<time
-              class="absolute left-2"
+              class="absolute right-0 left-2 -translate-y-full border-b border-border/60 pb-0.5 leading-3"
               style:top="{t.y}px"
               title={fullTime(t.at)}
               datetime={new Date(t.at).toISOString()}
@@ -261,6 +271,7 @@
             </time>{/each}
         </div>
         <div class="sticky left-20 z-10 w-60 shrink-0 border-x bg-background/95">
+          {@render gridLines()}
           {#each layout.waits as wait}<div
               class="pointer-events-none absolute inset-x-2 overflow-hidden rounded border-l-2 border-dashed border-muted-foreground/40 px-2 text-[0.625rem] text-muted-foreground"
               style:top="{wait.y}px"
@@ -297,6 +308,7 @@
           {/each}
         </div>
         <div class="relative flex-1">
+          {@render gridLines()}
           {#each layout.placed.filter((b) => b.lane >= 0) as p (p.block.id)}
             <button
               class="absolute grid w-41 content-start overflow-hidden rounded border-l-3 px-2 text-left text-xs hover:ring-2 focus-visible:ring-2 {tint(
