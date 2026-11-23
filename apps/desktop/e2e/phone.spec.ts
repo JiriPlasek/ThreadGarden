@@ -522,14 +522,14 @@ test('timeline is available on the phone and opens turn details', async ({ page 
   }
 });
 
-test('concise view fits the phone and keeps the composer available', async ({ page }) => {
+test('turns view fits the phone and hides the composer', async ({ page }) => {
   await phoneCall('uiState.set', { key: 'chat.view', value: 'conversation' });
   try {
     await openPhone(page);
     await openChat(page, 'session-3');
     const picker = page.getByRole('group', { name: 'Chat view', exact: true });
-    await picker.getByRole('button', { name: 'Concise', exact: true }).tap();
-    await expect(composer(page)).toBeVisible();
+    await picker.getByRole('button', { name: 'Turns', exact: true }).tap();
+    await expect(composer(page)).toBeHidden();
     await expect(
       page
         .getByRole('region', { name: 'Messages', exact: true })
@@ -540,7 +540,8 @@ test('concise view fits the phone and keeps the composer available', async ({ pa
     expect(bounds!.x).toBeGreaterThanOrEqual(0);
     expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
     await page.screenshot({ path: 'test-results/concise-phone.png' });
-    await picker.getByRole('button', { name: 'Conversation', exact: true }).tap();
+    await picker.getByRole('button', { name: 'Chat', exact: true }).tap();
+    await expect(composer(page)).toBeVisible();
   } finally {
     await phoneCall('uiState.set', { key: 'chat.view', value: 'conversation' });
   }

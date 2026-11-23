@@ -42,7 +42,7 @@ const mount = async () => {
   return { ...env, ...rendered };
 };
 
-describe('Concise view integration', () => {
+describe('Turns view integration', () => {
   it('keeps the composer and draft mounted across all views with separate list memories', async () => {
     const { app } = await mount();
     const composer = screen.getByRole('textbox', { name: 'Message' });
@@ -52,26 +52,33 @@ describe('Concise view integration', () => {
       within(switcher)
         .getAllByRole('button')
         .map((button) => button.textContent?.trim()),
-    ).toEqual(['Conversation', 'Concise', 'Timeline']);
-    await userEvent.click(within(switcher).getByRole('button', { name: 'Concise' }));
-    expect(screen.getByRole('textbox', { name: 'Message' })).toBe(composer);
+    ).toEqual(['Chat', 'Turns', 'Timeline']);
+    await userEvent.click(within(switcher).getByRole('button', { name: 'Turns' }));
+    expect(screen.queryByRole('textbox', { name: 'Message' })).toBeNull();
+    expect(composer.getAttribute('aria-disabled')).toBe('true');
+    expect(composer.isConnected).toBe(true);
     expect(composer.textContent).toBe('Keep this draft');
     const chat = app.chats.byId.get('s')!;
     expect(chat.conciseView).not.toBe(chat.view);
     await userEvent.click(within(switcher).getByRole('button', { name: 'Timeline' }));
     expect(screen.queryByRole('textbox', { name: 'Message' })).toBeNull();
     expect(composer.isConnected).toBe(true);
-    await userEvent.click(within(switcher).getByRole('button', { name: 'Concise' }));
-    expect(screen.getByRole('textbox', { name: 'Message' })).toBe(composer);
+    await userEvent.click(within(switcher).getByRole('button', { name: 'Turns' }));
+    expect(screen.queryByRole('textbox', { name: 'Message' })).toBeNull();
+    expect(composer.isConnected).toBe(true);
     expect(composer.textContent).toBe('Keep this draft');
     expect(chat.conciseView.turnScroll).toEqual(new Map([['concise-turn', 80]]));
     expect(chat.view.turnScroll).toEqual(new Map([['full-turn', 40]]));
+    await userEvent.click(within(switcher).getByRole('button', { name: 'Chat' }));
+    expect(screen.getByRole('textbox', { name: 'Message' })).toBe(composer);
+    expect(composer.getAttribute('aria-disabled')).toBe('false');
+    expect(composer.textContent).toBe('Keep this draft');
   });
 
-  it('allows Concise on a copied chat without loading Timeline', async () => {
+  it('allows Turns on a copied chat without loading Timeline', async () => {
     const { app, server } = await mount();
     app.chats.byId.get('s')!.copiedAt = Date.now() - 1000;
-    await userEvent.click(screen.getByRole('button', { name: 'Concise' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Turns' }));
     await screen.findByText('Found it');
     expect(app.settings.chatView).toBe('concise');
     expect(server.calls('chat.timeline')).toHaveLength(0);
@@ -79,7 +86,7 @@ describe('Concise view integration', () => {
 
   it('opens the full conversation before Activity navigates to a hidden tool', async () => {
     const { app, container } = await mount();
-    await userEvent.click(screen.getByRole('button', { name: 'Concise' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Turns' }));
     await userEvent.click(
       screen.getByRole('button', { name: 'Show Explore the parser in the chat' }),
     );

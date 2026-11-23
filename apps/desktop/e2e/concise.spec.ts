@@ -14,7 +14,7 @@ test.afterEach(async () => {
   await serviceCall('uiState.set', { key: 'chat.view', value: 'conversation' });
 });
 
-test('Concise hides tool noise, bounds whole turns, preserves drafts and remembers the mode', async ({
+test('Turns hides tool noise, bounds whole turns, preserves drafts and remembers the mode', async ({
   page,
 }) => {
   const long = (label: string) =>
@@ -69,8 +69,8 @@ test('Concise hides tool noise, bounds whole turns, preserves drafts and remembe
   await (await chatRow(page, SID)).click();
   const picker = page.getByRole('group', { name: 'Chat view', exact: true });
   const composer = page.getByRole('textbox', { name: 'Message' });
-  await composer.fill('Draft survives Concise');
-  await picker.getByRole('button', { name: 'Concise', exact: true }).click();
+  await composer.fill('Draft survives Turns');
+  await picker.getByRole('button', { name: 'Turns', exact: true }).click();
   const messages = page.getByLabel('Messages', { exact: true });
   await expect(messages.locator('[data-item-id="hidden-tool"]')).toHaveCount(0);
   await expect(messages.locator('[data-item-id="hidden-thought"]')).toHaveCount(0);
@@ -96,15 +96,16 @@ test('Concise hides tool noise, bounds whole turns, preserves drafts and remembe
   await page.mouse.wheel(0, 200);
   await expect.poll(() => scroll.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
   const saved = await scroll.evaluate((el) => el.scrollTop);
-  await picker.getByRole('button', { name: 'Conversation', exact: true }).click();
-  await picker.getByRole('button', { name: 'Concise', exact: true }).click();
+  await picker.getByRole('button', { name: 'Chat', exact: true }).click();
+  await expect(composer).toHaveText('Draft survives Turns');
+  await picker.getByRole('button', { name: 'Turns', exact: true }).click();
   await expect.poll(() => scroll.evaluate((el) => el.scrollTop)).toBeCloseTo(saved, 0);
   await scroll.evaluate((el) => {
     el.scrollTop = el.scrollHeight;
   });
   await expect(first.getByText('Second reply line 80', { exact: false })).toBeInViewport();
   expect(await turns.last().evaluate((el) => el.getBoundingClientRect().height)).toBeLessThan(cap);
-  await expect(composer).toHaveText('Draft survives Concise');
+  await expect(composer).toBeHidden();
   await page.screenshot({ path: 'test-results/concise-draft.png' });
   await expect
     .poll(
@@ -113,33 +114,36 @@ test('Concise hides tool noise, bounds whole turns, preserves drafts and remembe
     )
     .toBe('concise');
   await page.reload();
-  await expect(picker.getByRole('button', { name: 'Concise', exact: true })).toHaveAttribute(
+  await expect(picker.getByRole('button', { name: 'Turns', exact: true })).toHaveAttribute(
     'aria-pressed',
     'true',
   );
-  await expect(composer).toHaveText('Draft survives Concise');
+  await expect(composer).toBeHidden();
+  await picker.getByRole('button', { name: 'Chat', exact: true }).click();
+  await expect(composer).toHaveText('Draft survives Turns');
 });
 
-test('Concise shows one finished live agent summary and keeps permission actions available', async ({
+test('Turns shows one finished live agent summary and keeps permission actions available', async ({
   page,
 }) => {
   await openApp(page);
   await (await chatRow(page, SID)).click();
-  await page
-    .getByRole('group', { name: 'Chat view', exact: true })
-    .getByRole('button', { name: 'Concise', exact: true })
-    .click();
+  const picker = page.getByRole('group', { name: 'Chat view', exact: true });
   const composer = page.getByRole('textbox', { name: 'Message' });
   await composer.fill('Let an agent explore the code');
   await composer.press('Enter');
+  await picker.getByRole('button', { name: 'Turns', exact: true }).click();
+  await expect(composer).toBeHidden();
   const messages = page.getByLabel('Messages', { exact: true });
   const completed = messages
     .locator('[data-concise-task]')
     .filter({ hasText: 'Explore the project structure' });
   await expect(completed).toHaveCount(1, { timeout: 20_000 });
   await expect(completed).toContainText('Completed');
+  await picker.getByRole('button', { name: 'Chat', exact: true }).click();
   await composer.fill('Please list the files, perm needed');
   await composer.press('Enter');
+  await picker.getByRole('button', { name: 'Turns', exact: true }).click();
   const request = page.getByRole('group', { name: 'Permission request: Bash' });
   await expect(request).toBeVisible();
   await request.getByRole('button', { name: 'Allow', exact: true }).click();

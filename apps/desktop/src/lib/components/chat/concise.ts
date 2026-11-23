@@ -54,7 +54,7 @@ const terminal = (status: string): status is CompletedTaskSummary['status'] =>
 const main = (item: ChatItem): boolean => !('parentToolUseId' in item && item.parentToolUseId);
 const identity = (id: string): string => id.replace(/^codex-agent-/, '');
 
-/** A main-thread projection only; all source items remain available in Conversation. */
+/** A main-thread projection only; all source items remain available in Chat. */
 export const buildConciseRows = (
   items: readonly ChatItem[],
   tasks: readonly ChatTask[],

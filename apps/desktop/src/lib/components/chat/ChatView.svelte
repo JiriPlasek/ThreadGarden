@@ -1059,7 +1059,10 @@
               </div>
             {/if}
             <!-- Hidden, not removed, while a request waits: the draft stays as typed. -->
-            <div class="contents" hidden={docked !== undefined || settings.chatView === 'timeline'}>
+            <div
+              class="contents"
+              hidden={docked !== undefined || settings.chatView !== 'conversation'}
+            >
               <Composer
                 bind:this={composer}
                 bind:editorElement={composerBox}
@@ -1081,7 +1084,8 @@
                 limited={refusal !== undefined}
                 {editing}
                 autofocus={focusComposer}
-                disabled={machineAway && queueRefusal !== null}
+                disabled={settings.chatView !== 'conversation' ||
+                  (machineAway && queueRefusal !== null)}
                 {cacheNotice}
               />
             </div>

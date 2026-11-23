@@ -444,11 +444,7 @@
             ? 'bg-accent text-accent-foreground'
             : 'bg-background text-muted-foreground hover:bg-muted'}"
           onclick={() => onViewModeChange?.(mode as 'conversation' | 'concise' | 'timeline')}
-          >{mode === 'conversation'
-            ? 'Chat'
-            : mode === 'concise'
-              ? 'Concise'
-              : 'Timeline'}</button
+          >{mode === 'conversation' ? 'Chat' : mode === 'concise' ? 'Turns' : 'Timeline'}</button
         >
       {/each}
     </div>
