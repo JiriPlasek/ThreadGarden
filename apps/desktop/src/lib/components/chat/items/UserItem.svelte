@@ -5,7 +5,8 @@
   import { isThreadgardenNote } from '#lib/move/note.js';
   import { chatActions } from '../context';
   import UserText from './UserText.svelte';
-  import { restoreMessage, untaggedImages } from '../../composer/tags';
+  import Attachments from '../../composer/Attachments.svelte';
+  import { activePastes, restoreMessage } from '../../composer/tags';
 
   /**
    * A user message. Top-level messages offer "Fork from this message" (spec §6.4);
@@ -25,10 +26,10 @@
   const actions = chatActions();
   const LONG = 3000;
   let expanded = $state(false);
-  const display = $derived(restoreMessage(item.text).text);
+  const message = $derived(restoreMessage(item.text));
+  const display = $derived(message.text);
+  const pastes = $derived(activePastes(message.text, message.attachments));
   const long = $derived(display.length > LONG);
-  /** Images no tag in the text stands for: shown below it. */
-  const untagged = $derived(untaggedImages(display, item.images ?? []));
   const fromThreadgarden = $derived(isThreadgardenNote(item.text));
 </script>
 
@@ -48,17 +49,16 @@
       >{expanded ? 'Show less' : `Show all ${display.length.toLocaleString()} characters`}</button
     >
   {/if}
-  {#if untagged.length > 0}
-    <div class="mt-1.5 flex flex-wrap gap-1.5">
-      {#each untagged as img, i (i)}
-        <img
-          src="data:{img.mediaType};base64,{img.data}"
-          alt="Attached image {i + 1}"
-          class="max-h-32 max-w-48 rounded border object-contain"
-        />
-      {/each}
+  {#if item.images?.length || pastes.length}
+    <div class="mt-1.5">
+      <Attachments
+        images={item.images ?? []}
+        numbers={item.images?.map((image, i) => image.number ?? i + 1)}
+        {pastes}
+      />
     </div>
-  {:else if item.imageCount}
+  {/if}
+  {#if !item.images?.length && item.imageCount}
     <div class="text-muted-foreground mt-1 text-xs">{imageCountText(item.imageCount)}</div>
   {/if}
   {#if !nested && actions.fork && !fromThreadgarden}

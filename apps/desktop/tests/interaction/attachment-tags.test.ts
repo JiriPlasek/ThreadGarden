@@ -25,6 +25,22 @@ const pasteImage = async (el: HTMLDivElement) => {
 };
 
 describe('attachment tags in the composer', () => {
+  it('shows paste tiles alongside badges and restores a removed tile with undo', async () => {
+    const { composer } = await renderChat();
+    await pasteText(composer());
+    const tiles = screen.getByRole('list', { name: 'Attached pasted text' });
+    expect(within(tiles).getByRole('button', { name: 'Preview pasted text 1' })).toBeTruthy();
+    expect(composer().textContent).toBe('[Pasted text #1 +40 lines]');
+    await userEvent.click(within(tiles).getByRole('button', { name: 'Remove pasted text 1' }));
+    expect(composer().textContent).toBe('');
+    expect(screen.queryByRole('list', { name: 'Attached pasted text' })).toBeNull();
+    await userEvent.keyboard('{Control>}z{/Control}');
+    await waitFor(() =>
+      expect(screen.getByRole('list', { name: 'Attached pasted text' })).toBeTruthy(),
+    );
+    expect(composer().textContent).toBe('[Pasted text #1 +40 lines]');
+  });
+
   it('keeps an IME composition intact and undoes it as one edit', async () => {
     const { composer } = await renderChat();
     await fill(composer(), 'before ');
@@ -222,6 +238,12 @@ describe('sent attachment badges', () => {
     });
     const messages = screen.getByLabelText('Messages');
     expect(within(messages).queryByRole('button', { name: '[Image #1]' })).toBeNull();
+    expect(within(messages).getByRole('img', { name: 'Attached image 2' })).toBeTruthy();
+    const tiles = within(messages).getByRole('list', { name: 'Attached pasted text' });
+    await userEvent.click(within(tiles).getByRole('button', { name: 'Preview pasted text 1' }));
+    expect(screen.getByRole('tooltip').textContent).toBe(paste);
+    await userEvent.click(screen.getByRole('textbox', { name: /message/i }));
+    expect(within(tiles).queryByRole('button', { name: 'Remove pasted text 1' })).toBeNull();
     const badge = within(messages).getByRole('button', { name: '[Image #2]' });
     await fireEvent.focus(badge);
     expect(within(screen.getByRole('tooltip')).getByRole('img').getAttribute('src')).toBe(
