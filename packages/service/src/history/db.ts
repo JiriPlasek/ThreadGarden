@@ -36,6 +36,7 @@ export type SessionRow = {
   createdAt: number | null;
   lastModified: number;
   fileSize: number | null;
+  totalTokens?: number;
   customTitle: string | null;
   pinned: boolean;
 } & BucketState &
@@ -189,6 +190,9 @@ const toSession = (r: Row): SessionRow => ({
   createdAt: (r.created_at as number | null) ?? null,
   lastModified: r.last_modified as number,
   fileSize: (r.file_size as number | null) ?? null,
+  ...(typeof r.total_tokens === 'number' && r.total_tokens > 0
+    ? { totalTokens: r.total_tokens }
+    : {}),
   customTitle: (r.custom_title as string | null) ?? null,
   pinned: r.pinned === 1,
   ...toBucketState(r),
@@ -219,7 +223,9 @@ const NOT_AWAY = `NOT EXISTS (SELECT 1 FROM moved_chats mv WHERE mv.session_id =
 
 const SESSION_SELECT = `SELECT s.*, m.custom_title AS custom_title, COALESCE(m.pinned, 0) AS pinned,
     b.bucket AS bucket, b.hold_until AS hold_until, b.hold_note AS hold_note, b.back_at AS back_at,
-    ct.auto_title AS auto_title, ct.generated_title AS generated_title
+    ct.auto_title AS auto_title, ct.generated_title AS generated_title,
+    (SELECT SUM(d.input_tokens + d.output_tokens + d.cache_read_tokens + d.cache_creation_tokens)
+      FROM stats_days d WHERE d.session_id = s.session_id) AS total_tokens
   FROM ${WITH_BUCKET} LEFT JOIN meta m ON m.session_id = s.session_id
   LEFT JOIN chat_titles ct ON ct.session_id = s.session_id`;
 

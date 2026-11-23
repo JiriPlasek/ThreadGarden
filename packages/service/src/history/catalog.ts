@@ -216,6 +216,7 @@ const fromRow = (r: SessionRow, unread = false): ChatSummary => ({
   status: 'history',
   preview: previewOf(r),
   lastActivity: r.lastModified,
+  ...(r.totalTokens === undefined ? {} : { totalTokens: r.totalTokens }),
   pinned: r.pinned,
   live: false,
   external: null,

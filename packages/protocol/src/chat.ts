@@ -49,6 +49,8 @@ export const ChatSummarySchema = z.object({
   status: ChatStatusSchema,
   preview: z.string(),
   lastActivity: z.number(),
+  /** Recorded input, output and cache tokens, including available subagent usage. */
+  totalTokens: z.number().int().nonnegative().optional(),
   pinned: z.boolean(),
   live: z.boolean(),
   external: ExternalInfoSchema.nullable(),

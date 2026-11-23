@@ -3,12 +3,12 @@
  * from the service as local calendar days, `YYYY-MM-DD`.
  */
 
-const COMPACT = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 });
+import { compactNumber } from '#lib/format/numbers.js';
 const FULL = new Intl.NumberFormat('en-US');
 
 /** In full under 10,000 (1,284), compact above (12.9K, 4.2M). */
 export const compact = (n: number): string =>
-  Math.abs(n) < 10_000 ? FULL.format(n) : COMPACT.format(n);
+  Math.abs(n) < 10_000 ? FULL.format(n) : compactNumber(n);
 
 /** Every digit, for tables and tooltips (1,284,302). */
 export const full = (n: number): string => FULL.format(n);
@@ -24,7 +24,7 @@ export const usd = (n: number): string => {
   if (n < 0.01) return '< $0.01';
   if (n < 10) return `$${n.toFixed(2)}`;
   if (n < 1000) return `$${DOLLARS.format(n)}`;
-  return `$${COMPACT.format(n)}`;
+  return `$${compactNumber(n)}`;
 };
 
 /** Local midnight of a `YYYY-MM-DD` day. */

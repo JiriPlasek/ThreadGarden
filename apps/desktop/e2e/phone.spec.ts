@@ -496,3 +496,16 @@ test("the update notice opens the release's APK", async ({ page }) => {
     /^https:\/\/github\.com\/JiriPlasek\/ThreadGarden\/releases\/download\/v.+\/threadgarden-.+\.apk$/,
   );
 });
+
+test('token volume fits before the time on the phone', async ({ page }) => {
+  await openPhone(page);
+  await openProject(page);
+  const chat = row(page, 'session-3');
+  const volume = chat.locator('[data-chat-volume]');
+  await expect(volume).toBeVisible();
+  const countBox = (await volume.boundingBox())!;
+  const timeBox = (await chat.locator('time').boundingBox())!;
+  expect(countBox.x + countBox.width).toBeLessThan(timeBox.x);
+  expect(timeBox.x + timeBox.width).toBeLessThanOrEqual(page.viewportSize()!.width);
+  await page.screenshot({ path: 'test-results/chat-volume-phone.png' });
+});
