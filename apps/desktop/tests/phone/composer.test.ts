@@ -2,6 +2,7 @@ import { fireEvent, screen, waitFor } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { renderChat } from '../interaction/helpers';
+import { user } from '../chat/fixtures';
 
 vi.mock('../../src/lib/native', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../src/lib/native')>()),
@@ -16,6 +17,15 @@ const pasteImage = async (el: HTMLElement) => {
 };
 
 describe('the composer on the phone', () => {
+  it('browses sent messages with a hardware keyboard until the recalled text is edited', async () => {
+    await renderChat({ items: [user('first', 'First'), user('last', 'Last')] });
+    box().focus();
+    await userEvent.keyboard('{ArrowUp}{ArrowUp}{ArrowDown}');
+    await waitFor(() => expect(box().value).toBe('Last'));
+    await userEvent.type(box(), ' edited');
+    expect(await fireEvent.keyDown(box(), { key: 'ArrowDown' })).toBe(true);
+    expect(box().value).toBe('Last edited');
+  });
   it('is a plain textarea: tags are text, a delete next to one takes it whole', async () => {
     const { server } = await renderChat();
     expect(box()).toBeInstanceOf(HTMLTextAreaElement);
