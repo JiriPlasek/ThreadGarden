@@ -27,7 +27,7 @@ test('timeline reads old turns through the service, inspects one, and remembers 
   await composer.fill('Keep this draft');
   await timelineButton.click();
   await expect(composer).toBeHidden();
-  await picker.getByRole('button', { name: 'Conversation', exact: true }).click();
+  await picker.getByRole('button', { name: 'Chat', exact: true }).click();
   await expect(composer).toHaveText('Keep this draft');
   await timelineButton.click();
   const timeline = page.getByRole('region', { name: 'Chat timeline' });
@@ -46,7 +46,7 @@ test('timeline reads old turns through the service, inspects one, and remembers 
     'true',
   );
   await expect(page.getByRole('region', { name: 'Chat timeline' })).toBeVisible();
-  await picker.getByRole('button', { name: 'Conversation', exact: true }).click();
+  await picker.getByRole('button', { name: 'Chat', exact: true }).click();
   await expect(timeline).toBeHidden();
 });
 

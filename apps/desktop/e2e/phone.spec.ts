@@ -515,7 +515,7 @@ test('timeline is available on the phone and opens turn details', async ({ page 
     const details = page.getByRole('complementary', { name: 'Timeline details' });
     await expect(details).toBeVisible();
     await details.getByRole('button', { name: 'Close timeline details' }).tap();
-    await picker.getByRole('button', { name: 'Conversation', exact: true }).tap();
+    await picker.getByRole('button', { name: 'Chat', exact: true }).tap();
     await expect(composer(page)).toBeVisible();
   } finally {
     await phoneCall('uiState.set', { key: 'chat.view', value: 'conversation' });

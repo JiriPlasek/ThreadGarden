@@ -104,7 +104,7 @@
       if (id === sessionId && token === refreshGeneration)
         error =
           err instanceof RequestError && err.code === 'METHOD_NOT_FOUND'
-            ? 'Timeline needs a newer service on this machine. Update it or switch back to Conversation.'
+            ? 'Timeline needs a newer service on this machine. Update it or switch back to Chat.'
             : err instanceof Error
               ? err.message
               : String(err);
