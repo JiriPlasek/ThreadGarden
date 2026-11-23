@@ -1,5 +1,6 @@
 import {
   compareChats,
+  sidebarTime,
   messagePreview,
   type Bucket,
   type ChatStatus,
@@ -105,25 +106,31 @@ type Snapshot = { names: Map<string, string>; hidden: string[]; rows: CorpusRow[
 /** Most full-text content hits a query list merges in. Queries under 3 characters have none. */
 export const CONTENT_HIT_CAP = 2000;
 
-/** Cursor: `<kind>:<base64url JSON of overlay ids shown on page 1>.<keyset position>`. */
-const encodeCursor = (kind: string, ids: string[], key: string): string =>
-  `${kind}:${Buffer.from(JSON.stringify(ids)).toString('base64url')}.${key}`;
+/** Cursor carries transient ids and handoff rows already emitted, plus the keyset position. */
+const encodeCursor = (kind: string, ids: string[], key: string, emitted: string[]): string =>
+  `${kind}:${Buffer.from(JSON.stringify({ ids, emitted })).toString('base64url')}.${key}`;
 
 const decodeCursor = (
   cursor: string | undefined,
   kind: string,
-): { ids: string[]; key: string | undefined } => {
-  if (!cursor?.startsWith(`${kind}:`)) return { ids: [], key: undefined };
+): { ids: string[]; emitted: string[]; key: string | undefined } => {
+  const empty = { ids: [], emitted: [], key: undefined };
+  if (!cursor?.startsWith(`${kind}:`)) return empty;
   const body = cursor.slice(kind.length + 1);
   const dot = body.indexOf('.');
+  const strings = (v: unknown): string[] =>
+    Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
   try {
-    const ids: unknown = JSON.parse(Buffer.from(body.slice(0, dot), 'base64url').toString());
+    const value: unknown = JSON.parse(Buffer.from(body.slice(0, dot), 'base64url').toString());
+    const data =
+      value !== null && typeof value === 'object' ? (value as Record<string, unknown>) : {};
     return {
-      ids: Array.isArray(ids) ? ids.filter((x): x is string => typeof x === 'string') : [],
+      ids: strings(Array.isArray(value) ? value : data.ids),
+      emitted: strings(data.emitted),
       key: body.slice(dot + 1) || undefined,
     };
   } catch {
-    return { ids: [], key: undefined };
+    return empty;
   }
 };
 
@@ -181,6 +188,7 @@ const bucketFields = (
  */
 const flag = (s: ChatSummary, turns: Turns): void => {
   s.unread = isUnread(s, turns);
+  if (s.unread) s.sortAt = Math.max(sidebarTime(s), turns.get(s.sessionId) ?? 0);
   s.backFromHold = s.backFromHold && !BUSY.has(s.status);
 };
 
@@ -216,6 +224,7 @@ const fromRow = (r: SessionRow, unread = false): ChatSummary => ({
   status: 'history',
   preview: previewOf(r),
   lastActivity: r.lastModified,
+  sortAt: r.sortAt ?? r.lastModified,
   pinned: r.pinned,
   live: false,
   external: null,
@@ -230,6 +239,7 @@ export type CorpusRow = {
   projectId: string;
   projectName: string;
   lastActivity: number;
+  sortAt?: number;
   /** v1.2: archived chats are searched too, flagged (`search.quick`). */
   bucket: Bucket;
 };
@@ -237,7 +247,7 @@ export type CorpusRow = {
 /**
  * Merges the history index (DB rows), the session host's chats and external
  * sessions into the lists behind the places (spec §6.1–§6.2). Live and
- * external sessions are a small overlay that sorts above the DB rows.
+ * external sessions are a small overlay merged with indexed rows by sidebar time.
  */
 export class Catalog {
   private readonly db: Db;
@@ -291,29 +301,92 @@ export class Catalog {
   }
 
   /**
-   * One page of a place. The first page (no cursor) starts with the whole
-   * live/external overlay; later pages are DB rows only, keyset-paged and
-   * excluding the overlay ids captured in the cursor (Ruling R15), so a status
-   * change between pages can neither duplicate nor skip a row.
+   * One sidebar page, merging indexed and transient chats by meaningful time.
+   * Cursor ids retain transient rows across process exits; status changes alone
+   * neither move rows nor cause duplicates or skips between pages.
    */
   list(place: Place, query: string | undefined, limit: number, cursor?: string): Page {
     const snap = this.snapshot();
     const q = query?.trim();
     if (q) return this.searchList(place, q, snap, limit, cursor);
+    return this.sidebarPage(place, snap, limit, cursor, 'd');
+  }
 
+  /** Merge transient summaries and indexed rows by one stable key, on every page. */
+  private sidebarPage(
+    place: Place,
+    snap: Snapshot,
+    limit: number,
+    cursor: string | undefined,
+    kind: string,
+    matches: (s: Pick<ChatSummary, 'sessionId' | 'title' | 'projectId'>) => boolean = () => true,
+  ): Page {
     const turns = this.db.unreadTurns();
-    const first = cursor === undefined;
-    const overlay = first ? this.overlay(turns) : new Map<string, Entry>();
-    if (place.kind === 'needsYou') return { items: first ? this.needsYouList(overlay, turns) : [] };
-    const over = first ? this.overlayFor(place, overlay, snap.hidden) : [];
-    if (place.kind === 'running') return { items: over };
+    const overlay = this.overlay(turns);
+    if (place.kind === 'needsYou')
+      return { items: cursor ? [] : this.needsYouList(overlay, turns).filter(matches) };
+    if (place.kind === 'running')
+      return { items: cursor ? [] : this.overlayFor(place, overlay, snap.hidden).filter(matches) };
 
-    const page = decodeCursor(cursor, 'd');
-    const excluded = first ? [...overlay.keys()] : page.ids;
-    const rows = this.db.listSessions(this.dbFilter(place, excluded, snap.hidden), limit, page.key);
-    const items = [...over, ...rows.items.map((r) => fromRow(r, turns.has(r.sessionId)))];
-    return rows.nextCursor
-      ? { items, nextCursor: encodeCursor('d', excluded, rows.nextCursor) }
+    const page = decodeCursor(cursor, kind);
+    // Keep earlier overlay ids in the merge if their process ends between pages.
+    const excluded = [...new Set([...page.ids, ...overlay.keys()])];
+    const emitted = new Set(page.emitted);
+    const transient = new Map<string, ChatSummary>();
+    const previous = excluded.filter((id) => !overlay.has(id));
+    if (previous.length) {
+      for (const row of this.db.listSessions({ ids: previous }, previous.length, undefined).items)
+        transient.set(row.sessionId, fromRow(row, turns.has(row.sessionId)));
+    }
+    for (const [id, entry] of overlay) transient.set(id, entry.summary);
+    const after = page.key ? parseKey(page.key) : undefined;
+    const beyond = (s: ChatSummary): boolean =>
+      !after ||
+      sidebarTime(s) < after.at ||
+      (sidebarTime(s) === after.at && s.sessionId > after.id);
+    const over = [...transient.values()].filter(
+      (s) =>
+        !emitted.has(s.sessionId) &&
+        !this.isAway(s.sessionId) &&
+        beyond(s) &&
+        this.inPlace(place, s.projectId, s.bucket, snap.hidden) &&
+        matches(s),
+    );
+    const filter = this.dbFilter(place, [...new Set([...excluded, ...emitted])], snap.hidden);
+    if (kind === 'q') {
+      const omitted = new Set([...excluded, ...emitted]);
+      filter.ids = snap.rows
+        .filter(
+          (r) =>
+            !omitted.has(r.sessionId) &&
+            matches(r) &&
+            this.inPlace(place, r.projectId, r.bucket, snap.hidden) &&
+            (!after ||
+              sidebarTime(r) < after.at ||
+              (sidebarTime(r) === after.at && r.sessionId > after.id)),
+        )
+        .slice(0, limit + 1)
+        .map((r) => r.sessionId);
+    }
+    const rows = this.db.listSessions(filter, limit + 1, page.key, 'sidebar');
+    const merged = [...over, ...rows.items.map((r) => fromRow(r, turns.has(r.sessionId)))].sort(
+      compareChats,
+    );
+    const items = merged.slice(0, limit);
+    const last = items.at(-1);
+    // Handoff keys can drop when a request is answered or an unread turn is seen.
+    // Remember those returned rows so their lower key cannot emit them twice.
+    const transientIds = new Set(excluded);
+    for (const s of items)
+      if (transientIds.has(s.sessionId) || s.unread || s.status === 'needsYou')
+        emitted.add(s.sessionId);
+    return last && (merged.length > limit || rows.nextCursor)
+      ? {
+          items,
+          nextCursor: encodeCursor(kind, excluded, `${sidebarTime(last)}:${last.sessionId}`, [
+            ...emitted,
+          ]),
+        }
       : { items };
   }
 
@@ -380,16 +453,19 @@ export class Catalog {
     const turns = this.db.unreadTurns();
     const byId = this.overlay(turns);
     const overlay = [...byId.values()].map((e) => e.summary);
+    const order = this.db.projectSidebarActivity([...byId.keys()]);
     const needsYouBy = new Map<string, number>();
     for (const s of this.needsYouList(byId, turns)) {
       needsYouBy.set(s.projectId, (needsYouBy.get(s.projectId) ?? 0) + 1);
     }
     const list = this.db.listProjects().map((p) => {
       let lastActivity = activity.get(p.projectId) ?? 0;
+      let sortAt = order.get(p.projectId) ?? 0;
       let running = 0;
       for (const s of overlay) {
         if (s.projectId !== p.projectId) continue;
         lastActivity = Math.max(lastActivity, s.lastActivity);
+        sortAt = Math.max(sortAt, sidebarTime(s));
         if (isRunning(s)) running++;
       }
       return {
@@ -399,6 +475,7 @@ export class Catalog {
         pinned: p.pinned,
         hidden: p.hidden,
         lastActivity,
+        sortAt,
         counts: { needsYou: needsYouBy.get(p.projectId) ?? 0, running },
         exists: this.folderExists(p.path),
       };
@@ -406,7 +483,7 @@ export class Catalog {
     list.sort(
       (a, b) =>
         Number(b.pinned) - Number(a.pinned) ||
-        b.lastActivity - a.lastActivity ||
+        sidebarTime(b) - sidebarTime(a) ||
         a.displayName.localeCompare(b.displayName),
     );
     this.lastProjectOrder = list.map((p) => p.projectId).join('\n');
@@ -453,12 +530,13 @@ export class Catalog {
     if (this.cache) return this.cache;
     const projects = this.db.listProjects();
     const names = new Map(projects.map((p) => [p.projectId, p.displayName]));
-    const rows = this.db.listSessions({}, 1_000_000, undefined).items.map((r) => ({
+    const rows = this.db.listSessions({}, 1_000_000, undefined, 'sidebar').items.map((r) => ({
       sessionId: r.sessionId,
       title: titleFor(r),
       projectId: r.projectId,
       projectName: names.get(r.projectId) ?? baseName(r.cwd ?? r.projectId),
       lastActivity: r.lastModified,
+      sortAt: r.sortAt,
       bucket: r.bucket,
     }));
     this.cache = {
@@ -513,6 +591,10 @@ export class Catalog {
         // Only a chat with a process has tasks.
         ...(l.live && (l.runningTasks ?? 0) > 0 ? { runningTasks: l.runningTasks } : {}),
       };
+      const activity = this.db.sidebarActivityOf(l.sessionId);
+      summary.sortAt = activity?.userAt ?? row?.userAt ?? 0;
+      if (l.status === 'needsYou')
+        summary.sortAt = Math.max(summary.sortAt, activity?.attentionAt ?? 0);
       flag(summary, turns);
       out.set(l.sessionId, { indexed: row !== undefined, summary });
     }
@@ -526,6 +608,10 @@ export class Catalog {
         lastActivity: Math.max(row?.lastModified ?? 0, e.startedAt) || base.lastActivity,
         ...(e.waitingFor === undefined ? {} : { waitingFor: e.waitingFor }),
       };
+      const activity = this.db.sidebarActivityOf(e.sessionId);
+      summary.sortAt = activity?.userAt ?? e.startedAt;
+      if (summary.status === 'needsYou')
+        summary.sortAt = Math.max(summary.sortAt, activity?.attentionAt ?? 0);
       flag(summary, turns);
       out.set(e.sessionId, { indexed: row !== undefined, summary });
     }
@@ -587,7 +673,8 @@ export class Catalog {
       const row = rows.get(id);
       return row ? [fromRow(row, turns.has(id))] : [];
     });
-    return [...waiting, ...flagged];
+    for (const s of flagged) s.sortAt = Math.max(sidebarTime(s), backs.get(s.sessionId) ?? 0);
+    return [...waiting, ...flagged.sort(compareChats)];
   }
 
   /** The overlay rows that belong to `place`, in display order. */
@@ -649,55 +736,8 @@ export class Catalog {
       (snap.names.get(projectId) ?? '').toLowerCase().includes(needle) ||
       fts.has(id);
 
-    const turns = this.db.unreadTurns();
-    const first = cursor === undefined;
-    const overlay = first ? this.overlay(turns) : new Map<string, Entry>();
-    if (place.kind === 'needsYou') {
-      const all = first ? this.needsYouList(overlay, turns) : [];
-      return { items: all.filter((s) => keep(s.sessionId, s.title, s.projectId)) };
-    }
-    const over = first
-      ? this.overlayFor(place, overlay, snap.hidden).filter((s) =>
-          keep(s.sessionId, s.title, s.projectId),
-        )
-      : [];
-    if (place.kind === 'running') return { items: over };
-
-    const page = decodeCursor(cursor, 'q');
-    const excluded = new Set(first ? overlay.keys() : page.ids);
-    const after = page.key ? parseKey(page.key) : undefined;
-    const ids: string[] = [];
-    let more = false;
-    for (const r of snap.rows) {
-      if (
-        after &&
-        !(r.lastActivity < after.at || (r.lastActivity === after.at && r.sessionId > after.id))
-      ) {
-        continue;
-      }
-      if (excluded.has(r.sessionId)) continue;
-      if (!this.inPlace(place, r.projectId, r.bucket, snap.hidden)) continue;
-      if (!keep(r.sessionId, r.title, r.projectId)) continue;
-      if (ids.length === limit) {
-        more = true;
-        break;
-      }
-      ids.push(r.sessionId);
-    }
-    const found = new Map(
-      this.db.listSessions({ ids }, ids.length || 1, undefined).items.map((r) => [r.sessionId, r]),
+    return this.sidebarPage(place, snap, limit, cursor, 'q', (s) =>
+      keep(s.sessionId, s.title, s.projectId),
     );
-    const rows = ids.flatMap((id) => {
-      const r = found.get(id);
-      return r ? [r] : [];
-    });
-    const items = [...over, ...rows.map((r) => fromRow(r, turns.has(r.sessionId)))];
-    const last = rows.at(-1);
-    return more && last
-      ? {
-          items,
-          nextCursor: encodeCursor('q', [...excluded], `${last.lastModified}:${last.sessionId}`),
-        }
-      : { items };
   }
 }

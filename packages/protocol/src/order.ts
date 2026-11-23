@@ -17,16 +17,12 @@ export const statusRank = (s: ChatStatus): number => {
   }
 };
 
-/**
- * The order `sessions.list` lists a place's chats in: by status
- * (`statusRank`), then most recent first, then by session id. The index rows
- * after the live and external ones are all history, so a whole page follows it.
- * The UI merges several machines' pages with it.
- */
+/** Sidebar recency with fallback for peers predating stable ordering. */
+export const sidebarTime = (value: { lastActivity: number; sortAt?: number }): number =>
+  value.sortAt ?? value.lastActivity;
+
+/** Most recent sidebar activity first, with a deterministic tie break. */
 export const compareChats = (
-  a: Pick<ChatSummary, 'status' | 'lastActivity' | 'sessionId'>,
-  b: Pick<ChatSummary, 'status' | 'lastActivity' | 'sessionId'>,
-): number =>
-  statusRank(a.status) - statusRank(b.status) ||
-  b.lastActivity - a.lastActivity ||
-  a.sessionId.localeCompare(b.sessionId);
+  a: Pick<ChatSummary, 'lastActivity' | 'sortAt' | 'sessionId'>,
+  b: Pick<ChatSummary, 'lastActivity' | 'sortAt' | 'sessionId'>,
+): number => sidebarTime(b) - sidebarTime(a) || a.sessionId.localeCompare(b.sessionId);

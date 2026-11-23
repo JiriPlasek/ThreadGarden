@@ -35,6 +35,9 @@ export type SessionRow = {
   gitBranch: string | null;
   createdAt: number | null;
   lastModified: number;
+  userAt?: number;
+  attentionAt?: number;
+  sortAt?: number;
   fileSize: number | null;
   customTitle: string | null;
   pinned: boolean;
@@ -188,6 +191,9 @@ const toSession = (r: Row): SessionRow => ({
   gitBranch: (r.git_branch as string | null) ?? null,
   createdAt: (r.created_at as number | null) ?? null,
   lastModified: r.last_modified as number,
+  userAt: r.user_at as number,
+  ...(r.attention_at == null ? {} : { attentionAt: r.attention_at as number }),
+  sortAt: r.sort_at as number,
   fileSize: (r.file_size as number | null) ?? null,
   customTitle: (r.custom_title as string | null) ?? null,
   pinned: r.pinned === 1,
@@ -217,11 +223,18 @@ const WITH_BUCKET = `sessions s LEFT JOIN chat_buckets b ON b.session_id = s.ses
 /** A chat that moved away is kept for reading only: lists and counts leave it out. */
 const NOT_AWAY = `NOT EXISTS (SELECT 1 FROM moved_chats mv WHERE mv.session_id = s.session_id AND mv.state = 'away')`;
 
+const USER_AT_SQL = `COALESCE(sa.last_user_at, sa.baseline_at, s.created_at, s.last_modified)`;
+const SORT_AT_SQL = `CASE WHEN ${UNREAD_SQL} THEN MAX(${USER_AT_SQL},
+  (SELECT t.last_turn_ended_at FROM turn_state t WHERE t.session_id = s.session_id))
+  ELSE ${USER_AT_SQL} END`;
+
 const SESSION_SELECT = `SELECT s.*, m.custom_title AS custom_title, COALESCE(m.pinned, 0) AS pinned,
     b.bucket AS bucket, b.hold_until AS hold_until, b.hold_note AS hold_note, b.back_at AS back_at,
-    ct.auto_title AS auto_title, ct.generated_title AS generated_title
+    ct.auto_title AS auto_title, ct.generated_title AS generated_title,
+    ${USER_AT_SQL} AS user_at, sa.attention_at AS attention_at, ${SORT_AT_SQL} AS sort_at
   FROM ${WITH_BUCKET} LEFT JOIN meta m ON m.session_id = s.session_id
-  LEFT JOIN chat_titles ct ON ct.session_id = s.session_id`;
+  LEFT JOIN chat_titles ct ON ct.session_id = s.session_id
+  LEFT JOIN sidebar_activity sa ON sa.session_id = s.session_id`;
 
 export class Db implements LiveRegistry {
   constructor(readonly raw: DatabaseSync) {}
@@ -257,6 +270,50 @@ export class Db implements LiveRegistry {
         info.lastModified,
         info.fileSize ?? null,
       );
+    this.seedSidebarActivity(info.sessionId, info.createdAt ?? info.lastModified);
+  }
+
+  private seedSidebarActivity(id: string, fallback: number): void {
+    this.raw
+      .prepare(
+        `INSERT OR IGNORE INTO sidebar_activity (session_id, baseline_at)
+      VALUES (?, COALESCE((SELECT COALESCE(created_at, last_modified) FROM sessions WHERE session_id = ?), ?))`,
+      )
+      .run(id, id, fallback);
+  }
+
+  recordUserMessage(id: string, at: number): void {
+    if (!Number.isFinite(at)) return;
+    this.seedSidebarActivity(id, at);
+    this.raw
+      .prepare(
+        `UPDATE sidebar_activity SET last_user_at = MAX(COALESCE(last_user_at, ?), ?) WHERE session_id = ?`,
+      )
+      .run(at, at, id);
+  }
+
+  recordNeedsYou(id: string, at: number): void {
+    if (!Number.isFinite(at)) return;
+    this.seedSidebarActivity(id, at);
+    this.raw
+      .prepare(
+        `UPDATE sidebar_activity SET attention_at = MAX(COALESCE(attention_at, ?), ?) WHERE session_id = ?`,
+      )
+      .run(at, at, id);
+  }
+
+  sidebarActivityOf(id: string): { userAt: number; attentionAt?: number } | undefined {
+    const r = this.raw
+      .prepare(
+        `SELECT COALESCE(last_user_at, baseline_at) AS user_at, attention_at FROM sidebar_activity WHERE session_id = ?`,
+      )
+      .get(id);
+    return r
+      ? {
+          userAt: r.user_at as number,
+          ...(r.attention_at == null ? {} : { attentionAt: r.attention_at as number }),
+        }
+      : undefined;
   }
 
   getSession(id: string): SessionRow | undefined {
@@ -269,7 +326,9 @@ export class Db implements LiveRegistry {
     filter: SessionFilter,
     limit: number,
     cursor: string | undefined,
+    order: 'activity' | 'sidebar' = 'activity',
   ): { items: SessionRow[]; nextCursor?: string } {
+    const key = order === 'sidebar' ? SORT_AT_SQL : 's.last_modified';
     const where: string[] = [];
     const params: (string | number)[] = [];
     if (filter.projectId !== undefined) {
@@ -288,11 +347,11 @@ export class Db implements LiveRegistry {
       const at = cursor.indexOf(':');
       const modified = Number(cursor.slice(0, at));
       const id = cursor.slice(at + 1);
-      where.push('(s.last_modified < ? OR (s.last_modified = ? AND s.session_id > ?))');
+      where.push(`(${key} < ? OR (${key} = ? AND s.session_id > ?))`);
       params.push(modified, modified, id);
     }
     const sql = `${SESSION_SELECT} ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
-      ORDER BY s.last_modified DESC, s.session_id ASC LIMIT ?`;
+      ORDER BY ${key} DESC, s.session_id ASC LIMIT ?`;
     const rows = this.raw
       .prepare(sql)
       .all(...params, limit + 1)
@@ -300,7 +359,10 @@ export class Db implements LiveRegistry {
     const items = rows.slice(0, limit);
     const last = items.at(-1);
     return rows.length > limit && last
-      ? { items, nextCursor: `${last.lastModified}:${last.sessionId}` }
+      ? {
+          items,
+          nextCursor: `${order === 'sidebar' ? last.sortAt : last.lastModified}:${last.sessionId}`,
+        }
       : { items };
   }
 
@@ -327,6 +389,20 @@ export class Db implements LiveRegistry {
       .prepare('SELECT project_id, MAX(last_modified) AS m FROM sessions GROUP BY project_id')
       .all();
     return new Map(rows.map((r) => [r.project_id as string, Number(r.m)]));
+  }
+
+  projectSidebarActivity(excludeIds: readonly string[] = []): Map<string, number> {
+    const exclude = excludeIds.length
+      ? `AND s.session_id NOT IN (${excludeIds.map(() => '?').join(',')})`
+      : '';
+    const rows = this.raw
+      .prepare(
+        `SELECT s.project_id, MAX(${SORT_AT_SQL}) AS at FROM sessions s
+      LEFT JOIN sidebar_activity sa ON sa.session_id = s.session_id
+      WHERE ${NOT_AWAY} ${exclude} GROUP BY s.project_id`,
+      )
+      .all(...excludeIds);
+    return new Map(rows.map((r) => [r.project_id as string, r.at as number]));
   }
 
   /**
@@ -497,6 +573,7 @@ export class Db implements LiveRegistry {
   replaceStats(sessionId: string, stats: SessionStats, version: number): void {
     this.inTransaction(() => {
       this.deleteStatsRows(sessionId);
+      if (stats.lastUserAt !== undefined) this.recordUserMessage(sessionId, stats.lastUserAt);
       const first = stats.firstAt;
       const last = stats.lastAt;
       const messages = stats.days.reduce((n, d) => n + d.userMessages + d.assistantMessages, 0);

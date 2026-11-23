@@ -143,6 +143,9 @@ export type LiveSessionDeps = {
    * reported through `onError`.
    */
   onTurnEnded?: (sessionId: string, at: number) => void;
+  /** Meaningful sidebar activity, independent of streaming/tool output. */
+  onUserMessage?: (sessionId: string, at: number) => void;
+  onNeedsYou?: (sessionId: string, at: number) => void;
   /**
    * Ruling R29: the number of running background tasks changed (published
    * with the `chat.tasks` event that changed it). A throw is reported and
@@ -567,6 +570,7 @@ export class LiveSession {
       ...(images.length > 0 ? { images } : {}),
       ts: this.deps.now(),
     };
+    this.guard('onUserMessage', () => this.deps.onUserMessage?.(this.id, item.ts!));
     this.noteActivity();
     if (queued) {
       this.waiting.set(uuid, item);
@@ -1288,7 +1292,10 @@ export class LiveSession {
     }
     if (next === 'idle') this.idleSinceValue ??= this.deps.now();
     else this.idleSinceValue = null;
+    const previous = this.statusValue;
     this.statusValue = next;
+    if (next === 'needsYou' && previous !== next)
+      this.guard('onNeedsYou', () => this.deps.onNeedsYou?.(this.id, this.deps.now()));
     this.publishStatus();
   }
 

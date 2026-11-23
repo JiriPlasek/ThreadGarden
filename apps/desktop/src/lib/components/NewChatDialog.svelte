@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { ImageRef, Project, Result } from '@threadgarden/protocol';
-  import { PERMISSION_MODE_OPTIONS } from '@threadgarden/protocol';
+  import { sidebarTime, PERMISSION_MODE_OPTIONS } from '@threadgarden/protocol';
   import { untrack } from 'svelte';
   import { buildFlags } from '#lib/build-flags.js';
   import Composer from '#lib/components/composer/Composer.svelte';
@@ -74,7 +74,7 @@
 
   const byPinnedThenRecent = (a: Project, b: Project): number =>
     Number(b.pinned) - Number(a.pinned) ||
-    b.lastActivity - a.lastActivity ||
+    sidebarTime(b) - sidebarTime(a) ||
     a.displayName.localeCompare(b.displayName);
 
   type Tab = 'existing' | 'new' | 'clone';

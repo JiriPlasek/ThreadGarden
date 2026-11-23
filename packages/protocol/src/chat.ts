@@ -49,6 +49,8 @@ export const ChatSummarySchema = z.object({
   status: ChatStatusSchema,
   preview: z.string(),
   lastActivity: z.number(),
+  /** Stable sidebar recency; absent on older peers. */
+  sortAt: z.number().optional(),
   pinned: z.boolean(),
   live: z.boolean(),
   external: ExternalInfoSchema.nullable(),
@@ -88,6 +90,8 @@ export const ProjectSchema = z.object({
   pinned: z.boolean(),
   hidden: z.boolean(),
   lastActivity: z.number(),
+  /** Stable sidebar recency; absent on older peers. */
+  sortAt: z.number().optional(),
   counts: z.object({ needsYou: z.number(), running: z.number() }),
   /** v1.1: whether the project folder exists on disk (cached stat; "Missing folders" when false). */
   exists: z.boolean().default(true),

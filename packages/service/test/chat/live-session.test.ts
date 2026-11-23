@@ -1554,6 +1554,31 @@ describe('LiveSession turn ends and activity (v1.1)', () => {
     expect(finished(ctx.events)).toHaveLength(1); // still announced
   });
 
+  it('records sidebar user sends and first attention transitions, without streaming bumps', async () => {
+    const user = vi.fn();
+    const attention = vi.fn();
+    const ctx = setup({ onUserMessage: user, onNeedsYou: attention });
+    const session = LiveSession.create('/p', { text: 'go' }, ctx.opts);
+    expect(user).toHaveBeenCalledTimes(1);
+    const sentAt = ctx.timers.now();
+    expect(user).toHaveBeenLastCalledWith(session.sessionId, sentAt);
+    ctx.timers.advance(100);
+    const fake = ctx.adapter.lastSession();
+    const decision = fake.requestPermission('Read', { file_path: 'a' }, { requestId: 'a' });
+    await settle();
+    expect(attention).toHaveBeenCalledTimes(1);
+    expect(attention).toHaveBeenLastCalledWith(session.sessionId, sentAt + 100);
+    ctx.timers.advance(100);
+    fake.emit(assistantText('stream', 'still waiting'));
+    await settle();
+    expect(user).toHaveBeenCalledTimes(1);
+    expect(attention).toHaveBeenCalledTimes(1);
+    session.respond('a', { decision: 'allow' });
+    await decision;
+    session.send({ text: 'follow up' });
+    expect(user).toHaveBeenCalledTimes(2);
+  });
+
   it('tracks the time of the last real activity (sends and SDK messages) and reports it', async () => {
     const activity = vi.fn();
     const ctx = setup({ onActivity: activity });
