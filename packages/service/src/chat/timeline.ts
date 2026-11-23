@@ -35,7 +35,7 @@ export const projectTimeline = (
       status: 'unknown',
       toolCount: 0,
       agentCount: 0,
-      ...(time(startedAt) === undefined ? {} : { startedAt }),
+      ...(time(startedAt) === undefined ? {} : { startedAt, promptAt: startedAt }),
     };
     out.blocks.push(block);
     out.items.set(id, []);

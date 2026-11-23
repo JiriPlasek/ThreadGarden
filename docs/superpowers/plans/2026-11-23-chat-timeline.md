@@ -6,7 +6,7 @@
 
 **Architecture:** Project the service's existing complete history/live view into lightweight timeline blocks. Keep time and task interpretation in the service; layout and lane allocation belong to the desktop. Reuse normalized chat items for inspection. Read Claude history only through SDK methods; never infer missing dates from the current clock. Reuse the timestamps branch's Codex result correction.
 
-**Constraints:** No new dependencies. Unknown timing remains explicit. Live work must not disappear on a refresh. Detail requests validate block membership in the requested chat. Permission requests remain answerable through the existing composer.
+**Constraints:** No new dependencies. Unknown timing is never invented; undated entries are hidden from Timeline as requested in review. Live work must not disappear on a refresh. Detail requests validate block membership in the requested chat. Permission requests remain answerable through the existing composer.
 
 - [x] Add timeline schemas and a pure projection with tests for turns, parallel agents, unknown times, background completion, and live work.
 - [x] Preserve tool start/end timestamps in normalization; expose timeline summaries and bounded detail reads through chat handlers. Test history spanning more than one conversation page.
@@ -14,3 +14,5 @@
 - [x] Verify projection, handlers, UI interactions, typecheck, formatting, and the runnable local app. Keep the prior combined review branch intact.
 
 Review found that an open inspector needed to refresh its messages as well as its block summary. It now reloads its selected pages with stale-response protection. The browser test inspects a turn while it runs and verifies its final report appears without reopening it. Historical Agent results whose SDK wrapper omits structured output use the explicit resume trailer to identify the subagent; its messages are still read only through the SDK.
+
+Visual review: every block now has a minimum labeled height. A shared piecewise axis expands short recorded intervals across all lanes, rather than covering the next entry or gap with an oversized card. The toolbar discloses this; the timestamps and reported durations remain original. Clock ticks align to conventional local clock intervals, prompt starts have a You/time marker, and gaps are retained across the entire history returned by the SDK. Goal lifetimes are not reconstructed from incomplete lifecycle data.

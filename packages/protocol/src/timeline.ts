@@ -8,6 +8,8 @@ export const TimelineBlockSchema = z.object({
   outcome: z.string(),
   status: z.enum(['running', 'completed', 'failed', 'stopped', 'unknown']),
   startedAt: z.number().optional(),
+  /** Known user-message time; absent when the turn's start was inferred. */
+  promptAt: z.number().optional(),
   endedAt: z.number().optional(),
   toolCount: z.number(),
   agentCount: z.number(),

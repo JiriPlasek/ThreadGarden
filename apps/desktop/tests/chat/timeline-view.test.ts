@@ -12,6 +12,7 @@ const block: TimelineBlock = {
   outcome: 'Tests passed',
   status: 'completed',
   startedAt: T,
+  promptAt: T,
   endedAt: T + 3600000,
   toolCount: 12,
   agentCount: 2,
@@ -71,6 +72,7 @@ describe('timeline view', () => {
     render(TimelineView, { sessionId: 's', load: async () => ({ blocks: [block] }), detail });
     await userEvent.click(await screen.findByRole('button', { name: /Turn: Port billing/ }));
     expect(await screen.findByText('Saved report')).toBeTruthy();
+    expect(screen.getByText(/^You ·/)).toBeTruthy();
     await userEvent.click(screen.getByRole('button', { name: 'Load more messages' }));
     expect(await screen.findByText('Next report')).toBeTruthy();
     expect(detail).toHaveBeenLastCalledWith('turn:u', 1);
@@ -83,7 +85,7 @@ describe('timeline view', () => {
     expect(screen.queryByRole('complementary', { name: 'Timeline details' })).toBeNull();
   });
 
-  it('keeps entries without dates inspectable and retries failed reads', async () => {
+  it('hides entries without dates and retries failed reads', async () => {
     const load = vi
       .fn()
       .mockRejectedValueOnce(new Error('Disconnected'))
@@ -97,9 +99,9 @@ describe('timeline view', () => {
     await waitFor(() => expect(load).toHaveBeenCalled());
     if (screen.queryByText('Disconnected'))
       await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
-    expect(await screen.findByText(/Timing unavailable/)).toBeTruthy();
-    await userEvent.click(screen.getByRole('button', { name: /Turn: Port billing/ }));
-    expect(await screen.findByRole('complementary', { name: 'Timeline details' })).toBeTruthy();
+    expect(await screen.findByText('No timeline entries to show.')).toBeTruthy();
+    expect(screen.queryByText(/Timing unavailable/)).toBeNull();
+    expect(screen.queryByRole('button', { name: /Turn: Port billing/ })).toBeNull();
     expect(screen.queryByText(/Nov 20/)).toBeNull();
   });
 });

@@ -52,6 +52,7 @@ test('calendar layout shows parallel agents, folded overnight time, zoom, and a 
       kind: 'turn',
       title: 'Plan the billing migration',
       startedAt: yesterday,
+      promptAt: yesterday,
       endedAt: yesterday + 15 * minute,
       agentCount: 2,
     },
@@ -61,6 +62,7 @@ test('calendar layout shows parallel agents, folded overnight time, zoom, and a 
       kind: 'turn',
       title: 'Implement the plan and run the tests',
       startedAt: yesterday + 30 * minute,
+      promptAt: yesterday + 30 * minute,
       endedAt: yesterday + 130 * minute,
       outcome: 'Invoices and refunds are migrated. Webhook tests found an issue.',
       agentCount: 3,
@@ -89,7 +91,7 @@ test('calendar layout shows parallel agents, folded overnight time, zoom, and a 
       kind: 'agent',
       title: 'Check webhook compatibility',
       startedAt: yesterday + 40 * minute,
-      endedAt: yesterday + 90 * minute,
+      endedAt: yesterday + 40 * minute + 5000,
       status: 'failed',
       model: 'haiku',
     },
@@ -99,9 +101,11 @@ test('calendar layout shows parallel agents, folded overnight time, zoom, and a 
       kind: 'turn',
       title: 'Fix the webhook tests',
       startedAt: now - 40 * minute,
+      promptAt: now - 40 * minute,
       endedAt: now - 10 * minute,
       outcome: 'All tests pass.',
     },
+    { ...defaults, id: 'turn:undated', kind: 'turn', title: 'Undated legacy prompt' },
   ];
   await page.routeWebSocket(/127\.0\.0\.1/, (socket) => {
     const server = socket.connectToServer();
@@ -143,6 +147,17 @@ test('calendar layout shows parallel agents, folded overnight time, zoom, and a 
   const timeline = page.getByRole('region', { name: 'Chat timeline' });
   await expect(timeline.getByText(/with no recorded activity/)).toBeVisible();
   await expect(timeline.getByRole('button', { name: /^Agent:/ })).toHaveCount(3);
+  await expect(timeline.getByText(/Timing unavailable/)).toHaveCount(0);
+  await expect(timeline.getByText('Undated legacy prompt')).toHaveCount(0);
+  await expect(timeline.getByText(/You ·/)).toHaveCount(3);
+  await expect(timeline.getByRole('button', { name: /Agent: Check webhook/ })).toContainText(
+    'Check webhook compatibility',
+  );
+  const minuteMarks = await timeline
+    .locator('time')
+    .evaluateAll((times) => times.map((t) => new Date(t.getAttribute('datetime')!).getMinutes()));
+  expect(minuteMarks.length).toBeGreaterThan(0);
+  expect(minuteMarks.every((m) => m % 15 === 0)).toBe(true);
   await timeline.screenshot({ path: 'test-results/timeline-calendar.png' });
   await timeline.getByRole('button', { name: /Agent: Migrate refunds/ }).click();
   await expect(page.getByText('The migration is ready for review. All tests pass.')).toBeVisible();

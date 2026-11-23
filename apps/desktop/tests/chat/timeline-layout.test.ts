@@ -20,14 +20,39 @@ const block = (
   agentCount: 0,
 });
 describe('timeline layout', () => {
+  it('keeps short and instantaneous entries readable without covering the next turn or gap', () => {
+    const l = layoutTimeline(
+      [
+        block('short', M, M + 1000),
+        block('next', M + 2000, M + 3000),
+        block('instant', 60 * M, 60 * M),
+      ],
+      61 * M,
+    );
+    expect(l.placed.every((p) => p.height >= 48)).toBe(true);
+    expect(l.placed[1]!.y).toBeGreaterThanOrEqual(l.placed[0]!.y + l.placed[0]!.height);
+    expect(l.gaps[0]!.y).toBeGreaterThanOrEqual(l.placed[1]!.y + l.placed[1]!.height);
+    expect(l.height).toBeGreaterThan(l.placed[2]!.y + l.placed[2]!.height);
+  });
+
+  it('aligns clock ticks to conventional local clock intervals', () => {
+    const start = new Date(2026, 10, 21, 5, 13).getTime();
+    const l = layoutTimeline([block('long', start, start + 180 * M)], start + 200 * M);
+    expect(l.ticks.length).toBeGreaterThan(2);
+    expect(
+      l.ticks.every(
+        (t) => new Date(t.at).getMinutes() % 15 === 0 && new Date(t.at).getSeconds() === 0,
+      ),
+    ).toBe(true);
+  });
   it('folds overnight idle time but preserves elapsed height while work is running', () => {
     const l = layoutTimeline(
-      [block('first', M, 11 * M), block('next', 1440 * M, 1450 * M)],
+      [block('first', M, 121 * M), block('next', 1440 * M, 1560 * M)],
       1500 * M,
     );
     expect(l.gaps).toHaveLength(1);
-    expect(l.placed.map((b) => b.height)).toEqual([20, 20]);
-    expect(l.height).toBeLessThan(200);
+    expect(l.placed.map((b) => b.height)).toEqual([240, 240]);
+    expect(l.height).toBeLessThan(700);
   });
   it('does not fold a gap covered by a long-running agent', () => {
     const l = layoutTimeline(
@@ -56,13 +81,15 @@ describe('timeline layout', () => {
     const undated = { ...block('unknown', M, 2 * M), startedAt: undefined, endedAt: undefined };
     const live = { ...block('live', M, 2 * M), status: 'running' as const, endedAt: undefined };
     const l = layoutTimeline([undated, live], 11 * M);
-    expect(l.undated).toEqual([undated]);
-    expect(l.placed[0]?.height).toBe(20);
+    expect(l.placed).toHaveLength(1);
+    expect(l.placed[0]?.height).toBe(56);
     expect(l.nowY).toBeDefined();
   });
   it('hatches the wait between completed turns without counting it as work', () => {
     const l = layoutTimeline([block('one', M, 5 * M), block('two', 15 * M, 20 * M)], 30 * M);
-    expect(l.waits).toEqual([{ y: 36, height: 20, duration: 10 * M }]);
+    expect(l.waits).toEqual([
+      { y: l.placed[0]!.y + l.placed[0]!.height, height: 20, duration: 10 * M },
+    ]);
     expect(l.gaps).toHaveLength(0);
   });
 });

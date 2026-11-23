@@ -48,6 +48,16 @@
         : b.status === 'running'
           ? elapsed(now - b.startedAt)
           : 'End time unknown';
+  const clock = (at: number): string =>
+    new Date(at).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+  const gapDuration = (ms: number): string => {
+    const days = Math.floor(ms / 86_400_000);
+    return days >= 7 && days % 7 === 0
+      ? `${days / 7} weeks`
+      : days > 0
+        ? `${days} days ${Math.floor(ms / 3_600_000) % 24}h`
+        : elapsed(ms);
+  };
   const label = (b: TimelineBlock): string =>
     `${b.kind === 'turn' ? 'Turn' : 'Agent'}: ${b.title} · ${b.status} · ${durationOf(b)}`;
   const tint = (b: TimelineBlock): string =>
@@ -64,7 +74,7 @@
     try {
       const response = await load();
       if (id !== sessionId || token !== refreshGeneration) return;
-      blocks = response.blocks;
+      blocks = response.blocks.filter((b) => b.startedAt !== undefined || b.endedAt !== undefined);
       error = null;
       if (selectedId && blocks.some((b) => b.id === selectedId)) void readDetails(selectedId);
     } catch (err) {
@@ -172,6 +182,9 @@
         (b) => b.kind === 'agent',
       ).length} agents</span
     >
+    {#if layout.expanded}<span class="text-muted-foreground"
+        >Short entries expanded for readability</span
+      >{/if}
     <div class="ml-auto flex items-center gap-2">
       <button
         class="rounded border px-2 py-1 disabled:opacity-40"
@@ -199,7 +212,7 @@
     </p>{/if}
   {#if loading}<p role="status" class="p-6 text-sm text-muted-foreground">Loading timeline…</p>
   {:else if blocks.length === 0 && !error}<p class="p-6 text-sm text-muted-foreground">
-      No turns yet.
+      No timeline entries to show.
     </p>
   {:else}
     <div
@@ -264,11 +277,16 @@
               title="{label(p.block)}{p.block.startedAt ? `\n${fullTime(p.block.startedAt)}` : ''}"
               onclick={(e) => openBlock(p.block.id, e.currentTarget)}
             >
-              {#if p.height >= 26}<div class="truncate font-medium">{p.block.title}</div>{/if}
-              {#if p.height >= 46}<div class="truncate opacity-70">
+              <div class="flex items-center gap-1 text-[0.625rem] opacity-70">
+                <span aria-hidden="true">●</span>{p.block.promptAt !== undefined ? 'You' : 'Turn'} · {clock(
+                  p.block.promptAt ?? p.block.startedAt ?? p.block.endedAt!,
+                )}
+              </div>
+              <div class="truncate font-medium">{p.block.title}</div>
+              {#if p.height >= 72}<div class="truncate opacity-70">
                   {durationOf(p.block)} · {p.block.toolCount} tools · {p.block.agentCount} agents
                 </div>{/if}
-              {#if p.height >= 68}<div class="line-clamp-2 opacity-80">{p.block.outcome}</div>{/if}
+              {#if p.height >= 96}<div class="line-clamp-2 opacity-80">{p.block.outcome}</div>{/if}
             </button>
           {/each}
         </div>
@@ -286,10 +304,10 @@
               title={label(p.block)}
               onclick={(e) => openBlock(p.block.id, e.currentTarget)}
             >
-              {#if p.height >= 26}<div class="truncate font-medium">{p.block.title}</div>{/if}
-              {#if p.height >= 46}<div class="truncate opacity-70">
-                  {p.block.status} · {durationOf(p.block)}
-                </div>{/if}
+              <div class="truncate font-medium">{p.block.title}</div>
+              <div class="truncate opacity-70">
+                {p.block.status} · {durationOf(p.block)}
+              </div>
               {#if p.height >= 66}<div class="truncate opacity-70">{p.block.model ?? ''}</div>{/if}
             </button>
           {/each}
@@ -298,7 +316,7 @@
             class="pointer-events-none absolute inset-x-20 z-20 border-y border-dashed bg-muted/95 px-3 py-1 text-[0.6875rem] text-muted-foreground"
             style:top="{gap.y}px"
           >
-            ⋯ {elapsed(gap.end - gap.start)} with no recorded activity ⋯
+            ⋯ {gapDuration(gap.end - gap.start)} with no recorded activity ⋯
           </div>{/each}
         {#if layout.nowY !== undefined}<div
             class="pointer-events-none absolute inset-x-0 z-20 border-t border-blue-500"
@@ -307,26 +325,6 @@
             <span class="bg-background px-2 text-[0.625rem] text-blue-500">Now</span>
           </div>{/if}
       </div>
-      {#if layout.undated.length}
-        <div class="border-t p-4">
-          <h3 class="text-sm font-medium">Timing unavailable · {layout.undated.length}</h3>
-          <p class="mb-3 text-xs text-muted-foreground">
-            These entries have no saved timestamps. They are kept here rather than placed at an
-            invented time.
-          </p>
-          <div class="grid gap-2 sm:grid-cols-2">
-            {#each layout.undated as b (b.id)}<button
-                class="rounded border p-3 text-left text-xs hover:bg-muted"
-                aria-label={label(b)}
-                onclick={(e) => openBlock(b.id, e.currentTarget)}
-                ><span class="font-medium">{b.title}</span><span
-                  class="mt-1 block text-muted-foreground"
-                  >{b.kind} · {b.status} · {b.toolCount} tools</span
-                ></button
-              >{/each}
-          </div>
-        </div>
-      {/if}
     </div>
   {/if}
   {#if selected}

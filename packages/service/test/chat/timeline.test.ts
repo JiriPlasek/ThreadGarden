@@ -37,6 +37,7 @@ describe('timeline projection', () => {
         outcome: 'Done well',
         status: 'completed',
         startedAt: T,
+        promptAt: T,
         endedAt: T + 10000,
         toolCount: 0,
         agentCount: 0,
