@@ -1,4 +1,9 @@
-import type { ChatItem, ChatTask, TimelineBlock } from '@threadgarden/protocol';
+import {
+  parseTaskNotification,
+  type ChatItem,
+  type ChatTask,
+  type TimelineBlock,
+} from '@threadgarden/protocol';
 import { timelineActivity, type TimelineObservation } from './timeline-activity.js';
 
 const record = (v: unknown): Record<string, unknown> =>
@@ -23,8 +28,6 @@ const usageTokens = (v: unknown): number | undefined => {
 };
 const agentCall = (i: ChatItem): i is Extract<ChatItem, { kind: 'toolCall' }> =>
   i.kind === 'toolCall' && ['Agent', 'Task', 'collabAgentToolCall'].includes(i.name);
-const field = (v: string, tag: string): string | undefined =>
-  new RegExp(`<${tag}>([\\s\\S]*?)</${tag}>`).exec(v)?.[1]?.trim();
 
 export type TimelineProjection = {
   blocks: TimelineBlock[];
@@ -145,18 +148,20 @@ export const projectTimeline = (
   }
   // Notifications persisted by Claude are authoritative for background agents.
   for (const item of items) {
-    if (item.kind !== 'system' || !item.detail?.trim().startsWith('<task-notification>')) continue;
-    const toolId = field(item.detail, 'tool-use-id');
+    if (item.kind !== 'system') continue;
+    const notification = parseTaskNotification(item.detail ?? item.text);
+    if (!notification) continue;
+    const toolId = notification.toolUseId;
     const block = toolId ? calls.get(toolId) : undefined;
     if (!block) continue;
-    const status = field(item.detail, 'status');
+    const status = notification.status;
     if (status === 'completed' || status === 'failed' || status === 'stopped')
       block.status = status;
     const end = time(item.ts);
     if (end !== undefined) block.endedAt = end;
-    block.outcome = preview(field(item.detail, 'summary') ?? item.text);
+    block.outcome = preview(notification.summary || item.text);
     out.items.get(block.id)!.push(item);
-    const agentId = field(item.detail, 'task-id');
+    const agentId = notification.taskId;
     if (agentId) out.agents.set(block.id, agentId);
   }
   for (const task of tasks) {

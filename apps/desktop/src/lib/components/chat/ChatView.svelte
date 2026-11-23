@@ -671,9 +671,14 @@
   };
 
   /** Shows the tool call that started an agent, when it is among the loaded items. */
-  const showAgent = (toolUseId: string): void => {
+  const showAgent = async (toolUseId: string): Promise<void> => {
     const item = chat?.items.find((i) => i.kind === 'toolCall' && i.toolUseId === toolUseId);
-    if (item) list?.scrollToItem(item.id);
+    if (!item) return;
+    if (settings.chatView === 'concise') {
+      settings.setChatView('conversation');
+      await tick();
+    }
+    list?.scrollToItem(item.id);
   };
 
   // ── /model, /effort, /permissions (ruling R25) ──────────────────────────
@@ -784,23 +789,26 @@
             No messages yet.
           </div>
         {:else}
-          <MessageList
-            bind:this={list}
-            items={chat.items}
-            {agentName}
-            queued={chat.queuedMessages}
-            onWithdraw={readOnly ? undefined : removeQueued}
-            hasMore={chat.hasMore}
-            loadingOlder={chat.loadingOlder}
-            onLoadOlder={() => void chats.loadOlder(sessionId)}
-            onFork={readOnly || isCodexChat(sessionId) ? undefined : fork}
-            requests={readOnly ? undefined : requests}
-            requestsDocked={!readOnly}
-            tasks={machineAway ? [] : chat.tasks}
-            {working}
-            memory={chat.view}
-            stickRequests={chat.stickRequests}
-          />
+          {#key settings.chatView}
+            <MessageList
+              concise={settings.chatView === 'concise'}
+              bind:this={list}
+              items={chat.items}
+              {agentName}
+              queued={chat.queuedMessages}
+              onWithdraw={readOnly ? undefined : removeQueued}
+              hasMore={chat.hasMore}
+              loadingOlder={chat.loadingOlder}
+              onLoadOlder={() => void chats.loadOlder(sessionId)}
+              onFork={readOnly || isCodexChat(sessionId) ? undefined : fork}
+              requests={readOnly ? undefined : requests}
+              requestsDocked={!readOnly}
+              tasks={machineAway ? [] : chat.tasks}
+              {working}
+              memory={settings.chatView === 'concise' ? chat.conciseView : chat.view}
+              stickRequests={chat.stickRequests}
+            />
+          {/key}
         {/if}
 
         {#if movedTo}

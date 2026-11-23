@@ -12,7 +12,10 @@
   import ToolGroup from './items/ToolGroup.svelte';
   import UnknownItem from './items/UnknownItem.svelte';
   import UserItem from './items/UserItem.svelte';
-  import { buildRows, quietTail, type Row } from './rows';
+  import { buildRows, quietTail } from './rows';
+  import { buildConciseRows, type ConciseRow } from './concise';
+  import ClampedBlock from './ClampedBlock.svelte';
+  import CompletedTask from './CompletedTask.svelte';
   import { captureAnchor, computeOffsets, restoreAnchor, visibleRange } from './virtual';
 
   /**
@@ -34,11 +37,12 @@
    */
   type QueuedRow = { kind: 'queued'; key: string; message: QueuedMessage; itemIds: string[] };
   type WaitingRow = { kind: 'waiting'; key: string; itemIds: string[] };
-  type ListRow = Row | WaitingRow | QueuedRow;
+  type ListRow = ConciseRow | WaitingRow | QueuedRow;
 
   let {
     items,
     agentName = 'Claude',
+    concise = false,
     queued = [],
     hasMore = false,
     loadingOlder = false,
@@ -56,6 +60,7 @@
   }: {
     items: readonly ChatItem[];
     agentName?: string;
+    concise?: boolean;
     /** Messages sent while Claude worked that it has not read yet, oldest first. */
     queued?: readonly QueuedMessage[];
     hasMore?: boolean;
@@ -112,6 +117,21 @@
     anchor: null,
   };
 
+  let expanded = $state(new Set(untrack(() => mem.expanded)));
+  const toggleBlock = (key: string, open: boolean): void => {
+    mem.stick = false;
+    stuck = false;
+    remember();
+    const next = new Set(expanded);
+    if (open) next.add(key);
+    else next.delete(key);
+    expanded = next;
+    mem.expanded = next;
+  };
+  const contentRows = $derived(
+    concise ? buildConciseRows(items, tasks, hasMore) : buildRows(items),
+  );
+
   let viewport = $state<HTMLDivElement | null>(null);
   let content = $state<HTMLDivElement | null>(null);
   let scrollTop = $state(0);
@@ -127,7 +147,10 @@
   const WAITING_DELAY_MS = 400;
   const WAITING_ROW: WaitingRow = { kind: 'waiting', key: 'tg:waiting', itemIds: [] };
 
-  const quiet = $derived(working && quietTail(items));
+  const quiet = $derived(
+    working &&
+      quietTail(concise ? contentRows.flatMap((r) => (r.kind === 'item' ? [r.item] : [])) : items),
+  );
   /** When the tail went quiet; the row shows once WAITING_DELAY_MS have passed. */
   let quietSince = $state<number | null>(null);
   let waitingShown = $state(false);
@@ -158,7 +181,7 @@
   // The waiting row sits between the conversation and the queued messages: it is
   // about the turn in progress, which they wait behind.
   const rows: ListRow[] = $derived([
-    ...buildRows(items),
+    ...contentRows,
     ...(waitingShown ? [WAITING_ROW] : []),
     ...queued
       .filter((message) => !read.has(message.id))
@@ -173,7 +196,10 @@
   const anchorKeys = $derived(rows.map((r) => r.itemIds[0] ?? r.key));
   const rowOfItem = $derived.by(() => {
     const m = new Map<string, number>();
-    rows.forEach((r, i) => r.itemIds.forEach((id) => m.set(id, i)));
+    rows.forEach((r, i) => {
+      m.set(r.key, i);
+      r.itemIds.forEach((id) => m.set(id, i));
+    });
     return m;
   });
   /** Like `rowOfItem`, plus the subagent items nested inside a row (built on demand). */
@@ -191,13 +217,19 @@
 
   const estimate = (row: ListRow): number => {
     if (row.kind === 'queued') return userHeight(row.message.text) + 16;
+    if (row.kind === 'taskSummary') return 96;
     if (row.kind !== 'item') return 28;
     const it = row.item;
     switch (it.kind) {
       case 'user':
-        return userHeight(it.text);
+        return concise && !expanded.has(row.key)
+          ? Math.min(340, userHeight(it.text))
+          : userHeight(it.text);
       case 'assistantText':
-        return 32 + 21 * Math.min(120, Math.ceil(it.markdown.length / 110));
+        return Math.min(
+          concise && !expanded.has(row.key) ? 340 : Infinity,
+          32 + 21 * Math.min(120, Math.ceil(it.markdown.length / 110)),
+        );
       case 'todo':
         return 52 + 22 * it.todos.length;
       case 'toolCall':
@@ -426,8 +458,24 @@
             class="mx-auto max-w-4xl rounded-md px-4 py-1 transition-colors duration-700 data-flash:bg-amber-500/10"
             {@attach observe}
           >
-            {#if row.kind === 'item'}
-              <ItemView item={row.item} children={row.children} />
+            {#if row.kind === 'taskSummary'}
+              <ClampedBlock
+                expanded={expanded.has(row.key)}
+                onToggle={(open) => toggleBlock(row.key, open)}
+              >
+                <CompletedTask task={row.task} />
+              </ClampedBlock>
+            {:else if row.kind === 'item'}
+              {#if concise && (row.item.kind === 'user' || row.item.kind === 'assistantText' || row.item.kind === 'system' || row.item.kind === 'unknown')}
+                <ClampedBlock
+                  expanded={expanded.has(row.key)}
+                  onToggle={(open) => toggleBlock(row.key, open)}
+                >
+                  <ItemView item={row.item} children={row.children} {concise} />
+                </ClampedBlock>
+              {:else}
+                <ItemView item={row.item} children={row.children} />
+              {/if}
             {:else if row.kind === 'waiting'}
               <div
                 class="text-muted-foreground flex items-center gap-1.5 px-2 py-1 text-xs"

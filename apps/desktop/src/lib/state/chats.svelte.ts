@@ -46,6 +46,7 @@ export const LIVE_STATUSES: readonly ChatStatus[] = ['needsYou', 'working', 'idl
  */
 export type ListMemory = {
   heights: Map<string, number>;
+  expanded?: Set<string>;
   stick: boolean;
   anchor: { key: string; delta: number } | null;
 };
@@ -148,6 +149,7 @@ export class ChatState {
   running = $derived(runningTasks(this.tasks));
   /** Message list geometry, kept while the chat is resident. */
   view: ListMemory = { heights: new Map(), stick: true, anchor: null };
+  conciseView: ListMemory = { heights: new Map(), stick: true, anchor: null };
   /** Bumped by `stickToBottom`: a shown message list jumps to the bottom (v1.1 §5). */
   stickRequests = $state(0);
 
@@ -499,6 +501,8 @@ export class ChatsState {
     if (!chat) return;
     chat.view.stick = true;
     chat.view.anchor = null;
+    chat.conciseView.stick = true;
+    chat.conciseView.anchor = null;
     chat.stickRequests += 1;
   };
 

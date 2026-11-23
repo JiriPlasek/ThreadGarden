@@ -68,8 +68,8 @@
     /** The Activity panel is shown. */
     activityOpen?: boolean;
     onToggleActivity?: () => void;
-    viewMode?: 'conversation' | 'timeline';
-    onViewModeChange?: (mode: 'conversation' | 'timeline') => void;
+    viewMode?: 'conversation' | 'concise' | 'timeline';
+    onViewModeChange?: (mode: 'conversation' | 'concise' | 'timeline') => void;
   } = $props();
 
   const { machines, interaction, agents } = useApp();
@@ -433,18 +433,22 @@
       title="Choose chat view"
       class="inline-flex shrink-0 overflow-hidden rounded-md border text-xs"
     >
-      {#each ['conversation', 'timeline'] as mode}
+      {#each ['conversation', 'concise', 'timeline'] as mode (mode)}
         <button
           type="button"
           aria-pressed={viewMode === mode}
-          class="px-2.5 py-1 font-medium transition-colors focus-visible:relative focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-ring {mode ===
-          'timeline'
+          class="px-2.5 py-1 font-medium transition-colors focus-visible:relative focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-ring {mode !==
+          'conversation'
             ? 'border-l'
             : ''} {viewMode === mode
             ? 'bg-accent text-accent-foreground'
             : 'bg-background text-muted-foreground hover:bg-muted'}"
-          onclick={() => onViewModeChange?.(mode as 'conversation' | 'timeline')}
-          >{mode === 'conversation' ? 'Conversation' : 'Timeline'}</button
+          onclick={() => onViewModeChange?.(mode as 'conversation' | 'concise' | 'timeline')}
+          >{mode === 'conversation'
+            ? 'Conversation'
+            : mode === 'concise'
+              ? 'Concise'
+              : 'Timeline'}</button
         >
       {/each}
     </div>

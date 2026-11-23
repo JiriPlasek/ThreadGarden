@@ -17,3 +17,4 @@ export * from './update.js';
 export * from './away.js';
 export * from './methods.js';
 export * from './envelope.js';
+export * from './task-notification.js';
