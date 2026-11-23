@@ -89,7 +89,9 @@
     try {
       const response = await load();
       if (id !== sessionId || token !== refreshGeneration) return;
-      blocks = response.blocks.filter((b) => b.startedAt !== undefined || b.endedAt !== undefined);
+      blocks = response.blocks.filter(
+        (b) => b.startedAt !== undefined && (b.endedAt !== undefined || b.status === 'running'),
+      );
       error = null;
       if (selectedId && blocks.some((b) => b.id === selectedId)) void readDetails(selectedId);
     } catch (err) {

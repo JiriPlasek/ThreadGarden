@@ -90,11 +90,15 @@ describe('timeline view', () => {
     expect(screen.queryByRole('complementary', { name: 'Timeline details' })).toBeNull();
   });
 
-  it('hides entries without dates and retries failed reads', async () => {
+  it.each([
+    { startedAt: undefined, endedAt: undefined },
+    { startedAt: undefined, endedAt: T + 3600000 },
+    { startedAt: T, endedAt: undefined },
+  ])('hides entries with incomplete timing %j and retries failed reads', async (timing) => {
     const load = vi
       .fn()
       .mockRejectedValueOnce(new Error('Disconnected'))
-      .mockResolvedValue({ blocks: [{ ...block, startedAt: undefined, endedAt: undefined }] });
+      .mockResolvedValue({ blocks: [{ ...block, ...timing }] });
     render(TimelineView, {
       sessionId: 's',
       load,
