@@ -198,7 +198,7 @@
 
 {#snippet colorKey()}
   <div class="flex flex-col items-start gap-1">
-    {#each ['Tool pending', 'Reasoning observed', 'User message', 'Assistant response'] as name, channel}
+    {#each ['Tool pending', 'Reasoning', 'User message', 'Assistant response'] as name, channel}
       <span class="inline-flex items-center gap-1"
         ><span
           class="inline-block size-2 shrink-0 rounded-sm"
@@ -206,10 +206,6 @@
         ></span>{name}</span
       >
     {/each}
-    <span class="inline-flex items-center gap-1"
-      ><span class="inline-block size-2 shrink-0 rounded-sm bg-slate-400/50"
-      ></span>Unclassified</span
-    >
   </div>
 {/snippet}
 
@@ -299,7 +295,7 @@
       >
         <div class="sticky left-0 w-20 shrink-0 bg-background p-2">Time</div>
         <div class="sticky left-20 w-60 shrink-0 border-x bg-background p-2">Main chat</div>
-        {#each Array(layout.lanes) as _, lane}<div class="w-45 shrink-0 p-2">
+        {#each Array(layout.lanes) as _, lane}<div class="w-45 shrink-0 border-r p-2">
             Agent lane {lane + 1}
           </div>{/each}
       </div>
@@ -378,6 +374,11 @@
           {/each}
         </div>
         <div class="relative flex-1">
+          <div class="pointer-events-none absolute inset-0 flex" aria-hidden="true">
+            {#each Array(layout.lanes) as _}
+              <div class="h-full w-45 shrink-0 border-r"></div>
+            {/each}
+          </div>
           {@render gridLines()}
           {#each layout.placed.filter((b) => b.lane >= 0) as p (p.block.id)}
             <button

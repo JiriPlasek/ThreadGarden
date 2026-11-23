@@ -227,7 +227,7 @@ test('calendar layout shows parallel agents, folded overnight time, zoom, and a 
   expect(legendBox!.x + legendBox!.width).toBeLessThanOrEqual(viewport.right);
   await timeline.screenshot({ path: 'test-results/timeline-calendar.png' });
   await timeline.getByRole('button', { name: /Agent: Migrate invoices/ }).click();
-  await expect(page.getByLabel('Recorded activity')).toContainText('Reasoning observed');
+  await expect(page.getByLabel('Recorded activity')).toContainText('Reasoning');
   await expect(page.getByLabel('Recorded activity')).toContainText('Bash');
   await expect(page.getByText('The migration is ready for review. All tests pass.')).toBeVisible();
   await page
