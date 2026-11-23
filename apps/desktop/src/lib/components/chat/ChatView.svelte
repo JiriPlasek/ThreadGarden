@@ -1051,7 +1051,7 @@
               </div>
             {/if}
             <!-- Hidden, not removed, while a request waits: the draft stays as typed. -->
-            <div class="contents" hidden={docked !== undefined}>
+            <div class="contents" hidden={docked !== undefined || settings.chatView === 'timeline'}>
               <Composer
                 bind:this={composer}
                 bind:editorElement={composerBox}

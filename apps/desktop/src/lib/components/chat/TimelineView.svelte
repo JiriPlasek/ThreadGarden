@@ -31,6 +31,12 @@
   let now = $state(Date.now());
   let scale = $state(2);
   let scrollArea = $state<HTMLDivElement | null>(null);
+  let viewportWidth = $state(0);
+  let viewportHeight = $state(0);
+  let scrollOuterWidth = $state(0);
+  let scrollOuterHeight = $state(0);
+  const rightGutter = $derived(Math.max(0, scrollOuterWidth - viewportWidth));
+  const bottomGutter = $derived(Math.max(0, scrollOuterHeight - viewportHeight));
   let selectedId = $state<string | null>(null);
   let details = $state.raw<ChatItem[]>([]);
   let detailLoading = $state(false);
@@ -188,6 +194,23 @@
   {/each}
 {/snippet}
 
+{#snippet colorKey()}
+  <div class="flex flex-wrap gap-x-3 gap-y-1">
+    {#each ['Tool pending', 'Reasoning observed', 'User message', 'Assistant response'] as name, channel}
+      <span class="inline-flex items-center gap-1"
+        ><span
+          class="inline-block size-2 shrink-0 rounded-sm"
+          style:background={ACTIVITY_COLORS[channel]}
+        ></span>{name}</span
+      >
+    {/each}
+    <span class="inline-flex items-center gap-1"
+      ><span class="inline-block size-2 shrink-0 rounded-sm bg-slate-400/50"
+      ></span>Unclassified</span
+    >
+  </div>
+{/snippet}
+
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <section
   class="relative flex min-h-0 flex-1 flex-col"
@@ -201,36 +224,61 @@
   }}
 >
   <div
-    role="group"
-    aria-label="Timeline navigation"
-    title="Zoom: {scale} px/min. Short entries are expanded to keep their titles readable."
-    class="absolute right-3 bottom-3 z-30 inline-flex overflow-hidden rounded-md border bg-background/95 text-xs shadow-sm"
+    class="pointer-events-none absolute left-3 z-30 flex flex-wrap items-end justify-between gap-2"
+    style:right="{12 + rightGutter}px"
+    style:bottom="{12 + bottomGutter}px"
   >
-    <button
-      class="px-2.5 py-1.5 hover:bg-muted disabled:opacity-40"
-      aria-label="Zoom out timeline"
-      disabled={scale <= 0.25}
-      onclick={() => zoom(0.5)}>−</button
+    <details
+      open
+      class="pointer-events-auto relative rounded-md border bg-background/95 text-xs shadow-sm"
     >
-    <button
-      class="border-l px-2.5 py-1.5 hover:bg-muted disabled:opacity-40"
-      aria-label="Zoom in timeline"
-      disabled={scale >= 256}
-      onclick={() => zoom(2)}>+</button
+      <summary class="cursor-pointer px-3 py-1.5 font-medium">Color meanings</summary>
+      <div
+        role="group"
+        aria-label="Color meanings"
+        class="absolute bottom-full left-0 mb-2 rounded-md border bg-background/95 p-3 shadow-sm"
+        style:width="{Math.min(288, Math.max(180, viewportWidth - 24))}px"
+      >
+        <p class="mb-2 font-medium">Activity strip</p>
+        {@render colorKey()}
+        <p class="mt-2 text-muted-foreground">Gray means unclassified, not necessarily idle.</p>
+        <div class="mt-2 border-t pt-2 text-muted-foreground">
+          Block tint: blue = running, green = completed, red = failed; gray = other/unknown.
+        </div>
+      </div>
+    </details>
+    <div
+      role="group"
+      aria-label="Timeline navigation"
+      title="Zoom: {scale} px/min. Short entries are expanded to keep their titles readable."
+      class="pointer-events-auto inline-flex overflow-hidden rounded-md border bg-background/95 text-xs shadow-sm"
     >
-    <button
-      class="border-l px-2.5 py-1.5 hover:bg-muted"
-      aria-label="Refresh"
-      title="Refresh timeline"
-      onclick={() => void refresh()}>↻</button
-    >
-    <button
-      class="border-l px-2.5 py-1.5 hover:bg-muted"
-      aria-label="Latest"
-      title="Scroll to latest activity"
-      onclick={() => scrollArea?.scrollTo({ top: scrollArea.scrollHeight, behavior: 'smooth' })}
-      >↓</button
-    >
+      <button
+        class="px-2.5 py-1.5 hover:bg-muted disabled:opacity-40"
+        aria-label="Zoom out timeline"
+        disabled={scale <= 0.25}
+        onclick={() => zoom(0.5)}>−</button
+      >
+      <button
+        class="border-l px-2.5 py-1.5 hover:bg-muted disabled:opacity-40"
+        aria-label="Zoom in timeline"
+        disabled={scale >= 256}
+        onclick={() => zoom(2)}>+</button
+      >
+      <button
+        class="border-l px-2.5 py-1.5 hover:bg-muted"
+        aria-label="Refresh"
+        title="Refresh timeline"
+        onclick={() => void refresh()}>↻</button
+      >
+      <button
+        class="border-l px-2.5 py-1.5 hover:bg-muted"
+        aria-label="Latest"
+        title="Scroll to latest activity"
+        onclick={() => scrollArea?.scrollTo({ top: scrollArea.scrollHeight, behavior: 'smooth' })}
+        >↓</button
+      >
+    </div>
   </div>
   {#if error}<p role="alert" class="px-4 py-2 text-sm text-destructive">
       {error} <button class="underline" onclick={() => void refresh()}>Retry</button>
@@ -242,6 +290,11 @@
   {:else}
     <div
       bind:this={scrollArea}
+      bind:clientWidth={viewportWidth}
+      bind:clientHeight={viewportHeight}
+      bind:offsetWidth={scrollOuterWidth}
+      bind:offsetHeight={scrollOuterHeight}
+      data-timeline-scroll
       class="min-h-0 flex-1 overflow-auto"
       onwheel={(e) => {
         if (e.ctrlKey) {
@@ -416,16 +469,7 @@
       </div>
       {#if selected.activity}
         <div class="border-b px-4 py-2 text-xs" aria-label="Recorded activity">
-          <div class="mb-1 flex flex-wrap gap-x-3 gap-y-1">
-            {#each ['Tool pending', 'Reasoning observed', 'User message', 'Assistant response'] as name, channel}
-              <span class="inline-flex items-center gap-1"
-                ><span
-                  class="inline-block size-2 rounded-sm"
-                  style:background={ACTIVITY_COLORS[channel]}
-                ></span>{name}</span
-              >
-            {/each}
-          </div>
+          <div class="mb-1">{@render colorKey()}</div>
           <p class="text-muted-foreground">{activitySummary(selected.activity)}</p>
         </div>
       {/if}

@@ -23,6 +23,12 @@ test('timeline reads old turns through the service, inspects one, and remembers 
   const titleBox = await page.locator('header h1').last().boundingBox();
   const viewBox = await timelineButton.boundingBox();
   expect(viewBox!.y).toBeGreaterThan(titleBox!.y + titleBox!.height);
+  const composer = page.getByRole('textbox', { name: 'Message' });
+  await composer.fill('Keep this draft');
+  await timelineButton.click();
+  await expect(composer).toBeHidden();
+  await picker.getByRole('button', { name: 'Conversation', exact: true }).click();
+  await expect(composer).toHaveText('Keep this draft');
   await timelineButton.click();
   const timeline = page.getByRole('region', { name: 'Chat timeline' });
   await expect(timeline).toBeVisible();
@@ -204,6 +210,21 @@ test('calendar layout shows parallel agents, folded overnight time, zoom, and a 
     .evaluateAll((times) => times.map((t) => new Date(t.getAttribute('datetime')!).getMinutes()));
   expect(minuteMarks.length).toBeGreaterThan(0);
   expect(minuteMarks.every((m) => m % 15 === 0)).toBe(true);
+  const legend = timeline.getByRole('group', { name: 'Color meanings', exact: true });
+  await expect(legend).toBeVisible();
+  await expect(legend).toContainText('Tool pending');
+  await timeline.locator('summary').click();
+  await expect(legend).toBeHidden();
+  await timeline.locator('summary').click();
+  const viewport = await timeline.locator('[data-timeline-scroll]').evaluate((el) => {
+    const rect = el.getBoundingClientRect();
+    return { right: rect.left + el.clientWidth, bottom: rect.top + el.clientHeight };
+  });
+  const navigation = await timeline
+    .getByRole('group', { name: 'Timeline navigation' })
+    .boundingBox();
+  expect(navigation!.x + navigation!.width).toBeLessThanOrEqual(viewport.right);
+  expect(navigation!.y + navigation!.height).toBeLessThanOrEqual(viewport.bottom);
   await timeline.screenshot({ path: 'test-results/timeline-calendar.png' });
   await timeline.getByRole('button', { name: /Agent: Migrate invoices/ }).click();
   await expect(page.getByLabel('Recorded activity')).toContainText('Reasoning observed');
@@ -226,15 +247,16 @@ test('timeline follows a live delegated turn through completion', async ({ page 
     .getByRole('region', { name: 'Chat list' })
     .locator('[data-session-id="session-998"]')
     .click();
+  const composer = page.getByRole('textbox', { name: 'Message' });
+  await composer.fill('agent');
+  await composer.press('Enter');
   await page
     .getByRole('group', { name: 'Chat view', exact: true })
     .getByRole('button', { name: 'Timeline', exact: true })
     .click();
   const timeline = page.getByRole('region', { name: 'Chat timeline' });
   await expect(timeline).toBeVisible();
-  const composer = page.getByRole('textbox', { name: 'Message' });
-  await composer.fill('agent');
-  await composer.press('Enter');
+  await expect(composer).toBeHidden();
   await expect(timeline.getByRole('button', { name: /^Agent:.*running/ }).first()).toBeVisible();
   await timeline.getByRole('button', { name: /^Turn: agent · running/ }).click();
   const details = page.getByRole('complementary', { name: 'Timeline details' });
