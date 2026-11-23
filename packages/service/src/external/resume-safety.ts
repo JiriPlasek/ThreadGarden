@@ -21,7 +21,7 @@ export const externalStatus = (e: ExternalSession): ChatStatus => {
 };
 
 /** Listed as ended: a known final state and no live process. */
-const isEnded = (e: ExternalSession): boolean =>
+export const isEnded = (e: ExternalSession): boolean =>
   e.pid === undefined &&
   e.status === undefined &&
   (e.state === 'done' || e.state === 'failed' || e.state === 'stopped');

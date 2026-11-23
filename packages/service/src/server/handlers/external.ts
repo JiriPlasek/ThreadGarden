@@ -1,7 +1,12 @@
 /** Router handlers for external sessions, resume safety and system status. */
 import { endProcessTree } from '../../external/end-process.js';
-import type { ExternalPoller } from '../../external/poller.js';
-import { checkResume, resumeCommand, type ResumeCheck } from '../../external/resume-safety.js';
+import type { ExternalPoller, ExternalSession } from '../../external/poller.js';
+import {
+  checkResume,
+  isEnded,
+  resumeCommand,
+  type ResumeCheck,
+} from '../../external/resume-safety.js';
 import type { ClaudeFound, ClaudeProblem } from '../../sdk/claude-path.js';
 import { ServiceError, type Router } from '../router.js';
 import { isCodexSession } from '../../sdk/providers.js';
@@ -76,6 +81,21 @@ export const registerExternalHandlers = (router: Router, deps: ExternalHandlerDe
   const { poller } = deps;
   const resumeCheck = makeResumeChecker(deps);
 
+  /** Exit zero only acknowledges a stop request; confirm its effect in the session list. */
+  const confirmStopped = async (
+    list: ExternalPoller,
+    stillRunning: (entry: ExternalSession) => boolean,
+    pending: string,
+  ): Promise<void> => {
+    const until = Date.now() + (deps.stopWaitMs ?? STOP_WAIT_MS);
+    for (;;) {
+      const current = await list.current('claude');
+      if (current && !current.some(stillRunning)) return;
+      if (Date.now() >= until) throw new ServiceError('STOP_PENDING', pending);
+      await new Promise((r) => setTimeout(r, STOP_POLL_MS));
+    }
+  };
+
   /** Ends the process holding `sessionId`, then waits until `claude agents` no longer lists it. */
   const endHolder = async (list: ExternalPoller, sessionId: string, pid: number): Promise<void> => {
     try {
@@ -86,18 +106,11 @@ export const registerExternalHandlers = (router: Router, deps: ExternalHandlerDe
         `Ending process ${pid} failed: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
-    const until = Date.now() + (deps.stopWaitMs ?? STOP_WAIT_MS);
-    for (;;) {
-      const now = await list.current();
-      if (now && !now.some((e) => e.sessionId === sessionId && e.pid === pid)) return;
-      if (Date.now() >= until) {
-        throw new ServiceError(
-          'STOP_PENDING',
-          `A stop signal was sent to process ${pid}, but its exit has not been confirmed yet. It may need more time; refresh before trying to continue here.`,
-        );
-      }
-      await new Promise((r) => setTimeout(r, STOP_POLL_MS));
-    }
+    await confirmStopped(
+      list,
+      (e) => e.sessionId === sessionId && e.pid === pid,
+      `A stop signal was sent to process ${pid}, but its exit has not been confirmed yet. It may need more time; refresh before trying to continue here.`,
+    );
   };
 
   router.register('ui.visibility', async (p) => {
@@ -127,7 +140,7 @@ export const registerExternalHandlers = (router: Router, deps: ExternalHandlerDe
   router.register('external.stop', async (p) => {
     await deps.located?.();
     const usable = deps.externalUsable?.() ?? true;
-    const list = poller && deps.run && usable ? await poller.current() : null;
+    const list = poller && deps.run && usable ? await poller.current('claude') : null;
     if (!list || !deps.run || !poller) {
       throw new ServiceError(
         'EXTERNAL_UNAVAILABLE',
@@ -155,7 +168,11 @@ export const registerExternalHandlers = (router: Router, deps: ExternalHandlerDe
         `claude stop ${entry.shortId} failed: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
-    await poller.refresh();
+    await confirmStopped(
+      poller,
+      (e) => e.sessionId === p.sessionId && !isEnded(e),
+      'Claude Code still reports this background session as running, or its session list is unavailable. Its stop has not been confirmed. Refresh before trying to continue here.',
+    );
     return {};
   });
 
