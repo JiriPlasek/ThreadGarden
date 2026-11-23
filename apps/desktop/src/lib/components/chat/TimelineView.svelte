@@ -189,7 +189,7 @@
 {/snippet}
 
 {#snippet colorKey()}
-  <div class="flex flex-wrap gap-x-3 gap-y-1">
+  <div class="flex flex-col items-start gap-1">
     {#each ['Tool pending', 'Reasoning observed', 'User message', 'Assistant response'] as name, channel}
       <span class="inline-flex items-center gap-1"
         ><span
@@ -223,10 +223,6 @@
       <div role="group" aria-label="Color meanings" class="py-2">
         <p class="mb-2 font-medium">Activity strip</p>
         {@render colorKey()}
-        <p class="mt-2 text-muted-foreground">Gray means unclassified, not necessarily idle.</p>
-        <div class="mt-2 border-t pt-2 text-muted-foreground">
-          Block tint: blue = running, green = completed, red = failed; gray = other/unknown.
-        </div>
       </div>
     </details>
     <div
