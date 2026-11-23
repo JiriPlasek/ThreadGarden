@@ -115,6 +115,22 @@ const harness = (responses: Record<string, Rec> = {}) => {
 };
 
 describe('Codex provider', () => {
+  it('reports the runtime default effort without turning it into an explicit override', async () => {
+    const h = harness({
+      'thread/start': { thread: { id: 'thread-1' }, model: 'test-model', reasoningEffort: 'high' },
+    });
+    const session = h.create();
+    const c = await h.running();
+    expect(session.header.effort).toBe('high');
+    expect(c.calls.find((call) => call.method === 'turn/start')?.params).not.toHaveProperty(
+      'effort',
+    );
+    expect(h.codex.store.read(session.sessionId)?.effort).toBeUndefined();
+    c.event('turn/completed', { turn: { id: 'turn-1', status: 'completed' } });
+    await vi.waitFor(() => expect(session.status).toBe('idle'));
+    await session.setModel('codex:another-model');
+    await vi.waitFor(() => expect(session.header.effort).toBe(''));
+  });
   it('uses native Plan mode and switches to editing only after the user chooses it', async () => {
     const h = harness();
     const session = h.create('plan');

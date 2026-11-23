@@ -123,6 +123,7 @@ export const ChatHeaderInfoSchema = z.object({
   runtime: z.enum(['claude', 'codex']).optional(),
   runtimeVersion: z.string().optional(),
   model: z.string().optional(),
+  /** Effective named effort when reported; an empty string clears a previously reported level. */
   effort: z.string().optional(),
   permissionMode: z.string().optional(),
   claudeVersion: z.string().optional(),

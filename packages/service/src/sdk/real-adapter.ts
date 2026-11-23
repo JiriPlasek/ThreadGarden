@@ -257,6 +257,20 @@ export const usageReader = (q: object): (() => Promise<unknown>) | undefined => 
   return () => Promise.resolve(read.call(q, { skipBehaviors: true }) as unknown);
 };
 
+/** SDK 0.3.314 exposes this read-only control at runtime, but omits it from Query's types. */
+export const effortReader = (q: object): (() => Promise<string | null | undefined>) | undefined => {
+  const read: unknown = (q as Record<string, unknown>).getSettings;
+  if (typeof read !== 'function') return undefined;
+  return async () => {
+    const response: unknown = await read.call(q);
+    if (!response || typeof response !== 'object') return undefined;
+    const applied = (response as Record<string, unknown>).applied;
+    if (!applied || typeof applied !== 'object') return undefined;
+    const effort = (applied as Record<string, unknown>).effort;
+    return effort === null ? null : typeof effort === 'string' && effort ? effort : undefined;
+  };
+};
+
 /**
  * `Query` methods SDK 0.3.314 has but does not declare: `interrupt` takes
  * `cancelQueued`, and `cancelAsyncMessage` sends `cancel_async_message`
@@ -270,6 +284,7 @@ type QueueControls = {
 class RealSession implements AgentSession {
   private closed = false;
   readonly usage: (() => Promise<unknown>) | undefined;
+  readonly getEffort: (() => Promise<string | null | undefined>) | undefined;
   private readonly queue: QueueControls;
 
   constructor(
@@ -277,6 +292,7 @@ class RealSession implements AgentSession {
     private readonly input: InputQueue,
   ) {
     this.usage = usageReader(q);
+    this.getEffort = effortReader(q);
     this.queue = q as unknown as QueueControls;
   }
 

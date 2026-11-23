@@ -1643,3 +1643,71 @@ describe('LiveSession usage limits', () => {
     });
   });
 });
+
+describe('effective effort synchronization', () => {
+  it('reads applied effort at init, after model changes and after turns', async () => {
+    const { adapter, opts } = setup();
+    const session = LiveSession.create('/p', { text: 'go' }, opts);
+    const fake = adapter.lastSession();
+    const read = vi.fn<() => Promise<string | null | undefined>>().mockResolvedValue('high');
+    fake.getEffort = read;
+    fake.emit(init(session.sessionId));
+    await settle();
+    expect(session.header.effort).toBe('high');
+    read.mockResolvedValue('medium');
+    await session.setModel('other-model');
+    await settle();
+    expect(session.header.effort).toBe('medium');
+    read.mockResolvedValue('low');
+    fake.emit(result('finished'));
+    await settle();
+    expect(session.header.effort).toBe('low');
+  });
+  it('takes fresh init/status values, clears explicit null, and ignores subagent effort', async () => {
+    const { adapter, opts } = setup();
+    const session = LiveSession.create('/p', { text: 'go' }, opts);
+    const fake = adapter.lastSession();
+    fake.emit(init(session.sessionId, { effort: 'high' }));
+    await settle();
+    expect(session.header.effort).toBe('high');
+    fake.emit(sdk({ type: 'system', subtype: 'status', effort: 'low' }));
+    await settle();
+    expect(session.header.effort).toBe('low');
+    fake.emit(
+      sdk({ type: 'system', subtype: 'status', effort: 'max', parent_tool_use_id: 'agent' }),
+    );
+    await settle();
+    expect(session.header.effort).toBe('low');
+    fake.emit(sdk({ type: 'system', subtype: 'init', effort: null }));
+    await settle();
+    expect(session.header.effort).toBe('');
+  });
+  it('does not let a stale read replace a newer runtime report or explicit choice', async () => {
+    const { adapter, opts } = setup();
+    const session = LiveSession.create('/p', { text: 'go' }, opts);
+    const fake = adapter.lastSession();
+    let finish!: (value: string) => void;
+    fake.getEffort = () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      });
+    fake.emit(init(session.sessionId));
+    await settle();
+    await session.setEffort('high');
+    finish('low');
+    await settle();
+    expect(session.header.effort).toBe('high');
+  });
+  it('keeps the session usable when the runtime cannot report effort', async () => {
+    const { adapter, opts } = setup();
+    const session = LiveSession.create('/p', { text: 'go' }, opts);
+    const fake = adapter.lastSession();
+    fake.getEffort = async () => {
+      throw new Error('Unknown control request');
+    };
+    fake.emit(init(session.sessionId));
+    await settle();
+    expect(session.header.effort).toBeUndefined();
+    expect(session.status).not.toBe('failed');
+  });
+});

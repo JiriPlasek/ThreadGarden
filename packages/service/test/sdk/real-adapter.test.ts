@@ -6,7 +6,13 @@ import type {
   SDKUserMessage,
   StartOptions,
 } from '../../src/sdk/adapter.js';
-import { RealAdapter, USAGE_METHOD, usageReader, type SdkApi } from '../../src/sdk/real-adapter.js';
+import {
+  RealAdapter,
+  USAGE_METHOD,
+  usageReader,
+  effortReader,
+  type SdkApi,
+} from '../../src/sdk/real-adapter.js';
 
 /** A stand-in for the SDK's `Query`: an async generator plus the control methods. */
 const fakeQuery = (messages: SDKMessage[]) => {
@@ -334,5 +340,27 @@ describe('RealAdapter usage reading', () => {
     const { adapter } = setup();
     expect(adapter.start(startOptions).usage).toBeUndefined();
     expect(usageReader({})).toBeUndefined();
+  });
+});
+
+describe('effective effort reading', () => {
+  it('reads the applied effort instead of the configured request', async () => {
+    const { q, adapter } = setup();
+    const read = vi.fn(async function (this: unknown) {
+      expect(this).toBe(q);
+      return { settings: { effortLevel: 'max' }, applied: { effort: 'high' } };
+    });
+    Object.assign(q, { getSettings: read });
+    await expect(adapter.start(startOptions).getEffort!()).resolves.toBe('high');
+    expect(read).toHaveBeenCalledWith();
+  });
+  it('distinguishes explicitly unapplied effort from an unsupported reader or response', async () => {
+    expect(effortReader({})).toBeUndefined();
+    await expect(
+      effortReader({ getSettings: async () => ({ applied: { effort: null } }) })!(),
+    ).resolves.toBeNull();
+    await expect(
+      effortReader({ getSettings: async () => ({ settings: { effortLevel: 'high' } }) })!(),
+    ).resolves.toBeUndefined();
   });
 });
