@@ -586,6 +586,7 @@
       {/if}
 
       <div class="ml-auto flex shrink-0 items-center gap-3">
+        {@render viewSwitcher()}
         {#if usage}
           <span class="flex items-center gap-1.5" title="Context: {usage.text}">
             <span
@@ -638,7 +639,6 @@
         {#if header.runtimeVersion && header.runtime === 'codex'}
           <span title="Codex version recorded for this chat">codex {header.runtimeVersion}</span>
         {/if}
-        {@render viewSwitcher()}
       </div>
     </div>
   </header>
