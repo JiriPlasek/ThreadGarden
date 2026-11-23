@@ -949,6 +949,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
             ...(id && isCodexSession(id) ? { runtime: 'codex' as const } : {}),
           }),
         onLimitError: (id) => trackerFor(id).noteRefusal(id),
+        onAssistantMessage: (id, message) => trackerFor(id).observeReply(id, message),
         onTurnResult: (id) => {
           const refused = trackerFor(id).turnEnded(id);
           // After the session has finished handling this result.
@@ -995,6 +996,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         },
         {
           onError: (err, ctx) => log.error(`indexer ${JSON.stringify(ctx)}: ${String(err)}`),
+          onHistoryRead: (id, messages) => trackerFor(id).observeHistory(id, messages),
           // A turn in progress appends to its transcript all the time: index it
           // once the turn is over, not on every watcher event (the chat view
           // reads the SDK, never the index).
@@ -1112,6 +1114,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         },
       });
       const chatHandlers = registerChatHandlers(router, {
+        onHistoryRead: (id, messages) => trackerFor(id).observeHistory(id, messages),
         host: sessionHost,
         adapter,
         db: opened,

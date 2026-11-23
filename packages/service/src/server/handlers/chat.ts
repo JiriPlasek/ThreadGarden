@@ -45,6 +45,7 @@ import type {
   ModelInfo,
   PermissionMode,
   SlashCommand,
+  SessionMessage,
 } from '../../sdk/adapter.js';
 import type { ClaudeFound, ClaudeProblem } from '../../sdk/claude-path.js';
 import { ServiceError, type Router } from '../router.js';
@@ -70,6 +71,8 @@ export const HISTORY_CACHE_CHARS = 32 * 1024 * 1024;
 export const END_INDEX_WAIT_MS = 5_000;
 
 export type ChatHandlerDeps = {
+  /** Reconciles runtime state from the history already fetched for the chat. */
+  onHistoryRead?: (sessionId: string, messages: readonly SessionMessage[]) => void;
   host: SessionHost;
   adapter: AgentAdapter;
   db: Db;
@@ -392,6 +395,7 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
       return hit;
     }
     const messages = await adapter.getSessionMessages(sessionId, historyOf(sessionId));
+    deps.onHistoryRead?.(sessionId, messages);
     const normalizer = new Normalizer({ turnEnds: true, imageNumbers: (u) => db.imageNumbers(u) });
     const byId = new Map<string, ChatItem>();
     for (const m of messages) for (const item of normalizer.push(m).items) byId.set(item.id, item);
