@@ -7,7 +7,7 @@ it('shows compact volume before the unchanged relative time and hides missing to
   const { context } = await setup((server) => {
     server.handlers['sessions.list'] = () => ({
       items: [
-        summary('small', { totalTokens: 4700 }),
+        summary('small', { totalTokens: 4700, runningTasks: 2 }),
         summary('large', { totalTokens: 1_200_000 }),
         summary('middle', { totalTokens: 565_000 }),
         summary('unknown'),
@@ -18,6 +18,13 @@ it('shows compact volume before the unchanged relative time and hides missing to
   render(ChatList, { context });
   await waitFor(() => expect(screen.getAllByRole('option')).toHaveLength(5));
   const rows = screen.getAllByRole('option');
+  const runningRow = rows.find((r) => r.dataset.sessionId === 'small')!;
+  const running = runningRow.querySelector('[title="2 agents or processes running"]')!;
+  expect(running.textContent?.trim()).toBe('2 running');
+  expect(
+    running.compareDocumentPosition(runningRow.querySelector('[data-chat-volume]')!) &
+      Node.DOCUMENT_POSITION_FOLLOWING,
+  ).not.toBe(0);
   for (const [id, volume] of [
     ['small', '4.7K'],
     ['large', '1.2M'],

@@ -5,6 +5,23 @@ import { markAllSeen, openApp, resetTabs, serviceCall } from './helpers';
 test('token volume sits before the time in Active and project chat lists', async ({ page }) => {
   await resetTabs();
   await markAllSeen();
+  // Preview the running badge alongside real indexed usage, without starting any work.
+  await page.routeWebSocket(/127\.0\.0\.1/, (socket) => {
+    const server = socket.connectToServer();
+    server.onMessage((data) => {
+      if (typeof data === 'string') {
+        const response = JSON.parse(data);
+        if (Array.isArray(response.result?.items)) {
+          response.result.items = response.result.items.map((item: ChatSummary) =>
+            item.sessionId === 'session-998' ? { ...item, runningTasks: 2 } : item,
+          );
+          socket.send(JSON.stringify(response));
+          return;
+        }
+      }
+      socket.send(data);
+    });
+  });
   await openApp(page);
   const { items } = await serviceCall<{ items: ChatSummary[] }>('sessions.summaries', {
     sessionIds: ['session-998'],
@@ -21,6 +38,8 @@ test('token volume sits before the time in Active and project chat lists', async
   await expect(volume).toHaveText(label);
   await expect(volume).toHaveAttribute('title', /recorded tokens/);
   const countBox = (await volume.boundingBox())!;
+  const runningBox = (await row.getByText('2 running', { exact: true }).boundingBox())!;
+  expect(runningBox.x + runningBox.width).toBeLessThan(countBox.x);
   const timeBox = (await row.locator('time').boundingBox())!;
   expect(countBox.x + countBox.width).toBeLessThan(timeBox.x);
   expect(Math.abs(countBox.y + countBox.height / 2 - timeBox.y - timeBox.height / 2)).toBeLessThan(
