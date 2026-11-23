@@ -38,6 +38,8 @@ test('bypass requires confirmation in the chat header and New chat; Cancel keeps
   // At the dialog's two sides, only its padding (p-5) from each edge.
   expect(cancelBox!.x - dialogBox!.x).toBeLessThan(24);
   expect(dialogBox!.x + dialogBox!.width - (box!.x + box!.width)).toBeLessThan(24);
+  // Cancel fills the remaining space, leaving only the footer's gap-2 gutter.
+  expect(Math.abs(box!.x - (cancelBox!.x + cancelBox!.width) - 8)).toBeLessThan(2);
   await confirmation.getByRole('button', { name: 'Cancel', exact: true }).click();
   await expect(headerMode).toHaveValue('plan');
   await headerMode.selectOption('bypassPermissions');
