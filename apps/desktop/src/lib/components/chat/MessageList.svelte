@@ -13,8 +13,13 @@
   import UnknownItem from './items/UnknownItem.svelte';
   import UserItem from './items/UserItem.svelte';
   import { buildRows, quietTail } from './rows';
-  import { buildConciseRows, type ConciseRow } from './concise';
-  import ClampedBlock from './ClampedBlock.svelte';
+  import {
+    buildConciseRows,
+    groupConciseTurns,
+    type ConciseRow,
+    type ConciseTurn as TurnRow,
+  } from './concise';
+  import ConciseTurn from './ConciseTurn.svelte';
   import CompletedTask from './CompletedTask.svelte';
   import { captureAnchor, computeOffsets, restoreAnchor, visibleRange } from './virtual';
 
@@ -37,7 +42,7 @@
    */
   type QueuedRow = { kind: 'queued'; key: string; message: QueuedMessage; itemIds: string[] };
   type WaitingRow = { kind: 'waiting'; key: string; itemIds: string[] };
-  type ListRow = ConciseRow | WaitingRow | QueuedRow;
+  type ListRow = ConciseRow | TurnRow | WaitingRow | QueuedRow;
 
   let {
     items,
@@ -117,17 +122,6 @@
     anchor: null,
   };
 
-  let expanded = $state(new Set(untrack(() => mem.expanded)));
-  const toggleBlock = (key: string, open: boolean): void => {
-    mem.stick = false;
-    stuck = false;
-    remember();
-    const next = new Set(expanded);
-    if (open) next.add(key);
-    else next.delete(key);
-    expanded = next;
-    mem.expanded = next;
-  };
   const contentRows = $derived(
     concise ? buildConciseRows(items, tasks, hasMore) : buildRows(items),
   );
@@ -181,7 +175,7 @@
   // The waiting row sits between the conversation and the queued messages: it is
   // about the turn in progress, which they wait behind.
   const rows: ListRow[] = $derived([
-    ...contentRows,
+    ...(concise ? groupConciseTurns(contentRows) : contentRows),
     ...(waitingShown ? [WAITING_ROW] : []),
     ...queued
       .filter((message) => !read.has(message.id))
@@ -217,19 +211,23 @@
 
   const estimate = (row: ListRow): number => {
     if (row.kind === 'queued') return userHeight(row.message.text) + 16;
-    if (row.kind === 'taskSummary') return 96;
+    if (row.kind === 'turn')
+      return (
+        Math.min(
+          340,
+          row.rows.reduce((height, child) => height + estimate(child), 0),
+        ) +
+        (row.user ? estimate(row.user) + 8 : 0) +
+        8
+      );
+    if (row.kind === 'taskSummary') return 28;
     if (row.kind !== 'item') return 28;
     const it = row.item;
     switch (it.kind) {
       case 'user':
-        return concise && !expanded.has(row.key)
-          ? Math.min(340, userHeight(it.text))
-          : userHeight(it.text);
+        return userHeight(it.text);
       case 'assistantText':
-        return Math.min(
-          concise && !expanded.has(row.key) ? 340 : Infinity,
-          32 + 21 * Math.min(120, Math.ceil(it.markdown.length / 110)),
-        );
+        return 32 + 21 * Math.min(120, Math.ceil(it.markdown.length / 110));
       case 'todo':
         return 52 + 22 * it.todos.length;
       case 'toolCall':
@@ -318,6 +316,7 @@
 
   /** The row key briefly highlighted after `scrollToItem`. */
   let flashed = $state<string | null>(null);
+  let revealedItem = $state<string | null>(null);
   let flashTimer: ReturnType<typeof setTimeout> | undefined;
 
   /**
@@ -334,8 +333,12 @@
     remember();
     maybeLoadOlder();
     flashed = rows[row]!.key;
+    revealedItem = itemId;
     clearTimeout(flashTimer);
-    flashTimer = setTimeout(() => (flashed = null), 1200);
+    flashTimer = setTimeout(() => {
+      flashed = null;
+      revealedItem = null;
+    }, 1200);
     return true;
   };
 
@@ -429,6 +432,18 @@
   });
 </script>
 
+{#snippet conciseItem(row: ConciseRow)}
+  {#if row.kind === 'taskSummary'}
+    <CompletedTask task={row.task} />
+  {:else if row.kind === 'item'}
+    <ItemView item={row.item} children={row.children} {concise} />
+  {:else if row.kind === 'unknownGroup'}
+    <ItemBoundary item={row.items}><UnknownItem items={row.items} /></ItemBoundary>
+  {:else}
+    <ItemBoundary item={row.items}><ToolGroup name={row.name} items={row.items} /></ItemBoundary>
+  {/if}
+{/snippet}
+
 <div class="relative flex min-h-0 flex-1 flex-col">
   <!-- Never a horizontal scrollbar: a row wider than the list would show one only while
        it is rendered, and the scrollbar moves the bottom, so following the bottom could
@@ -458,24 +473,34 @@
             class="mx-auto max-w-4xl rounded-md px-4 py-1 transition-colors duration-700 data-flash:bg-amber-500/10"
             {@attach observe}
           >
-            {#if row.kind === 'taskSummary'}
-              <ClampedBlock
-                expanded={expanded.has(row.key)}
-                onToggle={(open) => toggleBlock(row.key, open)}
-              >
-                <CompletedTask task={row.task} />
-              </ClampedBlock>
-            {:else if row.kind === 'item'}
-              {#if concise && (row.item.kind === 'user' || row.item.kind === 'assistantText' || row.item.kind === 'system' || row.item.kind === 'unknown')}
-                <ClampedBlock
-                  expanded={expanded.has(row.key)}
-                  onToggle={(open) => toggleBlock(row.key, open)}
-                >
-                  <ItemView item={row.item} children={row.children} {concise} />
-                </ClampedBlock>
-              {:else}
-                <ItemView item={row.item} children={row.children} />
-              {/if}
+            {#if row.kind === 'turn'}
+              <div data-concise-turn class="space-y-2">
+                {#if row.user}
+                  {@render conciseItem(row.user)}
+                {/if}
+                {#if row.rows.length}
+                  <ConciseTurn
+                    revealKey={row.rows.find(
+                      (child) =>
+                        child.key === revealedItem ||
+                        (revealedItem !== null && child.itemIds.includes(revealedItem)),
+                    )?.key}
+                    initialScroll={mem.turnScroll?.get(row.key) ?? 0}
+                    onScroll={(top) => {
+                      mem.turnScroll ??= new Map();
+                      mem.turnScroll.set(row.key, top);
+                    }}
+                  >
+                    {#each row.rows as child (child.key)}
+                      <div data-concise-item={child.key}>
+                        {@render conciseItem(child)}
+                      </div>
+                    {/each}
+                  </ConciseTurn>
+                {/if}
+              </div>
+            {:else if row.kind === 'taskSummary' || row.kind === 'item'}
+              {@render conciseItem(row)}
             {:else if row.kind === 'waiting'}
               <div
                 class="text-muted-foreground flex items-center gap-1.5 px-2 py-1 text-xs"

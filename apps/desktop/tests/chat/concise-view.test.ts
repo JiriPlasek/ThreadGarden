@@ -35,7 +35,7 @@ describe('concise message list', () => {
       user(`u${i}`, `Message ${i}`, { ts: at + i * 1000 }),
     );
     const memory = {
-      heights: new Map(items.map((item) => [item.id, 60])),
+      heights: new Map(items.map((item) => [`concise-turn:${item.id}`, 60])),
       stick: false,
       anchor: { key: 'task-summary:finished', delta: 0 },
     };
@@ -55,7 +55,7 @@ describe('concise message list', () => {
         },
       ],
     });
-    await waitFor(() => expect(container.querySelector('[data-viewport]')?.scrollTop).toBe(600));
+    await waitFor(() => expect(container.querySelector('[data-viewport]')?.scrollTop).toBe(540));
     expect(memory.anchor.key).toBe('task-summary:finished');
   });
 

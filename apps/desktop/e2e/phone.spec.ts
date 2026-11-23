@@ -533,7 +533,7 @@ test('concise view fits the phone and keeps the composer available', async ({ pa
     await expect(
       page
         .getByRole('region', { name: 'Messages', exact: true })
-        .locator('[data-concise-block]')
+        .locator('[data-concise-turn]')
         .first(),
     ).toBeVisible();
     const bounds = await picker.boundingBox();

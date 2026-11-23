@@ -37,7 +37,7 @@ const note = (id: string, tool = 'agent'): ChatItem => ({
 });
 
 describe('buildConciseRows', () => {
-  it('shows main conversation, pending actions, failures and unknowns; hides noise and orphan child output', () => {
+  it('shows main conversation, pending actions and warnings; hides unknowns, noise and orphan child output', () => {
     const items: ChatItem[] = [
       user('u', 1),
       { kind: 'thinking', id: 'think', text: 'hmm' },
@@ -62,7 +62,9 @@ describe('buildConciseRows', () => {
         state: 'pending',
         variant: 'tool',
       },
-      { kind: 'unknown', id: 'unknown', sdkType: 'new', raw: {} },
+      { kind: 'unknown', id: 'unknown', sdkType: 'codex_item', raw: {} },
+      { kind: 'unknown', id: 'unknown2', sdkType: 'codex_item', raw: {} },
+      { kind: 'unknown', id: 'unknown3', sdkType: 'codex_item', raw: {} },
       { kind: 'result', id: 'result', isError: false },
       { kind: 'compactBoundary', id: 'compact' },
     ];
@@ -71,7 +73,6 @@ describe('buildConciseRows', () => {
       'reply',
       'warning',
       'request',
-      'unknown',
       'result',
       'compact',
     ]);
@@ -160,12 +161,18 @@ it('deduplicates native agent calls by task identity and hides nested task state
   });
 });
 
-it('hides settled actions but preserves tool failures and does not duplicate source IDs', () => {
+it('hides failed tool calls and does not duplicate task source IDs', () => {
   const rows = buildConciseRows(
-    [user('u', 1), call('broken', { name: 'Read', status: 'error' }), call('agent'), note('done')],
+    [
+      user('u', 1),
+      call('broken', { name: 'Bash', status: 'error' }),
+      call('read', { name: 'Read', status: 'error' }),
+      call('agent'),
+      note('done'),
+    ],
     [task({ toolUseId: 'agent' })],
   );
-  expect(rows[1]).toMatchObject({ kind: 'item', item: { id: 'broken' } });
+  expect(rows.map((row) => row.key)).toEqual(['u', 'task-summary:task']);
   const summaries = rows.filter((row) => row.kind === 'taskSummary');
   expect(summaries).toHaveLength(1);
   expect(summaries[0]?.itemIds).toEqual(['agent', 'done']);

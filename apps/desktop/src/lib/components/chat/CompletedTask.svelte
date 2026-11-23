@@ -1,33 +1,38 @@
 ﻿<script lang="ts">
   import type { CompletedTaskSummary } from './concise';
   import TaskStatusIcon from './TaskStatusIcon.svelte';
+  import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
   import { elapsed, tokens } from './format';
   let { task }: { task: CompletedTaskSummary } = $props();
 </script>
 
-<div data-concise-task class="rounded-md border bg-muted/30 px-3 py-2 text-sm">
-  <div class="flex items-start gap-2">
-    <span class="mt-0.5 shrink-0"><TaskStatusIcon {task} /></span>
-    <div class="min-w-0 flex-1">
-      <div class="font-medium break-words">{task.description}</div>
-      <div class="text-muted-foreground text-xs">
-        {task.status === 'unknown'
-          ? 'Finished, outcome unknown'
-          : task.status === 'completed'
-            ? 'Completed'
-            : task.status === 'failed'
-              ? 'Failed'
-              : 'Stopped'}
-        {#if task.durationMs !== undefined}
-          · {elapsed(task.durationMs)}{/if}
-        {#if task.tokens !== undefined}
-          · {tokens(task.tokens)} tokens{/if}
-        {#if task.model}
-          · {task.model}{/if}
-      </div>
-    </div>
-  </div>
+<details data-concise-task class="group rounded-md border text-xs">
+  <summary
+    class="hover:bg-muted/60 flex cursor-pointer list-none items-center gap-1.5 rounded-md px-2 py-1 [&::-webkit-details-marker]:hidden"
+  >
+    <ChevronRightIcon
+      class="text-muted-foreground size-4 shrink-0 transition-transform group-open:rotate-90"
+      aria-hidden="true"
+    />
+    <TaskStatusIcon {task} />
+    <span class="min-w-0 truncate font-medium">{task.description}</span>
+    <span class="text-muted-foreground shrink-0">
+      {task.status === 'unknown'
+        ? 'Finished, outcome unknown'
+        : task.status === 'completed'
+          ? 'Completed'
+          : task.status === 'failed'
+            ? 'Failed'
+            : 'Stopped'}
+      {#if task.durationMs !== undefined}
+        · {elapsed(task.durationMs)}{/if}
+      {#if task.tokens !== undefined}
+        · {tokens(task.tokens)} tokens{/if}
+      {#if task.model}
+        · {task.model}{/if}
+    </span>
+  </summary>
   {#if task.summary && task.summary !== task.description}
-    <div class="mt-1.5 break-words whitespace-pre-wrap">{task.summary}</div>
+    <div class="border-t px-2 py-1 break-words whitespace-pre-wrap">{task.summary}</div>
   {/if}
-</div>
+</details>

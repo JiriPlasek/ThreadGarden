@@ -14,7 +14,7 @@ test.afterEach(async () => {
   await serviceCall('uiState.set', { key: 'chat.view', value: 'conversation' });
 });
 
-test('Concise hides tool noise, bounds long messages, preserves drafts and remembers the mode', async ({
+test('Concise hides tool noise, bounds whole turns, preserves drafts and remembers the mode', async ({
   page,
 }) => {
   const long = (label: string) =>
@@ -37,6 +37,9 @@ test('Concise hides tool noise, bounds long messages, preserves drafts and remem
       markdown: long('Assistant reply'),
       streaming: false,
     },
+    { kind: 'assistantText', id: 'second-reply', markdown: long('Second reply'), streaming: false },
+    { kind: 'user', id: 'follow-up', ts: Date.now(), text: 'Next question' },
+    { kind: 'assistantText', id: 'short-reply', markdown: 'Short answer', streaming: false },
   ];
   // Only replace this chat's typed history response. Settings, drafts and all other RPCs use the mock service.
   await page.routeWebSocket(/127\.0\.0\.1/, (socket) => {
@@ -71,22 +74,36 @@ test('Concise hides tool noise, bounds long messages, preserves drafts and remem
   const messages = page.getByLabel('Messages', { exact: true });
   await expect(messages.locator('[data-item-id="hidden-tool"]')).toHaveCount(0);
   await expect(messages.locator('[data-item-id="hidden-thought"]')).toHaveCount(0);
-  for (const id of ['long-reply', 'long-user']) {
-    const row = messages.locator(`[data-row="${id}"]`);
-    const block = row.locator('[data-concise-block]').first();
-    const more = block.getByRole('button', { name: 'Show more', exact: true });
-    await more.scrollIntoViewIfNeeded();
-    await expect(more).toBeVisible();
-    const clip = block.locator('[data-clamped-content]').locator('..');
-    const cap = await clip.evaluate((el) => parseFloat(getComputedStyle(el).maxHeight));
-    expect(await clip.evaluate((el) => el.getBoundingClientRect().height)).toBeLessThanOrEqual(
-      cap + 1,
-    );
-    await more.click();
-    await expect(block.getByRole('button', { name: 'Show less', exact: true })).toBeVisible();
-    expect(await clip.evaluate((el) => el.getBoundingClientRect().height)).toBeGreaterThan(cap);
-    await block.getByRole('button', { name: 'Show less', exact: true }).click();
-  }
+  const turns = messages.locator('[data-concise-turn]');
+  await expect(turns).toHaveCount(2);
+  const first = turns.first();
+  await expect(first.locator('[data-item-id="long-user"]')).toHaveCount(1);
+  await expect(first.locator('[data-item-id="long-reply"]')).toHaveCount(1);
+  await expect(first.locator('[data-item-id="second-reply"]')).toHaveCount(1);
+  await expect(messages.getByRole('button', { name: 'Show more', exact: true })).toHaveCount(0);
+  const scroll = first.locator('[data-turn-scroll]');
+  const cap = await scroll.evaluate((el) => parseFloat(getComputedStyle(el).maxHeight));
+  const prompt = first.locator('[data-item-id="long-user"]');
+  expect(await prompt.evaluate((el) => el.closest('[data-turn-scroll]') === null)).toBe(true);
+  expect(await prompt.evaluate((el) => el.getBoundingClientRect().height)).toBeGreaterThan(cap);
+  await expect(prompt).toContainText('User request line 80');
+
+  expect(await scroll.evaluate((el) => el.getBoundingClientRect().height)).toBeLessThanOrEqual(
+    cap + 1,
+  );
+  await scroll.scrollIntoViewIfNeeded();
+  await scroll.hover();
+  await page.mouse.wheel(0, 200);
+  await expect.poll(() => scroll.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
+  const saved = await scroll.evaluate((el) => el.scrollTop);
+  await picker.getByRole('button', { name: 'Conversation', exact: true }).click();
+  await picker.getByRole('button', { name: 'Concise', exact: true }).click();
+  await expect.poll(() => scroll.evaluate((el) => el.scrollTop)).toBeCloseTo(saved, 0);
+  await scroll.evaluate((el) => {
+    el.scrollTop = el.scrollHeight;
+  });
+  await expect(first.getByText('Second reply line 80', { exact: false })).toBeInViewport();
+  expect(await turns.last().evaluate((el) => el.getBoundingClientRect().height)).toBeLessThan(cap);
   await expect(composer).toHaveText('Draft survives Concise');
   await page.screenshot({ path: 'test-results/concise-draft.png' });
   await expect

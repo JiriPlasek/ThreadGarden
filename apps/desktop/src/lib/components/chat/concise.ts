@@ -14,6 +14,31 @@ export type CompletedTaskSummary = {
 export type ConciseRow =
   Row | { kind: 'taskSummary'; key: string; task: CompletedTaskSummary; itemIds: string[] };
 
+export type ConciseTurn = {
+  kind: 'turn';
+  key: string;
+  user?: ConciseRow;
+  rows: ConciseRow[];
+  itemIds: string[];
+};
+
+/** User messages delimit turns, even when a loaded page begins midway through one. */
+export const groupConciseTurns = (rows: readonly ConciseRow[]): ConciseTurn[] => {
+  const turns: ConciseTurn[] = [];
+  for (const row of rows) {
+    let turn = turns.at(-1);
+    const isUser = row.kind === 'item' && row.item.kind === 'user';
+    if (!turn || isUser) {
+      turn = { kind: 'turn', key: `concise-turn:${row.key}`, rows: [], itemIds: [] };
+      turns.push(turn);
+    }
+    if (isUser) turn.user = row;
+    else turn.rows.push(row);
+    turn.itemIds.push(row.key, ...row.itemIds);
+  }
+  return turns;
+};
+
 type Completion = {
   task: CompletedTaskSummary;
   itemIds: string[];
@@ -137,8 +162,8 @@ export const buildConciseRows = (
       }
       if (item.level === 'info') continue;
     }
-    if (item.kind === 'thinking' || item.kind === 'todo') continue;
-    if (item.kind === 'toolCall' && item.status !== 'error') continue;
+    if (item.kind === 'thinking' || item.kind === 'todo' || item.kind === 'unknown') continue;
+    if (item.kind === 'toolCall') continue;
     if (item.kind === 'permissionRequest' && item.state !== 'pending') continue;
     visible.push(item);
   }

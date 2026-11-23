@@ -46,7 +46,7 @@ export const LIVE_STATUSES: readonly ChatStatus[] = ['needsYou', 'working', 'idl
  */
 export type ListMemory = {
   heights: Map<string, number>;
-  expanded?: Set<string>;
+  turnScroll?: Map<string, number>;
   stick: boolean;
   anchor: { key: string; delta: number } | null;
 };

@@ -32,8 +32,8 @@ const mount = async () => {
     server.handlers['chat.timeline'] = () => ({ blocks: [] });
   });
   await env.app.chats.open('s');
-  env.app.chats.byId.get('s')!.view.expanded = new Set(['full-block']);
-  env.app.chats.byId.get('s')!.conciseView.expanded = new Set(['concise-block']);
+  env.app.chats.byId.get('s')!.view.turnScroll = new Map([['full-turn', 40]]);
+  env.app.chats.byId.get('s')!.conciseView.turnScroll = new Map([['concise-turn', 80]]);
   const rendered = render(ChatView, {
     context: env.context,
     props: { ref: { machineId: LOCAL, sessionId: 's' } },
@@ -64,8 +64,8 @@ describe('Concise view integration', () => {
     await userEvent.click(within(switcher).getByRole('button', { name: 'Concise' }));
     expect(screen.getByRole('textbox', { name: 'Message' })).toBe(composer);
     expect(composer.textContent).toBe('Keep this draft');
-    expect(chat.conciseView.expanded).toEqual(new Set(['concise-block']));
-    expect(chat.view.expanded).toEqual(new Set(['full-block']));
+    expect(chat.conciseView.turnScroll).toEqual(new Map([['concise-turn', 80]]));
+    expect(chat.view.turnScroll).toEqual(new Map([['full-turn', 40]]));
   });
 
   it('allows Concise on a copied chat without loading Timeline', async () => {
