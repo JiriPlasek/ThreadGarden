@@ -31,6 +31,12 @@
   let now = $state(Date.now());
   let scale = $state(2);
   let scrollArea = $state<HTMLDivElement | null>(null);
+  let viewportWidth = $state(0);
+  let viewportHeight = $state(0);
+  let outerWidth = $state(0);
+  let outerHeight = $state(0);
+  const rightGutter = $derived(Math.max(0, outerWidth - viewportWidth));
+  const bottomGutter = $derived(Math.max(0, outerHeight - viewportHeight));
   let selectedId = $state<string | null>(null);
   let details = $state.raw<ChatItem[]>([]);
   let detailLoading = $state(false);
@@ -219,19 +225,23 @@
     }
   }}
 >
-  <div class="flex shrink-0 items-start justify-between gap-3 border-b px-3 py-2">
-    <details class="min-w-0 flex-1 text-xs text-muted-foreground">
-      <summary class="w-fit cursor-pointer py-1.5 font-medium">Color meanings</summary>
-      <div role="group" aria-label="Color meanings" class="py-2">
-        <p class="mb-2 font-medium">Activity strip</p>
-        {@render colorKey()}
-      </div>
-    </details>
+  <div
+    class="pointer-events-none absolute z-30 flex flex-col items-end gap-2"
+    style:right="{12 + rightGutter}px"
+    style:bottom="{12 + bottomGutter}px"
+  >
+    <div
+      role="group"
+      aria-label="Color meanings"
+      class="pointer-events-auto rounded-md border bg-background/95 p-3 text-xs text-muted-foreground shadow-sm"
+    >
+      {@render colorKey()}
+    </div>
     <div
       role="group"
       aria-label="Timeline navigation"
       title="Zoom: {scale} px/min. Short entries are expanded to keep their titles readable."
-      class="inline-flex shrink-0 overflow-hidden rounded-md border text-xs"
+      class="pointer-events-auto inline-flex shrink-0 overflow-hidden rounded-md border bg-background/95 text-xs shadow-sm"
     >
       <button
         class="px-2.5 py-1.5 hover:bg-muted disabled:opacity-40"
@@ -270,6 +280,10 @@
   {:else}
     <div
       bind:this={scrollArea}
+      bind:clientWidth={viewportWidth}
+      bind:clientHeight={viewportHeight}
+      bind:offsetWidth={outerWidth}
+      bind:offsetHeight={outerHeight}
       data-timeline-scroll
       class="min-h-0 flex-1 overflow-auto"
       onwheel={(e) => {

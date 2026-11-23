@@ -211,23 +211,20 @@ test('calendar layout shows parallel agents, folded overnight time, zoom, and a 
   expect(minuteMarks.length).toBeGreaterThan(0);
   expect(minuteMarks.every((m) => m % 15 === 0)).toBe(true);
   const legend = timeline.getByRole('group', { name: 'Color meanings', exact: true });
-  await expect(legend).toBeHidden();
-  await timeline.locator('summary').click();
   await expect(legend).toBeVisible();
   await expect(legend).toContainText('Tool pending');
   const viewport = await timeline.locator('[data-timeline-scroll]').evaluate((el) => {
     const rect = el.getBoundingClientRect();
-    return { right: rect.left + el.clientWidth, top: rect.top };
+    return { right: rect.left + el.clientWidth, bottom: rect.top + el.clientHeight };
   });
   const navigation = await timeline
     .getByRole('group', { name: 'Timeline navigation' })
     .boundingBox();
   expect(navigation!.x + navigation!.width).toBeLessThanOrEqual(viewport.right);
-  expect(navigation!.y + navigation!.height).toBeLessThanOrEqual(viewport.top);
+  expect(navigation!.y + navigation!.height).toBeLessThanOrEqual(viewport.bottom);
   const legendBox = await legend.boundingBox();
-  expect(legendBox!.y + legendBox!.height).toBeLessThanOrEqual(viewport.top);
-  await timeline.locator('summary').click();
-  await expect(legend).toBeHidden();
+  expect(legendBox!.y + legendBox!.height).toBeLessThanOrEqual(navigation!.y);
+  expect(legendBox!.x + legendBox!.width).toBeLessThanOrEqual(viewport.right);
   await timeline.screenshot({ path: 'test-results/timeline-calendar.png' });
   await timeline.getByRole('button', { name: /Agent: Migrate invoices/ }).click();
   await expect(page.getByLabel('Recorded activity')).toContainText('Reasoning observed');
