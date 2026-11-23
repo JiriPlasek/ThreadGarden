@@ -445,7 +445,7 @@
             : 'bg-background text-muted-foreground hover:bg-muted'}"
           onclick={() => onViewModeChange?.(mode as 'conversation' | 'concise' | 'timeline')}
           >{mode === 'conversation'
-            ? 'Conversation'
+            ? 'Chat'
             : mode === 'concise'
               ? 'Concise'
               : 'Timeline'}</button
