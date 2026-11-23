@@ -73,7 +73,10 @@ describe('timeline view', () => {
     render(TimelineView, { sessionId: 's', load: async () => ({ blocks: [block] }), detail });
     await userEvent.click(await screen.findByRole('button', { name: /Turn: Port billing/ }));
     expect(await screen.findByText('Saved report')).toBeTruthy();
-    expect(screen.getByText(/^You ·/)).toBeTruthy();
+    expect(document.querySelector('[data-timeline-block-time]')?.textContent).not.toMatch(
+      /You|Turn/,
+    );
+    expect(screen.queryByText(/Short entries expanded/)).toBeNull();
     expect(screen.getAllByText(/4.7M tokens/).length).toBeGreaterThan(0);
     await userEvent.click(screen.getByRole('button', { name: 'Load more messages' }));
     expect(await screen.findByText('Next report')).toBeTruthy();

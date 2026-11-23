@@ -159,7 +159,8 @@ test('calendar layout shows parallel agents, folded overnight time, zoom, and a 
   await expect(timeline.getByRole('button', { name: /^Agent:/ })).toHaveCount(3);
   await expect(timeline.getByText(/Timing unavailable/)).toHaveCount(0);
   await expect(timeline.getByText('Undated legacy prompt')).toHaveCount(0);
-  await expect(timeline.getByText(/You ·/)).toHaveCount(3);
+  await expect(timeline.locator('[data-timeline-block-time]')).toHaveCount(3);
+  await expect(timeline.getByText(/You ·|Short entries expanded for readability/)).toHaveCount(0);
   await expect(timeline.getByRole('button', { name: /Agent: Check webhook/ })).toContainText(
     'Check webhook compatibility',
   );
@@ -170,7 +171,7 @@ test('calendar layout shows parallel agents, folded overnight time, zoom, and a 
     'completed',
   );
   const minuteMarks = await timeline
-    .locator('time')
+    .locator('[data-timeline-tick]')
     .evaluateAll((times) => times.map((t) => new Date(t.getAttribute('datetime')!).getMinutes()));
   expect(minuteMarks.length).toBeGreaterThan(0);
   expect(minuteMarks.every((m) => m % 15 === 0)).toBe(true);
@@ -182,7 +183,10 @@ test('calendar layout shows parallel agents, folded overnight time, zoom, and a 
     .screenshot({ path: 'test-results/timeline-inspector.png' });
   await page.getByRole('button', { name: 'Close timeline details' }).click();
   await timeline.getByRole('button', { name: 'Zoom in timeline' }).click();
-  await expect(timeline.getByText('4 px/min')).toBeVisible();
+  await expect(timeline.getByRole('group', { name: 'Timeline navigation' })).toHaveAttribute(
+    'title',
+    /4 px\/min/,
+  );
 });
 
 test('timeline follows a live delegated turn through completion', async ({ page }) => {

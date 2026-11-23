@@ -189,37 +189,37 @@
     }
   }}
 >
-  <div class="flex shrink-0 flex-wrap items-center gap-3 border-b px-4 py-2 text-xs">
-    <span class="font-medium">Timeline</span>
-    <span class="text-muted-foreground"
-      >{blocks.filter((b) => b.kind === 'turn').length} turns · {blocks.filter(
-        (b) => b.kind === 'agent',
-      ).length} agents</span
+  <div
+    role="group"
+    aria-label="Timeline navigation"
+    title="Zoom: {scale} px/min. Short entries are expanded to keep their titles readable."
+    class="absolute right-3 bottom-3 z-30 inline-flex overflow-hidden rounded-md border bg-background/95 text-xs shadow-sm"
+  >
+    <button
+      class="px-2.5 py-1.5 hover:bg-muted disabled:opacity-40"
+      aria-label="Zoom out timeline"
+      disabled={scale <= 0.25}
+      onclick={() => zoom(0.5)}>−</button
     >
-    {#if layout.expanded}<span class="text-muted-foreground"
-        >Short entries expanded for readability</span
-      >{/if}
-    <div class="ml-auto flex items-center gap-2">
-      <button
-        class="rounded border px-2 py-1 disabled:opacity-40"
-        aria-label="Zoom out timeline"
-        disabled={scale <= 0.25}
-        onclick={() => zoom(0.5)}>−</button
-      >
-      <span class="w-16 text-center tabular-nums">{scale} px/min</span>
-      <button
-        class="rounded border px-2 py-1 disabled:opacity-40"
-        aria-label="Zoom in timeline"
-        disabled={scale >= 256}
-        onclick={() => zoom(2)}>+</button
-      >
-      <button class="rounded border px-2 py-1" onclick={() => void refresh()}>Refresh</button>
-      <button
-        class="rounded border px-2 py-1"
-        onclick={() => scrollArea?.scrollTo({ top: scrollArea.scrollHeight, behavior: 'smooth' })}
-        >Latest</button
-      >
-    </div>
+    <button
+      class="border-l px-2.5 py-1.5 hover:bg-muted disabled:opacity-40"
+      aria-label="Zoom in timeline"
+      disabled={scale >= 256}
+      onclick={() => zoom(2)}>+</button
+    >
+    <button
+      class="border-l px-2.5 py-1.5 hover:bg-muted"
+      aria-label="Refresh"
+      title="Refresh timeline"
+      onclick={() => void refresh()}>↻</button
+    >
+    <button
+      class="border-l px-2.5 py-1.5 hover:bg-muted"
+      aria-label="Latest"
+      title="Scroll to latest activity"
+      onclick={() => scrollArea?.scrollTo({ top: scrollArea.scrollHeight, behavior: 'smooth' })}
+      >↓</button
+    >
   </div>
   {#if error}<p role="alert" class="px-4 py-2 text-sm text-destructive">
       {error} <button class="underline" onclick={() => void refresh()}>Retry</button>
@@ -258,6 +258,7 @@
           class="sticky left-0 z-20 w-20 shrink-0 bg-background/95 text-[0.625rem] text-muted-foreground"
         >
           {#each layout.ticks as t}<time
+              data-timeline-tick
               class="absolute right-0 left-2 -translate-y-full border-b border-border/60 pb-0.5 leading-3"
               style:top="{t.y}px"
               title={fullTime(t.at)}
@@ -292,11 +293,15 @@
               title="{label(p.block)}{p.block.startedAt ? `\n${fullTime(p.block.startedAt)}` : ''}"
               onclick={(e) => openBlock(p.block.id, e.currentTarget)}
             >
-              <div class="flex items-center gap-1 text-[0.625rem] opacity-70">
-                <span aria-hidden="true">●</span>{p.block.promptAt !== undefined ? 'You' : 'Turn'} · {clock(
+              <time
+                data-timeline-block-time
+                class="text-[0.625rem] opacity-70"
+                datetime={new Date(
                   p.block.promptAt ?? p.block.startedAt ?? p.block.endedAt!,
-                )}
-              </div>
+                ).toISOString()}
+                title={fullTime(p.block.promptAt ?? p.block.startedAt ?? p.block.endedAt!)}
+                >{clock(p.block.promptAt ?? p.block.startedAt ?? p.block.endedAt!)}</time
+              >
               <div class="truncate font-medium">{p.block.title}</div>
               <div class="truncate opacity-70" title={tokenHint}>
                 {durationOf(p.block)}{p.block.tokens !== undefined
