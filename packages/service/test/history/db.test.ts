@@ -376,3 +376,61 @@ describe('recentCwds (the push check before a shutdown)', () => {
     db.close();
   });
 });
+
+describe('sidebar activity', () => {
+  it('freezes fallback, preserves notes and pages by sidebar time independently of raw activity', () => {
+    const db = openDb(':memory:');
+    db.upsertSession(info('a', { createdAt: 10, lastModified: 1000 }), 'p');
+    db.upsertSession(info('b', { lastModified: 20 }), 'p');
+    db.upsertSession(info('a', { createdAt: 99, lastModified: 2000 }), 'p');
+    expect(db.sidebarActivityOf('a')).toEqual({ userAt: 10 });
+    db.recordUserMessage('a', 30);
+    db.recordUserMessage('a', 15);
+    db.recordNeedsYou('a', 90);
+    db.recordNeedsYou('a', 60);
+    expect(db.sidebarActivityOf('a')).toEqual({ userAt: 30, attentionAt: 90 });
+    expect(db.getSession('a')?.sortAt).toBe(30);
+    db.setTurnEnded('b', 40);
+    const page = db.listSessions({}, 1, undefined, 'sidebar');
+    expect(page.items.map((r) => r.sessionId)).toEqual(['b']);
+    expect(db.listSessions({}, 1, page.nextCursor, 'sidebar').items[0]?.sessionId).toBe('a');
+    expect(db.listSessions({}, 1, undefined).items[0]?.sessionId).toBe('a');
+    expect(db.projectSidebarActivity().get('p')).toBe(40);
+    expect(db.projectSidebarActivity(['b']).get('p')).toBe(30);
+    db.markSeen('b', 50);
+    expect(db.getSession('b')?.sortAt).toBe(20);
+    db.close();
+  });
+
+  it('keeps live notes made before history metadata arrives', () => {
+    const db = openDb(':memory:');
+    db.recordUserMessage('s', 70);
+    db.recordNeedsYou('s', 80);
+    db.upsertSession(info('s', { createdAt: 10 }), 'p');
+    expect(db.sidebarActivityOf('s')).toEqual({ userAt: 70, attentionAt: 80 });
+    db.close();
+  });
+});
+
+describe('sidebar migration and backfill', () => {
+  it('seeds an older database once and preserves newer live notes during stats replacement', () => {
+    const db = openDb(':memory:');
+    db.upsertSession(info('s', { createdAt: 12 }), 'p');
+    db.raw.exec('DROP TABLE sidebar_activity');
+    const version = db.raw.prepare('PRAGMA user_version').get()?.user_version as number;
+    db.raw.exec(`PRAGMA user_version = ${version - 1}`);
+    migrate(db.raw);
+    expect(db.sidebarActivityOf('s')).toEqual({ userAt: 12 });
+    db.recordUserMessage('s', 100);
+    db.replaceStats(
+      's',
+      { firstAt: 5, lastAt: 200, lastUserAt: 40, days: [], hours: [], tools: [], agents: [] },
+      2,
+    );
+    expect(db.sidebarActivityOf('s')?.userAt).toBe(100);
+    db.raw.exec(`PRAGMA user_version = ${version - 1}`);
+    migrate(db.raw);
+    expect(db.sidebarActivityOf('s')?.userAt).toBe(100);
+    db.close();
+  });
+});

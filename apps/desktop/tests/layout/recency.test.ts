@@ -37,7 +37,7 @@ const options = (): string[] =>
   screen.getAllByRole('option').map((o) => o.getAttribute('data-session-id')!);
 
 const mixed = () => [
-  summary('n1', { status: 'needsYou', lastActivity: NOW - 40 * DAY_MS }),
+  summary('n1', { status: 'needsYou', sortAt: NOW, lastActivity: NOW - 40 * DAY_MS }),
   summary('w1', { status: 'working', lastActivity: NOW - 1000 }),
   summary('h1', { lastActivity: NOW - 2 * HOUR }),
   summary('h2', { lastActivity: NOW - 3 * DAY_MS }),
@@ -45,7 +45,23 @@ const mixed = () => [
 ];
 
 describe('chat list recency sections (v1.2 §2)', () => {
-  it('shows the last hour first (with the chats that need you or run), then by recency; empty sections are hidden', async () => {
+  it('shows actual activity time while grouping by the stable ordering timestamp', async () => {
+    freezeClock();
+    const { context } = await setup((server) => {
+      server.handlers['sessions.list'] = () => ({
+        items: [
+          summary('busy', { status: 'working', lastActivity: NOW, sortAt: NOW - 2 * DAY_MS }),
+        ],
+      });
+    });
+    render(ChatList, { context });
+    const row = await screen.findByRole('option');
+    expect(row.querySelector('time')?.getAttribute('datetime')).toBe(new Date(NOW).toISOString());
+    expect(row.querySelector('time')?.textContent).toBe('now');
+    expect(headers()).toEqual(['Last 7 days 1']);
+  });
+
+  it('shows the last hour first using stable handoff time, then by recency; empty sections are hidden', async () => {
     freezeClock();
     const { context } = await setup((server) => {
       server.handlers['sessions.list'] = () => ({ items: mixed() });

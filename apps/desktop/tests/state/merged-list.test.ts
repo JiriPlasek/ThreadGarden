@@ -57,6 +57,16 @@ const twoMachines = async (local: ChatSummary[], remote: ChatSummary[], kind = '
 };
 
 describe('merged lists across machines', () => {
+  it('merges by stable sidebar time despite streamed activity and status differences', async () => {
+    const { make } = await twoMachines(
+      [at('older', 1000, { sortAt: 10, status: 'working' })],
+      [at('newer', 20, { sortAt: 20, status: 'history' })],
+    );
+    const list = make();
+    await list.reload();
+    expect(keys(list)).toEqual([`${M1}/newer`, `${LOCAL}/older`]);
+  });
+
   it('merges two machines by last activity and keeps both copies of one id', async () => {
     const { make } = await twoMachines([at('s1', 30), at('s2', 10)], [at('s1', 20)]);
     const list = make();

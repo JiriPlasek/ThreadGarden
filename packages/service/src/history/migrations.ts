@@ -357,6 +357,17 @@ const steps: string[] = [
     mode TEXT NOT NULL
   );
   `,
+  // Sidebar activity is independent of transcript metadata and survives reindexing.
+  `
+  CREATE TABLE IF NOT EXISTS sidebar_activity (
+    session_id TEXT PRIMARY KEY,
+    baseline_at INTEGER NOT NULL,
+    last_user_at INTEGER,
+    attention_at INTEGER
+  );
+  INSERT OR IGNORE INTO sidebar_activity (session_id, baseline_at)
+    SELECT session_id, COALESCE(created_at, last_modified) FROM sessions;
+  `,
 ];
 
 /** Runs the steps not run yet; `upTo` stops early (tests build older schemas with it). */

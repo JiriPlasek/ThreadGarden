@@ -143,20 +143,20 @@ describe('the copy API of a machine that is away', () => {
     expect(ids(running.items)).toEqual([]);
     // A bucket in the service's order, paged; a hidden project's chats are left out.
     const first = await api.request('sessions.list', { place: { kind: 'active' }, limit: 3 });
-    expect(ids(first.items)).toEqual(['waiting', 'working', 'other']);
+    expect(ids(first.items)).toEqual(['other', 'new', 'unread']);
     expect(first.nextCursor).toBeDefined();
     const second = await api.request('sessions.list', {
       place: { kind: 'active' },
       limit: 3,
       cursor: first.nextCursor,
     });
-    expect(ids(second.items)).toEqual(['new', 'unread', 'old']);
+    expect(ids(second.items)).toEqual(['working', 'old', 'waiting']);
     expect(second.nextCursor).toBeUndefined();
     const project = await api.request('sessions.list', {
       place: { kind: 'project', projectId: 'p1', include: ['onHold'] },
       limit: 50,
     });
-    expect(ids(project.items)).toEqual(['waiting', 'working', 'new', 'held', 'unread', 'old']);
+    expect(ids(project.items)).toEqual(['new', 'held', 'unread', 'working', 'old', 'waiting']);
     const found = await api.request('sessions.list', {
       place: { kind: 'active' },
       limit: 50,

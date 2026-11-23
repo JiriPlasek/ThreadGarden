@@ -289,3 +289,24 @@ describe('StatsCollector', () => {
     });
   });
 });
+
+describe('sidebar user timestamp', () => {
+  it('uses only real main prompts with their own known time', () => {
+    const stats = collect(
+      [
+        user(30, 'real'),
+        assistant(100),
+        raw({ type: 'user', message: { content: 'missing time' } }),
+        user(200, 'meta', { isMeta: true }),
+        user(300, 'child', { parent_tool_use_id: 'tool' }),
+        user(400, [{ type: 'tool_result', content: 'result' }]),
+        user(20, 'earlier'),
+      ],
+      999,
+    );
+    expect(stats.lastUserAt).toBe(30);
+    expect(
+      collect([raw({ type: 'user', message: { content: 'unknown' } })], 999).lastUserAt,
+    ).toBeUndefined();
+  });
+});

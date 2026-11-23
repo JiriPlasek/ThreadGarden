@@ -71,6 +71,8 @@ export type SessionHostDeps = {
   // ── v1.1 T2 ──
   /** Handed to every session (see `LiveSessionDeps.onTurnEnded`). */
   onTurnEnded?: LiveSessionDeps['onTurnEnded'];
+  onUserMessage?: LiveSessionDeps['onUserMessage'];
+  onNeedsYou?: LiveSessionDeps['onNeedsYou'];
   /** Handed to every session (see `LiveSessionDeps.onActivity`). */
   onActivity?: LiveSessionDeps['onActivity'];
   /** Handed to every session (see `LiveSessionDeps.onRunningTasks`, Ruling R29). */
@@ -378,6 +380,8 @@ export class SessionHost {
       describe,
       onError,
       onTurnEnded,
+      onUserMessage,
+      onNeedsYou,
       onActivity,
       onRunningTasks,
       onRateLimit,
@@ -401,6 +405,8 @@ export class SessionHost {
       ...(describe ? { describe } : {}),
       ...(onError ? { onError } : {}),
       ...(onTurnEnded ? { onTurnEnded } : {}),
+      ...(onUserMessage ? { onUserMessage } : {}),
+      ...(onNeedsYou ? { onNeedsYou } : {}),
       ...(onActivity ? { onActivity } : {}),
       ...(onRunningTasks ? { onRunningTasks } : {}),
       ...(onRateLimit ? { onRateLimit } : {}),

@@ -24,6 +24,7 @@ import { resolveClaudeConfigDir } from './config.js';
 import { acquireInstanceLock, removeDiscovery, writeDiscovery } from './discovery.js';
 import { FileIndex } from './files/file-index.js';
 import { ExternalPoller, makeClaudeRunner, type ExternalSession } from './external/poller.js';
+import { externalStatus } from './external/resume-safety.js';
 import { Buckets } from './history/buckets.js';
 import { Catalog, UNTITLED_TITLE, titleFor, type LiveChat } from './history/catalog.js';
 import { openDb, type Db } from './history/db.js';
@@ -910,6 +911,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
           ...(project ? { projectName: project.displayName } : {}),
         };
       };
+      const catalogRef: { current?: Catalog } = {};
       const sessionHost = new SessionHost({
         adapter,
         registry: opened,
@@ -937,8 +939,15 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
           if (isCodexSession(id)) titlesRef.current?.forget(id);
           else titlesRef.current?.turnEnded(id);
         },
-        // v1.1 §4: live activity may reorder the projects.
-        onActivity: () => projectOrderRef.current?.notify(),
+        // Sidebar movement follows user input and handoffs, not streamed activity.
+        onUserMessage: (id, at) => {
+          opened.recordUserMessage(id, at);
+          emitChat({ event: 'sessions.changed', data: { sessionIds: [id] } });
+        },
+        onNeedsYou: (id, at) => {
+          opened.recordNeedsYou(id, at);
+          emitChat({ event: 'sessions.changed', data: { sessionIds: [id] } });
+        },
         // Ruling R29: running background tasks put a chat under Running, idle or not.
         onRunningTasks: (id) => emitChat({ event: 'sessions.changed', data: { sessionIds: [id] } }),
         // v1.3 B: usage limits, and the scheduled send whose turn this was.
@@ -976,7 +985,6 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       usageTracker.autoRefresh(() => sessionHost.usageReader());
       codexUsageTracker.autoRefresh(() => sessionHost.usageReader('codex'));
 
-      const catalogRef: { current?: Catalog } = {};
       // Chats moved here live in Threadgarden's own store. Every history read
       // of a session (index, chat view, resume) goes through `historyOf`.
       const chatStore = new ChatStore(opened, (id) => {
@@ -1013,6 +1021,9 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       indexer = index;
       /** Chat events go to clients; a turn that ended lets deferred indexing run. */
       const emitChat = (e: EventMsg): void => {
+        if (e.event === 'sessions.changed') catalogRef.current?.invalidate();
+        if (e.event === 'sessions.changed' || e.event === 'chat.status')
+          projectOrderRef.current?.notify();
         broadcastRef.fn(e);
         if (e.event === 'chat.status') {
           const { sessionId, status } = e.data as { sessionId: string; status: ChatStatus };
@@ -1083,7 +1094,29 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       });
       buckets = bucketList;
       const externalsNow = opts.externals ?? (() => poller?.snapshot() ?? []);
-      bucketsRef.onExternals = () => bucketList.unarchiveRunning(externalsNow());
+      let previousExternals = new Map<string, ChatStatus>();
+      bucketsRef.onExternals = () => {
+        const entries = externalsNow();
+        const next = new Map<string, ChatStatus>();
+        const handoffs: string[] = [];
+        for (const entry of entries) {
+          if (!entry.sessionId) continue;
+          const status = externalStatus(entry);
+          const previous = previousExternals.get(entry.sessionId);
+          // Initial discovery of an old blocked session does not establish when it blocked.
+          if (previous !== undefined && previous !== 'needsYou' && status === 'needsYou') {
+            opened.recordNeedsYou(entry.sessionId, clock());
+            handoffs.push(entry.sessionId);
+          }
+          next.set(entry.sessionId, status);
+        }
+        previousExternals = next;
+        if (handoffs.length) {
+          cat.invalidate();
+          emitChat({ event: 'sessions.changed', data: { sessionIds: handoffs } });
+        }
+        bucketList.unarchiveRunning(entries);
+      };
       projectOrder = new ProjectOrderNotifier({
         changed: () => cat.projectOrderChanged(),
         emit: projectsChanged,

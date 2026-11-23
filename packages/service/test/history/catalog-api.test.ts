@@ -79,7 +79,7 @@ describe('catalog and places API', () => {
     expect(run.items.map((i: Any) => i.sessionId)).toEqual(['session-2']);
   });
 
-  it('ordering puts needsYou first then working', async () => {
+  it('ordering follows sidebar timestamps rather than status', async () => {
     const t = await setup();
     t.setLive([
       lc('session-3', '/work/proj-0', 'idle'),
@@ -88,8 +88,8 @@ describe('catalog and places API', () => {
     ]);
     const r = await t.call('sessions.list', { place: { kind: 'all' }, limit: 50 });
     const ids = r.items.map((i: Any) => i.sessionId);
-    expect(ids.slice(0, 3)).toEqual(['session-5', 'session-4', 'session-3']);
-    const rest = r.items.slice(3).map((i: Any) => i.lastActivity);
+    expect(ids).toEqual(Array.from({ length: 12 }, (_, i) => `session-${11 - i}`));
+    const rest = r.items.map((i: Any) => i.sortAt);
     expect(rest).toEqual([...rest].sort((a, b) => b - a));
   });
 
@@ -154,7 +154,7 @@ describe('catalog and places API', () => {
     } while (cursor);
     expect(seen).toHaveLength(30);
     expect(new Set(seen).size).toBe(30);
-    expect(seen[0]).toBe('session-7');
+    expect(seen[0]).toBe('session-29');
     await t.call('meta.update', { sessionId: 'session-9', customTitle: 'zebra crossing' });
     const q = await t.call('sessions.list', { place: { kind: 'all' }, query: 'zebra', limit: 10 });
     expect(q.items.map((i: Any) => i.sessionId)).toEqual(['session-9']);
@@ -164,7 +164,7 @@ describe('catalog and places API', () => {
     const t = await setup(30, 2);
     t.setLive([lc('session-7', '/work/proj-1', 'working')]);
     const first = await t.call('sessions.list', { place: { kind: 'all' }, limit: 10 });
-    expect(first.items[0].sessionId).toBe('session-7');
+    expect(first.items[0].sessionId).toBe('session-29');
     expect(first.nextCursor).toBeTruthy();
     // between pages: session-7 needs you, and a row that was not yet shown becomes live
     t.setLive([

@@ -160,10 +160,10 @@ describe('catalog: unread chats and the Needs you place', () => {
       lc('session-2', '/work/proj-2', 'paused'),
       lc('session-3', '/work/proj-0', 'failed', { live: false }),
     ]);
-    t.db.setTurnEnded('session-1', 100);
-    t.db.setTurnEnded('session-2', 300);
-    t.db.setTurnEnded('session-3', 200);
-    t.db.setTurnEnded('session-4', 50); // ended (history only) but still unseen
+    t.db.setTurnEnded('session-1', 2_000_000_000_000 + 100);
+    t.db.setTurnEnded('session-2', 2_000_000_000_000 + 300);
+    t.db.setTurnEnded('session-3', 2_000_000_000_000 + 200);
+    t.db.setTurnEnded('session-4', 2_000_000_000_000 + 50); // ended (history only) but still unseen
     const ids = (await t.needsYou()).map((i) => i.sessionId);
     expect(ids).toEqual(['session-0', 'session-2', 'session-3', 'session-1', 'session-4']);
     expect((await t.call('places.counts')).needsYou).toBe(5);
@@ -203,11 +203,13 @@ describe('catalog: unread chats and the Needs you place', () => {
 });
 
 describe('catalog: project order and missing folders', () => {
-  it("a live chat's last activity moves its project up at once", async () => {
+  it('a user message moves its project while raw assistant activity does not', async () => {
     const t = await setup(12, 3);
     const order = () => t.catalog.projects().map((p) => p.projectId);
     expect(order()).toEqual(['/work/proj-2', '/work/proj-1', '/work/proj-0']);
     t.setLive([lc('session-0', '/work/proj-0', 'working', { lastActivity: 2_000_000_000_000 })]);
+    expect(order()).toEqual(['/work/proj-2', '/work/proj-1', '/work/proj-0']);
+    t.db.recordUserMessage('session-0', 2_000_000_000_000);
     expect(order()).toEqual(['/work/proj-0', '/work/proj-2', '/work/proj-1']);
     const top = t.catalog.projects()[0]!;
     expect(top.lastActivity).toBe(2_000_000_000_000);
@@ -223,10 +225,13 @@ describe('catalog: project order and missing folders', () => {
     expect(t.catalog.projectOrderChanged()).toBe(true); // nothing seen yet
     expect(t.catalog.projectOrderChanged()).toBe(false);
     t.setLive([lc('session-1', '/work/proj-1', 'working', { lastActivity: 2_000_000_000_000 })]);
+    expect(t.catalog.projectOrderChanged()).toBe(false); // stream activity does not move it
+    t.db.recordUserMessage('session-1', 2_000_000_000_000);
     expect(t.catalog.projectOrderChanged()).toBe(true);
     expect(t.catalog.projectOrderChanged()).toBe(false);
     // projects.list (what clients see) also moves the baseline.
     t.setLive([lc('session-0', '/work/proj-0', 'working', { lastActivity: 2_000_000_000_001 })]);
+    t.db.recordUserMessage('session-0', 2_000_000_000_001);
     await t.call('projects.list');
     expect(t.catalog.projectOrderChanged()).toBe(false);
   });

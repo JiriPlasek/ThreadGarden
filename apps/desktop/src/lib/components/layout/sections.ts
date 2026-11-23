@@ -1,10 +1,8 @@
-import type { ChatSummary } from '@threadgarden/protocol';
-import { isYourTurn } from './StatusIcon.svelte';
+import { sidebarTime, type ChatSummary } from '@threadgarden/protocol';
 
 /**
- * Recency sections of the chat list (v1.2 §2), by last activity: the last
- * hour (which also holds the chats that need the user or are running), the
- * last 24 hours, and so on. "Now" is the one section of the Needs you and
+ * Recency sections of the chat list (v1.2 §2), by sidebar recency: the last
+ * hour, the last 24 hours, and so on. "Now" is the one section of the Needs you and
  * Running places, whose chats are all of that kind.
  */
 export type SectionId = 'now' | 'hour' | 'day' | 'week' | 'month' | 'older';
@@ -22,21 +20,6 @@ const ORDER: readonly SectionId[] = ['now', 'hour', 'day', 'week', 'month', 'old
 
 export const HOUR_MS = 3_600_000;
 export const DAY_MS = 86_400_000;
-
-/**
- * Needs you, "Your turn", working, or (Ruling R29) running background tasks:
- * the chats listed at the top (in the last hour's section, whatever their
- * last activity). Statuses this build does not know go by their recency.
- * "Your turn" counts only for live and external chats (the overlay, all on
- * the first page): the service lists unread history chats and chats back from
- * hold at their recency position (Ruling R34), so a later page never moves one
- * to the top. Needs you lists them all first.
- */
-export const isNow = (chat: ChatSummary): boolean =>
-  chat.status === 'needsYou' ||
-  chat.status === 'working' ||
-  (chat.runningTasks ?? 0) > 0 ||
-  ((chat.live || chat.external !== null) && isYourTurn(chat.status, chat.unread));
 
 /**
  * The recency section of a last-activity time. A boundary belongs to the newer
@@ -87,7 +70,7 @@ export type Grouped<T extends ChatSummary = ChatSummary> = {
 
 /**
  * Splits a place's chats into sections, keeping the service order within each
- * (so the last hour keeps the status order). Empty sections are left out.
+ * Empty sections are left out.
  * `allNow` (the Needs you and Running places) puts every chat in "now"; `hasMore` marks
  * the last section's count as partial; `keyOf` keys the rows (lists across
  * machines add the machine). Linear in the number of chats.
@@ -100,7 +83,7 @@ export const groupChats = <T extends ChatSummary>(
   const keyOf = o.keyOf ?? ((chat: T) => chat.sessionId);
   const buckets = new Map<SectionId, T[]>(ORDER.map((id) => [id, []]));
   for (const chat of items) {
-    const id = o.allNow ? 'now' : isNow(chat) ? 'hour' : recencySection(chat.lastActivity, now);
+    const id = o.allNow ? 'now' : recencySection(sidebarTime(chat), now);
     buckets.get(id)!.push(chat);
   }
   const present = ORDER.filter((id) => buckets.get(id)!.length > 0);

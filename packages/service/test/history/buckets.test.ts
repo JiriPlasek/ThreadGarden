@@ -381,7 +381,7 @@ describe('buckets: places and counts', () => {
     expect(await t.ids({ kind: 'running' })).toEqual(['session-1']);
     expect(await t.call('places.counts')).toMatchObject({ needsYou: 3, running: 1 });
     // ...while their bucket place still holds them.
-    expect(await t.ids({ kind: 'onHold' })).toEqual(['session-0', 'session-1']);
+    expect(await t.ids({ kind: 'onHold' })).toEqual(['session-1', 'session-0']);
   });
 });
 

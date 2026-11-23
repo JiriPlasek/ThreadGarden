@@ -1,3 +1,4 @@
+import { groupChats } from '../../src/lib/components/layout/sections';
 import { describe, expect, it } from 'vitest';
 import {
   formatHoldUntil,
@@ -5,7 +6,6 @@ import {
   holdPresets,
   toDateTimeLocal,
 } from '../../src/lib/format/hold';
-import { isNow } from '../../src/lib/components/layout/sections';
 import { summary } from '../layout/harness';
 
 /**
@@ -78,6 +78,10 @@ describe('the "Pick date & time" field', () => {
 
 describe('back from hold in the recency sections', () => {
   it('a chat back from hold keeps its recency section (Ruling R34: the service does not lift it)', () => {
-    expect(isNow(summary('a', { backFromHold: true }))).toBe(false);
+    const rows = groupChats(
+      [summary('a', { backFromHold: true, sortAt: 1, lastActivity: 100_000_000 })],
+      100_000_000,
+    ).rows;
+    expect(rows[0]).toMatchObject({ kind: 'header', section: 'week' });
   });
 });

@@ -5,7 +5,7 @@
  * place's pages on its own (one cursor each), and the pages are merged in the
  * order the service lists a place in.
  */
-import { compareChats, type ChatSummary, type Result } from '@threadgarden/protocol';
+import { sidebarTime, compareChats, type ChatSummary, type Result } from '@threadgarden/protocol';
 import { quietly } from './api';
 import { machineLabel, type MachinesState } from './machines.svelte';
 import { wirePlace, type Place } from './places.svelte';
@@ -54,13 +54,13 @@ const waiting = (c: ChatSummary): number => (c.status === 'needsYou' ? 0 : 1);
  * How the heads of two machines' lists of `place` compare (each machine's own
  * order is kept). Needs you lists the chats waiting on the user first, then
  * unread chats and chats back from hold by their most recent turn end, which
- * is about their last activity; every other place follows `compareChats`.
+ * uses their sidebar recency; every other place follows `compareChats`.
  */
 export const mergeOrder = (place: Place): Order =>
   place.kind === 'needsYou'
     ? (a, b) =>
         waiting(a) - waiting(b) ||
-        b.lastActivity - a.lastActivity ||
+        sidebarTime(b) - sidebarTime(a) ||
         a.sessionId.localeCompare(b.sessionId)
     : compareChats;
 

@@ -10,7 +10,7 @@ import type { SessionMessage } from '../sdk/adapter.js';
  * Bumped when the extraction changes: sessions with statistics of an older
  * version are gathered again by the background backfill.
  */
-export const STATS_VERSION = 1;
+export const STATS_VERSION = 2;
 
 export type DayModelStats = {
   /** Local calendar day, `YYYY-MM-DD`. */
@@ -26,6 +26,7 @@ export type DayModelStats = {
 };
 
 export type SessionStats = {
+  lastUserAt?: number;
   firstAt: number | null;
   lastAt: number | null;
   days: DayModelStats[];
@@ -112,6 +113,7 @@ type Reply = {
  * as many `add` calls (slices) as the caller likes.
  */
 export class StatsCollector {
+  private lastUserAt: number | undefined;
   private lastTime: number | undefined;
   private firstAt: number | null = null;
   private lastAt: number | null = null;
@@ -134,6 +136,8 @@ export class StatsCollector {
       if (!isRec(msg)) continue;
       if (r.type === 'user') {
         if (!isUserPrompt(r, msg)) continue;
+        const actual = timeOf(r);
+        if (actual !== undefined) this.lastUserAt = Math.max(this.lastUserAt ?? actual, actual);
         const t = this.time(r);
         const day = this.dayOf(t);
         this.userDays.set(day, (this.userDays.get(day) ?? 0) + 1);
@@ -180,6 +184,7 @@ export class StatsCollector {
       return [key.slice(0, at), key.slice(at + 1)];
     };
     return {
+      ...(this.lastUserAt === undefined ? {} : { lastUserAt: this.lastUserAt }),
       firstAt: this.firstAt,
       lastAt: this.lastAt,
       days: [...days.values()],

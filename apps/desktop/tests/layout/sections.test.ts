@@ -3,7 +3,6 @@ import {
   DAY_MS,
   HOUR_MS,
   groupChats,
-  isNow,
   recencySection,
   type ListRow,
 } from '../../src/lib/components/layout/sections';
@@ -38,23 +37,13 @@ describe('recency sections (v1.2 §2)', () => {
     expect(recencySection(Number.NaN, NOW)).toBe('older');
   });
 
-  it('needs-you, your-turn, working and running chats belong at the top', () => {
-    expect(isNow(summary('a', { status: 'needsYou' }))).toBe(true);
-    expect(isNow(summary('a', { status: 'working' }))).toBe(true);
-    expect(isNow(summary('a', { status: 'idle', live: true, unread: true }))).toBe(true);
-    const external = { kind: 'interactive', pid: 1 };
-    expect(isNow(summary('a', { status: 'idle', external, unread: true }))).toBe(true);
-    // Ruling R29: background tasks running in an idle chat count as Running.
-    expect(isNow(summary('a', { status: 'idle', runningTasks: 2 }))).toBe(true);
-    expect(isNow(summary('a', { status: 'idle' }))).toBe(false);
-    expect(isNow(summary('a', { status: 'paused' }))).toBe(false);
-    expect(isNow(summary('a', { status: 'history' }))).toBe(false);
-    // An unread history row keeps its recency section: the service lists it at
-    // its recency position, so a later page never moves it to the top.
-    expect(isNow(summary('a', { status: 'history', unread: true }))).toBe(false);
-    expect(isNow(summary('a', { status: 'idle', unread: true }))).toBe(false);
-    // Forward compatibility: a status from a newer service goes by its recency.
-    expect(isNow(summary('a', { status: 'sleeping' as never }))).toBe(false);
+  it('keeps streamed activity and status changes in the same recency section', () => {
+    const old = summary('a', { sortAt: ago(3 * DAY_MS), lastActivity: NOW });
+    for (const status of ['needsYou', 'working', 'idle', 'history'] as const) {
+      expect(
+        shape(groupChats([{ ...old, status, unread: true, runningTasks: 2 }], NOW).rows),
+      ).toEqual(['Last 7 days (1)', 'a']);
+    }
   });
 });
 
@@ -73,8 +62,7 @@ describe('groupChats', () => {
     ];
     const g = groupChats(items, NOW);
     expect(shape(g.rows)).toEqual([
-      'Last hour (4)',
-      'n1',
+      'Last hour (3)',
       'w1',
       'h1',
       'u1',
@@ -85,12 +73,12 @@ describe('groupChats', () => {
       'h2',
       'Last 30 days (1)',
       'h3',
-      'Older (1)',
+      'Older (2)',
+      'n1',
       'h4',
     ]);
     // Chats in display order, each pointing at its row; the index answers lookups by id.
     expect(g.chats.map((c) => c.sessionId)).toEqual([
-      'n1',
       'w1',
       'h1',
       'u1',
@@ -98,6 +86,7 @@ describe('groupChats', () => {
       'i1',
       'h2',
       'h3',
+      'n1',
       'h4',
     ]);
     g.chats.forEach((c, i) => {
