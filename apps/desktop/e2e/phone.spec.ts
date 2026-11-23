@@ -496,3 +496,28 @@ test("the update notice opens the release's APK", async ({ page }) => {
     /^https:\/\/github\.com\/JiriPlasek\/ThreadGarden\/releases\/download\/v.+\/threadgarden-.+\.apk$/,
   );
 });
+
+test('timeline is available on the phone and opens turn details', async ({ page }) => {
+  await phoneCall('uiState.set', { key: 'chat.view', value: 'conversation' });
+  try {
+    await openPhone(page);
+    await openChat(page, 'session-3');
+    const picker = page.getByRole('group', { name: 'Chat view', exact: true });
+    await picker.getByRole('button', { name: 'Timeline', exact: true }).tap();
+    const timeline = page.getByRole('region', { name: 'Chat timeline' });
+    await expect(timeline).toBeVisible();
+    await expect(composer(page)).toBeHidden();
+    await expect(timeline.getByRole('group', { name: 'Color meanings' })).toBeVisible();
+    const turn = timeline.getByRole('button', { name: /^Turn:/ }).first();
+    await expect(turn).toBeVisible();
+    await page.screenshot({ path: 'test-results/timeline-phone.png' });
+    await turn.tap();
+    const details = page.getByRole('complementary', { name: 'Timeline details' });
+    await expect(details).toBeVisible();
+    await details.getByRole('button', { name: 'Close timeline details' }).tap();
+    await picker.getByRole('button', { name: 'Conversation', exact: true }).tap();
+    await expect(composer(page)).toBeVisible();
+  } finally {
+    await phoneCall('uiState.set', { key: 'chat.view', value: 'conversation' });
+  }
+});
