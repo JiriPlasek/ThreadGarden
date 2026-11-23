@@ -990,6 +990,13 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
           if (e.event === 'sessions.changed' || e.event === 'projects.changed') {
             catalogRef.current?.invalidate();
           }
+          if (e.event === 'sessions.changed') {
+            try {
+              bucketsRef.onExternals();
+            } catch (err) {
+              log.error(`auto-unarchive: ${errorText(err)}`);
+            }
+          }
           if (e.event === 'index.progress') indexing = e.data as typeof indexing;
           broadcastRef.fn(e);
         },
