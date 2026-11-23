@@ -42,6 +42,7 @@ import {
   type ImageRef,
 } from '@threadgarden/protocol';
 import type { SDKMessage, SessionMessage } from '../sdk/adapter.js';
+import type { TimelineObservation } from './timeline-activity.js';
 import {
   NON_VISUAL_SYSTEM_SUBTYPES,
   NON_VISUAL_TYPES,
@@ -134,6 +135,7 @@ export class Normalizer {
   private readonly aliases = new Map<string, string>();
   /** Every item id emitted so far. */
   private readonly known = new Set<string>();
+  private readonly observations = new Map<string, TimelineObservation>();
   /** A `compact_boundary` was shown and its summary message has not arrived yet. */
   private compactPending = false;
   private readonly turnEnds: boolean;
@@ -174,6 +176,10 @@ export class Normalizer {
     return this.last ? { ...this.last } : undefined;
   }
 
+  activityTimes(): ReadonlyMap<string, TimelineObservation> {
+    return this.observations;
+  }
+
   /**
    * The item id rendering SDK message `sdkUuid` (or a `<uuid>:<index>` block):
    * the streamed item's id for a finalised streamed block, the first item of a
@@ -199,6 +205,43 @@ export class Normalizer {
   }
 
   private remember(m: unknown, items: ChatItem[]): void {
+    if (isRec(m)) {
+      const at = this.timeOf(m);
+      const event = isRec(m.event) ? m.event : undefined;
+      const contentEvent =
+        m.type === 'assistant' ||
+        m.type === 'user' ||
+        (m.type === 'stream_event' &&
+          (event?.type === 'content_block_start' || event?.type === 'content_block_delta'));
+      if (at !== undefined && at > 0 && contentEvent) {
+        const message = isRec(m.message) ? m.message : undefined;
+        const sourceId =
+          str(message?.id) ??
+          (m.type === 'stream_event'
+            ? this.streamMessageId.get(str(m.parent_tool_use_id) ?? '')
+            : undefined) ??
+          str(m.uuid);
+        for (const item of items) {
+          if (item.kind !== 'assistantText' && item.kind !== 'thinking') continue;
+          const previous = this.observations.get(item.id);
+          const minutes = previous?.minutes instanceof Set ? previous.minutes : new Set<number>();
+          minutes.add(Math.floor(at / 60000) * 60000);
+          const from = num(m.codex_item_started_at_ms);
+          const to = num(m.codex_item_completed_at_ms);
+          const knownInterval =
+            from !== undefined && to !== undefined && from > 0 && to >= from
+              ? { from, to }
+              : previous?.knownInterval;
+          this.observations.set(item.id, {
+            firstAt: Math.min(previous?.firstAt ?? at, at),
+            lastAt: Math.max(previous?.lastAt ?? at, at),
+            sourceId: sourceId ?? item.id,
+            minutes,
+            ...(knownInterval ? { knownInterval } : {}),
+          });
+        }
+      }
+    }
     for (const item of items) this.known.add(item.id);
     const uuid = isRec(m) ? str(m.uuid) : undefined;
     if (!uuid || items.length === 0 || this.known.has(uuid) || this.aliases.has(uuid)) return;

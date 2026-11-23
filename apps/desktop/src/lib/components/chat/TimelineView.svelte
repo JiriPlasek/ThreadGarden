@@ -6,10 +6,13 @@
   import { elapsed, tokens } from './format';
   import { layoutTimeline } from './timeline-layout';
   import ItemView from './items/ItemView.svelte';
+  import ActivityStrip from './ActivityStrip.svelte';
+  import { ACTIVITY_COLORS, activitySummary } from './timeline-activity';
   import { setChatActions } from './context';
 
   // Historical inspection must not offer live permission decisions or fork actions.
   setChatActions({});
+  const activityDescriptionId = $props.id();
 
   let {
     sessionId,
@@ -60,6 +63,14 @@
   };
   const label = (b: TimelineBlock): string =>
     `${b.kind === 'turn' ? 'Turn' : 'Agent'}: ${b.title} · ${b.status} · ${durationOf(b)}`;
+  const description = (b: TimelineBlock): string =>
+    [
+      label(b),
+      b.startedAt ? fullTime(b.startedAt) : '',
+      b.activity ? activitySummary(b.activity) : '',
+    ]
+      .filter(Boolean)
+      .join('\n');
   const tokenText = (b: TimelineBlock): string =>
     b.tokens === undefined ? '' : `${tokens(b.tokens)} tokens`;
   const tokenHint =
@@ -290,9 +301,20 @@
               style:height="{p.height}px"
               aria-label={label(p.block)}
               aria-pressed={selectedId === p.block.id}
-              title="{label(p.block)}{p.block.startedAt ? `\n${fullTime(p.block.startedAt)}` : ''}"
+              title={description(p.block)}
+              aria-describedby={p.block.activity
+                ? `${activityDescriptionId}-${p.block.id}`
+                : undefined}
               onclick={(e) => openBlock(p.block.id, e.currentTarget)}
             >
+              {#if p.block.activity}<span class="sr-only" id="{activityDescriptionId}-{p.block.id}"
+                  >{activitySummary(p.block.activity)}</span
+                ><ActivityStrip
+                  activity={p.block.activity}
+                  top={p.y}
+                  height={p.height}
+                  yOf={layout.yOf}
+                />{/if}
               <time
                 data-timeline-block-time
                 class="text-[0.625rem] opacity-70"
@@ -324,15 +346,31 @@
               style:height="{p.height}px"
               aria-label={label(p.block)}
               aria-pressed={selectedId === p.block.id}
-              title={label(p.block)}
+              title={description(p.block)}
+              aria-describedby={p.block.activity
+                ? `${activityDescriptionId}-${p.block.id}`
+                : undefined}
               onclick={(e) => openBlock(p.block.id, e.currentTarget)}
             >
+              {#if p.block.activity}<span class="sr-only" id="{activityDescriptionId}-{p.block.id}"
+                  >{activitySummary(p.block.activity)}</span
+                ><ActivityStrip
+                  activity={p.block.activity}
+                  top={p.y}
+                  height={p.height}
+                  yOf={layout.yOf}
+                />{/if}
               <div class="truncate font-medium">{p.block.title}</div>
               <div class="truncate opacity-70">
                 <span title={tokenHint}>{tokenText(p.block)}</span>{p.block.tokens !== undefined
                   ? ' · '
                   : ''}{durationOf(p.block)}
               </div>
+              {#if p.block.activity && p.block.activity.prompts > 1}<div
+                  class="truncate text-[0.625rem] opacity-80"
+                >
+                  ↔ {p.block.activity.prompts} prompts
+                </div>{/if}
               {#if p.height >= 66}<div class="truncate opacity-70">{p.block.model ?? ''}</div>{/if}
             </button>
           {/each}
@@ -376,6 +414,21 @@
           onclick={close}>Close</button
         >
       </div>
+      {#if selected.activity}
+        <div class="border-b px-4 py-2 text-xs" aria-label="Recorded activity">
+          <div class="mb-1 flex flex-wrap gap-x-3 gap-y-1">
+            {#each ['Tool pending', 'Reasoning observed', 'User message', 'Assistant response'] as name, channel}
+              <span class="inline-flex items-center gap-1"
+                ><span
+                  class="inline-block size-2 rounded-sm"
+                  style:background={ACTIVITY_COLORS[channel]}
+                ></span>{name}</span
+              >
+            {/each}
+          </div>
+          <p class="text-muted-foreground">{activitySummary(selected.activity)}</p>
+        </div>
+      {/if}
       <div class="min-h-0 flex-1 overflow-y-auto p-4">
         {#each details as item (item.id)}<div class="mb-4"><ItemView {item} /></div>{/each}
         {#if detailError}<p role="alert" class="text-sm text-destructive">{detailError}</p>

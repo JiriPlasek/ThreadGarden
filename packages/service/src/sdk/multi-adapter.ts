@@ -177,7 +177,13 @@ export class MultiAdapter implements AgentAdapter {
     agentId: string,
     options?: PageOptions & HistoryOptions,
   ): Promise<SessionMessage[]> {
-    if (isCodexSession(id)) return [];
+    if (isCodexSession(id)) {
+      const messages = await this.codex.history.subagentMessages(id, agentId);
+      return messages.slice(
+        options?.offset ?? 0,
+        options?.limit === undefined ? undefined : (options.offset ?? 0) + options.limit,
+      );
+    }
     return this.claude.getSubagentMessages?.(id, agentId, options) ?? [];
   }
   async importSession(id: string, store: SessionStore, options: ImportOptions): Promise<void> {

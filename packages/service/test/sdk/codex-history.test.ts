@@ -63,6 +63,52 @@ const setup = (request: (method: string, params: Rec) => Promise<Rec> | Rec) => 
 };
 
 describe('native Codex history', () => {
+  it('reads descendant activity through native history without importing children as top-level chats', async () => {
+    const h = setup((method, p) =>
+      method === 'thread/read'
+        ? {
+            thread: thread(String(p.threadId), {
+              parentThreadId: p.threadId === B ? A : undefined,
+            }),
+          }
+        : method === 'thread/turns/list'
+          ? {
+              data: [
+                {
+                  id: 'turn',
+                  startedAt: 100,
+                  completedAt: 200,
+                  status: 'completed',
+                  items: [
+                    {
+                      id: 'user',
+                      type: 'userMessage',
+                      content: [{ type: 'text', text: 'Child prompt' }],
+                    },
+                    { id: 'reply', type: 'agentMessage', text: 'Child report' },
+                  ],
+                },
+              ],
+              nextCursor: null,
+            }
+          : {},
+    );
+    h.store.save({
+      id: OWN,
+      threadId: A,
+      cwd: dir,
+      createdAt: 100000,
+      updatedAt: 200000,
+      native: true,
+    });
+    const messages = await h.history.subagentMessages(OWN, `codex-agent-${B}`);
+    expect(messages.some((m) => JSON.stringify(m.message).includes('Child report'))).toBe(true);
+    expect(h.store.recordForThread(B)).toBeUndefined();
+    expect(await h.history.subagentMessages(OWN, C)).toEqual([]);
+    expect(
+      h.calls.filter((c) => c.method === 'thread/turns/list').every((c) => c.params.threadId === B),
+    ).toBe(true);
+  });
   it('imports every page including archives, excludes child threads, and keeps existing Threadgarden ids', async () => {
     const h = setup((method, p) =>
       method === 'thread/list'

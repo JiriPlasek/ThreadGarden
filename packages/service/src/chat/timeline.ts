@@ -1,4 +1,5 @@
 import type { ChatItem, ChatTask, TimelineBlock } from '@threadgarden/protocol';
+import { timelineActivity, type TimelineObservation } from './timeline-activity.js';
 
 const record = (v: unknown): Record<string, unknown> =>
   v !== null && typeof v === 'object' ? (v as Record<string, unknown>) : {};
@@ -36,10 +37,22 @@ export const projectTimeline = (
   items: readonly ChatItem[],
   tasks: readonly ChatTask[],
   working = false,
+  observations: ReadonlyMap<string, TimelineObservation> = new Map(),
+  now = Date.now(),
 ): TimelineProjection => {
   const out: TimelineProjection = { blocks: [], items: new Map(), agents: new Map() };
   const calls = new Map<string, TimelineBlock>();
+  const nativeAgents = new Map<string, TimelineBlock>();
+  const countedAgents = new Set<string>();
   let turn: TimelineBlock | undefined;
+  const countAgent = (id: string): void => {
+    if (!turn) return;
+    const key = `${turn.id}:${id}`;
+    if (!countedAgents.has(key)) {
+      countedAgents.add(key);
+      turn.agentCount++;
+    }
+  };
   const newTurn = (id: string, title: string, startedAt?: number): TimelineBlock => {
     const block: TimelineBlock = {
       id,
@@ -82,30 +95,45 @@ export const projectTimeline = (
     if (agentCall(item)) {
       const input = record(item.input);
       // A background launch result is not the agent's completion.
-      const background = input.run_in_background === true;
-      const block: TimelineBlock = {
-        id: `agent:${item.toolUseId}`,
-        kind: 'agent',
-        title: preview(text(input.description) || text(input.prompt) || item.name),
-        outcome: background ? '' : preview(item.resultText ?? ''),
-        status:
-          item.status === 'error'
-            ? 'failed'
-            : item.status === 'ok' && !background
-              ? 'completed'
-              : 'unknown',
-        toolCount: 0,
-        agentCount: 0,
-        ...(item.tokens === undefined ? {} : { tokens: item.tokens }),
-        ...(time(item.startedAt) === undefined ? {} : { startedAt: item.startedAt }),
-        ...(!background && time(item.endedAt) !== undefined ? { endedAt: item.endedAt } : {}),
-        ...(text(input.model) ? { model: text(input.model) } : {}),
-      };
-      calls.set(item.toolUseId, block);
-      out.blocks.push(block);
-      out.items.set(block.id, [item]);
-      if (item.agentId) out.agents.set(block.id, item.agentId);
-      if (turn) turn.agentCount++;
+      const receivers = Array.isArray(input.receiverThreadIds)
+        ? input.receiverThreadIds.filter(
+            (id): id is string => typeof id === 'string' && /^[0-9a-f-]{36}$/i.test(id),
+          )
+        : [];
+      const nativeAgentId =
+        item.name === 'collabAgentToolCall' && receivers.length === 1 ? receivers[0] : undefined;
+      const background = input.run_in_background === true || nativeAgentId !== undefined;
+      const existing = nativeAgentId ? nativeAgents.get(nativeAgentId) : undefined;
+      if (existing) {
+        calls.set(item.toolUseId, existing);
+        countAgent(existing.id);
+      } else {
+        const block: TimelineBlock = {
+          id: `agent:${item.toolUseId}`,
+          kind: 'agent',
+          title: preview(text(input.description) || text(input.prompt) || item.name),
+          outcome: background ? '' : preview(item.resultText ?? ''),
+          status:
+            item.status === 'error'
+              ? 'failed'
+              : item.status === 'ok' && !background
+                ? 'completed'
+                : 'unknown',
+          toolCount: 0,
+          agentCount: 0,
+          ...(item.tokens === undefined ? {} : { tokens: item.tokens }),
+          ...(time(item.startedAt) === undefined ? {} : { startedAt: item.startedAt }),
+          ...(!background && time(item.endedAt) !== undefined ? { endedAt: item.endedAt } : {}),
+          ...(text(input.model) ? { model: text(input.model) } : {}),
+        };
+        calls.set(item.toolUseId, block);
+        out.blocks.push(block);
+        out.items.set(block.id, [item]);
+        if (item.agentId) out.agents.set(block.id, item.agentId);
+        if (nativeAgentId) out.agents.set(block.id, nativeAgentId);
+        if (nativeAgentId) nativeAgents.set(nativeAgentId, block);
+        countAgent(block.id);
+      }
     }
     if (parent) {
       const block = calls.get(parent);
@@ -133,7 +161,14 @@ export const projectTimeline = (
   }
   for (const task of tasks) {
     if (task.kind !== 'agent') continue;
-    let block = task.toolUseId ? calls.get(task.toolUseId) : undefined;
+    let block = task.toolUseId
+      ? calls.get(task.toolUseId)
+      : out.blocks.find(
+          (b) =>
+            b.kind === 'agent' &&
+            out.agents.get(b.id)?.replace(/^codex-agent-/, '') ===
+              task.taskId.replace(/^codex-agent-/, ''),
+        );
     if (!block) {
       block = {
         id: `task:${task.taskId}`,
@@ -148,7 +183,9 @@ export const projectTimeline = (
       out.items.set(block.id, []);
     }
     block.status = task.status === 'pending' || task.status === 'paused' ? 'running' : task.status;
-    block.startedAt = time(task.startedAt) ?? block.startedAt;
+    const taskStart = time(task.startedAt);
+    block.startedAt =
+      taskStart === undefined ? block.startedAt : Math.min(block.startedAt ?? taskStart, taskStart);
     block.endedAt = time(task.endedAt) ?? block.endedAt;
     if (block.status === 'running' && task.endedAt === undefined) delete block.endedAt;
     block.outcome = preview(task.error ?? task.summary ?? block.outcome);
@@ -166,6 +203,16 @@ export const projectTimeline = (
       block.endedAt < block.startedAt
     )
       delete block.startedAt;
+    const activityItems = (out.items.get(block.id) ?? []).filter(
+      (i) => block.kind !== 'agent' || i.kind !== 'toolCall' || `agent:${i.toolUseId}` !== block.id,
+    );
+    block.activity = timelineActivity(
+      activityItems,
+      observations,
+      block.startedAt,
+      block.endedAt,
+      block.status === 'running' ? now : undefined,
+    );
   }
   return out;
 };

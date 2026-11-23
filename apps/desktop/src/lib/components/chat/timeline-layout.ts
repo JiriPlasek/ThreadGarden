@@ -123,6 +123,7 @@ export const layoutTimeline = (blocks: readonly TimelineBlock[], now: number, sc
     ticks,
     waits,
     expanded,
+    yOf,
     height: height + 28,
     lanes: laneEnds.length,
     nowY: timed.some((b) => b.block.status === 'running') ? yOf(now) : undefined,

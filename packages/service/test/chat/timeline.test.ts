@@ -22,6 +22,29 @@ const agent = (
 });
 
 describe('timeline projection', () => {
+  it('keeps repeated Codex exchanges and the live task under one child-agent block', () => {
+    const child = '22222222-2222-4222-8222-222222222222';
+    const call = (id: string): ChatItem =>
+      agent(id, {
+        name: 'collabAgentToolCall',
+        input: { receiverThreadIds: [child], prompt: 'Review code' },
+      });
+    const p = projectTimeline(
+      [user('u'), call('spawn'), call('send')],
+      [
+        {
+          taskId: `codex-agent-${child}`,
+          kind: 'agent',
+          description: 'Review code',
+          status: 'running',
+          startedAt: T + 2000,
+        },
+      ],
+    );
+    expect(p.blocks.filter((b) => b.kind === 'agent')).toHaveLength(1);
+    expect(p.blocks[0]?.agentCount).toBe(1);
+    expect(p.blocks[1]?.status).toBe('running');
+  });
   it('reports processed turn tokens, including cached input, and omits unknown usage', () => {
     const p = projectTimeline(
       [
@@ -65,7 +88,7 @@ describe('timeline projection', () => {
       { kind: 'result', id: 'r', isError: false, ts: T + 10000 },
     ];
     const p = projectTimeline(items, []);
-    expect(p.blocks).toEqual([
+    expect(p.blocks).toMatchObject([
       {
         id: 'turn:u',
         kind: 'turn',

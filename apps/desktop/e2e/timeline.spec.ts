@@ -67,6 +67,17 @@ test('calendar layout shows parallel agents, folded overnight time, zoom, and a 
       id: 'turn:build',
       kind: 'turn',
       title: 'Implement the plan and run the tests',
+      activity: {
+        startedAt: yesterday + 30 * minute,
+        endedAt: yesterday + 130 * minute,
+        binMs: minute,
+        bins: 'c' + '1'.repeat(49) + '2'.repeat(25) + '8'.repeat(25),
+        prompts: 1,
+        replies: 2,
+        reasoning: 25,
+        toolCalls: 2,
+        longestTool: { name: 'Bash', durationMs: 49 * minute },
+      },
       startedAt: yesterday + 30 * minute,
       promptAt: yesterday + 30 * minute,
       endedAt: yesterday + 130 * minute,
@@ -79,6 +90,17 @@ test('calendar layout shows parallel agents, folded overnight time, zoom, and a 
       kind: 'agent',
       title: 'Migrate invoices',
       tokens: 4700000,
+      activity: {
+        startedAt: yesterday + 35 * minute,
+        endedAt: yesterday + 95 * minute,
+        binMs: minute,
+        bins: '4' + '1'.repeat(39) + '0'.repeat(10) + '2'.repeat(5) + 'c'.repeat(5),
+        prompts: 3,
+        replies: 4,
+        reasoning: 7,
+        toolCalls: 1,
+        longestTool: { name: 'Bash', durationMs: 39 * minute },
+      },
       startedAt: yesterday + 35 * minute,
       endedAt: yesterday + 95 * minute,
       model: 'sonnet',
@@ -170,13 +192,22 @@ test('calendar layout shows parallel agents, folded overnight time, zoom, and a 
   await expect(timeline.getByRole('button', { name: /Agent: Migrate invoices/ })).not.toContainText(
     'completed',
   );
+  await expect(
+    timeline.getByRole('button', { name: /Agent: Migrate invoices/ }).locator('canvas'),
+  ).toHaveCount(1);
+  await expect(timeline.getByRole('button', { name: /Agent: Migrate invoices/ })).toContainText(
+    '3 prompts',
+  );
+  await expect(timeline.locator('canvas')).toHaveCount(2);
   const minuteMarks = await timeline
     .locator('[data-timeline-tick]')
     .evaluateAll((times) => times.map((t) => new Date(t.getAttribute('datetime')!).getMinutes()));
   expect(minuteMarks.length).toBeGreaterThan(0);
   expect(minuteMarks.every((m) => m % 15 === 0)).toBe(true);
   await timeline.screenshot({ path: 'test-results/timeline-calendar.png' });
-  await timeline.getByRole('button', { name: /Agent: Migrate refunds/ }).click();
+  await timeline.getByRole('button', { name: /Agent: Migrate invoices/ }).click();
+  await expect(page.getByLabel('Recorded activity')).toContainText('Reasoning observed');
+  await expect(page.getByLabel('Recorded activity')).toContainText('Bash');
   await expect(page.getByText('The migration is ready for review. All tests pass.')).toBeVisible();
   await page
     .getByRole('complementary', { name: 'Timeline details' })

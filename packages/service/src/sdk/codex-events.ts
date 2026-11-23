@@ -41,7 +41,16 @@ export const itemMessages = (
     envelope(
       sessionId,
       id,
-      { type: 'assistant', message: { id, role: 'assistant', model, content } },
+      {
+        type: 'assistant',
+        ...(finite(item.startedAtMs) !== undefined && finite(item.completedAtMs) !== undefined
+          ? {
+              codex_item_started_at_ms: item.startedAtMs,
+              codex_item_completed_at_ms: item.completedAtMs,
+            }
+          : {}),
+        message: { id, role: 'assistant', model, content },
+      },
       end,
     );
   switch (item.type) {

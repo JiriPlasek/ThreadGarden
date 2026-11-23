@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promis
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import { PROTOCOL_VERSION, type ChatItem } from '@threadgarden/protocol';
+import { PROTOCOL_VERSION, type ChatItem, type TimelineBlock } from '@threadgarden/protocol';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Logger } from '../../src/logger.js';
 import { startService, type ServiceHandle, type StartOptions } from '../../src/main.js';
@@ -161,6 +161,61 @@ it('timeline detail pages a long turn without returning every message at once', 
   );
 });
 
+it('refreshes unresolved child activity once per minute even without a live task', async () => {
+  const adapter = new FakeAdapter();
+  addHistory(adapter, 'unresolved-agent', 1);
+  const T = Date.parse('2026-11-20T09:00:00Z');
+  let clock = T + 10 * 60000;
+  let latest = T + 60000;
+  const row = adapter.sessions.get('unresolved-agent')!;
+  row.messages = [
+    {
+      ...msg('unresolved-agent', 'launch', 'assistant', ''),
+      timestamp: new Date(T).toISOString(),
+      message: {
+        content: [
+          { type: 'tool_use', id: 'background', name: 'Agent', input: { run_in_background: true } },
+        ],
+      },
+    } as SessionMessage,
+    {
+      ...msg('unresolved-agent', 'launched', 'user', ''),
+      timestamp: new Date(T + 1000).toISOString(),
+      message: {
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'background',
+            content: 'Launched\nagentId: child (for resuming this agent)',
+          },
+        ],
+      },
+    } as SessionMessage,
+  ];
+  const getSubagentMessages = vi.fn(async () => [
+    {
+      ...msg('unresolved-agent', 'child-answer', 'assistant', 'Progress'),
+      timestamp: new Date(latest).toISOString(),
+    },
+  ]);
+  Object.assign(adapter, { getSubagentMessages });
+  await start(adapter, { clock: () => clock });
+  const first = await ok<{ blocks: TimelineBlock[] }>('chat.timeline', {
+    sessionId: 'unresolved-agent',
+  });
+  await ok('chat.timeline', { sessionId: 'unresolved-agent' });
+  expect(getSubagentMessages).toHaveBeenCalledTimes(1);
+  clock += 60000;
+  latest += 60000;
+  const next = await ok<{ blocks: TimelineBlock[] }>('chat.timeline', {
+    sessionId: 'unresolved-agent',
+  });
+  expect(getSubagentMessages).toHaveBeenCalledTimes(2);
+  expect(next.blocks.find((b) => b.kind === 'agent')?.activity?.endedAt).toBeGreaterThan(
+    first.blocks.find((b) => b.kind === 'agent')!.activity!.endedAt,
+  );
+});
+
 it('agent inspection reads its own history through the SDK boundary, not the parent transcript', async () => {
   const adapter = new FakeAdapter();
   addHistory(adapter, 'agents-history', 1);
@@ -193,11 +248,66 @@ it('agent inspection reads its own history through the SDK boundary, not the par
       },
     },
   ];
-  const getSubagentMessages = vi.fn(async () => [
-    msg('agents-history', 'child-answer', 'assistant', 'Detailed child report'),
-  ]);
+  const T = Date.parse('2026-11-20T09:00:00Z');
+  row.messages = row.messages.map((m, i) => ({
+    ...m,
+    timestamp: new Date(T + (i === 2 ? 122 * 60000 : i * 1000)).toISOString(),
+  }));
+  const child = (id: string, type: 'user' | 'assistant', content: unknown, offset: number) => ({
+    ...msg('agents-history', id, type, ''),
+    timestamp: new Date(T + offset).toISOString(),
+    message: { role: type, content },
+  });
+  const getSubagentMessages = vi
+    .fn(async () => [
+      child('child-prompt', 'user', 'Review this', 2000),
+      child(
+        'child-thinking',
+        'assistant',
+        [{ type: 'thinking', thinking: 'Check the code' }],
+        3000,
+      ),
+      child(
+        'child-tool',
+        'assistant',
+        [{ type: 'tool_use', id: 'bash', name: 'Bash', input: {} }],
+        60000,
+      ),
+      child(
+        'child-result',
+        'user',
+        [{ type: 'tool_result', tool_use_id: 'bash', content: 'Done' }],
+        121 * 60000,
+      ),
+      child('child-followup', 'user', 'And check the tests', 121 * 60000 + 1000),
+      child(
+        'child-answer',
+        'assistant',
+        [{ type: 'text', text: 'Detailed child report' }],
+        121 * 60000 + 2000,
+      ),
+    ])
+    .mockRejectedValueOnce(new Error('Child history temporarily unavailable'));
   Object.assign(adapter, { getSubagentMessages });
   await start(adapter);
+  const incomplete = await ok<{ blocks: TimelineBlock[] }>('chat.timeline', {
+    sessionId: 'agents-history',
+  });
+  expect(incomplete.blocks).toHaveLength(2);
+  expect(incomplete.blocks.find((b) => b.kind === 'agent')?.activity).toBeUndefined();
+  const complete = await ok<{ blocks: TimelineBlock[] }>('chat.timeline', {
+    sessionId: 'agents-history',
+  });
+  const activity = complete.blocks.find((b) => b.kind === 'agent')?.activity;
+  expect(activity).toMatchObject({
+    prompts: 2,
+    replies: 1,
+    reasoning: 1,
+    toolCalls: 1,
+    longestTool: { name: 'Bash', durationMs: 120 * 60000 },
+  });
+  await ok('chat.timeline', { sessionId: 'agents-history' });
+  expect(getSubagentMessages).toHaveBeenCalledTimes(2); // one failed read, one cached successful read
   const detail = await ok<{ items: ChatItem[] }>('chat.timelineDetail', {
     sessionId: 'agents-history',
     blockId: 'agent:call-agent',
