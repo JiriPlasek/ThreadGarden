@@ -74,10 +74,10 @@ test('user sends move chats and projects while older tool progress keeps their s
   await expect.poll(chatOrder).toEqual([NEWER, OLDER]);
   await expect.poll(projectOrder).toEqual(['proj-1', 'proj-0']);
   const row = list.locator(`[data-session-id="${OLDER}"]`);
-  await expect(row.locator('time')).toHaveAttribute(
-    'datetime',
-    new Date(before.sortAt!).toISOString(),
-  );
+  // The tiny activity label still advances; only placement uses the stable key.
+  await expect
+    .poll(async () => Date.parse((await row.locator('time').getAttribute('datetime')) ?? ''))
+    .toBeGreaterThan(before.sortAt!);
   const section = await row.getAttribute('aria-describedby');
   await expect(page.locator(`[id="${section}"]`)).toHaveText('Last hour');
   // Let the waiting turn finish so the shared mock remains usable by later specs.

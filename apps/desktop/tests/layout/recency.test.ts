@@ -45,6 +45,22 @@ const mixed = () => [
 ];
 
 describe('chat list recency sections (v1.2 §2)', () => {
+  it('shows actual activity time while grouping by the stable ordering timestamp', async () => {
+    freezeClock();
+    const { context } = await setup((server) => {
+      server.handlers['sessions.list'] = () => ({
+        items: [
+          summary('busy', { status: 'working', lastActivity: NOW, sortAt: NOW - 2 * DAY_MS }),
+        ],
+      });
+    });
+    render(ChatList, { context });
+    const row = await screen.findByRole('option');
+    expect(row.querySelector('time')?.getAttribute('datetime')).toBe(new Date(NOW).toISOString());
+    expect(row.querySelector('time')?.textContent).toBe('now');
+    expect(headers()).toEqual(['Last 7 days 1']);
+  });
+
   it('shows the last hour first using stable handoff time, then by recency; empty sections are hidden', async () => {
     freezeClock();
     const { context } = await setup((server) => {

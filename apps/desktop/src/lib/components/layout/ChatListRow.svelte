@@ -1,10 +1,5 @@
 <script lang="ts">
-  import {
-    sidebarTime,
-    type Bucket,
-    type ChatSummary,
-    type ScheduledSend,
-  } from '@threadgarden/protocol';
+  import { type Bucket, type ChatSummary, type ScheduledSend } from '@threadgarden/protocol';
   import AlarmClockIcon from '@lucide/svelte/icons/alarm-clock';
   import ArrowRightLeftIcon from '@lucide/svelte/icons/arrow-right-left';
   import ArchiveIcon from '@lucide/svelte/icons/archive';
@@ -141,8 +136,8 @@
               'text-muted-foreground shrink-0 text-[0.6875rem] tabular-nums',
               running === 0 && scheduled.length === 0 && 'ml-auto',
             )}
-            datetime={sidebarTime(chat) > 0 ? new Date(sidebarTime(chat)).toISOString() : undefined}
-            title={fullTime(sidebarTime(chat))}>{relativeTime(sidebarTime(chat), now)}</time
+            datetime={chat.lastActivity > 0 ? new Date(chat.lastActivity).toISOString() : undefined}
+            title={fullTime(chat.lastActivity)}>{relativeTime(chat.lastActivity, now)}</time
           >
         </div>
         <div
