@@ -512,6 +512,21 @@ describe('tabs', () => {
     expect(t.active).toBe(k('x'));
   });
 
+  it('remembers Concise view and ignores unknown future modes', async () => {
+    const settings = new SettingsState();
+    settings.init(client);
+    settings.setChatView('concise');
+    await flushAsync();
+    expect(store.get('chat.view')).toBe('concise');
+    const restored = new SettingsState();
+    restored.init(client);
+    await restored.restoreChatView();
+    expect(restored.chatView).toBe('concise');
+    store.set('chat.view', 'future-mode');
+    await restored.restoreChatView();
+    expect(restored.chatView).toBe('concise');
+  });
+
   it('column widths persist through uiState, debounced', async () => {
     const s = new SettingsState();
     s.init(client);

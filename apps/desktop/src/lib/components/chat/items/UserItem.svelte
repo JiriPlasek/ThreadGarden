@@ -17,9 +17,11 @@
   let {
     item,
     nested = false,
+    truncate = true,
   }: {
     item: Extract<ChatItem, { kind: 'user' }> & { imageCount?: number };
     nested?: boolean;
+    truncate?: boolean;
   } = $props();
 
   const actions = chatActions();
@@ -37,9 +39,13 @@
     <div class="text-muted-foreground mb-1 text-[0.6875rem] font-medium">Sent by Threadgarden</div>
   {/if}
   {#if item.text}
-    <UserText text={item.text} images={item.images} limit={long && !expanded ? LONG : undefined} />
+    <UserText
+      text={item.text}
+      images={item.images}
+      limit={truncate && long && !expanded ? LONG : undefined}
+    />
   {/if}
-  {#if long}
+  {#if truncate && long}
     <button
       type="button"
       class="text-muted-foreground hover:text-foreground mt-1 text-xs underline-offset-2 hover:underline"

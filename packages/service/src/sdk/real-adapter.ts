@@ -13,6 +13,7 @@ import {
   forkSession,
   getSessionInfo,
   getSessionMessages,
+  getSubagentMessages,
   importSessionToStore,
   listSessions,
   query,
@@ -44,6 +45,7 @@ export type SdkApi = {
   listSessions: typeof listSessions;
   getSessionInfo: typeof getSessionInfo;
   getSessionMessages: typeof getSessionMessages;
+  getSubagentMessages?: typeof getSubagentMessages;
   forkSession: typeof forkSession;
   importSessionToStore: typeof importSessionToStore;
 };
@@ -53,6 +55,7 @@ const realSdk: SdkApi = {
   listSessions,
   getSessionInfo,
   getSessionMessages,
+  getSubagentMessages,
   forkSession,
   importSessionToStore,
 };
@@ -365,6 +368,14 @@ export class RealAdapter implements AgentAdapter {
 
   getSessionMessages(id: string, o?: PageOptions & HistoryOptions): Promise<SessionMessage[]> {
     return this.sdk.getSessionMessages(id, paging(o));
+  }
+
+  getSubagentMessages(
+    id: string,
+    agentId: string,
+    o?: PageOptions & HistoryOptions,
+  ): Promise<SessionMessage[]> {
+    return this.sdk.getSubagentMessages?.(id, agentId, paging(o)) ?? Promise.resolve([]);
   }
 
   forkSession(id: string, o: { upToMessageId?: string }): Promise<{ sessionId: string }> {

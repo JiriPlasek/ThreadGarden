@@ -19,7 +19,8 @@
     item,
     children,
     nested = false,
-  }: { item: ChatItem; children?: ChatItem[]; nested?: boolean } = $props();
+    concise = false,
+  }: { item: ChatItem; children?: ChatItem[]; nested?: boolean; concise?: boolean } = $props();
 
   const raw = $derived(item as unknown as { id?: unknown; kind?: unknown });
 </script>
@@ -27,7 +28,7 @@
 <div data-item-id={item.id}>
   <ItemBoundary {item}>
     {#if item.kind === 'user'}
-      <UserItem {item} {nested} />
+      <UserItem {item} {nested} truncate={!concise} />
     {:else if item.kind === 'assistantText'}
       <AssistantText {item} />
     {:else if item.kind === 'thinking'}

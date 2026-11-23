@@ -122,6 +122,8 @@ describe('protocol schemas', () => {
       'search.quick',
       'chat.open',
       'chat.older',
+      'chat.timeline',
+      'chat.timelineDetail',
       'chat.since',
       'chat.create',
       'chat.send',

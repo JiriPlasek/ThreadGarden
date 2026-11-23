@@ -135,6 +135,7 @@ describe('Normalizer', () => {
         name: 'Bash',
         input: { command: 'ls' },
         status: 'running',
+        startedAt: expect.any(Number),
         parentToolUseId: null,
       },
       { kind: 'assistantText', id: 'e5', markdown: 'Done', streaming: false },
@@ -182,6 +183,8 @@ describe('Normalizer', () => {
         name: 'Bash',
         input: { command: 'ls' },
         status: 'ok',
+        startedAt: expect.any(Number),
+        endedAt: expect.any(Number),
         resultText: 'x'.repeat(20_000),
         resultTruncated: true,
         parentToolUseId: null,
@@ -207,6 +210,34 @@ describe('Normalizer', () => {
         resultTruncated: false,
       }),
     ]);
+  });
+
+  it('preserves known Agent token totals from structured results and historical trailers', () => {
+    for (const metadata of [
+      { tool_use_result: { agentId: 'agent-one', totalTokens: 4700000 }, report: 'Done' },
+      {
+        report:
+          'Done\nagentId: agent-one (for resuming to continue this agent)\n<usage>total_tokens: 4700000\ntool_uses: 12\n</usage>',
+      },
+      { report: 'No usage recorded' },
+    ]) {
+      const n = new Normalizer();
+      n.push(assistant('launch', [{ type: 'tool_use', id: 'call', name: 'Agent', input: {} }]));
+      const result = n.push(
+        sdk({
+          type: 'user',
+          uuid: 'done',
+          ...metadata,
+          message: {
+            content: [{ type: 'tool_result', tool_use_id: 'call', content: metadata.report }],
+          },
+        }),
+      );
+      const call = result.items[0];
+      expect(call?.kind).toBe('toolCall');
+      if (call?.kind === 'toolCall')
+        expect(call.tokens).toBe(metadata.report === 'No usage recorded' ? undefined : 4700000);
+    }
   });
 
   it('marks a tool call waiting on its permission check, and clears it on done or its result', () => {
@@ -540,7 +571,7 @@ describe('Normalizer', () => {
   });
 
   it('maps content-bearing system messages to readable system items', () => {
-    const n = new Normalizer();
+    const n = new Normalizer({ now: () => 42 });
     const sys = (subtype: string, fields: Record<string, unknown>, uuid = subtype) =>
       n.push(sdk({ type: 'system', subtype, uuid, session_id: 's', ...fields })).items;
     expect(sys('local_command_output', { content: 'Total cost: $0.12' })).toEqual([
@@ -562,13 +593,13 @@ describe('Normalizer', () => {
       },
     ]);
     expect(sys('task_notification', { status: 'failed', summary: 'Tests broke' }, 'tn1')).toEqual([
-      { kind: 'system', id: 'tn1', level: 'error', text: 'Task failed: Tests broke' },
+      { kind: 'system', id: 'tn1', level: 'error', text: 'Task failed: Tests broke', ts: 42 },
     ]);
     expect(sys('task_notification', { status: 'completed', summary: 'Indexed' }, 'tn2')).toEqual([
-      { kind: 'system', id: 'tn2', level: 'info', text: 'Task completed: Indexed' },
+      { kind: 'system', id: 'tn2', level: 'info', text: 'Task completed: Indexed', ts: 42 },
     ]);
     expect(sys('task_notification', { status: 'stopped', summary: '' }, 'tn3')).toEqual([
-      { kind: 'system', id: 'tn3', level: 'warning', text: 'Task stopped' },
+      { kind: 'system', id: 'tn3', level: 'warning', text: 'Task stopped', ts: 42 },
     ]);
     expect(
       sys(
@@ -1032,7 +1063,7 @@ describe('Normalizer: user messages the CLI writes itself', () => {
   ].join('\n');
 
   it('renders a background-task notification as a collapsed system item (R27)', () => {
-    const items = run(new Normalizer(), [special('t1', taskNotification)]);
+    const items = run(new Normalizer({ now: () => 42 }), [special('t1', taskNotification)]);
     expect(items).toEqual([
       {
         kind: 'system',
@@ -1040,7 +1071,22 @@ describe('Normalizer: user messages the CLI writes itself', () => {
         level: 'info',
         text: 'Background command "Run the test suite" completed (exit code 0)',
         detail: taskNotification,
+        ts: 42,
       },
+    ]);
+  });
+
+  it('times a background-task notification in history by its timestamp, and none without one', () => {
+    const at = '2026-11-18T10:00:00.000Z';
+    const items = run(new Normalizer({ turnEnds: true, now: () => 42 }), [
+      special('t1', taskNotification, { timestamp: at }),
+      special('t2', taskNotification),
+      special('h1', handBack, { isMeta: true, timestamp: at }),
+    ]);
+    expect(items.map((i) => (i.kind === 'system' ? i.ts : i.kind))).toEqual([
+      Date.parse(at),
+      undefined,
+      undefined,
     ]);
   });
 
@@ -1285,6 +1331,33 @@ describe('Normalizer: turn ends', () => {
     expect(n.finish().items).toEqual([
       expect.objectContaining({ id: 'turn-end:a2', durationMs: 4_000, ts: T0 + 4_000 }),
     ]);
+  });
+
+  it('a completed Codex history turn keeps its original completion time when opened later', () => {
+    const n = new Normalizer({ turnEnds: true, now: () => Date.parse('2026-11-23T07:48:00Z') });
+    const r = n.push(
+      sdk({
+        type: 'result',
+        uuid: 'old-result',
+        subtype: 'success',
+        timestamp: '2026-11-20T15:00:00Z',
+        duration_ms: 269000,
+      }),
+    );
+    expect(r.items).toEqual([
+      expect.objectContaining({
+        kind: 'result',
+        ts: Date.parse('2026-11-20T15:00:00Z'),
+        durationMs: 269000,
+      }),
+    ]);
+  });
+
+  it('a history result without a timestamp never uses the time it was read', () => {
+    const n = new Normalizer({ turnEnds: true, now: () => 999 });
+    const r = n.push(sdk({ type: 'result', uuid: 'old-result', subtype: 'success' }));
+    expect(r.items[0]).toMatchObject({ kind: 'result' });
+    expect(r.items[0]).not.toHaveProperty('ts');
   });
 
   it('live, a result is the footer of its turn, with the id history gives it, and when it came', () => {

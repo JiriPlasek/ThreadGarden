@@ -56,6 +56,8 @@
     readOnly = false,
     activityOpen = false,
     onToggleActivity,
+    viewMode = 'conversation',
+    onViewModeChange,
   }: {
     chat: ChatState;
     /**
@@ -66,6 +68,8 @@
     /** The Activity panel is shown. */
     activityOpen?: boolean;
     onToggleActivity?: () => void;
+    viewMode?: 'conversation' | 'concise' | 'timeline';
+    onViewModeChange?: (mode: 'conversation' | 'concise' | 'timeline') => void;
   } = $props();
 
   const { machines, interaction, agents } = useApp();
@@ -421,6 +425,32 @@
   </select>
 {/snippet}
 
+{#snippet viewSwitcher()}
+  {#if onViewModeChange}
+    <div
+      role="group"
+      aria-label="Chat view"
+      title="Choose chat view"
+      class="inline-flex shrink-0 overflow-hidden rounded-md border text-xs"
+    >
+      {#each ['conversation', 'concise', 'timeline'] as mode (mode)}
+        <button
+          type="button"
+          aria-pressed={viewMode === mode}
+          class="px-2.5 py-1 font-medium transition-colors focus-visible:relative focus-visible:z-10 focus-visible:outline-2 focus-visible:outline-ring {mode !==
+          'conversation'
+            ? 'border-l'
+            : ''} {viewMode === mode
+            ? 'bg-accent text-accent-foreground'
+            : 'bg-background text-muted-foreground hover:bg-muted'}"
+          onclick={() => onViewModeChange?.(mode as 'conversation' | 'concise' | 'timeline')}
+          >{mode === 'conversation' ? 'Chat' : mode === 'concise' ? 'Turns' : 'Timeline'}</button
+        >
+      {/each}
+    </div>
+  {/if}
+{/snippet}
+
 {#if isPhone}
   <!-- The phone: one row under its bar, which shows the title; the rest is in the menu. -->
   <header class="shrink-0 border-b">
@@ -440,6 +470,9 @@
         {@render stateMenu()}
       </span>
     </div>
+    {#if onViewModeChange}<div class="flex justify-end px-2 pb-1">
+        {@render viewSwitcher()}
+      </div>{/if}
     {#if error}
       <p class="text-destructive px-3 pb-1 text-xs" role="alert">{error}</p>
     {/if}
@@ -553,6 +586,7 @@
       {/if}
 
       <div class="ml-auto flex shrink-0 items-center gap-3">
+        {@render viewSwitcher()}
         {#if usage}
           <span class="flex items-center gap-1.5" title="Context: {usage.text}">
             <span

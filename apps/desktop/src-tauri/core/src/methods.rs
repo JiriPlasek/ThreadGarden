@@ -361,6 +361,8 @@ pub const REFUSED: &[&str] = &[
     // Only for a chat of This PC (none on the phone); each call site handles the error.
     "chat.open",
     "chat.older",
+    "chat.timeline",
+    "chat.timelineDetail",
     "chat.since",
     "chat.create",
     "chat.send",

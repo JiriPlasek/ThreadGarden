@@ -42,6 +42,7 @@ import {
   type ImageRef,
 } from '@threadgarden/protocol';
 import type { SDKMessage, SessionMessage } from '../sdk/adapter.js';
+import type { TimelineObservation } from './timeline-activity.js';
 import {
   NON_VISUAL_SYSTEM_SUBTYPES,
   NON_VISUAL_TYPES,
@@ -134,6 +135,7 @@ export class Normalizer {
   private readonly aliases = new Map<string, string>();
   /** Every item id emitted so far. */
   private readonly known = new Set<string>();
+  private readonly observations = new Map<string, TimelineObservation>();
   /** A `compact_boundary` was shown and its summary message has not arrived yet. */
   private compactPending = false;
   private readonly turnEnds: boolean;
@@ -174,6 +176,10 @@ export class Normalizer {
     return this.last ? { ...this.last } : undefined;
   }
 
+  activityTimes(): ReadonlyMap<string, TimelineObservation> {
+    return this.observations;
+  }
+
   /**
    * The item id rendering SDK message `sdkUuid` (or a `<uuid>:<index>` block):
    * the streamed item's id for a finalised streamed block, the first item of a
@@ -199,6 +205,43 @@ export class Normalizer {
   }
 
   private remember(m: unknown, items: ChatItem[]): void {
+    if (isRec(m)) {
+      const at = this.timeOf(m);
+      const event = isRec(m.event) ? m.event : undefined;
+      const contentEvent =
+        m.type === 'assistant' ||
+        m.type === 'user' ||
+        (m.type === 'stream_event' &&
+          (event?.type === 'content_block_start' || event?.type === 'content_block_delta'));
+      if (at !== undefined && at > 0 && contentEvent) {
+        const message = isRec(m.message) ? m.message : undefined;
+        const sourceId =
+          str(message?.id) ??
+          (m.type === 'stream_event'
+            ? this.streamMessageId.get(str(m.parent_tool_use_id) ?? '')
+            : undefined) ??
+          str(m.uuid);
+        for (const item of items) {
+          if (item.kind !== 'assistantText' && item.kind !== 'thinking') continue;
+          const previous = this.observations.get(item.id);
+          const minutes = previous?.minutes instanceof Set ? previous.minutes : new Set<number>();
+          minutes.add(Math.floor(at / 60000) * 60000);
+          const from = num(m.codex_item_started_at_ms);
+          const to = num(m.codex_item_completed_at_ms);
+          const knownInterval =
+            from !== undefined && to !== undefined && from > 0 && to >= from
+              ? { from, to }
+              : previous?.knownInterval;
+          this.observations.set(item.id, {
+            firstAt: Math.min(previous?.firstAt ?? at, at),
+            lastAt: Math.max(previous?.lastAt ?? at, at),
+            sourceId: sourceId ?? item.id,
+            minutes,
+            ...(knownInterval ? { knownInterval } : {}),
+          });
+        }
+      }
+    }
     for (const item of items) this.known.add(item.id);
     const uuid = isRec(m) ? str(m.uuid) : undefined;
     if (!uuid || items.length === 0 || this.known.has(uuid) || this.aliases.has(uuid)) return;
@@ -363,6 +406,7 @@ export class Normalizer {
       this.todoToolUseIds.add(toolUseId);
       return { kind: 'todo', id, todos, ...this.parentOf(m) };
     }
+    const startedAt = this.toolCalls.get(toolUseId)?.startedAt ?? this.timeOf(m);
     const item: Item<'toolCall'> = {
       kind: 'toolCall',
       id,
@@ -370,6 +414,7 @@ export class Normalizer {
       name,
       input: block.input,
       status: 'running',
+      ...(startedAt === undefined ? {} : { startedAt }),
       parentToolUseId: str(m.parent_tool_use_id) ?? null,
     };
     this.toolCalls.set(toolUseId, item);
@@ -404,7 +449,7 @@ export class Normalizer {
         return;
       }
       if (isRec(block) && block.type === 'tool_result') {
-        const r = this.toolResult(block, id);
+        const r = this.toolResult(block, id, m);
         if (r.replaced) replace = true;
         if (r.item) items.push(r.item);
         return;
@@ -459,7 +504,14 @@ export class Normalizer {
     const injected = parseInjected(text);
     if (injected === null) return NONE;
     if (injected !== undefined) {
-      return this.one({ kind: 'system', id, level: 'info', ...injected });
+      const { task, ...shown } = injected;
+      return this.one({
+        kind: 'system',
+        id,
+        level: 'info',
+        ...shown,
+        ...(task ? this.taskTime(m) : {}),
+      });
     }
     const command = parseCommand(text);
     if (command !== undefined) return this.one(this.userItem(m, id, command, []));
@@ -499,12 +551,12 @@ export class Normalizer {
       id,
       text,
       ...(images.length > 0 ? { images } : {}),
-      ts: Number.isNaN(parsed) ? this.now() : parsed,
+      ts: Number.isNaN(parsed) ? (this.turnEnds ? 0 : this.now()) : parsed,
       ...this.parentOf(m),
     };
   }
 
-  private toolResult(block: Rec, id: string): { item?: ChatItem; replaced: boolean } {
+  private toolResult(block: Rec, id: string, m: Rec): { item?: ChatItem; replaced: boolean } {
     const toolUseId = str(block.tool_use_id);
     const isError = block.is_error === true;
     const text = resultText(block.content);
@@ -517,9 +569,28 @@ export class Normalizer {
     const call = toolUseId ? this.toolCalls.get(toolUseId) : undefined;
     if (!call) return { item: this.unknownBlock(undefined, block, id), replaced: false };
     const truncated = text.length > RESULT_TEXT_LIMIT;
+    const endedAt = this.timeOf(m);
+    // History omits tool_use_result. Older SDKs preserve the explicit Agent
+    // result trailer instead; accept only its resume marker, never arbitrary prose.
+    const agentId =
+      (isRec(m.tool_use_result) ? str(m.tool_use_result.agentId) : undefined) ??
+      (['Agent', 'Task'].includes(call.name)
+        ? /(?:^|\n)agentId:\s*([a-zA-Z0-9_-]+)\s*\(for resuming/.exec(text)?.[1]
+        : undefined);
+    const tokenTotal = ['Agent', 'Task'].includes(call.name)
+      ? ((isRec(m.tool_use_result) ? num(m.tool_use_result.totalTokens) : undefined) ??
+        (agentId
+          ? Number(/\n<usage>\s*total_tokens:\s*(\d+)[\s\S]*<\/usage>\s*$/.exec(text)?.[1] ?? NaN)
+          : undefined))
+      : undefined;
     const next: Item<'toolCall'> = {
       ...unchecked(call),
       status: isError ? 'error' : 'ok',
+      ...(endedAt === undefined ? {} : { endedAt }),
+      ...(agentId === undefined ? {} : { agentId }),
+      ...(tokenTotal === undefined || !Number.isFinite(tokenTotal) || tokenTotal < 0
+        ? {}
+        : { tokens: tokenTotal }),
       resultText: truncated ? text.slice(0, RESULT_TEXT_LIMIT) : text,
       resultTruncated: truncated,
     };
@@ -541,7 +612,18 @@ export class Normalizer {
     const line = systemLine(subtype, m);
     if (line === undefined) return this.unknown(m, `system:${subtype}`);
     if (line === null) return NONE;
-    return this.one({ kind: 'system', id: str(m.uuid) ?? this.localId(), ...line });
+    return this.one({
+      kind: 'system',
+      id: str(m.uuid) ?? this.localId(),
+      ...line,
+      ...(subtype === 'task_notification' ? this.taskTime(m) : {}),
+    });
+  }
+
+  /** A background task's notification shows when it came, as its `ts`. */
+  private taskTime(m: Rec): { ts?: number } {
+    const at = this.timeOf(m);
+    return at === undefined ? {} : { ts: at };
   }
 
   /**
@@ -567,13 +649,14 @@ export class Normalizer {
   private result(m: Rec): Item<'result'> {
     const durationMs = num(m.duration_ms);
     const costUsd = num(m.total_cost_usd);
+    const at = this.timeOf(m);
     // The id history's footer for this turn gets (`endTurn`), so a chat's view shows one.
     const lastUuid = this.turn.lastUuid;
     this.turn = { usage: new Map() };
     return {
       kind: 'result',
       id: lastUuid ? `turn-end:${lastUuid}` : (str(m.uuid) ?? this.localId()),
-      ts: this.now(),
+      ...(at === undefined ? {} : { ts: at }),
       isError: m.is_error === true || (str(m.subtype)?.startsWith('error') ?? false),
       ...(durationMs === undefined ? {} : { durationMs }),
       ...(costUsd === undefined ? {} : { costUsd }),
@@ -764,10 +847,13 @@ const ENVELOPE = /^\s*<([a-z][a-z-]*)(?:\s[^>]*)?>([\s\S]*)<\/\1>\s*$/;
 
 /**
  * A message that is exactly one injected envelope → its label and full text
- * (`detail`: the whole notification, or a hand-back's inner text); `null` for
- * one that is not shown; undefined for anything else (shown as typed).
+ * (`detail`: the whole notification, or a hand-back's inner text), and
+ * whether it is a background task's notification; `null` for one that is not
+ * shown; undefined for anything else (shown as typed).
  */
-const parseInjected = (text: string): { text: string; detail: string } | null | undefined => {
+const parseInjected = (
+  text: string,
+): { text: string; detail: string; task: boolean } | null | undefined => {
   const m = ENVELOPE.exec(text);
   const name = m?.[1];
   if (!m || name === undefined || !(name in INJECTED)) return undefined;
@@ -779,6 +865,7 @@ const parseInjected = (text: string): { text: string; detail: string } | null | 
     text: short.length > INJECTED_LABEL_MAX ? `${short.slice(0, INJECTED_LABEL_MAX)}…` : short,
     // A notification's fields are all worth seeing; a hand-back is just its text.
     detail: name === 'task-notification' ? text.trim() : inner,
+    task: name === 'task-notification',
   };
 };
 

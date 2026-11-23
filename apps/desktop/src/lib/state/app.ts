@@ -112,6 +112,7 @@ const connectTo = async (conn: ServiceConnection): Promise<void> => {
     settings.restoreColumns(),
     settings.restoreScale(),
     settings.restoreActivity(),
+    settings.restoreChatView(),
     places.restoreMissingOpen(),
     machines.restoreCollapsed(),
     machines.restoreMissingOpen(),
