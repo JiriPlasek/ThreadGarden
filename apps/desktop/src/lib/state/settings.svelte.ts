@@ -48,6 +48,7 @@ export class SettingsState {
    * narrow panes open it as a drawer on request instead). Remembered in `uiState`.
    */
   activityOpen = $state(true);
+  chatView = $state<'conversation' | 'timeline'>('conversation');
 
   /** An API key is stored (spec §5.5); the key itself never leaves the credential store and the service. */
   hasApiKey = $state(false);
@@ -155,6 +156,21 @@ export class SettingsState {
     } catch {
       // Open is fine.
     }
+  };
+
+  restoreChatView = async (): Promise<void> => {
+    if (!this.api) return;
+    try {
+      const { value } = await this.api.request('uiState.get', { key: 'chat.view' });
+      if (value === 'conversation' || value === 'timeline') this.chatView = value;
+    } catch {
+      /* Conversation is available on older services too. */
+    }
+  };
+
+  setChatView = (view: 'conversation' | 'timeline'): void => {
+    this.chatView = view;
+    if (this.api) quietly(this.api.request('uiState.set', { key: 'chat.view', value: view }));
   };
 
   /** Shows or hides the Activity panel and remembers it. */

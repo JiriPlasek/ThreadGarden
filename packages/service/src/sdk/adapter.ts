@@ -167,6 +167,11 @@ export interface AgentAdapter {
   listPolledSessions?(): Promise<SDKSessionInfo[]>;
   getSessionInfo(id: string, o?: HistoryOptions): Promise<SDKSessionInfo | undefined>;
   getSessionMessages(id: string, o?: PageOptions & HistoryOptions): Promise<SessionMessage[]>;
+  getSubagentMessages?(
+    id: string,
+    agentId: string,
+    o?: PageOptions & HistoryOptions,
+  ): Promise<SessionMessage[]>;
   forkSession(id: string, o: { upToMessageId?: string }): Promise<{ sessionId: string }>;
   /**
    * Protocol 9: copies a chat's local transcript (and its subagents') into

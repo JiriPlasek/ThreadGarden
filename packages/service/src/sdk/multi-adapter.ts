@@ -172,6 +172,14 @@ export class MultiAdapter implements AgentAdapter {
     if (isCodexSession(id)) throw new Error('Forking Codex conversations is not available yet.');
     return this.claude.forkSession(id, options);
   }
+  async getSubagentMessages(
+    id: string,
+    agentId: string,
+    options?: PageOptions & HistoryOptions,
+  ): Promise<SessionMessage[]> {
+    if (isCodexSession(id)) return [];
+    return this.claude.getSubagentMessages?.(id, agentId, options) ?? [];
+  }
   async importSession(id: string, store: SessionStore, options: ImportOptions): Promise<void> {
     if (isCodexSession(id))
       throw new Error('Moving Codex conversations between machines is not available yet.');

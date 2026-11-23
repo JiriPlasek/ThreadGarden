@@ -363,6 +363,7 @@ export class Normalizer {
       this.todoToolUseIds.add(toolUseId);
       return { kind: 'todo', id, todos, ...this.parentOf(m) };
     }
+    const startedAt = this.toolCalls.get(toolUseId)?.startedAt ?? this.timeOf(m);
     const item: Item<'toolCall'> = {
       kind: 'toolCall',
       id,
@@ -370,6 +371,7 @@ export class Normalizer {
       name,
       input: block.input,
       status: 'running',
+      ...(startedAt === undefined ? {} : { startedAt }),
       parentToolUseId: str(m.parent_tool_use_id) ?? null,
     };
     this.toolCalls.set(toolUseId, item);
@@ -404,7 +406,7 @@ export class Normalizer {
         return;
       }
       if (isRec(block) && block.type === 'tool_result') {
-        const r = this.toolResult(block, id);
+        const r = this.toolResult(block, id, m);
         if (r.replaced) replace = true;
         if (r.item) items.push(r.item);
         return;
@@ -506,12 +508,12 @@ export class Normalizer {
       id,
       text,
       ...(images.length > 0 ? { images } : {}),
-      ts: Number.isNaN(parsed) ? this.now() : parsed,
+      ts: Number.isNaN(parsed) ? (this.turnEnds ? 0 : this.now()) : parsed,
       ...this.parentOf(m),
     };
   }
 
-  private toolResult(block: Rec, id: string): { item?: ChatItem; replaced: boolean } {
+  private toolResult(block: Rec, id: string, m: Rec): { item?: ChatItem; replaced: boolean } {
     const toolUseId = str(block.tool_use_id);
     const isError = block.is_error === true;
     const text = resultText(block.content);
@@ -524,9 +526,19 @@ export class Normalizer {
     const call = toolUseId ? this.toolCalls.get(toolUseId) : undefined;
     if (!call) return { item: this.unknownBlock(undefined, block, id), replaced: false };
     const truncated = text.length > RESULT_TEXT_LIMIT;
+    const endedAt = this.timeOf(m);
+    // History omits tool_use_result. Older SDKs preserve the explicit Agent
+    // result trailer instead; accept only its resume marker, never arbitrary prose.
+    const agentId =
+      (isRec(m.tool_use_result) ? str(m.tool_use_result.agentId) : undefined) ??
+      (['Agent', 'Task'].includes(call.name)
+        ? /(?:^|\n)agentId:\s*([a-zA-Z0-9_-]+)\s*\(for resuming/.exec(text)?.[1]
+        : undefined);
     const next: Item<'toolCall'> = {
       ...unchecked(call),
       status: isError ? 'error' : 'ok',
+      ...(endedAt === undefined ? {} : { endedAt }),
+      ...(agentId === undefined ? {} : { agentId }),
       resultText: truncated ? text.slice(0, RESULT_TEXT_LIMIT) : text,
       resultTruncated: truncated,
     };

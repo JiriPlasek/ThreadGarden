@@ -418,6 +418,20 @@ export class ChatsState {
     if (again) await this.open(sessionId);
   };
 
+  timeline = async (sessionId: string): Promise<Result<'chat.timeline'>> => {
+    if (!this.api) throw new Error('Not connected to the Threadgarden service');
+    return this.api.request('chat.timeline', { sessionId });
+  };
+
+  timelineDetail = async (
+    sessionId: string,
+    blockId: string,
+    offset = 0,
+  ): Promise<Result<'chat.timelineDetail'>> => {
+    if (!this.api) throw new Error('Not connected to the Threadgarden service');
+    return this.api.request('chat.timelineDetail', { sessionId, blockId, offset });
+  };
+
   loadOlder = async (sessionId: string): Promise<void> => {
     const chat = this.byId.get(sessionId);
     const first = chat?.items[0];

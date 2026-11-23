@@ -115,6 +115,10 @@ export const ChatItemSchema = z.discriminatedUnion('kind', [
     name: z.string(),
     input: z.unknown(),
     status: z.enum(['running', 'ok', 'error']),
+    startedAt: z.number().optional(),
+    endedAt: z.number().optional(),
+    /** SDK subagent identity, when the completed Agent call reports one. */
+    agentId: z.string().optional(),
     /** Running, and waiting longer than usual (about 4 s) on its automatic permission check. */
     checkingPermission: z.literal(true).optional(),
     resultText: z.string().optional(),

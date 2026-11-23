@@ -56,6 +56,8 @@
     readOnly = false,
     activityOpen = false,
     onToggleActivity,
+    viewMode = 'conversation',
+    onViewModeChange,
   }: {
     chat: ChatState;
     /**
@@ -66,6 +68,8 @@
     /** The Activity panel is shown. */
     activityOpen?: boolean;
     onToggleActivity?: () => void;
+    viewMode?: 'conversation' | 'timeline';
+    onViewModeChange?: (mode: 'conversation' | 'timeline') => void;
   } = $props();
 
   const { machines, interaction, agents } = useApp();
@@ -347,6 +351,15 @@
         {#if isPhone}
           <!-- The phone's header has room for one row: these live here. -->
           <DropdownMenu.Separator />
+          {#if onViewModeChange}
+            <DropdownMenu.Item
+              class="py-1 text-xs"
+              onSelect={() =>
+                onViewModeChange?.(viewMode === 'timeline' ? 'conversation' : 'timeline')}
+            >
+              {viewMode === 'timeline' ? 'Show conversation' : 'Show timeline'}
+            </DropdownMenu.Item>
+          {/if}
           {#if onToggleActivity}
             <DropdownMenu.Item class="py-1 text-xs" onSelect={onToggleActivity}>
               <ActivityIcon />
@@ -489,6 +502,18 @@
         </span>
       {/if}
       <div class="ml-auto flex shrink-0 items-center gap-0.5">
+        {#if onViewModeChange}
+          <select
+            aria-label="Chat view"
+            class="mr-2 rounded border bg-background px-2 py-1 text-xs"
+            value={viewMode}
+            onchange={(e) =>
+              onViewModeChange?.(e.currentTarget.value as 'conversation' | 'timeline')}
+          >
+            <option value="conversation">Conversation</option>
+            <option value="timeline">Timeline</option>
+          </select>
+        {/if}
         {@render stateMenu()}
         {#if onToggleActivity}
           <IconButton

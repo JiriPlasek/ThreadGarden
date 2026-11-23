@@ -51,6 +51,7 @@ import {
   RepoSchema,
 } from './projects.js';
 import { ChatTaskSchema } from './tasks.js';
+import { TimelineBlockSchema } from './timeline.js';
 import { UpdateStartResultSchema, UpdateStatusSchema } from './update.js';
 import { ScheduledSendSchema, UsageStateSchema } from './usage.js';
 
@@ -250,6 +251,15 @@ export const methods = {
   ),
   'chat.older': def(
     z.object({ sessionId: z.string(), beforeItemId: z.string(), limit: z.number() }),
+    z.object({ items: z.array(ChatItemSchema), hasMore: z.boolean() }),
+  ),
+  'chat.timeline': def(sessionIdOnly, z.object({ blocks: z.array(TimelineBlockSchema) })),
+  'chat.timelineDetail': def(
+    z.object({
+      sessionId: z.string(),
+      blockId: z.string(),
+      offset: z.number().int().nonnegative().default(0),
+    }),
     z.object({ items: z.array(ChatItemSchema), hasMore: z.boolean() }),
   ),
   'chat.since': def(

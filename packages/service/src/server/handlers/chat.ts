@@ -33,6 +33,7 @@ import {
   type UserInput,
 } from '../../chat/live-session.js';
 import { Normalizer, type LastReply } from '../../chat/normalize.js';
+import { projectTimeline } from '../../chat/timeline.js';
 import type { SessionHost } from '../../chat/session-host.js';
 import type { ChatTitles } from '../../chat/titles.js';
 import type { ResumeCheck } from '../../external/resume-safety.js';
@@ -506,6 +507,39 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
       queued: snap.queued,
     };
   };
+
+  const timelineView = async (sessionId: string) => {
+    if (!catalog.summary(sessionId))
+      throw new ServiceError('NOT_FOUND', `Unknown chat ${sessionId}`);
+    const v = await view(sessionId);
+    const status = host.get(sessionId)?.status;
+    return projectTimeline(v.items, v.tasks, status === 'working' || status === 'needsYou');
+  };
+
+  router.register('chat.timeline', async (p) => ({
+    blocks: (await timelineView(p.sessionId)).blocks,
+  }));
+  router.register('chat.timelineDetail', async (p) => {
+    const timeline = await timelineView(p.sessionId);
+    let items = timeline.items.get(p.blockId);
+    if (!items) throw new ServiceError('NOT_FOUND', 'This timeline block is no longer available');
+    const agentId = timeline.agents.get(p.blockId);
+    if (agentId && adapter.getSubagentMessages) {
+      const messages = await adapter.getSubagentMessages(
+        p.sessionId,
+        agentId,
+        historyOf(p.sessionId),
+      );
+      if (messages.length) {
+        const n = new Normalizer({ turnEnds: true });
+        const byId = new Map<string, ChatItem>();
+        for (const m of messages) for (const item of n.push(m).items) byId.set(item.id, item);
+        for (const item of n.finish().items) byId.set(item.id, item);
+        items = [...byId.values()];
+      }
+    }
+    return { items: items.slice(p.offset, p.offset + 100), hasMore: p.offset + 100 < items.length };
+  });
 
   router.register('chat.open', async (p) => {
     if (!catalog.summary(p.sessionId)) {

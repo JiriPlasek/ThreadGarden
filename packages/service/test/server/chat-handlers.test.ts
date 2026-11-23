@@ -106,6 +106,111 @@ const ok = async <T = unknown>(method: string, params: unknown): Promise<T> => {
 const code = async (method: string, params: unknown) => (await call(method, params)).error?.code;
 
 type Opened = { items: ChatItem[]; hasMore: boolean; seq: number; summary: { live: boolean } };
+
+it('timeline covers history beyond the conversation tail and validates detail membership', async () => {
+  const adapter = new FakeAdapter();
+  addHistory(adapter, 'timeline-history', 240);
+  await start(adapter);
+  const opened = await ok<Opened>('chat.open', { sessionId: 'timeline-history', tail: 2 });
+  expect(opened.hasMore).toBe(true);
+  const timeline = await ok<{ blocks: { id: string; title: string }[] }>('chat.timeline', {
+    sessionId: 'timeline-history',
+  });
+  expect(timeline.blocks).toHaveLength(240);
+  expect(timeline.blocks[0]?.title).toBe('question 0');
+  const detail = await ok<{ items: ChatItem[]; hasMore: boolean }>('chat.timelineDetail', {
+    sessionId: 'timeline-history',
+    blockId: timeline.blocks[0]!.id,
+  });
+  expect(detail.items[0]).toMatchObject({ kind: 'user', text: 'question 0', ts: 0 });
+  expect(detail.hasMore).toBe(false);
+  expect(
+    await code('chat.timelineDetail', {
+      sessionId: 'timeline-history',
+      blockId: 'turn:some-other-chat',
+    }),
+  ).toBe('NOT_FOUND');
+  expect(await code('chat.timeline', { sessionId: 'missing-chat' })).toBe('NOT_FOUND');
+});
+
+it('timeline detail pages a long turn without returning every message at once', async () => {
+  const adapter = new FakeAdapter();
+  addHistory(adapter, 'long-turn', 1);
+  adapter.sessions
+    .get('long-turn')!
+    .messages.push(
+      ...Array.from({ length: 150 }, (_, i) =>
+        msg('long-turn', `extra-${i}`, 'assistant', `Step ${i}`),
+      ),
+    );
+  await start(adapter);
+  const first = await ok<{ items: ChatItem[]; hasMore: boolean }>('chat.timelineDetail', {
+    sessionId: 'long-turn',
+    blockId: 'turn:long-turn-u0',
+  });
+  expect(first.items).toHaveLength(100);
+  expect(first.hasMore).toBe(true);
+  const next = await ok<{ items: ChatItem[]; hasMore: boolean }>('chat.timelineDetail', {
+    sessionId: 'long-turn',
+    blockId: 'turn:long-turn-u0',
+    offset: 100,
+  });
+  expect(next.hasMore).toBe(false);
+  expect(next.items.map((i) => i.id).some((id) => first.items.some((i) => i.id === id))).toBe(
+    false,
+  );
+});
+
+it('agent inspection reads its own history through the SDK boundary, not the parent transcript', async () => {
+  const adapter = new FakeAdapter();
+  addHistory(adapter, 'agents-history', 1);
+  const row = adapter.sessions.get('agents-history')!;
+  row.messages = [
+    row.messages[0]!,
+    {
+      ...msg('agents-history', 'launch', 'assistant', ''),
+      message: {
+        content: [
+          {
+            type: 'tool_use',
+            id: 'call-agent',
+            name: 'Agent',
+            input: { description: 'Review code' },
+          },
+        ],
+      },
+    },
+    {
+      ...msg('agents-history', 'done', 'user', ''),
+      message: {
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'call-agent',
+            content: 'Review complete.\nagentId: agent-one (for resuming to continue this agent)',
+          },
+        ],
+      },
+    },
+  ];
+  const getSubagentMessages = vi.fn(async () => [
+    msg('agents-history', 'child-answer', 'assistant', 'Detailed child report'),
+  ]);
+  Object.assign(adapter, { getSubagentMessages });
+  await start(adapter);
+  const detail = await ok<{ items: ChatItem[] }>('chat.timelineDetail', {
+    sessionId: 'agents-history',
+    blockId: 'agent:call-agent',
+  });
+  expect(getSubagentMessages).toHaveBeenCalledWith(
+    'agents-history',
+    'agent-one',
+    expect.anything(),
+  );
+  expect(detail.items).toContainEqual(
+    expect.objectContaining({ kind: 'assistantText', markdown: 'Detailed child report' }),
+  );
+});
 const ids = (items: ChatItem[]) => items.map((i) => i.id);
 
 it('chat.open and chat.since expose transient prompt predictions without adding history items', async () => {
