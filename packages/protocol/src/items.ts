@@ -119,6 +119,8 @@ export const ChatItemSchema = z.discriminatedUnion('kind', [
     endedAt: z.number().optional(),
     /** SDK subagent identity, when the completed Agent call reports one. */
     agentId: z.string().optional(),
+    /** Reported token total for an Agent/Task call, when available. */
+    tokens: z.number().finite().nonnegative().optional(),
     /** Running, and waiting longer than usual (about 4 s) on its automatic permission check. */
     checkingPermission: z.literal(true).optional(),
     resultText: z.string().optional(),

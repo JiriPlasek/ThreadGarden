@@ -212,6 +212,34 @@ describe('Normalizer', () => {
     ]);
   });
 
+  it('preserves known Agent token totals from structured results and historical trailers', () => {
+    for (const metadata of [
+      { tool_use_result: { agentId: 'agent-one', totalTokens: 4700000 }, report: 'Done' },
+      {
+        report:
+          'Done\nagentId: agent-one (for resuming to continue this agent)\n<usage>total_tokens: 4700000\ntool_uses: 12\n</usage>',
+      },
+      { report: 'No usage recorded' },
+    ]) {
+      const n = new Normalizer();
+      n.push(assistant('launch', [{ type: 'tool_use', id: 'call', name: 'Agent', input: {} }]));
+      const result = n.push(
+        sdk({
+          type: 'user',
+          uuid: 'done',
+          ...metadata,
+          message: {
+            content: [{ type: 'tool_result', tool_use_id: 'call', content: metadata.report }],
+          },
+        }),
+      );
+      const call = result.items[0];
+      expect(call?.kind).toBe('toolCall');
+      if (call?.kind === 'toolCall')
+        expect(call.tokens).toBe(metadata.report === 'No usage recorded' ? undefined : 4700000);
+    }
+  });
+
   it('marks a tool call waiting on its permission check, and clears it on done or its result', () => {
     const n = new Normalizer();
     const check = (status: string, toolUseId = 'toolu_1'): SDKMessage =>

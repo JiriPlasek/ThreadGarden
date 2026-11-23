@@ -6,6 +6,20 @@ const text = (v: unknown): string => (typeof v === 'string' ? v : '');
 const preview = (v: string): string => v.replace(/\s+/g, ' ').trim().slice(0, 240);
 const time = (v: number | undefined): number | undefined =>
   v !== undefined && Number.isFinite(v) && v > 0 ? v : undefined;
+const tokenCount = (v: unknown): number | undefined =>
+  typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : undefined;
+const usageTokens = (v: unknown): number | undefined => {
+  const usage = record(v);
+  const counts = [
+    'input_tokens',
+    'cache_read_input_tokens',
+    'cache_creation_input_tokens',
+    'output_tokens',
+  ].map((k) => tokenCount(usage[k]));
+  return counts.some((n) => n !== undefined)
+    ? tokenCount(counts.reduce<number>((sum, n) => sum + (n ?? 0), 0))
+    : undefined;
+};
 const agentCall = (i: ChatItem): i is Extract<ChatItem, { kind: 'toolCall' }> =>
   i.kind === 'toolCall' && ['Agent', 'Task', 'collabAgentToolCall'].includes(i.name);
 const field = (v: string, tag: string): string | undefined =>
@@ -50,6 +64,8 @@ export const projectTimeline = (
       if (item.kind === 'assistantText') turn.outcome = preview(item.markdown);
       if (item.kind === 'toolCall') turn.toolCount++;
       if (item.kind === 'result') {
+        const tokens = usageTokens(item.usage);
+        if (tokens !== undefined) turn.tokens = tokens;
         turn.status = item.isError ? 'failed' : 'completed';
         const end = time(item.ts);
         if (end !== undefined) turn.endedAt = end;
@@ -80,6 +96,7 @@ export const projectTimeline = (
               : 'unknown',
         toolCount: 0,
         agentCount: 0,
+        ...(item.tokens === undefined ? {} : { tokens: item.tokens }),
         ...(time(item.startedAt) === undefined ? {} : { startedAt: item.startedAt }),
         ...(!background && time(item.endedAt) !== undefined ? { endedAt: item.endedAt } : {}),
         ...(text(input.model) ? { model: text(input.model) } : {}),
@@ -137,6 +154,7 @@ export const projectTimeline = (
     block.outcome = preview(task.error ?? task.summary ?? block.outcome);
     block.model = task.model ?? block.model;
     block.toolCount = task.toolUses ?? block.toolCount;
+    block.tokens = tokenCount(task.tokens) ?? block.tokens;
     out.agents.set(block.id, task.taskId);
   }
   if (working && turn && turn.status === 'unknown') turn.status = 'running';

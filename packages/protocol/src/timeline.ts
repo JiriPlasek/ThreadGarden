@@ -13,6 +13,8 @@ export const TimelineBlockSchema = z.object({
   endedAt: z.number().optional(),
   toolCount: z.number(),
   agentCount: z.number(),
+  /** Reported processed tokens; turn totals include cached input. Unknown is absent. */
+  tokens: z.number().finite().nonnegative().optional(),
   model: z.string().optional(),
 });
 export type TimelineBlock = z.infer<typeof TimelineBlockSchema>;

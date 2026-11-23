@@ -22,6 +22,42 @@ const agent = (
 });
 
 describe('timeline projection', () => {
+  it('reports processed turn tokens, including cached input, and omits unknown usage', () => {
+    const p = projectTimeline(
+      [
+        user('u'),
+        {
+          kind: 'result',
+          id: 'r',
+          isError: false,
+          usage: { input_tokens: 2000000, cache_read_input_tokens: 2500000, output_tokens: 200000 },
+        },
+        user('next'),
+      ],
+      [],
+    );
+    expect(p.blocks[0]?.tokens).toBe(4700000);
+    expect(p.blocks[1]?.tokens).toBeUndefined();
+  });
+
+  it('uses the task token count for its agent without adding it to the main turn', () => {
+    const p = projectTimeline(
+      [user('u'), agent('one')],
+      [
+        {
+          taskId: 'a1',
+          toolUseId: 'one',
+          kind: 'agent',
+          description: 'Work',
+          status: 'completed',
+          startedAt: T,
+          tokens: 4700000,
+        },
+      ],
+    );
+    expect(p.blocks[1]?.tokens).toBe(4700000);
+    expect(p.blocks[0]?.tokens).toBeUndefined();
+  });
   it('summarizes complete turns without putting full messages in the summary', () => {
     const items: ChatItem[] = [
       user('u'),

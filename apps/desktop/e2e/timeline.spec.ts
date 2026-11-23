@@ -17,8 +17,13 @@ test('timeline reads old turns through the service, inspects one, and remembers 
     .getByRole('region', { name: 'Chat list' })
     .locator('[data-session-id="session-998"]')
     .click();
-  const picker = page.getByRole('combobox', { name: 'Chat view', exact: true });
-  await picker.selectOption('timeline');
+  const picker = page.getByRole('group', { name: 'Chat view', exact: true });
+  const timelineButton = picker.getByRole('button', { name: 'Timeline', exact: true });
+  await expect(timelineButton).toHaveAttribute('aria-pressed', 'false');
+  const titleBox = await page.locator('header h1').last().boundingBox();
+  const viewBox = await timelineButton.boundingBox();
+  expect(viewBox!.y).toBeGreaterThan(titleBox!.y + titleBox!.height);
+  await timelineButton.click();
   const timeline = page.getByRole('region', { name: 'Chat timeline' });
   await expect(timeline).toBeVisible();
   const first = timeline.getByRole('button', { name: /^Turn:/ }).first();
@@ -30,11 +35,12 @@ test('timeline reads old turns through the service, inspects one, and remembers 
   await details.getByRole('button', { name: 'Close timeline details' }).click();
   await expect(details).toBeHidden();
   await page.reload();
-  await expect(page.getByRole('combobox', { name: 'Chat view', exact: true })).toHaveValue(
-    'timeline',
+  await expect(picker.getByRole('button', { name: 'Timeline', exact: true })).toHaveAttribute(
+    'aria-pressed',
+    'true',
   );
   await expect(page.getByRole('region', { name: 'Chat timeline' })).toBeVisible();
-  await picker.selectOption('conversation');
+  await picker.getByRole('button', { name: 'Conversation', exact: true }).click();
   await expect(timeline).toBeHidden();
 });
 
@@ -72,6 +78,7 @@ test('calendar layout shows parallel agents, folded overnight time, zoom, and a 
       id: 'agent:invoices',
       kind: 'agent',
       title: 'Migrate invoices',
+      tokens: 4700000,
       startedAt: yesterday + 35 * minute,
       endedAt: yesterday + 95 * minute,
       model: 'sonnet',
@@ -143,7 +150,10 @@ test('calendar layout shows parallel agents, folded overnight time, zoom, and a 
     .getByRole('region', { name: 'Chat list' })
     .locator('[data-session-id="session-998"]')
     .click();
-  await page.getByRole('combobox', { name: 'Chat view', exact: true }).selectOption('timeline');
+  await page
+    .getByRole('group', { name: 'Chat view', exact: true })
+    .getByRole('button', { name: 'Timeline', exact: true })
+    .click();
   const timeline = page.getByRole('region', { name: 'Chat timeline' });
   await expect(timeline.getByText(/with no recorded activity/)).toBeVisible();
   await expect(timeline.getByRole('button', { name: /^Agent:/ })).toHaveCount(3);
@@ -152,6 +162,12 @@ test('calendar layout shows parallel agents, folded overnight time, zoom, and a 
   await expect(timeline.getByText(/You ·/)).toHaveCount(3);
   await expect(timeline.getByRole('button', { name: /Agent: Check webhook/ })).toContainText(
     'Check webhook compatibility',
+  );
+  await expect(timeline.getByRole('button', { name: /Agent: Migrate invoices/ })).toContainText(
+    '4.7M tokens',
+  );
+  await expect(timeline.getByRole('button', { name: /Agent: Migrate invoices/ })).not.toContainText(
+    'completed',
   );
   const minuteMarks = await timeline
     .locator('time')
@@ -175,7 +191,10 @@ test('timeline follows a live delegated turn through completion', async ({ page 
     .getByRole('region', { name: 'Chat list' })
     .locator('[data-session-id="session-998"]')
     .click();
-  await page.getByRole('combobox', { name: 'Chat view', exact: true }).selectOption('timeline');
+  await page
+    .getByRole('group', { name: 'Chat view', exact: true })
+    .getByRole('button', { name: 'Timeline', exact: true })
+    .click();
   const timeline = page.getByRole('region', { name: 'Chat timeline' });
   await expect(timeline).toBeVisible();
   const composer = page.getByRole('textbox', { name: 'Message' });

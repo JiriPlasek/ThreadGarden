@@ -3,7 +3,7 @@
   import { tick, untrack } from 'svelte';
   import { RequestError } from '#lib/service/client.js';
   import { fullTime } from '#lib/format/time.js';
-  import { elapsed } from './format';
+  import { elapsed, tokens } from './format';
   import { layoutTimeline } from './timeline-layout';
   import ItemView from './items/ItemView.svelte';
   import { setChatActions } from './context';
@@ -60,6 +60,10 @@
   };
   const label = (b: TimelineBlock): string =>
     `${b.kind === 'turn' ? 'Turn' : 'Agent'}: ${b.title} · ${b.status} · ${durationOf(b)}`;
+  const tokenText = (b: TimelineBlock): string =>
+    b.tokens === undefined ? '' : `${tokens(b.tokens)} tokens`;
+  const tokenHint =
+    'Reported input and output tokens processed, including cached input when available.';
   const tint = (b: TimelineBlock): string =>
     b.status === 'failed'
       ? 'border-red-500 bg-red-500/15'
@@ -283,9 +287,11 @@
                 )}
               </div>
               <div class="truncate font-medium">{p.block.title}</div>
-              {#if p.height >= 72}<div class="truncate opacity-70">
-                  {durationOf(p.block)} · {p.block.toolCount} tools · {p.block.agentCount} agents
-                </div>{/if}
+              <div class="truncate opacity-70" title={tokenHint}>
+                {durationOf(p.block)}{p.block.tokens !== undefined
+                  ? ` · ${tokenText(p.block)}`
+                  : ''}
+              </div>
               {#if p.height >= 96}<div class="line-clamp-2 opacity-80">{p.block.outcome}</div>{/if}
             </button>
           {/each}
@@ -306,7 +312,9 @@
             >
               <div class="truncate font-medium">{p.block.title}</div>
               <div class="truncate opacity-70">
-                {p.block.status} · {durationOf(p.block)}
+                <span title={tokenHint}>{tokenText(p.block)}</span>{p.block.tokens !== undefined
+                  ? ' · '
+                  : ''}{durationOf(p.block)}
               </div>
               {#if p.height >= 66}<div class="truncate opacity-70">{p.block.model ?? ''}</div>{/if}
             </button>
@@ -336,7 +344,7 @@
         <div class="min-w-0 flex-1">
           <h3 class="text-sm font-medium">{selected.title}</h3>
           <p class="mt-1 text-xs text-muted-foreground">
-            {selected.status} · {durationOf(selected)}
+            {durationOf(selected)}{selected.tokens !== undefined ? ` · ${tokenText(selected)}` : ''}
           </p>
           {#if selected.startedAt}<p class="mt-1 text-xs text-muted-foreground">
               {fullTime(selected.startedAt)}{selected.endedAt

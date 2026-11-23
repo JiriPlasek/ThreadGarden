@@ -16,6 +16,7 @@ const block: TimelineBlock = {
   endedAt: T + 3600000,
   toolCount: 12,
   agentCount: 2,
+  tokens: 4700000,
 };
 
 describe('timeline view', () => {
@@ -73,6 +74,7 @@ describe('timeline view', () => {
     await userEvent.click(await screen.findByRole('button', { name: /Turn: Port billing/ }));
     expect(await screen.findByText('Saved report')).toBeTruthy();
     expect(screen.getByText(/^You ·/)).toBeTruthy();
+    expect(screen.getAllByText(/4.7M tokens/).length).toBeGreaterThan(0);
     await userEvent.click(screen.getByRole('button', { name: 'Load more messages' }));
     expect(await screen.findByText('Next report')).toBeTruthy();
     expect(detail).toHaveBeenLastCalledWith('turn:u', 1);

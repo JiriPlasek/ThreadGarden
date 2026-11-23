@@ -534,11 +534,20 @@ export class Normalizer {
       (['Agent', 'Task'].includes(call.name)
         ? /(?:^|\n)agentId:\s*([a-zA-Z0-9_-]+)\s*\(for resuming/.exec(text)?.[1]
         : undefined);
+    const tokenTotal = ['Agent', 'Task'].includes(call.name)
+      ? ((isRec(m.tool_use_result) ? num(m.tool_use_result.totalTokens) : undefined) ??
+        (agentId
+          ? Number(/\n<usage>\s*total_tokens:\s*(\d+)[\s\S]*<\/usage>\s*$/.exec(text)?.[1] ?? NaN)
+          : undefined))
+      : undefined;
     const next: Item<'toolCall'> = {
       ...unchecked(call),
       status: isError ? 'error' : 'ok',
       ...(endedAt === undefined ? {} : { endedAt }),
       ...(agentId === undefined ? {} : { agentId }),
+      ...(tokenTotal === undefined || !Number.isFinite(tokenTotal) || tokenTotal < 0
+        ? {}
+        : { tokens: tokenTotal }),
       resultText: truncated ? text.slice(0, RESULT_TEXT_LIMIT) : text,
       resultTruncated: truncated,
     };
