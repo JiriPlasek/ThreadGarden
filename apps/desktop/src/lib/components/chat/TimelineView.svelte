@@ -31,12 +31,6 @@
   let now = $state(Date.now());
   let scale = $state(2);
   let scrollArea = $state<HTMLDivElement | null>(null);
-  let viewportWidth = $state(0);
-  let viewportHeight = $state(0);
-  let scrollOuterWidth = $state(0);
-  let scrollOuterHeight = $state(0);
-  const rightGutter = $derived(Math.max(0, scrollOuterWidth - viewportWidth));
-  const bottomGutter = $derived(Math.max(0, scrollOuterHeight - viewportHeight));
   let selectedId = $state<string | null>(null);
   let details = $state.raw<ChatItem[]>([]);
   let detailLoading = $state(false);
@@ -83,12 +77,12 @@
     'Reported input and output tokens processed, including cached input when available.';
   const tint = (b: TimelineBlock): string =>
     b.status === 'failed'
-      ? 'border-red-500 bg-red-500/15'
+      ? 'border-red-500/25 bg-red-500/5'
       : b.status === 'running'
-        ? 'border-blue-500 bg-blue-500/15'
+        ? 'border-blue-500/25 bg-blue-500/5'
         : b.status === 'completed'
-          ? 'border-emerald-500 bg-emerald-500/15'
-          : 'border-muted-foreground bg-muted';
+          ? 'border-emerald-500/25 bg-emerald-500/5'
+          : 'border-border bg-muted/40';
 
   const refresh = async (id = sessionId): Promise<void> => {
     const token = ++refreshGeneration;
@@ -223,22 +217,10 @@
     }
   }}
 >
-  <div
-    class="pointer-events-none absolute left-3 z-30 flex flex-wrap items-end justify-between gap-2"
-    style:right="{12 + rightGutter}px"
-    style:bottom="{12 + bottomGutter}px"
-  >
-    <details
-      open
-      class="pointer-events-auto relative rounded-md border bg-background/95 text-xs shadow-sm"
-    >
-      <summary class="cursor-pointer px-3 py-1.5 font-medium">Color meanings</summary>
-      <div
-        role="group"
-        aria-label="Color meanings"
-        class="absolute bottom-full left-0 mb-2 rounded-md border bg-background/95 p-3 shadow-sm"
-        style:width="{Math.min(288, Math.max(180, viewportWidth - 24))}px"
-      >
+  <div class="flex shrink-0 items-start justify-between gap-3 border-b px-3 py-2">
+    <details class="min-w-0 flex-1 text-xs text-muted-foreground">
+      <summary class="w-fit cursor-pointer py-1.5 font-medium">Color meanings</summary>
+      <div role="group" aria-label="Color meanings" class="py-2">
         <p class="mb-2 font-medium">Activity strip</p>
         {@render colorKey()}
         <p class="mt-2 text-muted-foreground">Gray means unclassified, not necessarily idle.</p>
@@ -251,7 +233,7 @@
       role="group"
       aria-label="Timeline navigation"
       title="Zoom: {scale} px/min. Short entries are expanded to keep their titles readable."
-      class="pointer-events-auto inline-flex overflow-hidden rounded-md border bg-background/95 text-xs shadow-sm"
+      class="inline-flex shrink-0 overflow-hidden rounded-md border text-xs"
     >
       <button
         class="px-2.5 py-1.5 hover:bg-muted disabled:opacity-40"
@@ -290,10 +272,6 @@
   {:else}
     <div
       bind:this={scrollArea}
-      bind:clientWidth={viewportWidth}
-      bind:clientHeight={viewportHeight}
-      bind:offsetWidth={scrollOuterWidth}
-      bind:offsetHeight={scrollOuterHeight}
       data-timeline-scroll
       class="min-h-0 flex-1 overflow-auto"
       onwheel={(e) => {
@@ -347,7 +325,7 @@
             </div>{/each}
           {#each layout.placed.filter((b) => b.lane === -1) as p (p.block.id)}
             <button
-              class="absolute inset-x-2 grid content-start overflow-hidden rounded border-l-3 px-2 text-left text-xs hover:ring-2 focus-visible:ring-2 {tint(
+              class="absolute inset-x-2 grid content-start overflow-hidden rounded border pr-2 pl-3 text-left text-xs hover:ring-2 focus-visible:ring-2 {tint(
                 p.block,
               )}"
               style:top="{p.y}px"
@@ -391,7 +369,7 @@
           {@render gridLines()}
           {#each layout.placed.filter((b) => b.lane >= 0) as p (p.block.id)}
             <button
-              class="absolute grid w-41 content-start overflow-hidden rounded border-l-3 px-2 text-left text-xs hover:ring-2 focus-visible:ring-2 {tint(
+              class="absolute grid w-41 content-start overflow-hidden rounded border pr-2 pl-3 text-left text-xs hover:ring-2 focus-visible:ring-2 {tint(
                 p.block,
               )}"
               style:left="{p.lane * 180 + 8}px"
