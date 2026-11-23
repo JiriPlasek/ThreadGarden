@@ -15,6 +15,7 @@
   import { ariaKeyShortcuts, shortcut } from '#lib/shortcuts.js';
   import { formatHoldUntil } from '#lib/format/hold.js';
   import { fullTime, relativeTime } from '#lib/format/time.js';
+  import { compactNumber } from '#lib/format/numbers.js';
   import { cn } from '#lib/utils.js';
   import { externalLabel, previewLine, rawStatus } from './chat-info';
   import RunningBadge from './RunningBadge.svelte';
@@ -131,14 +132,28 @@
           {#if running > 0}
             <RunningBadge count={running} class={scheduled.length === 0 ? 'ml-auto' : ''} />
           {/if}
-          <time
+          <span
             class={cn(
-              'text-muted-foreground shrink-0 text-[0.6875rem] tabular-nums',
+              'text-muted-foreground inline-flex shrink-0 items-center gap-1 text-[0.6875rem] tabular-nums',
               running === 0 && scheduled.length === 0 && 'ml-auto',
             )}
-            datetime={chat.lastActivity > 0 ? new Date(chat.lastActivity).toISOString() : undefined}
-            title={fullTime(chat.lastActivity)}>{relativeTime(chat.lastActivity, now)}</time
           >
+            {#if chat.totalTokens !== undefined && chat.totalTokens > 0}
+              <span
+                data-chat-volume
+                title={`${chat.totalTokens.toLocaleString('en-US')} recorded tokens (input, output and cache; includes available subagent usage)`}
+                aria-label={`${chat.totalTokens.toLocaleString('en-US')} recorded tokens`}
+                >{compactNumber(chat.totalTokens)}</span
+              >
+              <span aria-hidden="true">·</span>
+            {/if}
+            <time
+              datetime={chat.lastActivity > 0
+                ? new Date(chat.lastActivity).toISOString()
+                : undefined}
+              title={fullTime(chat.lastActivity)}>{relativeTime(chat.lastActivity, now)}</time
+            >
+          </span>
         </div>
         <div
           class="text-muted-foreground flex min-w-0 items-center gap-1.5 pl-5.5 text-xs leading-4"
