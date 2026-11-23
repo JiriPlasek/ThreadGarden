@@ -399,7 +399,7 @@
       onchange={change(chats.setEffort, () => header.effort ?? '')}
     >
       {#if !header.effort}
-        <option value="">Effort</option>
+        <option value="">Effort (unreported)</option>
       {/if}
       {#each effortOptions as o (o.value)}
         <option value={o.value}>{labelled('Effort', o.label)}</option>

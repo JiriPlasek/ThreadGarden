@@ -303,6 +303,7 @@ export class LiveSession {
   private readonly pending = new Map<string, Pending>();
   private statusValue: ChatStatus = 'history';
   private headerValue: ChatHeaderInfo = {};
+  private effortRevision = 0;
   private idleSinceValue: number | null = null;
   private lastActivityValue: number | null = null;
   /**
@@ -692,7 +693,9 @@ export class LiveSession {
     await this.requireLive().setModel(value);
     this.chosen.model = value;
     this.headerValue.model = value;
+    this.effortRevision++;
     this.publishStatus();
+    void this.refreshEffort();
   }
 
   async setPermissionMode(value: string): Promise<void> {
@@ -709,6 +712,7 @@ export class LiveSession {
     else session.send(toUserMessage({ text: `/effort ${value}` }, randomUUID()));
     this.chosen.effort = value as Effort;
     this.headerValue.effort = value;
+    this.effortRevision++;
     this.publishStatus();
   }
 
@@ -843,6 +847,7 @@ export class LiveSession {
       this.noteActivity();
       this.updateHeader(m);
       this.requestAuth(m);
+      this.requestEffort(m);
       this.noteSuggestion(m);
       const r = this.normalizer.push(m);
       this.syncLastReply();
@@ -964,7 +969,6 @@ export class LiveSession {
       if (model !== undefined) h.model = model;
       if (mode !== undefined) this.rememberPermissionMode(mode);
       if (version !== undefined) h.claudeVersion = version;
-      if (str(x.effort) !== undefined) h.effort = str(x.effort)!;
     } else if (x.type === 'system' && x.subtype === 'status') {
       const mode = str(x.permissionMode);
       if (mode !== undefined) this.rememberPermissionMode(mode);
@@ -1001,6 +1005,45 @@ export class LiveSession {
       const used = num(x.contextUsage.used),
         max = num(x.contextUsage.max);
       if (used !== undefined && max !== undefined && max > 0) h.contextUsage = { used, max };
+    }
+    if (
+      x.type === 'system' &&
+      (x.subtype === 'init' || x.subtype === 'status') &&
+      !x.parent_tool_use_id &&
+      (typeof x.effort === 'string' || x.effort === null)
+    ) {
+      // An explicit empty value clears a previous level even for older clients that merge headers.
+      h.effort = x.effort ?? '';
+      this.effortRevision++;
+    }
+  }
+
+  private requestEffort(m: SDKMessage): void {
+    const x: unknown = m;
+    if (!isRec(x) || x.parent_tool_use_id) return;
+    if (
+      x.type === 'result' ||
+      (x.type === 'system' &&
+        (x.subtype === 'init' || x.subtype === 'status') &&
+        typeof x.effort !== 'string' &&
+        x.effort !== null)
+    )
+      void this.refreshEffort();
+  }
+
+  private async refreshEffort(): Promise<void> {
+    const session = this.session;
+    if (!session?.getEffort) return;
+    const revision = ++this.effortRevision;
+    try {
+      const effort = await session.getEffort();
+      if (this.session !== session || revision !== this.effortRevision || effort === undefined)
+        return;
+      this.headerValue.effort = effort ?? '';
+      this.publishStatus();
+    } catch (err) {
+      // Older CLIs may not implement this read-only control; their init/status frames still work.
+      this.report(err, `read effort (session ${this.id})`);
     }
   }
 

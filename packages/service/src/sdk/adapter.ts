@@ -136,6 +136,8 @@ export interface AgentSession {
   setPermissionMode(m: PermissionMode): Promise<void>;
   /** Runtimes with a native reasoning control use it instead of a Claude slash command. */
   setEffort?(effort: Effort): Promise<void>;
+  /** Effective runtime effort; null means no named effort is applied, undefined means unreported. */
+  getEffort?(): Promise<Effort | null | undefined>;
   /** Stops one task (SDK `Query.stopTask`); its `stopped` task_notification follows in `messages`. */
   stopTask(taskId: string): Promise<void>;
   supportedCommands(): Promise<SlashCommand[]>;

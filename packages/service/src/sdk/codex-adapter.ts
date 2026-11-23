@@ -198,7 +198,7 @@ export class CodexSession implements AgentSession {
       model: this.record.model,
       permissionMode:
         this.record.permissionMode ?? (this.record.preservePermissions ? 'custom' : 'default'),
-      effort: this.record.effort,
+      effort: this.record.effort ?? (str(result.reasoningEffort) || undefined),
       runtime: 'codex',
       runtimeVersion: this.record.runtimeVersion,
       contextUsage: this.record.contextUsage,
@@ -374,8 +374,12 @@ export class CodexSession implements AgentSession {
         'Choose a reasoning effort supported by the new Codex model before switching models.',
       );
     }
+    const changed = this.record.model !== model;
     this.record.model = model;
     this.store.save(this.record);
+    // A reported default belongs to the old model; an explicit effort carries across models.
+    if (changed && this.record.effort === undefined)
+      this.emit({ type: 'system', subtype: 'status', effort: null });
   }
 
   async setEffort(effort: Effort): Promise<void> {
