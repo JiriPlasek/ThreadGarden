@@ -585,13 +585,14 @@ export class Normalizer {
   private result(m: Rec): Item<'result'> {
     const durationMs = num(m.duration_ms);
     const costUsd = num(m.total_cost_usd);
+    const at = this.timeOf(m);
     // The id history's footer for this turn gets (`endTurn`), so a chat's view shows one.
     const lastUuid = this.turn.lastUuid;
     this.turn = { usage: new Map() };
     return {
       kind: 'result',
       id: lastUuid ? `turn-end:${lastUuid}` : (str(m.uuid) ?? this.localId()),
-      ts: this.now(),
+      ...(at === undefined ? {} : { ts: at }),
       isError: m.is_error === true || (str(m.subtype)?.startsWith('error') ?? false),
       ...(durationMs === undefined ? {} : { durationMs }),
       ...(costUsd === undefined ? {} : { costUsd }),

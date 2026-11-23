@@ -1302,6 +1302,33 @@ describe('Normalizer: turn ends', () => {
     ]);
   });
 
+  it('a completed Codex history turn keeps its original completion time when opened later', () => {
+    const n = new Normalizer({ turnEnds: true, now: () => Date.parse('2026-11-23T07:48:00Z') });
+    const r = n.push(
+      sdk({
+        type: 'result',
+        uuid: 'old-result',
+        subtype: 'success',
+        timestamp: '2026-11-20T15:00:00Z',
+        duration_ms: 269000,
+      }),
+    );
+    expect(r.items).toEqual([
+      expect.objectContaining({
+        kind: 'result',
+        ts: Date.parse('2026-11-20T15:00:00Z'),
+        durationMs: 269000,
+      }),
+    ]);
+  });
+
+  it('a history result without a timestamp never uses the time it was read', () => {
+    const n = new Normalizer({ turnEnds: true, now: () => 999 });
+    const r = n.push(sdk({ type: 'result', uuid: 'old-result', subtype: 'success' }));
+    expect(r.items[0]).toMatchObject({ kind: 'result' });
+    expect(r.items[0]).not.toHaveProperty('ts');
+  });
+
   it('live, a result is the footer of its turn, with the id history gives it, and when it came', () => {
     const n = new Normalizer({ now: () => 999 });
     run(n, [
