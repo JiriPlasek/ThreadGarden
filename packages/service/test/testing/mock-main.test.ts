@@ -354,7 +354,10 @@ describe('mock service: MCP servers in the chat (protocol 12)', () => {
     await act('mock-oauth', 'reconnect');
     expect(await statusOf('mock-oauth')).toBe('pending');
     await eventually(async () => (await statusOf('mock-oauth')) === 'connected', 5_000);
+    // As Claude Code: forgetting the token leaves the live connection up until a reconnect.
     await act('mock-oauth', 'clearAuth');
+    expect(await statusOf('mock-oauth')).toBe('connected');
+    await act('mock-oauth', 'reconnect');
     expect(await statusOf('mock-oauth')).toBe('needs-auth');
   });
 

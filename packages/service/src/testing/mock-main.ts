@@ -334,6 +334,8 @@ class ScriptedSession extends FakeSession {
   private servers = startServers();
   /** Servers whose sign-in finished (token saved); they still need a reconnect. */
   private readonly tokens = new Set<string>();
+  /** Servers whose token was forgotten while connected: the next reconnect finds no sign-in. */
+  private readonly forgotten = new Set<string>();
   private readonly mcpTimers = new Set<ReturnType<typeof setTimeout>>();
 
   override readonly mcp: McpControls = {
@@ -341,6 +343,11 @@ class ScriptedSession extends FakeSession {
     reconnect: async (name) => {
       // As Claude Code: a server that needs sign-in only comes up once its token is saved.
       if (this.servers.get(name)?.status === 'needs-auth' && !this.tokens.has(name)) return;
+      // A connected server whose token was forgotten drops to Needs sign-in on reconnect.
+      if (this.forgotten.has(name) && !this.tokens.has(name)) {
+        this.setMcp(name, { status: 'needs-auth' });
+        return;
+      }
       this.connecting(name);
     },
     toggle: async (name, enabled) => {
@@ -370,8 +377,9 @@ class ScriptedSession extends FakeSession {
     },
     clearAuth: async (name) => {
       if (!this.servers.has(name)) throw new Error(`No MCP server named ${name}`);
+      // As Claude Code: the token goes, the live connection stays until a reconnect.
       this.tokens.delete(name);
-      this.setMcp(name, { status: 'needs-auth' });
+      this.forgotten.add(name);
     },
   };
 
@@ -381,6 +389,7 @@ class ScriptedSession extends FakeSession {
     this.mcpTimers.clear();
     this.servers = startServers();
     this.tokens.clear();
+    this.forgotten.clear();
   }
 
   private later(fn: () => void): void {
