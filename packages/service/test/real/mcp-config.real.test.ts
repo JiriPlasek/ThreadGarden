@@ -170,9 +170,7 @@ describe.skipIf(!REAL)('adding and removing MCP servers (THREADGARDEN_REAL=1)', 
     sessions.push(session);
     void (async () => {
       try {
-        for await (const _ of session.messages) {
-          // drain
-        }
+        for await (const m of session.messages) void m;
       } catch {
         // closed
       }
