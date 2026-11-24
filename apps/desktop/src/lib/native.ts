@@ -406,3 +406,9 @@ export const updater: Updater = {
   },
   installKind: async () => (desktopTauri ? invoke<InstallKind>('install_kind') : 'unsupported'),
 };
+
+/** Open a document on this PC; the native command validates the actual target. */
+export const openChatFile = async (path: string, cwd: string): Promise<void> => {
+  if (!isTauri) throw new Error('Local files can only be opened in the desktop app.');
+  await invoke('open_chat_file', { path, cwd });
+};

@@ -25,13 +25,14 @@ describe('markdown', () => {
     expect(html).toContain('<code>two</code>');
   });
 
-  it('keeps http(s) links (opened by Threadgarden, never by the webview) and drops other targets', () => {
+  it('keeps web and local links while dropping unsafe schemes', () => {
     const html = renderMarkdown(
       '[site](https://example.com) [mail](mailto:a@b.example) [rel](/etc/passwd) [js](javascript:alert(1))',
     );
     expect(html).toContain('href="https://example.com"');
     expect(html).not.toContain('target=');
-    expect(html).not.toMatch(/mailto:|\/etc\/passwd|javascript:/);
+    expect(html).not.toMatch(/mailto:|javascript:/);
+    expect(html).toContain('href="/etc/passwd"');
     expect(html).toContain('mail');
   });
 

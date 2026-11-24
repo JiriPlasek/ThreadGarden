@@ -1,13 +1,16 @@
 import { fireEvent, render } from '@testing-library/svelte';
 import { describe, expect, it, vi } from 'vitest';
+import MessageList from '../../src/lib/components/chat/MessageList.svelte';
 import AssistantText from '../../src/lib/components/chat/items/AssistantText.svelte';
 
-const { openExternal } = vi.hoisted(() => ({
+const { openExternal, openChatFile } = vi.hoisted(() => ({
+  openChatFile: vi.fn(async () => {}),
   openExternal: vi.fn(async (url: string) => /^https?:/.test(url)),
 }));
 vi.mock('../../src/lib/native', async (original) => ({
   ...(await original<typeof import('../../src/lib/native')>()),
   openExternal,
+  openChatFile,
 }));
 
 const item = { id: 'a1', markdown: 'see [docs](https://example.com/docs)', streaming: false };
@@ -50,5 +53,43 @@ describe('links in assistant text', () => {
     expect(allowed).toBe(false); // default prevented
     expect(reached).not.toHaveBeenCalled(); // propagation stopped
     expect(openExternal).not.toHaveBeenCalled();
+  });
+});
+
+describe('local file opening', () => {
+  const fileItem = {
+    kind: 'assistantText' as const,
+    id: 'file',
+    markdown: '[spec](docs/spec.md)',
+    streaming: false,
+    ts: 0,
+  };
+  it('routes local relative links with the chat working folder', async () => {
+    openChatFile.mockClear();
+    const { container } = render(MessageList, {
+      items: [fileItem],
+      fileLocation: { cwd: 'C:/project', local: true },
+    });
+    expect(await fireEvent.click(container.querySelector('a')!)).toBe(false);
+    expect(openChatFile).toHaveBeenCalledWith('docs/spec.md', 'C:/project');
+  });
+  it('reports remote paths instead of opening the same path on this PC', async () => {
+    openChatFile.mockClear();
+    const { container, findByRole } = render(MessageList, {
+      items: [fileItem],
+      fileLocation: { cwd: '/remote', local: false },
+    });
+    await fireEvent.click(container.querySelector('a')!);
+    expect(openChatFile).not.toHaveBeenCalled();
+    expect((await findByRole('alert')).textContent).toContain('another machine');
+  });
+  it('shows opener failures', async () => {
+    openChatFile.mockRejectedValueOnce(new Error('Missing file'));
+    const { container, findByRole } = render(MessageList, {
+      items: [fileItem],
+      fileLocation: { cwd: 'C:/project', local: true },
+    });
+    await fireEvent.click(container.querySelector('a')!);
+    expect((await findByRole('alert')).textContent).toContain('Missing file');
   });
 });

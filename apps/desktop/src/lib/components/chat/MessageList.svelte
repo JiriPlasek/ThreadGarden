@@ -4,6 +4,7 @@
   import LoaderCircleIcon from '@lucide/svelte/icons/loader-circle';
   import XIcon from '@lucide/svelte/icons/x';
   import { onDestroy, untrack } from 'svelte';
+  import { copyMarkdownSelection } from '#lib/markdown-copy.js';
   import type { ListMemory } from '#lib/state/chats.svelte.js';
   import { setChatActions, type RequestActions } from './context';
   import { elapsed } from './format';
@@ -47,6 +48,7 @@
     onWithdraw,
     requests,
     requestsDocked = false,
+    fileLocation,
     tasks = [],
     working = false,
     memory,
@@ -68,6 +70,7 @@
     requests?: RequestActions;
     /** Waiting requests are answered in the composer's place: the list shows a line for each. */
     requestsDocked?: boolean;
+    fileLocation?: { cwd: string; local: boolean };
     /** The chat's tasks: a subagent row shows its task's status (a background agent outlives its call). */
     tasks?: readonly ChatTask[];
     /** A turn of a chat Threadgarden runs is in progress (status `working`). */
@@ -91,6 +94,9 @@
   );
 
   setChatActions({
+    get fileLocation() {
+      return fileLocation;
+    },
     get agentName() {
       return agentName;
     },
@@ -409,6 +415,7 @@
     data-viewport
     role="region"
     aria-label="Messages"
+    oncopy={copyMarkdownSelection}
     tabindex="-1"
     class="min-h-0 flex-1 overflow-x-hidden overflow-y-auto outline-none [overflow-anchor:none]"
   >
