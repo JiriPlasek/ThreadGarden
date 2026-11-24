@@ -163,7 +163,18 @@ const fixture = async () => {
       .find((event) => event.method === 'turn/completed' && event.params?.threadId === rootId);
     expect(rec(turn?.params?.turn).status).toBe('completed');
   };
-  return { root, cwd, outside, events, calls, create, done, readThread, client: () => client };
+  return {
+    root,
+    cwd,
+    outside,
+    events,
+    calls,
+    create,
+    done,
+    readThread,
+    adapter,
+    client: () => client,
+  };
 };
 
 const powershellWrite = (file: string, text: string) =>
@@ -175,6 +186,39 @@ const exists = async (file: string) =>
   );
 
 describe.skipIf(!enabled)('real Codex workflows', () => {
+  it('forks a completed native turn without changing its source history', async () => {
+    const h = await fixture();
+    const session = h.create('Reply exactly FORK_FIXTURE_OK. Do not call any tools.');
+    await h.done(session);
+    session.send({ text: 'Reply exactly AFTER_FORK_CUTOFF. Do not call any tools.' });
+    await h.done(session);
+    const source = rec((await h.readThread()).thread);
+    const before = await h.client().request('thread/turns/list', {
+      threadId: source.id,
+      limit: 100,
+      sortDirection: 'asc',
+      itemsView: 'full',
+    });
+    const messages = await h.adapter.getSessionMessages(session.sessionId);
+    const user = messages.find((message) => message.type === 'user');
+    expect(user?.uuid).toBeTruthy();
+    const fork = await h.adapter.forkSession(session.sessionId, { upToMessageId: user!.uuid });
+    expect(fork.sessionId).not.toBe(session.sessionId);
+    const forkInfo = await h.adapter.getSessionInfo(fork.sessionId);
+    expect(forkInfo?.cwd).toBe(h.cwd);
+    const forkMessages = await h.adapter.getSessionMessages(fork.sessionId);
+    expect(JSON.stringify(forkMessages)).toContain('FORK_FIXTURE_OK');
+    expect(JSON.stringify(forkMessages)).not.toContain('AFTER_FORK_CUTOFF');
+    expect(forkMessages.some((message) => message.type === 'user')).toBe(true);
+    const after = await h.client().request('thread/turns/list', {
+      threadId: source.id,
+      limit: 100,
+      sortDirection: 'asc',
+      itemsView: 'full',
+    });
+    expect(after.data).toEqual(before.data);
+  });
+
   it('runs an ordinary read-only shell command without escalation', async () => {
     const h = await fixture();
     const session = h.create(
