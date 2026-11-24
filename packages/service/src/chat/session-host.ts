@@ -51,13 +51,14 @@ export type SessionHostDeps = {
   isPinned: (sessionId: string) => boolean;
   /** Reads the new-chat permission default on creation and idle minutes on each reclaim pass. */
   getSettings: () => Settings;
-  /** The chat's last mode, independent of the new-chat default. */
+  /** The chat's remembered mode; none for one that never ran here since modes were remembered. */
   getPermissionMode?: (sessionId: string) => ChatPermissionMode | undefined;
   onPermissionMode?: LiveSessionDeps['onPermissionMode'];
   /**
    * False where Claude Code refuses Bypass permissions (the service runs as
    * root, `canBypassPermissions`): a new chat asking for it starts in
-   * `default` with a note saying why. Default: allowed.
+   * `default` with a note saying why, and a chat continued in it resumes in
+   * `default`. Default: allowed.
    */
   canBypass?: () => boolean;
   describe?: LiveSessionDeps['describe'];
@@ -147,6 +148,18 @@ export class SessionHost {
     return s;
   }
 
+  /**
+   * The mode `sessionId` continues in: its remembered one, else the new-chat
+   * default. A chat with none ran before modes were remembered, or only in the
+   * terminal, and the SDK's history does not say which mode it ran in. Where
+   * Claude Code refuses Bypass permissions (root), Ask before acting instead.
+   */
+  permissionModeOf(sessionId: string): ChatPermissionMode {
+    const mode =
+      this.deps.getPermissionMode?.(sessionId) ?? this.deps.getSettings().defaultPermissionMode;
+    return mode === 'bypassPermissions' && this.deps.canBypass?.() === false ? 'default' : mode;
+  }
+
   get(sessionId: string): LiveSession | undefined {
     return this.sessions.get(sessionId);
   }
@@ -170,7 +183,7 @@ export class SessionHost {
       sessionId,
       cwd,
       this.options({
-        ...this.savedPermissions(sessionId),
+        permissionMode: this.permissionModeOf(sessionId),
         ...current?.choices,
         ...(log ? { log } : {}),
         ...(from.sessionStore === undefined ? {} : { sessionStore: from.sessionStore }),
@@ -258,7 +271,7 @@ export class SessionHost {
           sessionId,
           cwd,
           'failed',
-          this.options(this.savedPermissions(sessionId)),
+          this.options({ permissionMode: this.permissionModeOf(sessionId) }),
           {
             level: 'error',
             text: INTERRUPTED_TEXT,
@@ -352,11 +365,6 @@ export class SessionHost {
     } catch {
       // Nothing left to tell.
     }
-  }
-
-  private savedPermissions(sessionId: string): SessionChoices {
-    const permissionMode = this.deps.getPermissionMode?.(sessionId);
-    return permissionMode === undefined ? {} : { permissionMode };
   }
 
   /** "Suggest my next reply", read at every start; unreadable settings leave it off. */
