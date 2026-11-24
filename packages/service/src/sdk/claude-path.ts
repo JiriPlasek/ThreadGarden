@@ -195,3 +195,12 @@ export const findInstalledClaude = (
     run: runCommand,
     readFile: (p) => readFileSync(p, 'utf8'),
   });
+
+/** How to start `claude args…`: a `.js`/`.mjs` path with this process's Node, anything else directly (as the SDK does). */
+export const claudeInvocation = (
+  claudePath: string,
+  args: string[],
+): { cmd: string; argv: string[] } =>
+  isScript(claudePath)
+    ? { cmd: process.execPath, argv: [claudePath, ...args] }
+    : { cmd: claudePath, argv: args };
