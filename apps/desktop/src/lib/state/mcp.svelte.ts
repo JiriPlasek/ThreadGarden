@@ -73,11 +73,23 @@ export class ChatMcp {
     await this.act(name, 'reconnect');
   };
 
+  /**
+   * `clearAuth` deletes the saved token but leaves the live connection up, so it
+   * reconnects too: the server then shows Needs sign-in. A failed clearAuth does
+   * not reconnect.
+   */
   act = async (
     name: string,
     action: 'reconnect' | 'enable' | 'disable' | 'clearAuth',
   ): Promise<void> => {
     await this.api.request('mcp.act', { sessionId: this.sessionId, name, action });
+    if (action === 'clearAuth') {
+      await this.api.request('mcp.act', {
+        sessionId: this.sessionId,
+        name,
+        action: 'reconnect',
+      });
+    }
     quietly(this.load());
   };
 
