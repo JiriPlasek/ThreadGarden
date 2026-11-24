@@ -27,6 +27,7 @@
   let problem = $state<string | null>(null);
 
   const scopes = Object.keys(SCOPE_LABELS) as McpScope[];
+  const rows = $derived(form.type === 'http' ? form.headers : form.env);
   const pairsTitle = $derived(form.type === 'http' ? 'Headers' : 'Environment');
   const pairsLabel = $derived(form.type === 'http' ? 'Header' : 'Environment');
 
@@ -120,10 +121,10 @@
         variant="ghost"
         size="sm"
         class="ml-auto h-6 px-2 text-xs"
-        onclick={() => form.pairs.push({ key: '', value: '' })}>+ add</Button
+        onclick={() => rows.push({ key: '', value: '' })}>+ add</Button
       >
     </div>
-    {#each form.pairs as pair, i (i)}
+    {#each rows as pair, i (i)}
       <div class="flex gap-1">
         <input
           type="text"
@@ -146,7 +147,7 @@
           size="sm"
           class="h-8 px-2"
           aria-label={`Remove ${pairsLabel.toLowerCase()} ${i + 1}`}
-          onclick={() => form.pairs.splice(i, 1)}>×</Button
+          onclick={() => rows.splice(i, 1)}>×</Button
         >
       </div>
     {/each}

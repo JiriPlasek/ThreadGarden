@@ -53,10 +53,21 @@ export type McpScope = z.infer<typeof McpScopeSchema>;
 /** Letters, digits, `-` and `_` (Claude Code's rule); never a leading `-`, since the name is an argument. */
 export const MCP_SERVER_NAME = /^[A-Za-z0-9_][A-Za-z0-9_-]*$/;
 
-const MCP_VALUE_MAX = 4000;
-const MCP_ENTRIES_MAX = 100;
+/** The size bounds of a server config (the form checks them too, for friendlier messages). */
+export const MCP_LIMITS = {
+  name: 100,
+  url: 4000,
+  command: 1000,
+  arg: 1000,
+  args: 100,
+  key: 1000,
+  value: 4000,
+  entries: 100,
+} as const;
+const MCP_VALUE_MAX = MCP_LIMITS.value;
+const MCP_ENTRIES_MAX = MCP_LIMITS.entries;
 const mcpMap = z
-  .record(z.string().min(1).max(1000), z.string().max(MCP_VALUE_MAX))
+  .record(z.string().min(1).max(MCP_LIMITS.key), z.string().max(MCP_VALUE_MAX))
   .refine((r) => Object.keys(r).length <= MCP_ENTRIES_MAX, 'Too many entries');
 
 export const McpServerConfigSchema = z.discriminatedUnion('type', [
@@ -64,15 +75,15 @@ export const McpServerConfigSchema = z.discriminatedUnion('type', [
     type: z.literal('http'),
     url: z
       .string()
-      .max(MCP_VALUE_MAX)
+      .max(MCP_LIMITS.url)
       .url()
       .refine((u) => /^https?:\/\//i.test(u), 'Must be an http(s) URL'),
     headers: mcpMap.optional(),
   }),
   z.object({
     type: z.literal('stdio'),
-    command: z.string().min(1).max(1000),
-    args: z.array(z.string().max(1000)).max(MCP_ENTRIES_MAX).optional(),
+    command: z.string().min(1).max(MCP_LIMITS.command),
+    args: z.array(z.string().max(MCP_LIMITS.arg)).max(MCP_LIMITS.args).optional(),
     env: mcpMap.optional(),
   }),
 ]);

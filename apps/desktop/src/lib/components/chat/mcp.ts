@@ -1,4 +1,5 @@
 import {
+  MCP_LIMITS,
   MCP_SERVER_NAME,
   type McpScope,
   type McpServer,
@@ -80,8 +81,9 @@ export type AddForm = {
   command: string;
   /** One argument per line. */
   args: string;
-  /** Headers (http) or environment variables (stdio). */
-  pairs: { key: string; value: string }[];
+  /** Kept apart, so switching the type carries nothing across. */
+  headers: { key: string; value: string }[];
+  env: { key: string; value: string }[];
   scope: McpScope;
 };
 
@@ -91,7 +93,8 @@ export const emptyAddForm = (): AddForm => ({
   url: '',
   command: '',
   args: '',
-  pairs: [],
+  headers: [],
+  env: [],
   scope: 'local',
 });
 
@@ -110,27 +113,57 @@ export const REMOVED_AFTER_RESTART =
 
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
-/** A pair with a blank key and a blank value is an unused row. */
+/** The rows of the current type; a blank key with a blank value is an unused row. */
 const usedPairs = (f: AddForm) =>
-  f.pairs
+  (f.type === 'http' ? f.headers : f.env)
     .filter((p) => p.key.trim() !== '' || p.value !== '')
-    .map((p) => ({
-      key: p.key.trim(),
-      value: p.value,
-    }));
+    .map((p) => ({ key: p.key.trim(), value: p.value }));
+
+const argList = (args: string): string[] =>
+  args
+    .split(/\n/)
+    .map((a) => a.replace(/\r$/, ''))
+    .filter((a) => a !== '');
+
+const tooLong = (field: string, max: number): string =>
+  `That's too long: ${field} can be at most ${max} characters.`;
 
 /** The first problem with the form, or null. */
 export const validateAddForm = (f: AddForm): string | null => {
-  if (!MCP_SERVER_NAME.test(f.name.trim()))
+  const name = f.name.trim();
+  if (!MCP_SERVER_NAME.test(name))
     return 'Use letters, numbers, - and _ for the name (not starting with -).';
-  if (f.type === 'http') {
+  const http = f.type === 'http';
+  if (http) {
     if (!/^https?:\/\/\S+$/i.test(f.url.trim()) || !URL.canParse(f.url.trim()))
       return 'Enter a full address starting with https:// or http://.';
   } else if (f.command.trim() === '') return 'Enter the command to run.';
-  for (const p of usedPairs(f)) {
-    if (f.type === 'http' && p.key === '') return 'Give every header a name.';
-    if (f.type === 'stdio' && !ENV_NAME.test(p.key))
+  const pairs = usedPairs(f);
+  for (const p of pairs) {
+    if (http && p.key === '') return 'Give every header a name.';
+    if (!http && !ENV_NAME.test(p.key))
       return 'Environment names use letters, numbers and _, not starting with a number.';
+  }
+  if (name.length > MCP_LIMITS.name) return tooLong('Name', MCP_LIMITS.name);
+  if (http && f.url.trim().length > MCP_LIMITS.url) return tooLong('URL', MCP_LIMITS.url);
+  if (!http) {
+    if (f.command.trim().length > MCP_LIMITS.command) return tooLong('Command', MCP_LIMITS.command);
+    const args = argList(f.args);
+    if (args.length > MCP_LIMITS.args)
+      return `That's too many: at most ${MCP_LIMITS.args} arguments.`;
+    if (args.some((a) => a.length > MCP_LIMITS.arg)) return tooLong('an argument', MCP_LIMITS.arg);
+  }
+  const noun = http ? 'header' : 'variable';
+  if (pairs.length > MCP_LIMITS.entries)
+    return `That's too many: at most ${MCP_LIMITS.entries} ${noun}s.`;
+  for (const p of pairs) {
+    if (p.key.length > MCP_LIMITS.key) return tooLong(`a ${noun} name`, MCP_LIMITS.key);
+    if (p.value.length > MCP_LIMITS.value) return tooLong(`a ${noun} value`, MCP_LIMITS.value);
+  }
+  const seen = new Set<string>();
+  for (const p of pairs) {
+    if (seen.has(p.key)) return `${p.key} appears twice.`;
+    seen.add(p.key);
   }
   return null;
 };
@@ -142,10 +175,7 @@ export const toServerConfig = (f: AddForm): McpServerConfig => {
   if (f.type === 'http') {
     return { type: 'http', url: f.url.trim(), ...(pairs.length > 0 ? { headers: map } : {}) };
   }
-  const args = f.args
-    .split('\n')
-    .map((a) => a.replace(/\r$/, ''))
-    .filter((a) => a !== '');
+  const args = argList(f.args);
   return {
     type: 'stdio',
     command: f.command.trim(),

@@ -26,6 +26,7 @@ import {
   ReturnedMessageSchema,
 } from './items.js';
 import {
+  MCP_LIMITS,
   MCP_SERVER_NAME,
   McpScopeSchema,
   McpServerConfigSchema,
@@ -807,7 +808,7 @@ export const methods = {
   'mcp.add': def(
     z.object({
       sessionId: z.string(),
-      name: z.string().max(100).regex(MCP_SERVER_NAME),
+      name: z.string().max(MCP_LIMITS.name).regex(MCP_SERVER_NAME),
       scope: McpScopeSchema,
       config: McpServerConfigSchema,
     }),

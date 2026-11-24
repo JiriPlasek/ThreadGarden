@@ -33,6 +33,7 @@ describe('McpAddServerForm', () => {
     expect(screen.getByLabelText('Header value 1').getAttribute('type')).toBe('password');
     await userEvent.click(screen.getByLabelText('Command (stdio)'));
     expect(screen.getByText('Environment')).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: '+ add' }));
     expect(screen.getByLabelText('Environment value 1').getAttribute('type')).toBe('password');
   });
 
@@ -81,6 +82,32 @@ describe('McpAddServerForm', () => {
       'https://mcp.sentry.dev/mcp',
     );
     expect(add).toHaveBeenCalledTimes(1);
+  });
+
+  it('Add sends a command server', async () => {
+    const add = show();
+    await userEvent.type(screen.getByLabelText('Name'), 'files');
+    await userEvent.click(screen.getByLabelText('Command (stdio)'));
+    await userEvent.type(screen.getByLabelText('Command'), 'npx');
+    await userEvent.type(screen.getByLabelText('Arguments (one per line)'), '-y{enter}pkg');
+    await userEvent.click(screen.getByRole('button', { name: '+ add' }));
+    await userEvent.type(screen.getByLabelText('Environment name 1'), 'API_KEY');
+    await userEvent.type(screen.getByLabelText('Environment value 1'), 'secret');
+    await userEvent.click(screen.getByRole('button', { name: 'Add' }));
+    expect(add).toHaveBeenCalledWith('files', 'local', {
+      type: 'stdio',
+      command: 'npx',
+      args: ['-y', 'pkg'],
+      env: { API_KEY: 'secret' },
+    });
+  });
+
+  it('headers and variables are separate rows', async () => {
+    show();
+    await userEvent.click(screen.getByRole('button', { name: '+ add' }));
+    expect(screen.getByLabelText('Header name 1')).toBeTruthy();
+    await userEvent.click(screen.getByLabelText('Command (stdio)'));
+    expect(screen.queryByLabelText('Environment name 1')).toBeNull();
   });
 
   it('Cancel calls onCancel', async () => {

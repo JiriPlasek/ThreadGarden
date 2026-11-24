@@ -1,4 +1,4 @@
-import type { McpServer, McpState } from '@threadgarden/protocol';
+import { MCP_LIMITS, type McpServer, type McpState } from '@threadgarden/protocol';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   ADDED_AFTER_RESTART,
@@ -132,7 +132,7 @@ describe('the add form helpers', () => {
           type: 'stdio',
           command: 'npx',
           args: '-y\npkg',
-          pairs: [
+          env: [
             { key: 'API_KEY', value: 'x' },
             { key: '', value: '' },
           ],
@@ -148,13 +148,74 @@ describe('the add form helpers', () => {
     expect(validateAddForm(form({ url: '' }))).toBe(url);
     expect(validateAddForm(form({ url: 'ftp://x' }))).toBe(url);
     expect(validateAddForm(form({ type: 'stdio', command: '' }))).toBe('Enter the command to run.');
-    expect(validateAddForm(form({ pairs: [{ key: '', value: 'v' }] }))).toBe(
+    expect(validateAddForm(form({ headers: [{ key: '', value: 'v' }] }))).toBe(
       'Give every header a name.',
     );
     expect(
-      validateAddForm(form({ type: 'stdio', command: 'x', pairs: [{ key: '1X', value: 'v' }] })),
+      validateAddForm(form({ type: 'stdio', command: 'x', env: [{ key: '1X', value: 'v' }] })),
     ).toBe('Environment names use letters, numbers and _, not starting with a number.');
     expect(validateAddForm(form({ name: '-x', url: '' }))).toBe(name);
+  });
+
+  it('validateAddForm checks the protocol sizes', () => {
+    const long = (n: number) => 'a'.repeat(n + 1);
+    const tooLong = (field: string, n: number) =>
+      `That's too long: ${field} can be at most ${n} characters.`;
+    const stdio = (over: Partial<AddForm>) => form({ type: 'stdio', command: 'x', ...over });
+    expect(validateAddForm(form({ name: long(MCP_LIMITS.name) }))).toBe(
+      tooLong('Name', MCP_LIMITS.name),
+    );
+    expect(validateAddForm(form({ url: 'https://' + long(MCP_LIMITS.url) }))).toBe(
+      tooLong('URL', MCP_LIMITS.url),
+    );
+    expect(validateAddForm(stdio({ command: long(MCP_LIMITS.command) }))).toBe(
+      tooLong('Command', MCP_LIMITS.command),
+    );
+    expect(validateAddForm(stdio({ args: long(MCP_LIMITS.arg) }))).toBe(
+      tooLong('an argument', MCP_LIMITS.arg),
+    );
+    expect(validateAddForm(form({ headers: [{ key: long(MCP_LIMITS.key), value: '' }] }))).toBe(
+      tooLong('a header name', MCP_LIMITS.key),
+    );
+    expect(validateAddForm(form({ headers: [{ key: 'A', value: long(MCP_LIMITS.value) }] }))).toBe(
+      tooLong('a header value', MCP_LIMITS.value),
+    );
+    expect(validateAddForm(stdio({ env: [{ key: 'A', value: long(MCP_LIMITS.value) }] }))).toBe(
+      tooLong('a variable value', MCP_LIMITS.value),
+    );
+    expect(validateAddForm(stdio({ env: [{ key: long(MCP_LIMITS.key), value: 'v' }] }))).toBe(
+      tooLong('a variable name', MCP_LIMITS.key),
+    );
+    const many = (n: number) =>
+      Array.from({ length: n + 1 }, (_, i) => ({ key: `K${i}`, value: 'v' }));
+    expect(validateAddForm(stdio({ args: 'a\n'.repeat(MCP_LIMITS.args + 1) }))).toBe(
+      `That's too many: at most ${MCP_LIMITS.args} arguments.`,
+    );
+    expect(validateAddForm(form({ headers: many(MCP_LIMITS.entries) }))).toBe(
+      `That's too many: at most ${MCP_LIMITS.entries} headers.`,
+    );
+    expect(validateAddForm(stdio({ env: many(MCP_LIMITS.entries) }))).toBe(
+      `That's too many: at most ${MCP_LIMITS.entries} variables.`,
+    );
+  });
+
+  it('validateAddForm refuses a name used twice', () => {
+    const dup = [
+      { key: 'A', value: '1' },
+      { key: ' A ', value: '2' },
+    ];
+    expect(validateAddForm(form({ headers: dup }))).toBe('A appears twice.');
+    expect(validateAddForm(form({ type: 'stdio', command: 'x', env: dup }))).toBe(
+      'A appears twice.',
+    );
+  });
+
+  it('switching type does not carry headers into the environment', () => {
+    const f = form({ headers: [{ key: 'A', value: '1' }] });
+    expect(toServerConfig({ ...f, type: 'stdio', command: 'x' })).toStrictEqual({
+      type: 'stdio',
+      command: 'x',
+    });
   });
 
   it('toServerConfig builds the JSON Claude Code takes', () => {
@@ -163,7 +224,7 @@ describe('the add form helpers', () => {
         form({
           name: ' sentry ',
           url: ' https://mcp.sentry.dev/mcp ',
-          pairs: [
+          headers: [
             { key: 'Authorization', value: 'Bearer x' },
             { key: '', value: '' },
           ],
@@ -184,7 +245,8 @@ describe('the add form helpers', () => {
           type: 'stdio',
           command: ' npx ',
           args: '-y\r\n\npkg',
-          pairs: [{ key: 'K', value: 'v' }],
+          env: [{ key: 'K', value: 'v' }],
+          headers: [{ key: 'Ignored', value: 'v' }],
         }),
       ),
     ).toEqual({ type: 'stdio', command: 'npx', args: ['-y', 'pkg'], env: { K: 'v' } });
