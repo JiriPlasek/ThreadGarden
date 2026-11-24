@@ -76,7 +76,11 @@ export const codexOneShot = async (
       includeLayers: false,
       cwd: options.cwd,
     });
-    if (!effective.config || typeof effective.config !== 'object')
+    if (
+      !effective.config ||
+      typeof effective.config !== 'object' ||
+      Array.isArray(effective.config)
+    )
       throw new Error('Codex returned no effective configuration');
     const servers = Object.fromEntries(
       Object.keys(rec(rec(effective.config).mcp_servers)).map((name) => [name, { enabled: false }]),
