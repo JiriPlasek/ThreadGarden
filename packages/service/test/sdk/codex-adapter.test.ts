@@ -44,7 +44,7 @@ const harness = (responses: Record<string, Rec> = {}) => {
         calls.push({ method, params });
         if (responses[method]) return responses[method]!;
         if (method === 'thread/start' || method === 'thread/resume')
-          return { thread: { id: 'thread-123' }, model: 'test-model' };
+          return { thread: { id: 'thread-123' }, model: 'test-model', sandbox: { type: 'readOnly' } };
         if (method === 'turn/start') return { turn: { id: `turn-${++turns}` } };
         if (method === 'account/read') return { account: { type: 'chatgpt', planType: 'pro' } };
         if (method === 'model/list')

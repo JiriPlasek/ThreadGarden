@@ -4,7 +4,7 @@
 
 **Goal:** Name chats from their actual conversation and refresh misleading automatic names without constant renaming or overwriting user choices.
 
-**Architecture:** Extend the existing ChatTitles scheduler and local title metadata. Feed it the existing normalized chat view (main user/assistant text only), retaining provider-specific isolated title requests from PR #59. The model may explicitly keep a name or defer while intent is unclear.
+**Architecture:** Extend the existing ChatTitles scheduler and local title metadata. Feed it the existing normalized chat view (main user/assistant text only), including provider-specific isolated title requests on latest main. The model may explicitly keep a name or defer while intent is unclear.
 
 **Tech stack:** TypeScript, Svelte 5, SQLite, existing Claude/Codex adapters, Vitest.
 
