@@ -76,6 +76,19 @@ const pairUbuntu = async (page: Page): Promise<void> => {
 const timesShown = async (page: Page, text: string): Promise<number> =>
   (await block(page).locator('.xterm-rows').innerText()).split(text).length - 1;
 
+/**
+ * `text` shows exactly once in the block's terminal, and still does two frames
+ * later: by then a write still queued in the terminal has been drawn.
+ */
+const expectShownOnce = async (page: Page, text: string): Promise<void> => {
+  await expect.poll(() => timesShown(page, text)).toBe(1);
+  await page.evaluate(
+    () =>
+      new Promise<void>((done) => requestAnimationFrame(() => requestAnimationFrame(() => done()))),
+  );
+  expect(await timesShown(page, text)).toBe(1);
+};
+
 const run = async (page: Page, command: string): Promise<void> => {
   await composer(page).fill(`! ${command}`);
   await composer(page).press('Enter');
@@ -111,6 +124,7 @@ test('the next message carries the output to Claude', async ({ page }) => {
   await openLiveChat(page, CHATS[1]!);
   await run(page, 'ls');
   await expect(block(page)).toContainText('✓ exit 0 ·');
+  await expectShownOnce(page, 'package.json');
   await composer(page).fill('What do you see?');
   await composer(page).press('Enter');
   await expect(page.getByText(/I can see the output of/)).toBeVisible();
@@ -187,10 +201,7 @@ test('a command on a paired machine shows its output once, live', async ({ page 
 
     await run(page, 'echo hi');
     await expect(block(page)).toContainText('✓ exit 0 ·');
-    await expect(block(page).locator('.xterm-rows')).toContainText('mock: echo hi');
-    // A write still queued in the terminal is drawn within a frame or two.
-    await page.waitForTimeout(500);
-    expect(await timesShown(page, 'mock: echo hi')).toBe(1);
+    await expectShownOnce(page, 'mock: echo hi');
   } finally {
     await remoteCall('chat.end', { sessionId: REMOTE_CHAT }).catch(() => undefined);
     await markAllSeen(remoteCall);

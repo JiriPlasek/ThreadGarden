@@ -92,15 +92,16 @@
   };
 
   /**
-   * True while the terminal replays output it already showed (the scrollback,
-   * a redraw): the replies it makes to queries in it (cursor position, colours)
-   * are dropped, since the command asked those long ago.
+   * How many replays of output the terminal already showed (the scrollback, a
+   * redraw) are written but not drawn yet: while any is, the replies it makes
+   * to queries in them (cursor position, colours) are dropped, since the
+   * command asked those long ago.
    */
-  let replaying = false;
+  let replays = 0;
   const replay = (t: Terminal, text: string): void => {
-    replaying = true;
+    replays++;
     t.write(text, () => {
-      replaying = false;
+      replays--;
       measure(t);
     });
   };
@@ -120,7 +121,7 @@
     t.open(host);
     t.onData((data) => {
       // Replies the terminal makes while replaying old output aren't for the command.
-      if (replaying) return;
+      if (replays > 0) return;
       if (untrack(() => run.state) === 'running') onInput(data);
     });
     term = t;
@@ -162,21 +163,24 @@
    */
   const RESET = '\u001bc';
 
+  /**
+   * The output as its own value: the props come spread from one object, so
+   * reading `output` directly would redraw whenever the run (or focus) changed.
+   * A derived passes on only a different output (another run's).
+   */
+  const shown = $derived(output);
+
   // The scrollback, then each new chunk; a reset (or another run's output) redraws.
   let drawnOn: Terminal | null = null;
   $effect(() => {
     const t = term;
-    const out = output;
+    const out = shown;
     if (!t) return;
-    replaying = true;
     const redraw = drawnOn === t;
     drawnOn = t;
     const text = out.text();
     if (text || redraw) replay(t, (redraw ? RESET : '') + text);
-    else {
-      replaying = false;
-      measure(t);
-    }
+    else measure(t);
     return out.listen((data, reset) => {
       if (reset) replay(t, RESET + data);
       else t.write(data, () => measure(t));

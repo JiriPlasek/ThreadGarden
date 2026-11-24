@@ -242,6 +242,57 @@ describe('ShellBlock', () => {
       h.flush();
       expect(term.screen).toBe('hi\r\n');
     });
+
+    it("replies to queries in two queued replays wait for both; a live query's reply goes", () => {
+      h.queued = true;
+      const output = new ShellOutput();
+      output.reset('first\u001b[6n', 0);
+      const { props } = mount({ output });
+      output.reset('second\u001b[6n', 0);
+      h.flush();
+      expect(props.onInput).not.toHaveBeenCalled();
+      output.push(output.end, '\u001b[6n');
+      h.flush();
+      expect(props.onInput).toHaveBeenCalledWith(h.reply);
+    });
+  });
+
+  describe('drawn through spread props (as MessageList draws it)', () => {
+    const spread = (output: ShellOutput) => {
+      const block = {
+        run: run(),
+        output,
+        machineName: 'kumbal',
+        home: '/home/me',
+        autofocus: false,
+        onInput: vi.fn(),
+        onResize: vi.fn(),
+        onStop: vi.fn(),
+      };
+      const view = render(ShellBlockSpread, { block } as never);
+      return { ...view, block, term: h.terms.at(-1)! };
+    };
+    const writes = (term: { ops: unknown[][] }) => term.ops.filter((op) => op[0] !== 'resize');
+
+    it('the run changing (running, ended, its entry added) and focus never redraw', async () => {
+      const output = new ShellOutput();
+      const { block, term, rerender } = spread(output);
+      output.push(0, 'hi\r\n');
+      const ended = run({ state: 'ended', exitCode: 0, endReason: 'exit', endedAt: Date.now() });
+      await rerender({ block: { ...block, autofocus: true } } as never);
+      await rerender({ block: { ...block, run: ended } } as never);
+      await rerender({ block: { ...block, run: { ...ended, entryId: 'e1' } } } as never);
+      expect(writes(term)).toEqual([['write', 'hi\r\n']]);
+      expect(term.screen).toBe('hi\r\n');
+    });
+
+    it("another run's output redraws", async () => {
+      const { block, term, rerender } = spread(new ShellOutput());
+      const next = new ShellOutput();
+      next.reset('next run', 0);
+      await rerender({ block: { ...block, output: next } } as never);
+      expect(term.screen).toBe('next run');
+    });
   });
 
   it("a replayed scrollback's terminal replies never reach the command", () => {
