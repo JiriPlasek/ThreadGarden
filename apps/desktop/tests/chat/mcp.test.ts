@@ -1,12 +1,21 @@
 import type { McpServer, McpState } from '@threadgarden/protocol';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  ADDED_AFTER_RESTART,
+  type AddForm,
   clearAuthLabel,
+  emptyAddForm,
   menuActions,
   primaryAction,
+  removeScope,
+  removeText,
+  REMOVED_AFTER_RESTART,
+  SCOPE_LABELS,
   sourceLabel,
   statusLabel,
+  toServerConfig,
   TURN_OFF_LABEL,
+  validateAddForm,
 } from '../../src/lib/components/chat/mcp';
 import type { Api } from '../../src/lib/state/api';
 import { ChatMcp, MCP_POLL_MS } from '../../src/lib/state/mcp.svelte';
@@ -106,6 +115,133 @@ const fakeApi = () => {
     lists: () => request.mock.calls.filter((c) => c[0] === 'mcp.list').length,
   };
 };
+
+const form = (over: Partial<AddForm> = {}): AddForm => ({
+  ...emptyAddForm(),
+  name: 'sentry',
+  url: 'https://mcp.sentry.dev/mcp',
+  ...over,
+});
+
+describe('the add form helpers', () => {
+  it('validateAddForm accepts a good http and stdio server', () => {
+    expect(validateAddForm(form())).toBeNull();
+    expect(
+      validateAddForm(
+        form({
+          type: 'stdio',
+          command: 'npx',
+          args: '-y\npkg',
+          pairs: [
+            { key: 'API_KEY', value: 'x' },
+            { key: '', value: '' },
+          ],
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it('validateAddForm names the first problem', () => {
+    const name = 'Use letters, numbers, - and _ for the name (not starting with -).';
+    for (const n of [' ', '-x', 'a b']) expect(validateAddForm(form({ name: n }))).toBe(name);
+    const url = 'Enter a full address starting with https:// or http://.';
+    expect(validateAddForm(form({ url: '' }))).toBe(url);
+    expect(validateAddForm(form({ url: 'ftp://x' }))).toBe(url);
+    expect(validateAddForm(form({ type: 'stdio', command: '' }))).toBe('Enter the command to run.');
+    expect(validateAddForm(form({ pairs: [{ key: '', value: 'v' }] }))).toBe(
+      'Give every header a name.',
+    );
+    expect(
+      validateAddForm(form({ type: 'stdio', command: 'x', pairs: [{ key: '1X', value: 'v' }] })),
+    ).toBe('Environment names use letters, numbers and _, not starting with a number.');
+    expect(validateAddForm(form({ name: '-x', url: '' }))).toBe(name);
+  });
+
+  it('toServerConfig builds the JSON Claude Code takes', () => {
+    expect(
+      toServerConfig(
+        form({
+          name: ' sentry ',
+          url: ' https://mcp.sentry.dev/mcp ',
+          pairs: [
+            { key: 'Authorization', value: 'Bearer x' },
+            { key: '', value: '' },
+          ],
+        }),
+      ),
+    ).toEqual({
+      type: 'http',
+      url: 'https://mcp.sentry.dev/mcp',
+      headers: { Authorization: 'Bearer x' },
+    });
+    expect(toServerConfig(form())).toStrictEqual({
+      type: 'http',
+      url: 'https://mcp.sentry.dev/mcp',
+    });
+    expect(
+      toServerConfig(
+        form({
+          type: 'stdio',
+          command: ' npx ',
+          args: '-y\r\n\npkg',
+          pairs: [{ key: 'K', value: 'v' }],
+        }),
+      ),
+    ).toEqual({ type: 'stdio', command: 'npx', args: ['-y', 'pkg'], env: { K: 'v' } });
+    expect(toServerConfig(form({ type: 'stdio', command: 'npx' }))).toStrictEqual({
+      type: 'stdio',
+      command: 'npx',
+    });
+  });
+
+  it('removeScope is the source for local, user and project, null otherwise', () => {
+    for (const s of ['local', 'user', 'project'] as const)
+      expect(removeScope(server({ source: s }))).toBe(s);
+    for (const s of ['claudeai', 'plugin', 'managed', ''])
+      expect(removeScope(server({ source: s }))).toBeNull();
+  });
+
+  it('the fixed copy', () => {
+    expect(SCOPE_LABELS).toEqual({
+      local: 'Me, this project',
+      user: 'Me, every project',
+      project: 'Everyone (.mcp.json)',
+    });
+    expect(removeText('Ubuntu PC', 'user')).toBe(
+      'Claude Code on Ubuntu PC stops using it for Me, every project.',
+    );
+    expect(ADDED_AFTER_RESTART).toBe('Added. It appears when this chat restarts between turns.');
+    expect(REMOVED_AFTER_RESTART).toBe(
+      'Removed. It disappears when this chat restarts between turns.',
+    );
+  });
+});
+
+describe('ChatMcp add and remove', () => {
+  it('ChatMcp add and remove send the scope and reload', async () => {
+    const f = fakeApi();
+    f.request.mockImplementation(async (method: string, params: { sessionId: string }) =>
+      method === 'mcp.list' ? stateOf(params.sessionId, [server()]) : { restartPending: true },
+    );
+    const mcp = new ChatMcp(f.api, 's1');
+    const config = { type: 'http', url: 'https://x.dev/mcp' } as const;
+    expect(await mcp.add('x', 'user', config)).toEqual({ restartPending: true });
+    expect(f.request).toHaveBeenCalledWith('mcp.add', {
+      sessionId: 's1',
+      name: 'x',
+      scope: 'user',
+      config,
+    });
+    expect(await mcp.remove('x', 'project')).toEqual({ restartPending: true });
+    expect(f.request).toHaveBeenCalledWith('mcp.remove', {
+      sessionId: 's1',
+      name: 'x',
+      scope: 'project',
+    });
+    await vi.waitFor(() => expect(f.lists()).toBe(2));
+    mcp.stop();
+  });
+});
 
 describe('ChatMcp', () => {
   afterEach(() => vi.useRealTimers());

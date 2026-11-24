@@ -7,7 +7,7 @@
  * Sign-in links and callback addresses pass through here only: they are never
  * stored.
  */
-import type { McpState } from '@threadgarden/protocol';
+import type { McpScope, McpServerConfig, McpState } from '@threadgarden/protocol';
 import type { Api } from './api';
 import { quietly } from './api';
 
@@ -91,6 +91,23 @@ export class ChatMcp {
       });
     }
     quietly(this.load());
+  };
+
+  /** Claude Code's CLI writes the server; `restartPending` says the live chat sees it only after a restart. */
+  add = async (
+    name: string,
+    scope: McpScope,
+    config: McpServerConfig,
+  ): Promise<{ restartPending: boolean }> => {
+    const r = await this.api.request('mcp.add', { sessionId: this.sessionId, name, scope, config });
+    quietly(this.load());
+    return r;
+  };
+
+  remove = async (name: string, scope: McpScope): Promise<{ restartPending: boolean }> => {
+    const r = await this.api.request('mcp.remove', { sessionId: this.sessionId, name, scope });
+    quietly(this.load());
+    return r;
   };
 
   stop = (): void => {
