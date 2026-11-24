@@ -815,7 +815,11 @@ export const methods = {
     z.object({ restartPending: z.boolean() }),
   ),
   'mcp.remove': def(
-    z.object({ sessionId: z.string(), name: z.string().min(1).max(100), scope: McpScopeSchema }),
+    z.object({
+      sessionId: z.string(),
+      name: z.string().min(1).max(MCP_LIMITS.name),
+      scope: McpScopeSchema,
+    }),
     z.object({ restartPending: z.boolean() }),
   ),
   /** Starts the chat's Claude Code process (resumes it) without sending a message. */
