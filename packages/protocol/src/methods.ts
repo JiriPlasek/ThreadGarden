@@ -350,6 +350,8 @@ export const methods = {
       }),
     ),
   ),
+  /** Explicitly regenerates a chat name, including a name supplied by the user. */
+  'chat.regenerateTitle': def(sessionIdOnly, z.object({ title: z.string(), changed: z.boolean() })),
   'chat.resumeCommand': def(sessionIdOnly, z.object({ command: z.string() })),
   /**
    * Stops one task of a chat Threadgarden runs (SDK `stopTask`); its `stopped`

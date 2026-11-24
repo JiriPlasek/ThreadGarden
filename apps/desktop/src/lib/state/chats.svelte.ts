@@ -616,6 +616,12 @@ export class ChatsState {
     return r.sessionId;
   };
 
+  /** Uses this chat scope's service; summary events refresh the title after success. */
+  regenerateTitle = async (sessionId: string): Promise<{ title: string; changed: boolean }> => {
+    if (!this.api) throw new Error('Not connected to the Threadgarden service');
+    return this.api.request('chat.regenerateTitle', { sessionId });
+  };
+
   /** The terminal command that continues this chat (`claude --resume <id>` or `claude attach`). */
   resumeCommand = async (sessionId: string): Promise<string> => {
     if (!this.api) throw new Error('Not connected to the Threadgarden service');
