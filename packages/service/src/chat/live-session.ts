@@ -933,7 +933,11 @@ export class LiveSession {
     if (type === 'result' && this.lifecycleFrames && this.waiting.size > 0) return 'working';
     // Output while idle means a turn started (e.g. a background task's notification).
     if (next === 'idle' && this.statusValue === 'idle') {
-      if (type === 'assistant' || type === 'stream_event') return 'working';
+      if (
+        (type === 'assistant' || type === 'stream_event') &&
+        !(m as { parent_tool_use_id?: unknown }).parent_tool_use_id
+      )
+        return 'working';
     }
     return next;
   }

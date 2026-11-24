@@ -482,6 +482,298 @@ describe('Codex provider', () => {
     await expect(session.setEffort('max')).rejects.toThrow('does not support');
   });
 
+  it('shows reasoning summaries and tool output while the native tool is still running', async () => {
+    const h = harness();
+    const session = h.create();
+    const c = await h.running();
+    c.event('item/reasoning/summaryTextDelta', {
+      itemId: 'reason',
+      summaryIndex: 0,
+      delta: 'Checking ',
+    });
+    c.event('item/reasoning/summaryTextDelta', {
+      itemId: 'reason',
+      summaryIndex: 0,
+      delta: 'the result',
+    });
+    c.event('item/started', {
+      item: { id: 'shell', type: 'commandExecution', command: 'echo hello' },
+    });
+    c.event('item/commandExecution/outputDelta', { itemId: 'shell', delta: 'hel' });
+    c.event('item/commandExecution/outputDelta', { itemId: 'shell', delta: 'lo' });
+    await vi.waitFor(() =>
+      expect(session.snapshot(100).items).toContainEqual(
+        expect.objectContaining({
+          kind: 'thinking',
+          id: 'reason',
+          text: 'Checking the result',
+        }),
+      ),
+    );
+    expect(session.snapshot(100).items).toContainEqual(
+      expect.objectContaining({
+        kind: 'toolCall',
+        toolUseId: 'shell',
+        status: 'running',
+        resultText: 'hello',
+      }),
+    );
+    c.event('item/completed', {
+      item: { id: 'reason', type: 'reasoning', summary: ['Checking the result'] },
+    });
+    c.event('item/completed', {
+      item: {
+        id: 'shell',
+        type: 'commandExecution',
+        aggregatedOutput: 'hello final',
+        status: 'completed',
+      },
+    });
+    await vi.waitFor(() =>
+      expect(session.snapshot(100).items).toContainEqual(
+        expect.objectContaining({
+          kind: 'toolCall',
+          toolUseId: 'shell',
+          status: 'ok',
+          resultText: 'hello final',
+        }),
+      ),
+    );
+    expect(session.snapshot(100).items.filter((item) => item.id === 'reason')).toHaveLength(1);
+  });
+
+  it('nests early child and grandchild content beneath their native spawn calls without ending the main turn', async () => {
+    const h = harness();
+    const session = h.create();
+    const c = await h.running();
+    c.event('item/started', {
+      threadId: 'thread-123',
+      item: { id: 'spawn', type: 'collabAgentToolCall', tool: 'spawnAgent', receiverThreadIds: [] },
+    });
+    c.event('thread/started', { thread: { id: 'child', parentThreadId: 'thread-123' } });
+    c.event('item/agentMessage/delta', {
+      threadId: 'child',
+      turnId: 'child-turn',
+      itemId: 'child-reply',
+      delta: 'child live',
+    });
+    c.event('item/completed', {
+      threadId: 'thread-123',
+      item: {
+        id: 'spawn',
+        type: 'collabAgentToolCall',
+        tool: 'spawnAgent',
+        receiverThreadIds: ['child'],
+      },
+    });
+    await vi.waitFor(() =>
+      expect(session.snapshot(100).items).toContainEqual(
+        expect.objectContaining({
+          kind: 'assistantText',
+          markdown: 'child live',
+          parentToolUseId: 'spawn',
+          streaming: true,
+        }),
+      ),
+    );
+    c.event('item/completed', {
+      threadId: 'child',
+      item: { id: 'child-reply', type: 'agentMessage', text: 'child final' },
+    });
+    c.event('item/completed', {
+      threadId: 'child',
+      item: {
+        id: 'nested-spawn',
+        type: 'collabAgentToolCall',
+        tool: 'spawnAgent',
+        receiverThreadIds: ['grandchild'],
+      },
+    });
+    c.event('item/completed', {
+      threadId: 'grandchild',
+      item: { id: 'grandchild-reply', type: 'agentMessage', text: 'nested final' },
+    });
+    c.event('turn/completed', {
+      threadId: 'child',
+      turn: { id: 'child-turn', status: 'completed' },
+    });
+    c.event('turn/completed', {
+      threadId: 'grandchild',
+      turn: { id: 'nested-turn', status: 'completed' },
+    });
+    await vi.waitFor(() =>
+      expect(session.snapshot(100).items).toContainEqual(
+        expect.objectContaining({
+          kind: 'assistantText',
+          markdown: 'nested final',
+          parentToolUseId: 'nested-spawn',
+        }),
+      ),
+    );
+    expect(session.status).toBe('working');
+    expect(session.snapshot(100).items.filter((item) => item.kind === 'result')).toHaveLength(0);
+    const history = await h.adapter.getSessionMessages(session.sessionId);
+    expect(history).toContainEqual(
+      expect.objectContaining({
+        uuid: 'child-reply',
+        parent_tool_use_id: 'spawn',
+        parent_agent_id: 'child',
+      }),
+    );
+  });
+
+  it('maps modern sub-agent activity to its child conversation and completes the original call', async () => {
+    const h = harness();
+    const session = h.create();
+    const c = await h.running();
+    c.event('item/completed', {
+      threadId: 'thread-123',
+      item: {
+        id: 'native-spawn',
+        type: 'subAgentActivity',
+        kind: 'started',
+        model: 'child-model',
+        agentThreadId: 'child',
+        agentPath: '/root/child',
+      },
+    });
+    c.event('item/completed', {
+      threadId: 'child',
+      item: { id: 'child-text', type: 'agentMessage', text: 'child done' },
+    });
+    c.event('item/completed', {
+      threadId: 'thread-123',
+      item: {
+        id: 'native-finished',
+        type: 'subAgentActivity',
+        kind: 'completed',
+        agentThreadId: 'child',
+        agentPath: '/root/child',
+      },
+    });
+    await vi.waitFor(() =>
+      expect(session.snapshot(100).items).toContainEqual(
+        expect.objectContaining({
+          kind: 'assistantText',
+          markdown: 'child done',
+          parentToolUseId: 'native-spawn',
+        }),
+      ),
+    );
+    expect(session.snapshot(100).items).toContainEqual(
+      expect.objectContaining({
+        kind: 'toolCall',
+        toolUseId: 'native-spawn',
+        name: 'Agent',
+        status: 'ok',
+      }),
+    );
+    const messages = await h.adapter.getSessionMessages(session.sessionId);
+    expect(messages).toContainEqual(
+      expect.objectContaining({
+        uuid: 'child-text',
+        message: expect.objectContaining({ model: 'child-model' }),
+      }),
+    );
+    expect(session.tasks()).toContainEqual(
+      expect.objectContaining({
+        taskId: 'codex-agent-child',
+        toolUseId: 'native-spawn',
+        status: 'completed',
+        model: 'child-model',
+      }),
+    );
+    expect(session.snapshot(100).items.some((item) => item.kind === 'unknown')).toBe(false);
+  });
+
+  it('keeps the main turn idle when a background child continues speaking', async () => {
+    const h = harness();
+    const session = h.create();
+    const c = await h.running();
+    c.event('item/completed', {
+      threadId: 'thread-123',
+      item: {
+        id: 'spawn-idle',
+        type: 'subAgentActivity',
+        kind: 'started',
+        model: 'child-model',
+        agentThreadId: 'child',
+        agentPath: '/root/child',
+      },
+    });
+    c.event('turn/completed', {
+      threadId: 'thread-123',
+      turn: { id: 'turn-1', status: 'completed' },
+    });
+    await vi.waitFor(() => expect(session.status).toBe('idle'));
+    c.event('item/completed', {
+      threadId: 'child',
+      turnId: 'child-turn',
+      item: { id: 'background-text', type: 'agentMessage', text: 'still working' },
+    });
+    await vi.waitFor(() =>
+      expect(session.snapshot(100).items).toContainEqual(
+        expect.objectContaining({
+          kind: 'assistantText',
+          markdown: 'still working',
+          parentToolUseId: 'spawn-idle',
+        }),
+      ),
+    );
+    expect(session.status).toBe('idle');
+    expect(session.header.model).toBe('codex:test-model');
+    expect(session.tasks()).toContainEqual(
+      expect.objectContaining({
+        taskId: 'codex-agent-child',
+        status: 'running',
+        model: 'child-model',
+      }),
+    );
+  });
+
+  it('resolves approval lifetimes per native thread while background children continue', async () => {
+    const h = harness();
+    const session = h.create();
+    const c = await h.running();
+    c.event(
+      'item/commandExecution/requestApproval',
+      { threadId: 'thread-123', itemId: 'main-command' },
+      91,
+    );
+    c.event(
+      'item/commandExecution/requestApproval',
+      { threadId: 'child', itemId: 'child-command' },
+      92,
+    );
+    await vi.waitFor(() => expect(session.pendingRequests()).toHaveLength(2));
+    c.event('turn/completed', {
+      threadId: 'child',
+      turn: { id: 'child-turn', status: 'completed' },
+    });
+    await vi.waitFor(() => expect(session.pendingRequests()).toHaveLength(1));
+    expect(session.pendingRequests()[0]).toMatchObject({ requestId: 'codex-91' });
+    session.respond('codex-91', { decision: 'allow' });
+    await vi.waitFor(() =>
+      expect(c.replies).toContainEqual({ id: 91, result: { decision: 'accept' } }),
+    );
+    c.event(
+      'item/commandExecution/requestApproval',
+      { threadId: 'child', itemId: 'next-child-command' },
+      93,
+    );
+    await vi.waitFor(() => expect(session.pendingRequests()).toHaveLength(1));
+    c.event('turn/completed', {
+      threadId: 'thread-123',
+      turn: { id: 'turn-1', status: 'completed' },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(session.pendingRequests()[0]).toMatchObject({ requestId: 'codex-93' });
+    session.respond('codex-93', { decision: 'allow' });
+    await vi.waitFor(() =>
+      expect(c.replies).toContainEqual({ id: 93, result: { decision: 'accept' } }),
+    );
+  });
+
   it('keeps slash commands queued for native command handling after the active turn', async () => {
     const h = harness();
     const session = h.create();

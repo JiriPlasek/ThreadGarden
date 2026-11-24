@@ -522,6 +522,53 @@ describe.skipIf(!enabled)('real Codex workflows', () => {
     await h.done(session);
   });
 
+  it('renders native child conversation and command output beneath its spawn call', async () => {
+    const h = await fixture();
+    const session = h.create(
+      'Use spawn_agent to create exactly one child with this task: "Run powershell -NoProfile -Command "Write-Output CHILD_LIVE_OUTPUT; Start-Sleep -Seconds 8" using exec_command with yield_time_ms=10000, then reply CHILD_CONVERSATION_DONE. Do not inspect files or do other work." Wait for the child to finish, then reply PARENT_DONE. Do not close the child.',
+      'bypassPermissions',
+    );
+    await eventually(
+      () =>
+        session
+          .snapshot(200)
+          .items.some(
+            (item) =>
+              item.kind === 'toolCall' &&
+              item.status === 'running' &&
+              item.resultText?.includes('CHILD_LIVE_OUTPUT') === true &&
+              !!item.parentToolUseId,
+          ),
+      'live child command output',
+      45_000,
+    );
+    await h.done(session);
+    const spawn = h.events.find(
+      (event) =>
+        event.method === 'item/completed' &&
+        ((rec(event.params?.item).type === 'collabAgentToolCall' &&
+          rec(event.params?.item).tool === 'spawnAgent') ||
+          (rec(event.params?.item).type === 'subAgentActivity' &&
+            rec(event.params?.item).kind === 'started')),
+    );
+    const spawnId = str(rec(spawn?.params?.item).id);
+    expect(spawnId).not.toBe('');
+    expect(session.snapshot(200).items).toContainEqual(
+      expect.objectContaining({
+        kind: 'assistantText',
+        markdown: expect.stringContaining('CHILD_CONVERSATION_DONE'),
+        parentToolUseId: spawnId,
+      }),
+    );
+    expect(session.snapshot(200).items).toContainEqual(
+      expect.objectContaining({
+        kind: 'toolCall',
+        resultText: expect.stringContaining('CHILD_LIVE_OUTPUT'),
+        parentToolUseId: spawnId,
+      }),
+    );
+  });
+
   it('lists a real child agent in Activity and interrupts only that owned agent', async () => {
     const h = await fixture();
     const session = h.create(

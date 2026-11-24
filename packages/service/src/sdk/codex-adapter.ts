@@ -126,7 +126,16 @@ export class CodexSession implements AgentSession {
   >();
   private streamed = new Map<string, string>();
   private tools = new Set<string>();
+  private output = new Map<string, string>();
+  private reasoning = new Map<string, Map<number, string>>();
+  private children = new Map<
+    string,
+    { parent: string; toolId?: string; model?: string; buffered: RpcMessage[] }
+  >();
+  private context?: { parent_tool_use_id: string; parent_agent_id: string; codex_turn_id?: string };
+  private streamContexts = new Map<string, typeof this.context>();
   private approvals = new Map<number | string, AbortController>();
+  private approvalThreads = new Map<number | string, string>();
   private turnUsage?: Rec;
   private previousUsageTotal?: Rec;
   private nativeCollaboration?: Rec;
@@ -550,6 +559,7 @@ export class CodexSession implements AgentSession {
     this.taskSource?.close();
     for (const controller of this.approvals.values()) controller.abort();
     this.approvals.clear();
+    this.approvalThreads.clear();
     this.client.close();
     this.messages.end();
   }
@@ -578,6 +588,7 @@ export class CodexSession implements AgentSession {
       parent_agent_id: null,
       ...message,
       ...(this.activeTurn ? { codex_turn_id: this.activeTurn } : {}),
+      ...this.context,
     } as unknown as SDKMessage;
     if (persist) this.store.append(this.record, envelope);
     this.messages.push(envelope);
@@ -591,7 +602,9 @@ export class CodexSession implements AgentSession {
         message: {
           id,
           role: 'assistant',
-          model: codexModel(this.record.model),
+          model: this.context
+            ? this.children.get(this.context.parent_agent_id)?.model
+            : codexModel(this.record.model),
           content,
           ...(usage ? { usage } : {}),
         },
@@ -602,6 +615,7 @@ export class CodexSession implements AgentSession {
 
   private onMessage(message: RpcMessage): void {
     if (this.closed) return;
+    const previousContext = this.context;
     try {
       const p = message.params ?? {};
       // Requests come before the thread filter: this app-server only runs this chat's thread
@@ -614,9 +628,41 @@ export class CodexSession implements AgentSession {
         const id = p.requestId as number | string;
         this.approvals.get(id)?.abort();
         this.approvals.delete(id);
+        this.approvalThreads.delete(id);
         return;
       }
-      if (p.threadId && this.record.threadId && p.threadId !== this.record.threadId) return;
+      if (message.method === 'turn/completed')
+        this.finishApprovals(str(p.threadId) || this.record.threadId!);
+      if (message.method === 'thread/started') {
+        const thread = rec(p.thread);
+        const parent =
+          str(thread.parentThreadId) ||
+          str(rec(rec(rec(thread.source).subAgent).thread_spawn).parent_thread_id);
+        if (parent === this.record.threadId || this.children.has(parent))
+          this.child(str(thread.id), parent, str(thread.model));
+        return;
+      }
+      if (p.threadId && this.record.threadId && p.threadId !== this.record.threadId) {
+        const child = this.children.get(str(p.threadId));
+        if (!child) return;
+        if (!child.toolId) {
+          // A child may speak before spawn completion supplies receiver IDs.
+          // Final native items retain complete content if old partials are evicted.
+          if (child.buffered.length === 256) child.buffered.shift();
+          child.buffered.push(message);
+          return;
+        }
+        this.context = {
+          parent_tool_use_id: child.toolId,
+          parent_agent_id: str(p.threadId),
+          codex_turn_id: str(p.turnId) || str(rec(p.turn).id) || undefined,
+        };
+        if (message.method === 'turn/completed') {
+          this.finishStreams(str(p.threadId));
+          return;
+        }
+        if (!message.method?.startsWith('item/')) return;
+      } else this.context = undefined;
       switch (message.method) {
         case 'turn/started':
           this.activeTurn = str(rec(p.turn).id);
@@ -667,6 +713,52 @@ export class CodexSession implements AgentSession {
           }
           break;
         }
+        case 'item/reasoning/summaryTextDelta': {
+          const id = str(p.itemId);
+          const index = typeof p.summaryIndex === 'number' ? p.summaryIndex : 0;
+          const summary = this.reasoning.get(id) ?? new Map<number, string>();
+          summary.set(index, (summary.get(index) ?? '') + str(p.delta));
+          this.reasoning.set(id, summary);
+          this.assistant(
+            id,
+            [
+              {
+                type: 'thinking',
+                thinking: [...summary]
+                  .sort(([a], [b]) => a - b)
+                  .map(([, text]) => text)
+                  .join('\n'),
+              },
+            ],
+            false,
+          );
+          break;
+        }
+        case 'item/commandExecution/outputDelta':
+        case 'item/fileChange/outputDelta':
+        case 'item/mcpToolCall/progress': {
+          const id = str(p.itemId);
+          const text =
+            (this.output.get(id) ?? '') +
+            (message.method === 'item/mcpToolCall/progress' ? `${str(p.message)}\n` : str(p.delta));
+          this.output.set(id, text.slice(0, 20_001));
+          this.emit({
+            type: 'user',
+            uuid: `${id}-result`,
+            message: {
+              role: 'user',
+              content: [
+                {
+                  type: 'tool_result',
+                  tool_use_id: id,
+                  content: this.output.get(id),
+                  is_partial: true,
+                },
+              ],
+            },
+          });
+          break;
+        }
         case 'item/agentMessage/delta': {
           const id = str(p.itemId);
           if (!this.streamed.has(id)) {
@@ -681,6 +773,7 @@ export class CodexSession implements AgentSession {
               },
             });
           }
+          this.streamContexts.set(id, this.context);
           this.streamed.set(id, (this.streamed.get(id) ?? '') + str(p.delta));
           this.emit({
             type: 'stream_event',
@@ -701,13 +794,7 @@ export class CodexSession implements AgentSession {
         case 'turn/completed': {
           this.compacting = false;
           this.completedWhileStarting = this.starting;
-          for (const [id, text] of this.streamed) {
-            this.lastAssistant = { id, content: [{ type: 'text', text }] };
-            this.assistant(id, this.lastAssistant.content);
-          }
-          this.streamed.clear();
-          for (const controller of this.approvals.values()) controller.abort();
-          this.approvals.clear();
+          this.finishStreams();
           const turn = rec(p.turn);
           for (const [message, submitted] of this.submitted) {
             if (submitted.turnId !== str(turn.id)) continue;
@@ -748,6 +835,8 @@ export class CodexSession implements AgentSession {
       }
     } catch (error) {
       this.fail(error);
+    } finally {
+      this.context = previousContext;
     }
   }
 
@@ -759,18 +848,65 @@ export class CodexSession implements AgentSession {
           this.show(message);
         }
       }
-      return; // Sent input is echoed under the client's own UUID, exactly once.
+      if (!this.context) return; // Main input is echoed under the client's own UUID.
     }
     const id = str(item.id);
     if (!id) return;
     if (item.type === 'agentMessage' && completed) {
-      this.lastAssistant = { id, content: [{ type: 'text', text: str(item.text) }] };
+      if (!this.context)
+        this.lastAssistant = { id, content: [{ type: 'text', text: str(item.text) }] };
       this.streamed.delete(id);
+      this.streamContexts.delete(id);
+    }
+    if (completed) {
+      this.reasoning.delete(id);
+      if (this.output.has(id) && !str(item.aggregatedOutput) && item.type === 'commandExecution')
+        item = { ...item, aggregatedOutput: this.output.get(id) };
+      this.output.delete(id);
+    }
+    if (item.type === 'subAgentActivity' && item.kind !== 'started') {
+      const child = this.children.get(str(item.agentThreadId));
+      if (completed && child?.toolId && item.kind !== 'interacted') {
+        this.emit(
+          {
+            type: 'user',
+            uuid: `${child.toolId}-result`,
+            message: {
+              role: 'user',
+              content: [
+                {
+                  type: 'tool_result',
+                  tool_use_id: child.toolId,
+                  content: `Codex agent ${str(item.kind)}`,
+                  is_error: item.kind === 'failed',
+                },
+              ],
+            },
+          },
+          true,
+        );
+        this.emit({
+          type: 'system',
+          subtype: 'task_notification',
+          task_id: `codex-agent-${str(item.agentThreadId)}`,
+          status:
+            item.kind === 'interrupted'
+              ? 'stopped'
+              : item.kind === 'failed'
+                ? 'failed'
+                : 'completed',
+          summary: `Codex agent ${str(item.kind)}`,
+          output_file: '',
+        });
+      }
+      return;
     }
     const messages = itemMessages(
       this.record.id,
       item,
-      codexModel(this.record.model),
+      this.context
+        ? this.children.get(this.context.parent_agent_id)?.model
+        : codexModel(this.record.model),
       completed,
       Date.now(),
     );
@@ -788,7 +924,89 @@ export class CodexSession implements AgentSession {
       if (completed) this.tools.delete(id);
       else this.tools.add(id);
     }
-    if (item.type === 'collabAgentToolCall' && completed) void this.taskSource?.refresh();
+    if (item.type === 'subAgentActivity' && item.kind === 'started') {
+      const child = this.child(
+        str(item.agentThreadId),
+        this.context?.parent_agent_id || this.record.threadId!,
+        str(item.model),
+      );
+      if (child) {
+        child.toolId ??= id;
+        this.agentStarted(str(item.agentThreadId), child, str(item.agentPath));
+        for (const event of child.buffered.splice(0)) this.onMessage(event);
+      }
+    }
+    if (item.type === 'collabAgentToolCall') {
+      if (item.tool === 'spawnAgent') {
+        const parent =
+          str(item.senderThreadId) || this.context?.parent_agent_id || this.record.threadId!;
+        for (const childId of Array.isArray(item.receiverThreadIds) ? item.receiverThreadIds : []) {
+          const child = this.child(str(childId), parent, str(item.model));
+          if (!child) continue;
+          child.toolId ??= id;
+          this.agentStarted(str(childId), child, str(item.prompt));
+          for (const event of child.buffered.splice(0)) this.onMessage(event);
+        }
+      }
+      if (completed) void this.taskSource?.refresh();
+    }
+  }
+
+  private child(id: string, parent: string, model?: string) {
+    if (!id || id === this.record.threadId) return undefined;
+    const existing = this.children.get(id);
+    if (existing) {
+      if (model) existing.model = model;
+      return existing;
+    }
+    if (this.children.size >= 128) return undefined;
+    const child = {
+      parent,
+      model: model || undefined,
+      buffered: [] as RpcMessage[],
+      toolId: undefined as string | undefined,
+    };
+    this.children.set(id, child);
+    return child;
+  }
+
+  private agentStarted(
+    id: string,
+    child: { parent: string; toolId?: string; model?: string },
+    description: string,
+  ): void {
+    this.emit({
+      type: 'system',
+      subtype: 'task_started',
+      is_backgrounded: true,
+      task_id: `codex-agent-${id}`,
+      task_type: 'local_agent',
+      tool_use_id: child.toolId,
+      description: description || 'Codex agent',
+      ...(child.parent !== this.record.threadId
+        ? { parent_task_id: `codex-agent-${child.parent}` }
+        : {}),
+    });
+  }
+
+  private finishStreams(childId?: string): void {
+    for (const [id, text] of this.streamed) {
+      if (this.streamContexts.get(id)?.parent_agent_id !== childId) continue;
+      const content = [{ type: 'text', text }];
+      if (!childId) this.lastAssistant = { id, content };
+      this.assistant(id, content);
+      this.streamed.delete(id);
+      this.streamContexts.delete(id);
+    }
+  }
+
+  private finishApprovals(threadId: string): void {
+    for (const [id, owner] of this.approvalThreads) {
+      if (owner !== threadId) continue;
+      this.approvals.get(id)?.abort();
+      this.approvals.delete(id);
+      this.approvalThreads.delete(id);
+    }
   }
 
   private async approve(message: RpcMessage): Promise<void> {
@@ -805,6 +1023,7 @@ export class CodexSession implements AgentSession {
     }
     const controller = new AbortController();
     this.approvals.set(id, controller);
+    this.approvalThreads.set(id, str(p.threadId) || this.record.threadId!);
     const questions = Array.isArray(p.questions) ? p.questions.map(rec) : [];
     const input = question
       ? { questions: questions.map((q) => ({ ...q, multiSelect: false })) }
@@ -847,6 +1066,7 @@ export class CodexSession implements AgentSession {
       } else this.client.reply(id, { decision: allowed ? 'accept' : 'decline' });
     } finally {
       this.approvals.delete(id);
+      this.approvalThreads.delete(id);
     }
   }
 }

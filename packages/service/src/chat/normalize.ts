@@ -519,7 +519,7 @@ export class Normalizer {
     const truncated = text.length > RESULT_TEXT_LIMIT;
     const next: Item<'toolCall'> = {
       ...unchecked(call),
-      status: isError ? 'error' : 'ok',
+      status: block.is_partial === true ? call.status : isError ? 'error' : 'ok',
       resultText: truncated ? text.slice(0, RESULT_TEXT_LIMIT) : text,
       resultTruncated: truncated,
     };
