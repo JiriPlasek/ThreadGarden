@@ -357,6 +357,9 @@ const steps: string[] = [
     mode TEXT NOT NULL
   );
   `,
+  `CREATE TABLE IF NOT EXISTS title_checks (
+    session_id TEXT PRIMARY KEY, user_id TEXT NOT NULL, user_count INTEGER NOT NULL, checked_at INTEGER NOT NULL
+  );`,
 ];
 
 /** Runs the steps not run yet; `upTo` stops early (tests build older schemas with it). */
