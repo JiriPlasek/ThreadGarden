@@ -306,7 +306,9 @@ export class ChatTitles {
         !filtered.some((m) => m.role === 'assistant') ||
         (!manual &&
           (latest === check?.userId ||
-            (check && users.length - check.userCount < (check.userCount < 4 ? 3 : 5))))
+            (check &&
+              (users.length - check.userCount < (check.userCount < 4 ? 3 : 5) ||
+                (check.userCount >= 4 && this.now() - check.checkedAt < 30 * 60 * 1000)))))
       ) {
         job.resolve(unchanged());
         return;

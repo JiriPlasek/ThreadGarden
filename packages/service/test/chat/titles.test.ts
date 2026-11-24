@@ -258,13 +258,19 @@ const harness = () => {
     },
   };
 };
-it('checks after messages 1, 4, 9 and 14 without a time condition and persists across restarts', async () => {
+it('checks after messages 1 and 4, then requires five messages and 30 minutes across restarts', async () => {
   const h = harness();
   try {
     h.titles.started('c', '/w', 'Repair login');
     let expectedCalls = 0;
     for (let count = 1; count <= 15; count++) {
       h.exchange();
+      if ([9, 14].includes(count)) {
+        await h.end();
+        expect(h.calls).toHaveLength(expectedCalls);
+        h.restart();
+        h.advance();
+      }
       await h.end();
       const due = [1, 4, 9, 14].includes(count);
       if (due) expectedCalls++;
@@ -476,6 +482,7 @@ it('does not spend the message interval on a failed provider attempt', async () 
     await h.end();
     await h.answer(null);
     for (let i = 0; i < 5; i++) h.exchange();
+    h.advance();
     await h.end();
     h.calls.at(-1)!.reject(new Error('provider failed'));
     await h.flush();

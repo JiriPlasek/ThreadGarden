@@ -12,7 +12,7 @@
 
 ## Requirements and proof
 
-- [ ] Persist the last checked user message/count/time in Threadgarden metadata. Check after the first substantive user message, then three additional messages, then every five additional messages, without a time condition. Reopening/restarting alone must not trigger another call.
+- [ ] Persist the last checked user message/count/time in Threadgarden metadata. Check after the first substantive user message, then three additional messages, then every five additional messages with at least 30 minutes since the last valid check. Reopening/restarting alone must not trigger another call.
 - [ ] Build bounded context from the first and recent user/assistant messages, excluding child agents, tools, synthetic notes and queued/unconsumed messages. Both live and imported history use the existing merged chat view.
 - [ ] Parse a validated `{title: string | null}` decision. Null keeps the current name or defers. Invalid/failed output preserves the current name; later new context can retry.
 - [ ] Serialize per chat and retain the existing global concurrency/timeout. A stale result must not overwrite a manual rename or newer conversation. Automatic checks never change custom names or take over externally owned names without an explicit request.

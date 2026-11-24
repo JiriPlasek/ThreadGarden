@@ -486,7 +486,7 @@ current name is adequate or the task is still unclear.
 
 An initial check runs after the first substantive user message receives a reply.
 The next check requires three additional substantive user messages; subsequent
-checks require five additional messages, with no time condition. Checkpoints survive service restarts;
+checks require five additional messages and at least 30 minutes since the last valid check. Checkpoints survive service restarts;
 opening a chat alone never generates a title. A failed check keeps the old
 name and does not consume the refinement interval. Existing native names are
 not automatically taken over. A native rename relinquishes automatic naming,
