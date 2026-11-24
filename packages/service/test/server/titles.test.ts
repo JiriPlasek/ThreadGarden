@@ -143,12 +143,15 @@ describe('chat titles (service)', () => {
     expect(asked.prompt).toContain('Fix the login bug on Safari');
     expect(asked.prompt).toContain('Let me check the redirect handler.');
 
-    // Early clarification may refine the name, or explicitly keep an adequate one.
+    // Refinement waits for three more substantive user messages.
     adapter.oneShotReply = async () => JSON.stringify({ title: null });
-    await c.call('chat.send', { sessionId, text: 'And on Firefox?' });
-    adapter.lastSession().emit(assistantText('a2', 'The same redirect fix applies to Firefox.'));
-    adapter.lastSession().emit(result('r2'));
-    await eventually(() => adapter.oneShots.length === 2);
+    for (let i = 2; i <= 4; i++) {
+      await c.call('chat.send', { sessionId, text: `Check browser redirect case ${i}` });
+      adapter.lastSession().emit(assistantText(`a${i}`, 'The same redirect fix applies.'));
+      adapter.lastSession().emit(result(`r${i}`));
+      await new Promise((r) => setTimeout(r, 50));
+      expect(adapter.oneShots).toHaveLength(i === 4 ? 2 : 1);
+    }
     expect(await titleOf(c, sessionId)).toBe('Safari OAuth login fix');
 
     // The user's own name wins.

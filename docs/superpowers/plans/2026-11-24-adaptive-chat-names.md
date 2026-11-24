@@ -12,12 +12,12 @@
 
 ## Requirements and proof
 
-- [ ] Persist the last checked user message/count/time in Threadgarden metadata. An initial generation and early clarification/refinement may run through the third substantive user message. Later checks need at least five new user messages and 30 minutes. Reopening/restarting alone must not trigger another call.
+- [ ] Persist the last checked user message/count/time in Threadgarden metadata. Check after the first substantive user message, then three additional messages, then every five additional messages, without a time condition. Reopening/restarting alone must not trigger another call.
 - [ ] Build bounded context from the first and recent user/assistant messages, excluding child agents, tools, synthetic notes and queued/unconsumed messages. Both live and imported history use the existing merged chat view.
 - [ ] Parse a validated `{title: string | null}` decision. Null keeps the current name or defers. Invalid/failed output preserves the current name; later new context can retry.
 - [ ] Serialize per chat and retain the existing global concurrency/timeout. A stale result must not overwrite a manual rename or newer conversation. Automatic checks never change custom names or take over externally owned names without an explicit request.
 - [ ] Add `chat.regenerateTitle({sessionId}) -> {title, changed}` and a scoped header menu action. It works on old/paused chats without resuming a runtime, honors moved/moving/read-only boundaries, and keeps the previous name/draft until success. An explicit regeneration can replace a custom title; an intervening rename still wins.
-- [ ] Cover cooldown/restarts/defer/keep/retry/stale work in engine tests, context filtering and handler safety in service tests, and pending/error/read-only/remote scope in UI tests.
+- [ ] Cover message intervals/restarts/defer/keep/retry/stale work in engine tests, context filtering and handler safety in service tests, and pending/error/read-only/remote scope in UI tests.
 - [ ] Run affected suites, lint/typecheck, independent review, and an isolated local preview before publishing a PR.
 
 ## Boundaries

@@ -484,9 +484,9 @@ internal handoff notes, queued messages and unfinished output are excluded.
 The model returns a short title, or an explicit keep/defer decision if the
 current name is adequate or the task is still unclear.
 
-An initial check and early refinements can run through the third substantive
-user message. Later checks require five additional user messages and at least
-30 minutes since the last valid check. Checkpoints survive service restarts;
+An initial check runs after the first substantive user message receives a reply.
+The next check requires three additional substantive user messages; subsequent
+checks require five additional messages, with no time condition. Checkpoints survive service restarts;
 opening a chat alone never generates a title. A failed check keeps the old
 name and does not consume the refinement interval. Existing native names are
 not automatically taken over. A native rename relinquishes automatic naming,

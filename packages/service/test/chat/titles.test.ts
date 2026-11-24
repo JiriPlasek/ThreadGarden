@@ -166,6 +166,12 @@ it('defers then names clarified context', async () => {
     { id: '3', role: 'user', text: 'Repair Safari login redirects' },
     { id: '4', role: 'assistant', text: 'I found the redirect failure' },
   ];
+  messages.push(
+    { id: '5', role: 'user', text: 'Check Safari cookies too' },
+    { id: '6', role: 'assistant', text: 'Checking cookie persistence' },
+    { id: '7', role: 'user', text: 'Fix the redirect cookie handling' },
+    { id: '8', role: 'assistant', text: 'Found the underlying cause' },
+  );
   titles.turnEnded('c', '/w');
   await flush();
   expect(calls).toHaveLength(2);
@@ -252,30 +258,22 @@ const harness = () => {
     },
   };
 };
-it('persists checkpoints across restart and respects early refinement and cooldown', async () => {
+it('checks after messages 1, 4, 9 and 14 without a time condition and persists across restarts', async () => {
   const h = harness();
   try {
     h.titles.started('c', '/w', 'Repair login');
-    h.exchange();
-    await h.end();
-    await h.answer('Safari login repair');
-    h.restart();
-    await h.end();
-    expect(h.calls).toHaveLength(1);
-    h.exchange('Repair redirect cookie handling');
-    await h.end();
-    await h.answer('Safari cookie repair');
-    h.exchange('Test redirect cookie persistence');
-    await h.end();
-    await h.answer(null);
-    for (let i = 0; i < 5; i++) h.exchange();
-    await h.end();
-    expect(h.calls).toHaveLength(3);
-    h.advance();
-    await h.end();
-    expect(h.calls).toHaveLength(4);
-    await h.answer(null);
-    expect(h.db.metaOf('c').generatedTitle).toBe('Safari cookie repair');
+    let expectedCalls = 0;
+    for (let count = 1; count <= 15; count++) {
+      h.exchange();
+      await h.end();
+      const due = [1, 4, 9, 14].includes(count);
+      if (due) expectedCalls++;
+      expect(h.calls).toHaveLength(expectedCalls);
+      if (due) await h.answer(null);
+      h.restart();
+      await h.end();
+      expect(h.calls).toHaveLength(expectedCalls);
+    }
   } finally {
     h.close();
   }
@@ -467,29 +465,25 @@ it('releases hung context slots after timeout and disposal', async () => {
     db.close();
   }
 });
-it('does not spend established cooldown quota on a failed provider attempt', async () => {
+it('does not spend the message interval on a failed provider attempt', async () => {
   const h = harness();
   try {
     h.titles.started('c', '/w', 'Repair login');
     h.exchange();
     await h.end();
     await h.answer('Login repair');
-    h.exchange();
-    await h.end();
-    await h.answer(null);
-    h.exchange();
+    for (let i = 0; i < 3; i++) h.exchange();
     await h.end();
     await h.answer(null);
     for (let i = 0; i < 5; i++) h.exchange();
-    h.advance();
     await h.end();
     h.calls.at(-1)!.reject(new Error('provider failed'));
     await h.flush();
-    expect(h.db.titleCheck('c')?.userCount).toBe(3);
+    expect(h.db.titleCheck('c')?.userCount).toBe(4);
     await h.end();
-    expect(h.calls).toHaveLength(5);
+    expect(h.calls).toHaveLength(4);
     await h.answer(null);
-    expect(h.db.titleCheck('c')?.userCount).toBe(8);
+    expect(h.db.titleCheck('c')?.userCount).toBe(9);
   } finally {
     h.close();
   }
