@@ -6,7 +6,11 @@ import type { ChatItem } from '@threadgarden/protocol';
 import { LiveSession, type LiveSessionDeps } from '../../src/chat/live-session.js';
 import { Normalizer } from '../../src/chat/normalize.js';
 import { CodexAdapter, codexPermissions } from '../../src/sdk/codex-adapter.js';
-import type { CodexConnection, ConnectCodex } from '../../src/sdk/codex-client.js';
+import {
+  CodexRpcError,
+  type CodexConnection,
+  type ConnectCodex,
+} from '../../src/sdk/codex-client.js';
 import { MultiAdapter } from '../../src/sdk/multi-adapter.js';
 import { FakeAdapter } from '../../src/testing/fake-adapter.js';
 import { MemoryRegistry } from '../chat/live-helpers.js';
@@ -452,75 +456,182 @@ describe('Codex provider', () => {
     expect(session.status).toBe('working');
   });
 
-  it('consumes queued messages in one next turn and applies reasoning controls natively', async () => {
+  it('applies reasoning controls to a turn started after completion', async () => {
     const h = harness();
     const session = h.create();
     const connection = await h.running();
     await session.setEffort('high');
-    expect(session.send({ text: 'second' })).toEqual({ queued: true });
-    expect(session.send({ text: 'third' })).toEqual({ queued: true });
-    expect(connection.calls.filter((c) => c.method === 'turn/start')).toHaveLength(1);
     connection.event('turn/completed', { turn: { id: 'turn-1', status: 'completed' } });
+    await vi.waitFor(() => expect(session.status).toBe('idle'));
+    session.send({ text: 'second' });
     await vi.waitFor(() =>
       expect(connection.calls.filter((c) => c.method === 'turn/start')).toHaveLength(2),
     );
     expect(connection.calls.filter((c) => c.method === 'turn/start')[1]!.params).toMatchObject({
       effort: 'high',
-      input: [
-        { type: 'text', text: 'second' },
-        { type: 'text', text: 'third' },
-      ],
+      input: [{ type: 'text', text: 'second' }],
     });
     connection.event('turn/completed', { turn: { id: 'turn-2', status: 'completed' } });
     await vi.waitFor(() => expect(session.status).toBe('idle'));
     await expect(session.setEffort('max')).rejects.toThrow('does not support');
   });
 
-  it('shows mid-turn messages as queued until their turn, and gives back what Stop cancels', async () => {
+  it('keeps slash commands queued for native command handling after the active turn', async () => {
+    const h = harness();
+    const session = h.create();
+    const c = await h.running();
+    session.send({ text: '/compact' });
+    session.send({ text: 'after command' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(c.calls.filter((call) => call.method === 'turn/steer')).toHaveLength(0);
+    expect(session.queued().map((m) => m.text)).toEqual(['/compact', 'after command']);
+  });
+
+  it('steers active turns and acknowledges input only after native acceptance', async () => {
+    const h = harness();
+    const session = h.create();
+    const c = await h.running();
+    const original = vi.mocked(c.client.request).getMockImplementation()!;
+    let accept!: (value: Rec) => void;
+    vi.spyOn(c.client, 'request').mockImplementation((method, params) =>
+      method === 'turn/steer'
+        ? new Promise<Rec>((resolve) => {
+            c.calls.push({ method, params });
+            accept = resolve;
+          })
+        : original(method, params),
+    );
+    session.send({ text: 'second' });
+    await vi.waitFor(() => expect(c.calls.some((call) => call.method === 'turn/steer')).toBe(true));
+    expect(session.queued().map((m) => m.text)).toEqual(['second']);
+    await expect(session.withdraw(session.queued()[0]!.id)).rejects.toMatchObject({
+      code: 'NOT_QUEUED',
+    });
+    expect(c.calls.find((call) => call.method === 'turn/steer')?.params).toMatchObject({
+      threadId: 'thread-123',
+      expectedTurnId: 'turn-1',
+      input: [{ type: 'text', text: 'second', text_elements: [] }],
+    });
+    accept({ turnId: 'turn-1' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(session.queued().map((m) => m.text)).toEqual(['second']);
+    c.event('item/started', {
+      item: {
+        type: 'userMessage',
+        id: 'native-user',
+        clientId: c.calls.find((call) => call.method === 'turn/steer')?.params.clientUserMessageId,
+      },
+    });
+    await vi.waitFor(() => expect(session.queued()).toEqual([]));
+    expect(c.calls.filter((call) => call.method === 'turn/start')).toHaveLength(1);
+  });
+
+  it('retries a rejected steering precondition once in the next turn without duplicating input', async () => {
+    const h = harness();
+    const session = h.create();
+    const c = await h.running();
+    const original = vi.mocked(c.client.request).getMockImplementation()!;
+    vi.spyOn(c.client, 'request').mockImplementation(async (method, params) => {
+      if (method === 'turn/steer') {
+        c.calls.push({ method, params });
+        c.event('turn/completed', { turn: { id: 'turn-1', status: 'completed' } });
+        throw new CodexRpcError('no active turn to steer', -32600);
+      }
+      return original(method, params);
+    });
+    session.send({ text: 'race' });
+    await vi.waitFor(() =>
+      expect(c.calls.filter((call) => call.method === 'turn/start')).toHaveLength(2),
+    );
+    await vi.waitFor(() => expect(session.queued()).toEqual([]));
+    expect(c.calls.filter((call) => call.method === 'turn/steer')).toHaveLength(1);
+    expect(c.calls.filter((call) => call.method === 'turn/start')[1]?.params.input).toEqual([
+      { type: 'text', text: 'race', text_elements: [] },
+    ]);
+    expect(
+      session.snapshot(100).items.filter((item) => item.kind === 'user' && item.text === 'race'),
+    ).toHaveLength(1);
+  });
+
+  it('does not replay ambiguous steering failures or finish the active turn', async () => {
+    const h = harness();
+    const session = h.create();
+    const c = await h.running();
+    const original = vi.mocked(c.client.request).getMockImplementation()!;
+    vi.spyOn(c.client, 'request').mockImplementation(async (method, params) => {
+      if (method === 'turn/steer') {
+        c.calls.push({ method, params });
+        throw new Error('Codex turn/steer timed out');
+      }
+      return original(method, params);
+    });
+    session.send({ text: 'uncertain' });
+    await vi.waitFor(() =>
+      expect(c.calls.filter((call) => call.method === 'turn/steer')).toHaveLength(1),
+    );
+    expect(session.queued().map((m) => m.text)).toEqual(['uncertain']);
+    expect(session.status).toBe('working');
+    expect(c.calls.filter((call) => call.method === 'turn/start')).toHaveLength(1);
+    c.event('turn/completed', { turn: { id: 'turn-1', status: 'completed' } });
+    await vi.waitFor(() => expect(session.status).toBe('idle'));
+    expect(c.calls.filter((call) => call.method === 'turn/start')).toHaveLength(1);
+  });
+
+  it('Stop returns only unsubmitted messages and waits for in-flight steering before interrupting', async () => {
     const returned: string[] = [];
     const h = harness();
     const session = h.create('default', {
       onReturned: (_id, messages) => returned.push(...messages.map((m) => m.text)),
     });
-    const connection = await h.running();
-    session.send({ text: 'second' });
-    session.send({ text: 'third' });
-    session.send({ text: 'fourth' });
-    expect(session.queued().map((m) => m.text)).toEqual(['second', 'third', 'fourth']);
-    await expect(session.withdraw(session.queued()[1]!.id)).resolves.toMatchObject({
-      text: 'third',
+    const c = await h.running();
+    const original = vi.mocked(c.client.request).getMockImplementation()!;
+    let accept!: (value: Rec) => void;
+    vi.spyOn(c.client, 'request').mockImplementation((method, params) => {
+      if (method === 'turn/steer') {
+        c.calls.push({ method, params });
+        return new Promise<Rec>((resolve) => {
+          accept = resolve;
+        });
+      }
+      return original(method, params);
     });
-    connection.event('turn/completed', { turn: { id: 'turn-1', status: 'completed' } });
-    await vi.waitFor(() => expect(session.queued()).toEqual([]));
-    // Codex goes straight on to the queued messages: the chat never stops working in between.
-    expect(session.status).toBe('working');
-    expect(connection.calls.filter((c) => c.method === 'turn/start')[1]!.params.input).toEqual([
-      { type: 'text', text: 'second', text_elements: [] },
-      { type: 'text', text: 'fourth', text_elements: [] },
-    ]);
-    session.send({ text: 'never read' });
-    await session.interrupt();
-    await vi.waitFor(() => expect(returned).toEqual(['never read']));
-    expect(session.queued()).toEqual([]);
-    connection.event('turn/completed', { turn: { id: 'turn-2', status: 'interrupted' } });
-    await vi.waitFor(() => expect(session.status).toBe('idle'));
-    expect(connection.calls.filter((c) => c.method === 'turn/start')).toHaveLength(2);
+    session.send({ text: 'submitted' });
+    await vi.waitFor(() => expect(accept).toBeTypeOf('function'));
+    session.send({ text: 'unsent' });
+    const stop = session.interrupt();
+    expect(c.calls.some((call) => call.method === 'turn/interrupt')).toBe(false);
+    c.event('item/started', {
+      item: {
+        type: 'userMessage',
+        id: 'native-user',
+        clientId: c.calls.find((call) => call.method === 'turn/steer')?.params.clientUserMessageId,
+      },
+    });
+    accept({ turnId: 'turn-1' });
+    await stop;
+    await vi.waitFor(() => expect(returned).toEqual(['unsent']));
+    expect(c.calls.find((call) => call.method === 'turn/interrupt')?.params.turnId).toBe('turn-1');
+    expect(c.calls.filter((call) => call.method === 'turn/steer')).toHaveLength(1);
   });
 
-  it('keeps messages sent during initialization queued behind the first turn', async () => {
+  it('steers messages sent during initialization once the first turn is active', async () => {
     const h = harness();
     const session = h.create();
     expect(session.send({ text: 'arrived during startup' })).toEqual({ queued: true });
-    const connection = await h.running();
-    expect(connection.calls.find((call) => call.method === 'turn/start')?.params.input).toEqual([
-      { type: 'text', text: 'hello', text_elements: [] },
-    ]);
-    connection.event('turn/completed', { turn: { id: 'turn-1', status: 'completed' } });
-    await vi.waitFor(() =>
-      expect(connection.calls.filter((call) => call.method === 'turn/start')).toHaveLength(2),
+    const c = await h.running();
+    await vi.waitFor(() => expect(c.calls.some((call) => call.method === 'turn/steer')).toBe(true));
+    expect(c.calls.find((call) => call.method === 'turn/steer')?.params.expectedTurnId).toBe(
+      'turn-1',
     );
-    connection.event('turn/completed', { turn: { id: 'turn-2', status: 'completed' } });
-    await vi.waitFor(() => expect(session.status).toBe('idle'));
+    c.event('item/started', {
+      item: {
+        type: 'userMessage',
+        id: 'startup-user',
+        clientId: c.calls.find((call) => call.method === 'turn/steer')?.params.clientUserMessageId,
+      },
+    });
+    await vi.waitFor(() => expect(session.queued()).toEqual([]));
+    expect(c.calls.filter((call) => call.method === 'turn/start')).toHaveLength(1);
   });
 
   it('resumes the saved Codex thread with the saved model and permission policy after restart', async () => {

@@ -14,6 +14,7 @@ import type {
   StartOptions,
 } from './adapter.js';
 import {
+  CodexRpcError,
   connectCodex,
   initializeCodex,
   type CodexConnection,
@@ -111,8 +112,14 @@ export class CodexSession implements AgentSession {
   private closed = false;
   private activeTurn?: string;
   private starting = false;
+  private stopping = false;
+  private steeringBlockedTurn?: string;
   private completedWhileStarting = false;
   private inputs: SDKUserMessage[] = [];
+  private submitted = new Map<
+    SDKUserMessage,
+    { turnId: string; settled: boolean; completed: boolean }
+  >();
   private streamed = new Map<string, string>();
   private tools = new Set<string>();
   private approvals = new Map<number | string, AbortController>();
@@ -218,26 +225,86 @@ export class CodexSession implements AgentSession {
   }
 
   private async drain(): Promise<void> {
-    if (this.starting || this.activeTurn || this.closed) return;
+    if (this.starting || this.stopping || this.closed || !this.inputs.length) return;
+    const firstContent: unknown = this.inputs[0]?.message.content;
+    const firstText =
+      typeof firstContent === 'string'
+        ? firstContent
+        : Array.isArray(firstContent)
+          ? firstContent.map((block) => str(rec(block).text)).join('')
+          : '';
+    if (
+      this.activeTurn &&
+      (this.activeTurn === 'compact' ||
+        this.steeringBlockedTurn === this.activeTurn ||
+        firstText.trimStart().startsWith('/'))
+    )
+      return;
     this.starting = true;
-    // Capture before initialization: inputs arriving during startup belong to the next turn.
-    const messages = this.inputs.splice(0);
+    // Capture before initialization; later inputs steer as soon as the first turn is active.
+    const messages = this.inputs.splice(0, 1);
     const shown = new Set<SDKUserMessage>();
+    let steering = false;
     try {
       await this.ready;
       if (this.closed) return;
-      // Match LiveSession's queued-input semantics: one subsequent turn consumes the batch.
+      // Requests are serialized so one message can never be sent to two turns.
       if (messages.length === 0) return;
       try {
-        await this.startTurn(messages, shown);
+        if (this.activeTurn) {
+          steering = true;
+          const expectedTurnId = this.activeTurn;
+          for (const message of messages)
+            this.submitted.set(message, {
+              turnId: expectedTurnId,
+              settled: false,
+              completed: false,
+            });
+          try {
+            await this.client.request('turn/steer', {
+              threadId: this.record.threadId,
+              expectedTurnId,
+              input: this.input(messages),
+              ...(messages[0]?.uuid ? { clientUserMessageId: messages[0].uuid } : {}),
+            });
+            for (const message of messages) this.settleSubmitted(message);
+          } catch (error) {
+            // A rejected precondition means none of this input was consumed. Transport
+            // failures are ambiguous and must never replay input into a second turn.
+            if (
+              error instanceof CodexRpcError &&
+              error.code === -32600 &&
+              (/^no active turn to steer$/.test(error.message) ||
+                /^expected active turn id `[^`]+` but found `[^`]+`$/.test(error.message))
+            ) {
+              // Completion may arrive after this rejection. Wait for that native
+              // event instead of racing another turn/start against the old turn.
+              this.steeringBlockedTurn = expectedTurnId;
+              for (const message of messages) this.submitted.delete(message);
+              if (this.stopping) {
+                for (const message of messages)
+                  if (message.uuid) this.lifecycle(message.uuid, 'cancelled');
+              } else this.inputs.unshift(...messages);
+              return;
+            }
+            // A definite refusal can be returned; a timeout stays pending until
+            // native consumption or turn completion resolves its ambiguity.
+            for (const message of messages) {
+              if (error instanceof CodexRpcError) this.cancelSubmitted(message);
+              else this.settleSubmitted(message);
+            }
+            throw error;
+          }
+        } else await this.startTurn(messages, shown);
       } catch (error) {
         // One turn failing (rejected, timed out, unsupported input) leaves the thread usable;
         // a dead app-server fails the whole session through onExit instead.
         if (this.closed) return;
-        for (const message of messages) if (!shown.has(message)) this.show(message);
+        if (!steering) for (const message of messages) if (!shown.has(message)) this.show(message);
         const text = error instanceof Error ? error.message : String(error);
         const id = randomUUID();
         this.turnError(id, text);
+        if (steering) return;
         this.emit(
           {
             type: 'result',
@@ -251,9 +318,21 @@ export class CodexSession implements AgentSession {
       }
     } finally {
       this.starting = false;
-      if (!this.activeTurn && this.inputs.length && !this.closed)
+      if (this.inputs.length && !this.closed && !this.stopping)
         void this.drain().catch((error: unknown) => this.fail(error));
     }
+  }
+
+  private cancelSubmitted(message: SDKUserMessage): void {
+    if (!this.submitted.delete(message)) return;
+    if (message.uuid) this.lifecycle(message.uuid, 'cancelled');
+  }
+
+  private settleSubmitted(message: SDKUserMessage): void {
+    const submitted = this.submitted.get(message);
+    if (!submitted) return; // Native consumption may precede the RPC response.
+    submitted.settled = true;
+    if (submitted.completed) this.cancelSubmitted(message);
   }
 
   private show(message: SDKUserMessage): void {
@@ -275,6 +354,29 @@ export class CodexSession implements AgentSession {
       },
       true,
     );
+  }
+
+  private input(messages: SDKUserMessage[]): Rec[] {
+    const input: Rec[] = [];
+    for (const message of messages) {
+      const content: unknown = message.message.content;
+      const blocks = typeof content === 'string' ? [{ type: 'text', text: content }] : content;
+      if (!Array.isArray(blocks)) throw new Error('Unsupported Codex input');
+      for (const block of blocks) {
+        const b = rec(block);
+        if (b.type === 'text') {
+          input.push({ type: 'text', text: str(b.text), text_elements: [] });
+          this.record.firstPrompt ??= str(b.text);
+        } else if (b.type === 'image') {
+          const source = rec(b.source);
+          input.push({
+            type: 'image',
+            url: `data:${str(source.media_type)};base64,${str(source.data)}`,
+          });
+        } else throw new Error(`Unsupported Codex input: ${str(b.type)}`);
+      }
+    }
+    return input;
   }
 
   private async startTurn(messages: SDKUserMessage[], shown: Set<SDKUserMessage>): Promise<void> {
@@ -301,24 +403,8 @@ export class CodexSession implements AgentSession {
       }
       return;
     }
-    const input: Rec[] = [];
+    const input = this.input(messages);
     for (const message of messages) {
-      const content: unknown = message.message.content;
-      const blocks = typeof content === 'string' ? [{ type: 'text', text: content }] : content;
-      if (!Array.isArray(blocks)) throw new Error('Unsupported Codex input');
-      for (const block of blocks) {
-        const b = rec(block);
-        if (b.type === 'text') {
-          input.push({ type: 'text', text: str(b.text), text_elements: [] });
-          this.record.firstPrompt ??= str(b.text);
-        } else if (b.type === 'image') {
-          const source = rec(b.source);
-          input.push({
-            type: 'image',
-            url: `data:${str(source.media_type)};base64,${str(source.data)}`,
-          });
-        } else throw new Error(`Unsupported Codex input: ${str(b.type)}`);
-      }
       this.show(message);
       shown.add(message);
     }
@@ -364,16 +450,23 @@ export class CodexSession implements AgentSession {
 
   /** As Claude Code's Esc: messages still waiting for a turn are cancelled with the turn. */
   async interrupt(): Promise<void> {
-    for (const message of this.inputs.splice(0))
-      if (message.uuid) this.lifecycle(message.uuid, 'cancelled');
-    await this.ready;
-    // A click while turn/start is pending still interrupts the turn it creates.
-    while (this.starting && !this.closed) await new Promise((resolve) => setTimeout(resolve, 10));
-    if (this.activeTurn)
-      await this.client.request('turn/interrupt', {
-        threadId: this.record.threadId,
-        turnId: this.activeTurn,
-      });
+    this.stopping = true;
+    try {
+      for (const message of this.inputs.splice(0))
+        if (message.uuid) this.lifecycle(message.uuid, 'cancelled');
+      await this.ready;
+      // A click while turn/start is pending still interrupts the turn it creates.
+      while ((this.starting || this.activeTurn === 'compact') && !this.closed)
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      if (this.activeTurn)
+        await this.client.request('turn/interrupt', {
+          threadId: this.record.threadId,
+          turnId: this.activeTurn,
+        });
+    } finally {
+      this.stopping = false;
+      if (this.inputs.length) void this.drain().catch((error: unknown) => this.fail(error));
+    }
   }
 
   async cancelQueued(uuid: string): Promise<boolean> {
@@ -619,6 +712,11 @@ export class CodexSession implements AgentSession {
           for (const controller of this.approvals.values()) controller.abort();
           this.approvals.clear();
           const turn = rec(p.turn);
+          for (const [message, submitted] of this.submitted) {
+            if (submitted.turnId !== str(turn.id)) continue;
+            submitted.completed = true;
+            if (submitted.settled) this.cancelSubmitted(message);
+          }
           const failed = turn.status === 'failed';
           if (this.lastAssistant && this.turnUsage)
             this.assistant(this.lastAssistant.id, this.lastAssistant.content, true, this.turnUsage);
@@ -657,7 +755,15 @@ export class CodexSession implements AgentSession {
   }
 
   private item(item: Rec, completed: boolean): void {
-    if (item.type === 'userMessage') return; // Sent input is echoed under the client's own UUID.
+    if (item.type === 'userMessage') {
+      for (const [message] of this.submitted) {
+        if (message.uuid && message.uuid === str(item.clientId)) {
+          this.submitted.delete(message);
+          this.show(message);
+        }
+      }
+      return; // Sent input is echoed under the client's own UUID, exactly once.
+    }
     const id = str(item.id);
     if (!id) return;
     if (item.type === 'agentMessage' && completed) {

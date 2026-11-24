@@ -45,7 +45,7 @@ afterEach(async (context) => {
                 ['item/completed', 'turn/completed', 'error'].includes(event.method ?? '') ||
                 event.id !== undefined,
             ),
-            calls: h.calls.filter((call) => /thread\/start|turn\/start/.test(call.method)),
+            calls: h.calls.filter((call) => /thread\/start|turn\/(start|steer)/.test(call.method)),
           },
           null,
           2,
@@ -102,7 +102,9 @@ const fixture = async () => {
         try {
           const result = await real.request(method, params);
           if (
-            /^(thread\/start|thread\/resume|turn\/start|thread\/backgroundTerminals\/)/.test(method)
+            /^(thread\/start|thread\/resume|turn\/(start|steer)|thread\/backgroundTerminals\/)/.test(
+              method,
+            )
           )
             call.result = result;
           return result;
@@ -549,28 +551,46 @@ describe.skipIf(!enabled)('real Codex workflows', () => {
     await h.done(session);
   });
 
-  it('queues two inputs behind a real running turn and interrupts subsequent running work', async () => {
+  it('steers two inputs into a real running turn and interrupts subsequent running work', async () => {
     const h = await fixture();
     const session = h.create(
-      'Run powershell -NoProfile -Command "Start-Sleep -Seconds 4" with exec_command and yield_time_ms=1000, wait for completion, then reply FIRST_DONE. Do not use other tools.',
+      'Run powershell -NoProfile -Command "Start-Sleep -Seconds 8" with exec_command and yield_time_ms=1000, wait for completion, then reply FIRST_DONE. Do not use other tools.',
       'bypassPermissions',
     );
     await eventually(
       () => h.events.some((event) => rec(event.params?.item).type === 'commandExecution'),
       'running command',
     );
-    expect(session.send({ text: 'For the next answer remember the word QUEUE_ALPHA.' })).toEqual({
+    expect(session.send({ text: 'For this answer remember the word QUEUE_ALPHA.' })).toEqual({
       queued: true,
     });
     expect(
       session.send({ text: 'Reply with QUEUE_ALPHA and QUEUE_BETA together. Do not use tools.' }),
     ).toEqual({ queued: true });
     await eventually(
-      () => h.events.filter((event) => event.method === 'turn/completed').length >= 2,
-      'queued turn completion',
+      () => h.events.some((event) => event.method === 'turn/completed'),
+      'steered turn completion',
     );
     await h.done(session);
-    expect(h.calls.filter((call) => call.method === 'turn/start')).toHaveLength(2);
+    expect(h.calls.filter((call) => call.method === 'turn/start')).toHaveLength(1);
+    const steers = h.calls.filter((call) => call.method === 'turn/steer');
+    expect(steers).toHaveLength(2);
+    for (const steer of steers) {
+      expect(steer.error).toBeUndefined();
+      expect(steer.result?.turnId).toBe(steer.params.expectedTurnId);
+      expect(h.events).toContainEqual(
+        expect.objectContaining({
+          method: 'item/started',
+          params: expect.objectContaining({
+            item: expect.objectContaining({
+              type: 'userMessage',
+              clientId: steer.params.clientUserMessageId,
+            }),
+          }),
+        }),
+      );
+    }
+    expect(session.queued()).toEqual([]);
     expect(session.snapshot(100).items).toContainEqual(
       expect.objectContaining({
         kind: 'assistantText',
@@ -589,7 +609,7 @@ describe.skipIf(!enabled)('real Codex workflows', () => {
     );
     await session.interrupt();
     await eventually(
-      () => h.events.filter((event) => event.method === 'turn/completed').length >= 3,
+      () => h.events.filter((event) => event.method === 'turn/completed').length >= 2,
       'interrupted turn completion',
     );
     expect(
