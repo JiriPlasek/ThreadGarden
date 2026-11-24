@@ -177,8 +177,13 @@
 
   const confirmRemove = async (): Promise<void> => {
     if (!removing) return;
-    const { restartPending } = await mcp.remove(removing.name, removing.scope);
-    if (restartPending) removedPending = true;
+    busy = removing.name;
+    try {
+      const { restartPending } = await mcp.remove(removing.name, removing.scope);
+      if (restartPending) removedPending = true;
+    } finally {
+      busy = null;
+    }
   };
 
   const menuItems = (s: McpServer): MenuAction[] => [
@@ -225,18 +230,7 @@
 <Dialog.Root bind:open>
   <Dialog.Content class="gap-4 p-5 sm:max-w-lg">
     <Dialog.Header>
-      <div class="flex items-center gap-2">
-        <Dialog.Title class="text-base">MCP servers (this chat)</Dialog.Title>
-        {#if canConfigure && live && !adding}
-          <Button
-            size="sm"
-            variant="outline"
-            class="ml-auto"
-            disabled={busy !== null}
-            onclick={() => (adding = true)}>+ Add server</Button
-          >
-        {/if}
-      </div>
+      <Dialog.Title class="text-base">MCP servers (this chat)</Dialog.Title>
       <Dialog.Description class="sr-only">The MCP servers this chat can use.</Dialog.Description>
     </Dialog.Header>
 
@@ -251,6 +245,16 @@
     {:else if adding}
       <McpAddServerForm onAdd={add} onCancel={() => (adding = false)} />
     {:else}
+      {#if canConfigure}
+        <div>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={busy !== null}
+            onclick={() => (adding = true)}>+ Add server</Button
+          >
+        </div>
+      {/if}
       {#if addedPending}
         <p class="text-muted-foreground text-sm">{ADDED_AFTER_RESTART}</p>
       {/if}

@@ -166,8 +166,7 @@ describe('McpServersDialog', () => {
     show(mcp, { remote: false });
     await userEvent.click(screen.getByRole('button', { name: 'Sign in' }));
     await userEvent.click(await screen.findByRole('button', { name: "I've signed in" }));
-    const button = () =>
-      screen.getByRole('button', { name: "I've signed in" }) as HTMLButtonElement;
+    const button = () => screen.getByRole('button', { name: "I've signed in" }) as HTMLButtonElement;
     await waitFor(() => expect(button().disabled).toBe(true));
     fail(new Error('Server "api" is not responding'));
     await waitFor(() =>
@@ -193,7 +192,7 @@ describe('McpServersDialog', () => {
     expect(screen.queryByLabelText(/Paste the address/)).toBeNull();
   });
 
-  it('a remote machine has the paste field and no "I\'ve signed in"', async () => {
+  it("a remote machine has the paste field and no \"I've signed in\"", async () => {
     const mcp = fakeMcp([server({ name: 'api', status: 'needs-auth', canSignIn: true })]);
     show(mcp, { remote: true });
     await userEvent.click(screen.getByRole('button', { name: 'Sign in' }));
@@ -260,6 +259,14 @@ describe('McpServersDialog', () => {
     });
     expect(screen.queryByText('Add MCP server')).toBeNull();
     expect(screen.queryByText(/^Added\./)).toBeNull();
+  });
+
+  it('+ Add server sits in the body, not in the title row', () => {
+    show(fakeMcp([server()]));
+    const add = screen.getByRole('button', { name: '+ Add server' });
+    const title = screen.getByText('MCP servers (this chat)');
+    expect(title.parentElement?.contains(add)).toBe(false);
+    expect(title.contains(add)).toBe(false);
   });
 
   it("no Add server without mcp-config or when the chat isn't running", () => {
@@ -340,6 +347,20 @@ describe('McpServersDialog', () => {
     expect(
       await screen.findByText('Removed. It disappears when this chat restarts between turns.'),
     ).toBeTruthy();
+  });
+
+  it('confirming Remove keeps the MCP servers dialog open', async () => {
+    const mcp = fakeMcp([server({ name: 'a', source: 'user' })]);
+    show(mcp);
+    await userEvent.click(screen.getByRole('button', { name: 'More for a' }));
+    await userEvent.click(await screen.findByText('Remove'));
+    await userEvent.click(
+      within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Remove' }),
+    );
+    await waitFor(() => expect(mcp.remove).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(screen.getByText('MCP servers (this chat)')).toBeTruthy();
+    expect(screen.getByRole('button', { name: '+ Add server' })).toBeTruthy();
   });
 
   it("a refused remove shows Claude Code's words", async () => {
