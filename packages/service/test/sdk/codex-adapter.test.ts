@@ -684,6 +684,40 @@ describe('Codex provider', () => {
       }),
     );
     expect(session.snapshot(100).items.some((item) => item.kind === 'unknown')).toBe(false);
+    c.event('item/completed', {
+      item: {
+        id: 'known-interaction',
+        type: 'subAgentActivity',
+        kind: 'interacted',
+        agentThreadId: 'child',
+        agentPath: '/root/child',
+      },
+    });
+    c.event('item/completed', {
+      threadId: 'child',
+      item: { id: 'known-child-followup', type: 'agentMessage', text: 'continued child' },
+    });
+    await vi.waitFor(() =>
+      expect(session.snapshot(100).items).toContainEqual(
+        expect.objectContaining({
+          kind: 'assistantText',
+          markdown: 'continued child',
+          parentToolUseId: 'native-spawn',
+        }),
+      ),
+    );
+    expect(session.tasks()).toContainEqual(
+      expect.objectContaining({
+        taskId: 'codex-agent-child',
+        toolUseId: 'native-spawn',
+        status: 'running',
+      }),
+    );
+    expect(
+      session
+        .snapshot(100)
+        .items.some((item) => item.kind === 'toolCall' && item.toolUseId === 'known-interaction'),
+    ).toBe(false);
   });
 
   it('keeps the main turn idle when a background child continues speaking', async () => {
@@ -771,6 +805,157 @@ describe('Codex provider', () => {
     session.respond('codex-93', { decision: 'allow' });
     await vi.waitFor(() =>
       expect(c.replies).toContainEqual({ id: 93, result: { decision: 'accept' } }),
+    );
+  });
+
+  it('routes an existing child first observed through interaction after native resume', async () => {
+    const h = harness();
+    const id = 'codex-00000000-0000-4000-8000-000000000002';
+    h.codex.store.save({
+      id,
+      threadId: 'thread-123',
+      cwd: dir,
+      createdAt: 1,
+      updatedAt: 1,
+      model: 'codex:test-model',
+    });
+    const session = LiveSession.resume(id, dir, {
+      adapter: h.adapter,
+      registry: new MemoryRegistry(),
+      env: {},
+      claudePath: '',
+      now: Date.now,
+      emit: () => {},
+      onError: () => {},
+    });
+    sessions.push(session);
+    const c = h.connections.at(-1)!;
+    await vi.waitFor(() =>
+      expect(c.calls.some((call) => call.method === 'thread/resume')).toBe(true),
+    );
+    await vi.waitFor(() => expect(session.status).toBe('idle'));
+    c.event('item/completed', {
+      threadId: 'thread-123',
+      item: {
+        id: 'existing-interaction',
+        type: 'subAgentActivity',
+        kind: 'interacted',
+        agentThreadId: 'existing-child',
+        agentPath: '/root/existing',
+      },
+    });
+    c.event('item/completed', {
+      threadId: 'existing-child',
+      item: { id: 'resumed-child-reply', type: 'agentMessage', text: 'existing child reply' },
+    });
+    await vi.waitFor(() =>
+      expect(session.snapshot(100).items).toContainEqual(
+        expect.objectContaining({
+          kind: 'assistantText',
+          markdown: 'existing child reply',
+          parentToolUseId: 'existing-interaction',
+        }),
+      ),
+    );
+    expect(session.snapshot(100).items).toContainEqual(
+      expect.objectContaining({
+        kind: 'toolCall',
+        name: 'Agent',
+        toolUseId: 'existing-interaction',
+      }),
+    );
+    expect(session.status).toBe('idle');
+    expect(session.tasks()).toContainEqual(
+      expect.objectContaining({
+        taskId: 'codex-agent-existing-child',
+        toolUseId: 'existing-interaction',
+        status: 'running',
+      }),
+    );
+    expect(c.calls.some((call) => call.method === 'thread/read')).toBe(false);
+  });
+
+  it('continues routing sequential children after the bounded live registry fills', async () => {
+    const h = harness();
+    const session = h.create();
+    const c = await h.running();
+    for (let i = 0; i < 129; i++) {
+      c.event('item/completed', {
+        item: {
+          id: `spawn-${i}`,
+          type: 'subAgentActivity',
+          kind: 'started',
+          agentThreadId: `child-${i}`,
+          agentPath: `/root/child-${i}`,
+        },
+      });
+      c.event('item/completed', {
+        threadId: `child-${i}`,
+        item: { id: `reply-${i}`, type: 'agentMessage', text: `reply ${i}` },
+      });
+      c.event('item/completed', {
+        item: {
+          id: `completed-${i}`,
+          type: 'subAgentActivity',
+          kind: 'completed',
+          agentThreadId: `child-${i}`,
+        },
+      });
+    }
+    await vi.waitFor(() =>
+      expect(session.snapshot(1000).items).toContainEqual(
+        expect.objectContaining({
+          kind: 'assistantText',
+          markdown: 'reply 128',
+          parentToolUseId: 'spawn-128',
+        }),
+      ),
+    );
+    c.event('item/completed', {
+      item: {
+        id: 'reactivated-child',
+        type: 'subAgentActivity',
+        kind: 'interacted',
+        agentThreadId: 'child-0',
+        agentPath: '/root/child-0',
+      },
+    });
+    c.event('item/completed', {
+      threadId: 'child-0',
+      item: { id: 'reactivated-reply', type: 'agentMessage', text: 'reactivated child' },
+    });
+    await vi.waitFor(() =>
+      expect(session.snapshot(1000).items).toContainEqual(
+        expect.objectContaining({
+          kind: 'assistantText',
+          markdown: 'reactivated child',
+          parentToolUseId: 'reactivated-child',
+        }),
+      ),
+    );
+  });
+
+  it('explains when too many active children prevent live output routing', async () => {
+    const h = harness();
+    const session = h.create();
+    const c = await h.running();
+    for (let i = 0; i < 129; i++)
+      c.event('item/completed', {
+        item: {
+          id: `spawn-${i}`,
+          type: 'subAgentActivity',
+          kind: 'started',
+          agentThreadId: `active-child-${i}`,
+        },
+      });
+    await vi.waitFor(() =>
+      expect(session.snapshot(1000).items).toContainEqual(
+        expect.objectContaining({
+          kind: 'system',
+          level: 'warning',
+          text: expect.stringContaining('128 active Codex agents'),
+        }),
+      ),
     );
   });
 

@@ -130,8 +130,18 @@ export class CodexSession implements AgentSession {
   private reasoning = new Map<string, Map<number, string>>();
   private children = new Map<
     string,
-    { parent: string; toolId?: string; model?: string; buffered: RpcMessage[] }
+    {
+      parent: string;
+      toolId?: string;
+      model?: string;
+      terminal: boolean;
+      activityId?: string;
+      runId?: string;
+      buffered: RpcMessage[];
+    }
   >();
+  private childCapacityNotified = false;
+  private taskRun = 0;
   private context?: { parent_tool_use_id: string; parent_agent_id: string; codex_turn_id?: string };
   private streamContexts = new Map<string, typeof this.context>();
   private approvals = new Map<number | string, AbortController>();
@@ -850,6 +860,23 @@ export class CodexSession implements AgentSession {
       }
       if (!this.context) return; // Main input is echoed under the client's own UUID.
     }
+    if (item.type === 'subAgentActivity' && item.kind === 'interacted') {
+      const child = this.child(
+        str(item.agentThreadId),
+        this.context?.parent_agent_id || this.record.threadId!,
+        str(item.model),
+      );
+      if (!child) return;
+      child.terminal = false;
+      if (child.toolId) {
+        this.agentStarted(str(item.agentThreadId), child, str(item.agentPath), str(item.id));
+        for (const event of child.buffered.splice(0)) this.onMessage(event);
+        return;
+      }
+      // Resume excludes old turns. The first owned interaction is sufficient
+      // evidence to show and route this child without loading unrelated history.
+      item = { ...item, kind: 'started' };
+    }
     const id = str(item.id);
     if (!id) return;
     if (item.type === 'agentMessage' && completed) {
@@ -867,6 +894,7 @@ export class CodexSession implements AgentSession {
     if (item.type === 'subAgentActivity' && item.kind !== 'started') {
       const child = this.children.get(str(item.agentThreadId));
       if (completed && child?.toolId && item.kind !== 'interacted') {
+        child.terminal = true;
         this.emit(
           {
             type: 'user',
@@ -918,7 +946,13 @@ export class CodexSession implements AgentSession {
     );
     for (const message of messages) {
       if (isTool && message.type === 'assistant' && this.tools.has(id)) continue;
-      this.emit(message as unknown as Rec, true);
+      this.emit(
+        {
+          ...(message as unknown as Rec),
+          ...(item.type === 'subAgentActivity' ? { codex_activity_only: true } : {}),
+        },
+        true,
+      );
     }
     if (isTool) {
       if (completed) this.tools.delete(id);
@@ -959,9 +993,29 @@ export class CodexSession implements AgentSession {
       if (model) existing.model = model;
       return existing;
     }
-    if (this.children.size >= 128) return undefined;
+    if (this.children.size >= 128) {
+      const terminal = [...this.children].find(([, child]) => child.terminal);
+      if (terminal) this.children.delete(terminal[0]);
+      else {
+        if (!this.childCapacityNotified) {
+          this.childCapacityNotified = true;
+          this.emit(
+            {
+              type: 'system',
+              subtype: 'informational',
+              level: 'warning',
+              content:
+                'Live output is limited to 128 active Codex agents. Additional agent output is omitted until a slot is available.',
+            },
+            true,
+          );
+        }
+        return undefined;
+      }
+    }
     const child = {
       parent,
+      terminal: false,
       model: model || undefined,
       buffered: [] as RpcMessage[],
       toolId: undefined as string | undefined,
@@ -972,12 +1026,19 @@ export class CodexSession implements AgentSession {
 
   private agentStarted(
     id: string,
-    child: { parent: string; toolId?: string; model?: string },
+    child: { parent: string; toolId?: string; model?: string; activityId?: string; runId?: string },
     description: string,
+    activityId = child.toolId,
   ): void {
+    // Task tracking orders run IDs; native call IDs are random rather than ordered.
+    if (child.activityId !== activityId || !child.runId) {
+      child.activityId = activityId;
+      child.runId = String(++this.taskRun).padStart(16, '0');
+    }
     this.emit({
       type: 'system',
       subtype: 'task_started',
+      run_id: child.runId,
       is_backgrounded: true,
       task_id: `codex-agent-${id}`,
       task_type: 'local_agent',
