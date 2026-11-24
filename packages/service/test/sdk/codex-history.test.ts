@@ -11,6 +11,7 @@ import {
 } from '../../src/sdk/codex-client.js';
 import { Normalizer } from '../../src/chat/normalize.js';
 import { rec } from '../../src/sdk/codex-events.js';
+import type { SDKMessage } from '../../src/sdk/adapter.js';
 
 const A = '11111111-1111-4111-8111-111111111111';
 const B = '22222222-2222-4222-8222-222222222222';
@@ -112,7 +113,12 @@ describe('native Codex history', () => {
       if (method === 'thread/read') {
         if (p.threadId === B) throw new Error('child unavailable');
         return {
-          thread: thread(String(p.threadId), { parentThreadId: p.threadId === C ? B : undefined }),
+          thread: thread(String(p.threadId), {
+            source:
+              p.threadId === C
+                ? { subAgent: { thread_spawn: { parent_thread_id: B } } }
+                : undefined,
+          }),
         };
       }
       if (method === 'thread/turns/list')
@@ -226,10 +232,15 @@ describe('native Codex history', () => {
       items.find((item) => item.kind === 'assistantText' && item.markdown === 'child answer'),
     ).toMatchObject({ parentToolUseId: 'spawn' });
     expect(h.store.records().map((record) => record.id)).toEqual([OWN]);
+    const childMessage = messages.find((message) => message.uuid === 'child-reply')!;
+    h.store.append(h.store.read(OWN)!, childMessage as unknown as SDKMessage);
+    expect(
+      (await h.history.messages(OWN)).filter((message) => message.uuid === 'child-reply'),
+    ).toHaveLength(1);
     expect(h.envs.every((env) => env.CODEX_HOME === '/original')).toBe(true);
     expect(
       h.calls.filter((call) => call.method === 'thread/read' && call.params.threadId === A),
-    ).toHaveLength(1);
+    ).toHaveLength(2);
   });
 
   it('rejects an unfinished turn before attempting a native fork', async () => {

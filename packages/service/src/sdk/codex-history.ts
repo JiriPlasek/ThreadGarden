@@ -10,7 +10,7 @@ import {
   type CodexConnection,
   type ConnectCodex,
 } from './codex-client.js';
-import { envelope, millis, rec, str, turnMessages, type Rec } from './codex-events.js';
+import { envelope, finite, millis, rec, str, turnMessages, type Rec } from './codex-events.js';
 import { CodexStore, type CodexRecord } from './codex-store.js';
 
 const SOURCES = ['cli', 'vscode', 'exec', 'appServer', 'unknown'];
@@ -300,9 +300,13 @@ export class CodexHistory {
         try {
           const result = await client.request('thread/read', { threadId: childId });
           const child = rec(result.thread);
+          const legacyParent = str(
+            rec(rec(rec(child.source).subAgent).thread_spawn).parent_thread_id,
+          );
           if (
             str(child.id) !== childId ||
-            (child.parentThreadId && child.parentThreadId !== parent)
+            (child.parentThreadId && child.parentThreadId !== parent) ||
+            (legacyParent && legacyParent !== parent)
           ) {
             notice(
               childId,
@@ -375,7 +379,9 @@ export class CodexHistory {
                   ],
                 },
               },
-              millis(rec(turn).completedAt),
+              finite(item.completedAtMs) ??
+                finite(item.startedAtMs) ??
+                millis(rec(turn).completedAt),
             ) as SessionMessage,
           );
         }
