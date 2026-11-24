@@ -841,24 +841,29 @@ it('sends absolute paths as normal Codex prompts and rejects compact attachments
   expect(c.calls.some((x) => x.method === 'thread/compact/start')).toBe(false);
 });
 
-it('fails closed before starting a Codex title turn when configuration is unavailable', async () => {
-  const h = harness();
-  await expect(
-    h.adapter.oneShot({
-      prompt: 'Title',
-      systemPrompt: 'Title only',
-      model: 'codex:default',
-      cwd: dir,
-      env: {},
-      claudePath: '',
-      sessionId: 'title-query',
-      signal: new AbortController().signal,
-    }),
-  ).rejects.toThrow('effective configuration');
-  const c = h.connections.at(-1)!;
-  expect(c.calls.some((x) => x.method === 'thread/start' || x.method === 'turn/start')).toBe(false);
-  expect(c.client.close).toHaveBeenCalled();
-});
+it.each([{ config: undefined }, { config: [] }])(
+  'fails closed before a Codex title turn with invalid configuration $config',
+  async ({ config }) => {
+    const h = harness({ 'config/read': { config } });
+    await expect(
+      h.adapter.oneShot({
+        prompt: 'Title',
+        systemPrompt: 'Title only',
+        model: 'codex:default',
+        cwd: dir,
+        env: {},
+        claudePath: '',
+        sessionId: 'title-query',
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow('effective configuration');
+    const c = h.connections.at(-1)!;
+    expect(c.calls.some((x) => x.method === 'thread/start' || x.method === 'turn/start')).toBe(
+      false,
+    );
+    expect(c.client.close).toHaveBeenCalled();
+  },
+);
 
 it('closes a Codex title query on cancellation', async () => {
   const h = harness({ 'config/read': { config: {} } });
