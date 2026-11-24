@@ -53,7 +53,7 @@ import { AwayDeliverer, connectToMachine } from './away/deliverer.js';
 import { AwayQueue } from './away/queue.js';
 import { registerAwayHandlers } from './server/handlers/away.js';
 import { registerCopyHandlers } from './server/handlers/copies.js';
-import { registerChatHandlers } from './server/handlers/chat.js';
+import { registerChatHandlers, type ChatHandlers } from './server/handlers/chat.js';
 import { isCodexSession } from './sdk/providers.js';
 import { busyOf, MoveLocks, registerMoveHandlers, type MoveGit } from './server/handlers/move.js';
 import { makeResumeChecker, registerExternalHandlers } from './server/handlers/external.js';
@@ -910,7 +910,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
           ...(project ? { projectName: project.displayName } : {}),
         };
       };
-      const sessionHost = new SessionHost({
+      const sessionHost: SessionHost = new SessionHost({
         adapter,
         registry: opened,
         claudePath: () => {
@@ -933,8 +933,8 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         onTurnEnded: (id, at) => {
           opened.setTurnEnded(id, at);
           emitChat({ event: 'sessions.changed', data: { sessionIds: [id] } });
-          // v1.2 C1: a new chat's first turn is over: it gets its generated title.
-          titlesRef.current?.turnEnded(id);
+          const cwd = sessionHost.get(id)?.cwd;
+          if (cwd) titlesRef.current?.turnEnded(id, cwd);
         },
         // v1.1 §4: live activity may reorder the projects.
         onActivity: () => projectOrderRef.current?.notify(),
@@ -1049,7 +1049,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       });
       catalogRef.current = cat;
       const routing = new RoutingSettingsCheck();
-      const chatTitles = new ChatTitles({
+      const chatTitles: ChatTitles = new ChatTitles({
         db: opened,
         adapter,
         enabled: () => opened.getSettings().autoTitles,
@@ -1065,7 +1065,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
             env: sessionEnvOf(),
           };
         },
-        firstReply: (id) => sessionHost.get(id)?.firstReplyText() ?? '',
+        conversation: (id) => chatHandlers.conversation(id),
         // Ruling R33: never around the provider the user's settings choose.
         routedElsewhere: (cwd) => routing.check(routingSettingsPaths(claudeDir, cwd)),
         titleChanged: (id) => cat.titleChanged(id),
@@ -1111,7 +1111,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
           }
         },
       });
-      const chatHandlers = registerChatHandlers(router, {
+      const chatHandlers: ChatHandlers = registerChatHandlers(router, {
         host: sessionHost,
         adapter,
         db: opened,

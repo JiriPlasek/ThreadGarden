@@ -363,8 +363,14 @@ export class Indexer {
     const after = this.db.getSession(info.sessionId);
     // v1.2 C1: a new Claude Code title (e.g. a /rename in the terminal) is the
     // user's newer choice; Threadgarden's generated title would otherwise outrank it.
-    if (before && after?.sdkTitle && before.sdkTitle !== after.sdkTitle && after.generatedTitle) {
+    if (
+      before &&
+      after?.sdkTitle &&
+      before.sdkTitle !== after.sdkTitle &&
+      (after.generatedTitle || after.autoTitle)
+    ) {
       this.db.setGeneratedTitle(info.sessionId, null);
+      this.db.setAutoTitle(info.sessionId, null);
     }
     return (
       stale ||

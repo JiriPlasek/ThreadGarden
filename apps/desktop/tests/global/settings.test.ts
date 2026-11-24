@@ -179,12 +179,10 @@ describe('settings dialog', () => {
     expect(env.app.settings.value.notifyOnFinish).toBe(false);
   });
 
-  it('v1.2: "Name new chats automatically" is on by default and can be turned off', async () => {
+  it('v1.2: "Name chats automatically" is on by default and can be turned off', async () => {
     const env = await withSettings();
     const dialog = await openDialog(env);
-    const toggle = within(dialog).getByLabelText(
-      /name new chats automatically \(Claude only; uses a small model\)/i,
-    ) as HTMLInputElement;
+    const toggle = within(dialog).getByLabelText(/^name chats automatically$/i) as HTMLInputElement;
     expect(toggle.checked).toBe(true);
     // Ruling R33: the toggle says when titles are skipped.
     const hint = within(dialog).getByText(

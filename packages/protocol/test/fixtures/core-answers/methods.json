@@ -55,6 +55,7 @@
     "chat.markSeen",
     "chat.older",
     "chat.open",
+    "chat.regenerateTitle",
     "chat.respond",
     "chat.resumeCheck",
     "chat.resumeCommand",
