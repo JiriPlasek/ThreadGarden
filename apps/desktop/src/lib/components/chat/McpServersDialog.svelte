@@ -47,6 +47,8 @@
   /** The server whose sign-in waits for its pasted address (remote machines). */
   let pasting = $state<string | null>(null);
   let pasted = $state('');
+  /** The server whose browser sign-in on This PC is under way: "I've signed in" reconnects it. */
+  let finishing = $state<string | null>(null);
   let busy = $state<string | null>(null);
   let wakeError = $state<string | null>(null);
 
@@ -66,9 +68,16 @@
   });
 
   $effect(() => {
+    // The "I've signed in" line belongs to a sign-in that is still waiting.
+    const waiting = mcp.state?.servers.find((s) => s.name === finishing)?.status === 'needs-auth';
+    if (finishing !== null && !waiting) finishing = null;
+  });
+
+  $effect(() => {
     if (open) return;
     errors = {};
     pasting = null;
+    finishing = null;
     pasted = '';
     wakeError = null;
   });
@@ -94,6 +103,8 @@
       if (url && remote) {
         pasting = name;
         pasted = '';
+      } else if (url) {
+        finishing = name;
       }
     });
 
@@ -229,6 +240,18 @@
                   size="sm"
                   disabled={busy !== null || pasted.trim() === ''}
                   onclick={() => finish(s.name)}>Finish sign-in</Button
+                >
+              </div>
+            {/if}
+            {#if finishing === s.name && s.status === 'needs-auth'}
+              <div class="flex items-center gap-2 text-xs">
+                <span>Finish signing in in your browser, then:</span>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={busy !== null}
+                  onclick={() => run(s.name, () => mcp.act(s.name, 'reconnect'))}
+                  >I've signed in</Button
                 >
               </div>
             {/if}

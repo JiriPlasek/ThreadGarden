@@ -107,6 +107,30 @@ describe('McpServersDialog', () => {
     expect(screen.queryByRole('button', { name: 'Finish sign-in' })).toBeNull();
   });
 
+  it('on This PC, after Sign in the "I\'ve signed in" line appears, reconnects, and goes when connected', async () => {
+    const mcp = fakeMcp([server({ name: 'api', status: 'needs-auth', canSignIn: true })]);
+    const { rerender } = show(mcp, { remote: false });
+    expect(screen.queryByText('Finish signing in in your browser, then:')).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    expect(await screen.findByText('Finish signing in in your browser, then:')).toBeTruthy();
+    await userEvent.click(screen.getByRole('button', { name: "I've signed in" }));
+    expect(mcp.act).toHaveBeenCalledWith('api', 'reconnect');
+    mcp.state.servers = [server({ name: 'api', status: 'connected' })];
+    await rerender({ mcp: { ...mcp, state: { ...mcp.state } } as unknown as ChatMcp });
+    await waitFor(() =>
+      expect(screen.queryByText('Finish signing in in your browser, then:')).toBeNull(),
+    );
+  });
+
+  it("a remote machine has the paste field and no \"I've signed in\"", async () => {
+    const mcp = fakeMcp([server({ name: 'api', status: 'needs-auth', canSignIn: true })]);
+    show(mcp, { remote: true });
+    await userEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await screen.findByLabelText(/Paste the address/);
+    expect(screen.queryByText('Finish signing in in your browser, then:')).toBeNull();
+    expect(screen.queryByRole('button', { name: "I've signed in" })).toBeNull();
+  });
+
   it("claude.ai Sign in opens claude.ai's connector settings", async () => {
     const mcp = fakeMcp([
       server({ name: 'Gmail', source: 'claudeai', status: 'needs-auth', claudeAi: true }),

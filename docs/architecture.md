@@ -192,6 +192,9 @@ Sign-in links, pasted addresses and tokens only pass through request params and
 results: never an event, the database or the log. On a remote machine the
 browser can't reach the sign-in callback, so the dialog asks for the address
 the browser ended up at ("Paste the address from your browser's address bar").
+Claude Code saves the token after a sign-in but does not reconnect the server,
+so the dialog reconnects it after a pasted address and, on This PC, offers
+"I've signed in" to do the same.
 A chat that isn't running offers **Wake the chat** (`chat.wake`), which goes
 through the same resume-safety check as sending. Codex chats have none of this.
 

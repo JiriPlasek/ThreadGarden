@@ -150,6 +150,7 @@ test('sign in on the remote mock needs the pasted address', async ({ page }) => 
   await expect(oauth.getByRole('alert')).toHaveText('Missing authorization code');
   await field.fill('http://localhost/callback?code=abc&state=x');
   await oauth.getByRole('button', { name: 'Finish sign-in' }).click();
+  // No manual Reconnect: the dialog reconnects after the pasted address.
   await expect(oauth).toContainText('Connected');
   await expect(field).toHaveCount(0);
 });
