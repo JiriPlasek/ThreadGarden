@@ -63,6 +63,95 @@ const setup = (request: (method: string, params: Rec) => Promise<Rec> | Rec) => 
 };
 
 describe('native Codex history', () => {
+  it('rejects an unfinished turn before attempting a native fork', async () => {
+    const h = setup((method) => {
+      if (method === 'thread/read') return { thread: thread(A) };
+      if (method === 'thread/turns/list')
+        return {
+          data: [
+            {
+              id: 'busy',
+              status: 'inProgress',
+              items: [
+                { id: 'prompt', type: 'userMessage', content: [{ type: 'text', text: 'hello' }] },
+              ],
+            },
+          ],
+        };
+      return {};
+    });
+    h.store.save({ id: OWN, threadId: A, cwd: dir, createdAt: 1, updatedAt: 2 });
+    await expect(h.history.fork(OWN, { upToMessageId: 'prompt' })).rejects.toThrow(
+      'completed Codex turn',
+    );
+    expect(h.calls.some((call) => call.method === 'thread/fork')).toBe(false);
+  });
+
+  it.each([A, 'bad-id'])(
+    'does not save a fork when Codex returns invalid new thread id %s',
+    async (id) => {
+      const h = setup((method) => (method === 'thread/fork' ? { thread: thread(id) } : {}));
+      h.store.save({ id: OWN, threadId: A, cwd: dir, createdAt: 1, updatedAt: 2 });
+      await expect(h.history.fork(OWN, {})).rejects.toThrow();
+      expect(h.store.records().map((record) => record.id)).toEqual([OWN]);
+    },
+  );
+
+  it('forks through a completed turn in its original home without changing the source', async () => {
+    const h = setup((method) => {
+      if (method === 'thread/read') return { thread: thread(A) };
+      if (method === 'thread/turns/list')
+        return {
+          data: [
+            {
+              id: 'turn1',
+              status: 'completed',
+              items: [
+                { id: 'prompt', type: 'userMessage', content: [{ type: 'text', text: 'hello' }] },
+                { id: 'answer', type: 'agentMessage', text: 'hello back' },
+              ],
+            },
+          ],
+          nextCursor: null,
+        };
+      if (method === 'thread/fork') return { thread: thread(B) };
+      return {};
+    });
+    h.store.save({
+      id: OWN,
+      threadId: A,
+      cwd: dir,
+      native: true,
+      home: '/original',
+      modelProvider: 'custom',
+      model: 'codex:test-model',
+      createdAt: 1,
+      updatedAt: 2,
+    });
+    await expect(h.history.fork(OWN, { upToMessageId: 'missing' })).rejects.toThrow(
+      'message in a completed Codex turn',
+    );
+    expect(h.calls.some((c) => c.method === 'thread/fork')).toBe(false);
+    await expect(h.history.fork(OWN, { upToMessageId: 'prompt' })).resolves.toEqual({
+      sessionId: `codex-${B}`,
+    });
+    expect(h.calls.find((c) => c.method === 'thread/fork')?.params).toEqual({
+      threadId: A,
+      modelProvider: 'custom',
+      model: 'test-model',
+      lastTurnId: 'turn1',
+      excludeTurns: true,
+    });
+    expect(h.store.read(`codex-${B}`)).toMatchObject({
+      threadId: B,
+      home: '/original',
+      preservePermissions: true,
+      modelProvider: 'openai',
+    });
+    expect(h.store.read(OWN)?.threadId).toBe(A);
+    expect(h.envs.every((env) => env.CODEX_HOME === '/original')).toBe(true);
+  });
+
   it('imports every page including archives, excludes child threads, and keeps existing Threadgarden ids', async () => {
     const h = setup((method, p) =>
       method === 'thread/list'

@@ -14,7 +14,7 @@
   import XIcon from '@lucide/svelte/icons/x';
   import { tick, untrack } from 'svelte';
   import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
-  import { agentNameOf, isCodexChat, runtimeOfChat } from '#lib/runtime.js';
+  import { agentNameOf, runtimeOfChat } from '#lib/runtime.js';
   import Composer from '#lib/components/composer/Composer.svelte';
   import SetupScreen from '#lib/components/SetupScreen.svelte';
   import { imageCountText } from '#lib/format/images.js';
@@ -778,7 +778,7 @@
             hasMore={chat.hasMore}
             loadingOlder={chat.loadingOlder}
             onLoadOlder={() => void chats.loadOlder(sessionId)}
-            onFork={readOnly || isCodexChat(sessionId) ? undefined : fork}
+            onFork={readOnly ? undefined : fork}
             requests={readOnly ? undefined : requests}
             requestsDocked={!readOnly}
             tasks={machineAway ? [] : chat.tasks}

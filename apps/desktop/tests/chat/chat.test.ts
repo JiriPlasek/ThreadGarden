@@ -14,6 +14,22 @@ import { manyItems, text, tool, unknownItem, user } from './fixtures';
 const rows = (root: HTMLElement) => root.querySelectorAll('[data-row]');
 
 describe('message list', () => {
+  it('explains that a Codex fork includes the selected turn reply', async () => {
+    const fork = vi.fn();
+    render(MessageList, {
+      items: [user('u1'), text('a1', 'answer')],
+      agentName: 'Codex',
+      onFork: fork,
+    });
+    await userEvent.click(
+      await screen.findByRole('button', {
+        name: 'Fork through this completed turn (includes its reply)',
+      }),
+    );
+    expect(fork).toHaveBeenCalledWith('u1');
+    expect(screen.queryByRole('button', { name: 'Fork from this message' })).toBeNull();
+  });
+
   it('renders 5,000 items with fewer than 120 DOM rows', async () => {
     const { container } = render(MessageList, { items: manyItems(5000) });
     await waitFor(() => expect(rows(container).length).toBeGreaterThan(0));

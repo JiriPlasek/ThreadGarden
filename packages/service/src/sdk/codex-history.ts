@@ -223,32 +223,7 @@ export class CodexHistory {
       const result = await client.request('thread/read', { threadId: record.threadId });
       const thread = rec(result.thread);
       this.remember(thread, record.home);
-      let turns: unknown[] = [];
-      if (thread.historyMode === 'paginated' || record.historyMode === 'paginated') {
-        let cursor: string | undefined;
-        const seen = new Set<string>();
-        do {
-          const page = await client.request('thread/turns/list', {
-            threadId: record.threadId,
-            limit: 100,
-            sortDirection: 'asc',
-            itemsView: 'full',
-            ...(cursor ? { cursor } : {}),
-          });
-          turns.push(...(Array.isArray(page.data) ? page.data : []));
-          cursor = str(page.nextCursor) || undefined;
-          if (cursor && seen.has(cursor)) throw new Error('Codex repeated a turns cursor');
-          if (cursor) seen.add(cursor);
-        } while (cursor);
-      } else {
-        const history = await client.request('thread/read', {
-          threadId: record.threadId,
-          includeTurns: true,
-        });
-        turns = Array.isArray(rec(history.thread).turns)
-          ? (rec(history.thread).turns as unknown[])
-          : [];
-      }
+      const turns = await this.turns(client, record, thread);
       const native = turns.flatMap((turn) =>
         turnMessages(id, rec(turn), record.model?.replace(/^codex:/, '')),
       );
@@ -258,6 +233,83 @@ export class CodexHistory {
       return [...byId.values()].sort(
         (a, b) => Date.parse(str(rec(a).timestamp)) - Date.parse(str(rec(b).timestamp)),
       );
+    });
+  }
+
+  private async turns(
+    client: CodexConnection,
+    record: CodexRecord,
+    thread: Rec,
+  ): Promise<unknown[]> {
+    let turns: unknown[] = [];
+    if (thread.historyMode === 'paginated' || record.historyMode === 'paginated') {
+      let cursor: string | undefined;
+      const seen = new Set<string>();
+      do {
+        const page = await client.request('thread/turns/list', {
+          threadId: record.threadId,
+          limit: 100,
+          sortDirection: 'asc',
+          itemsView: 'full',
+          ...(cursor ? { cursor } : {}),
+        });
+        turns.push(...(Array.isArray(page.data) ? page.data : []));
+        cursor = str(page.nextCursor) || undefined;
+        if (cursor && seen.has(cursor)) throw new Error('Codex repeated a turns cursor');
+        if (cursor) seen.add(cursor);
+      } while (cursor);
+    } else {
+      const history = await client.request('thread/read', {
+        threadId: record.threadId,
+        includeTurns: true,
+      });
+      turns = Array.isArray(rec(history.thread).turns)
+        ? (rec(history.thread).turns as unknown[])
+        : [];
+    }
+    return turns;
+  }
+
+  /** The UI explicitly offers to fork through the selected message's whole turn. */
+  async fork(id: string, options: { upToMessageId?: string }): Promise<{ sessionId: string }> {
+    const source = this.store.read(id);
+    if (!source?.threadId) throw new Error('No saved Codex thread to fork');
+    return this.inHome(source.home, async (client) => {
+      let lastTurnId: string | undefined;
+      if (options.upToMessageId) {
+        const result = await client.request('thread/read', { threadId: source.threadId });
+        const turns = await this.turns(client, source, rec(result.thread));
+        for (const value of turns) {
+          const turn = rec(value);
+          const messages = turnMessages(id, turn).filter(
+            (message) => rec(message).type !== 'result',
+          );
+          if (
+            turn.status === 'completed' &&
+            messages.some((message) => message.uuid === options.upToMessageId)
+          )
+            lastTurnId = str(turn.id) || undefined;
+        }
+        if (!lastTurnId)
+          throw new Error('Choose a message in a completed Codex turn to fork this chat.');
+      }
+      const result = await client.request('thread/fork', {
+        threadId: source.threadId,
+        ...(source.modelProvider ? { modelProvider: source.modelProvider } : {}),
+        ...(source.model ? { model: source.model.replace(/^codex:/, '') } : {}),
+        ...(lastTurnId ? { lastTurnId } : {}),
+        excludeTurns: true,
+      });
+      const thread = rec(result.thread);
+      if (str(thread.id) === source.threadId) throw new Error('Codex did not create a new thread');
+      const fork = this.remember(thread, source.home);
+      fork.createdHere = true;
+      fork.preservePermissions = true;
+      if (result.model) fork.model = `codex:${str(result.model)}`;
+      if (result.reasoningEffort) fork.effort = str(result.reasoningEffort);
+      if (result.modelProvider) fork.modelProvider = str(result.modelProvider);
+      this.store.save(fork);
+      return { sessionId: fork.id };
     });
   }
 
