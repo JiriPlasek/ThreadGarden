@@ -112,6 +112,25 @@ describe('SessionHost', () => {
     expect(statuses(events, s.sessionId).at(-1)).toBe('paused');
   });
 
+  it('remembers an owned idle pause only while fresh SDK history metadata is unchanged', async () => {
+    const ctx = setup();
+    const { s, fake } = await idleChat(ctx);
+    const info = { sessionId: s.sessionId, summary: 'Owned', lastModified: 1000, fileSize: 100 };
+    ctx.adapter.sessions.set(s.sessionId, { info, messages: [] });
+    fake.historyInfo = () => info;
+    expect(await ctx.host.canResumeAutomatically(s.sessionId)).toBe(false);
+    ctx.host.reclaimIdle(ctx.timers.now() + 15 * MIN);
+    expect(fake.closed).toBe(true);
+    expect(await ctx.host.canResumeAutomatically(s.sessionId)).toBe(true);
+    info.fileSize++;
+    expect(await ctx.host.canResumeAutomatically(s.sessionId)).toBe(false);
+    info.fileSize--;
+    info.lastModified++;
+    expect(await ctx.host.canResumeAutomatically(s.sessionId)).toBe(false);
+    ctx.host.end(s.sessionId);
+    expect(await ctx.host.canResumeAutomatically(s.sessionId)).toBe(false);
+  });
+
   it('runs reclaim every 60 s once started, using the minutes from settings', async () => {
     const ctx = setup();
     const { host, timers, settings } = ctx;

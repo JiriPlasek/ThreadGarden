@@ -303,6 +303,11 @@ export class LiveSession {
   private readonly pending = new Map<string, Pending>();
   private statusValue: ChatStatus = 'history';
   private headerValue: ChatHeaderInfo = {};
+  private idleResumeValue: { lastModified: number; fileSize: number } | undefined;
+
+  get idleResumeInfo(): { lastModified: number; fileSize: number } | undefined {
+    return this.idleResumeValue && { ...this.idleResumeValue };
+  }
   private idleSinceValue: number | null = null;
   private lastActivityValue: number | null = null;
   /**
@@ -652,6 +657,21 @@ export class LiveSession {
 
   /** Closes the process after idle reclaim; the next message resumes it. */
   pause(): void {
+    this.idleResumeValue = undefined;
+    if (this.statusValue === 'idle')
+      this.guard('idle resume checkpoint', () => {
+        const info = this.session?.historyInfo?.();
+        if (
+          info &&
+          Number.isFinite(info.lastModified) &&
+          info.lastModified > 0 &&
+          typeof info.fileSize === 'number' &&
+          Number.isFinite(info.fileSize) &&
+          info.fileSize >= 0
+        ) {
+          this.idleResumeValue = { lastModified: info.lastModified, fileSize: info.fileSize };
+        }
+      });
     this.stop('paused');
   }
 

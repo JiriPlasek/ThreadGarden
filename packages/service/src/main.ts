@@ -840,6 +840,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       );
     }
     const resumeCheck = makeResumeChecker({
+      canResumeAutomatically: async (id) => (await host?.canResumeAutomatically(id)) ?? false,
       ...(poller ? { poller } : {}),
       located: whenLocated,
       externalUsable,
@@ -1243,6 +1244,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
 
     registerFileHandlers(router, { index: new FileIndex() });
     registerExternalHandlers(router, {
+      canResumeAutomatically: async (id) => (await host?.canResumeAutomatically(id)) ?? false,
       ...(poller ? { poller } : {}),
       ...(run ? { run } : {}),
       located: whenLocated,

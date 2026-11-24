@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -115,6 +115,38 @@ const harness = (responses: Record<string, Rec> = {}) => {
 };
 
 describe('Codex provider', () => {
+  it('captures its own history metadata before an idle pause', async () => {
+    const nativePath = path.join(dir, 'native-history.jsonl');
+    writeFileSync(nativePath, 'fixture');
+    const thread = {
+      id: '11111111-2222-4333-8444-555555555555',
+      path: nativePath,
+      updatedAt: Math.floor(Date.now() / 1000),
+    };
+    const h = harness({
+      'thread/start': { thread, model: 'test-model' },
+      'thread/read': { thread },
+    });
+    const session = h.create();
+    const c = await h.running();
+    c.event('turn/completed', { turn: { id: 'turn-1', status: 'completed' } });
+    await vi.waitFor(() => expect(session.status).toBe('idle'));
+    // No history-index refresh before reclaim: initialization must retain native metadata.
+    const before = h.codex.store.info(session.sessionId);
+    session.pause();
+    expect(session.idleResumeInfo).toEqual({
+      lastModified: before!.lastModified,
+      fileSize: before!.fileSize,
+    });
+    const after = await h.adapter.getSessionInfo(session.sessionId);
+    expect(after?.lastModified).toBe(before?.lastModified);
+    expect(after?.fileSize).toBe(before?.fileSize);
+    writeFileSync(nativePath, 'changed history');
+    expect((await h.adapter.getSessionInfo(session.sessionId))?.fileSize).not.toBe(
+      session.idleResumeInfo?.fileSize,
+    );
+  });
+
   it('uses native Plan mode and switches to editing only after the user chooses it', async () => {
     const h = harness();
     const session = h.create('plan');
