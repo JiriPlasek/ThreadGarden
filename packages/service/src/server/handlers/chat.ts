@@ -257,6 +257,21 @@ const storedModels = (value: unknown): Model[] | undefined => {
   return ok ? (value as Model[]) : undefined;
 };
 
+/** Where the last slash-command list is kept: overall, and per project (`:` + cwd). */
+const COMMANDS_KEY = 'claudeCommands';
+const storedCommands = (value: unknown): Command[] | undefined => {
+  if (!Array.isArray(value) || value.length === 0) return undefined;
+  const ok = value.every(
+    (c: unknown) =>
+      !!c &&
+      typeof c === 'object' &&
+      typeof (c as Command).name === 'string' &&
+      typeof (c as Command).description === 'string' &&
+      typeof (c as Command).argumentHint === 'string',
+  );
+  return ok ? (value as Command[]) : undefined;
+};
+
 export type ChatHandlers = {
   /** What `chat.send` does (scheduled sends go out through it). */
   send: (p: {
@@ -290,7 +305,7 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
     historyCache.delete(sessionId);
   };
   const commandsByCwd = new Map<string, Command[]>();
-  let lastCommands: Command[] | undefined;
+  let lastCommands: Command[] | undefined = storedCommands(db.getUiState(COMMANDS_KEY));
   let lastModels: Model[] | undefined = storedModels(db.getUiState(CLAUDE_MODELS_KEY));
 
   const changed = (sessionIds: string[]) =>
@@ -826,12 +841,20 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
         const list = (await s.supportedCommands()).map(toCommand);
         commandsByCwd.set(s.cwd, list);
         lastCommands = list;
+        if (list.length > 0) {
+          db.setUiState(`${COMMANDS_KEY}:${s.cwd}`, list);
+          db.setUiState(COMMANDS_KEY, list);
+        }
         return list;
       } catch (err) {
         deps.onError(err, `supportedCommands (session ${s.sessionId})`);
       }
     }
-    return (cwd === undefined ? undefined : commandsByCwd.get(cwd)) ?? lastCommands ?? [];
+    const own =
+      cwd === undefined
+        ? undefined
+        : (commandsByCwd.get(cwd) ?? storedCommands(db.getUiState(`${COMMANDS_KEY}:${cwd}`)));
+    return own ?? lastCommands ?? [];
   });
 
   router.register('chat.models', async (p) => {
