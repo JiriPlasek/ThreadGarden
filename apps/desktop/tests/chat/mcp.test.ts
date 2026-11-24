@@ -153,4 +153,53 @@ describe('ChatMcp', () => {
     });
     mcp.stop();
   });
+
+  describe('submitCallback reconnects the server', () => {
+    const calls = (f: ReturnType<typeof fakeApi>) =>
+      f.request.mock.calls.map((c) => [c[0], (c[1] as { action?: string }).action]);
+
+    it('after a successful submit: reconnect that server, then reload', async () => {
+      const f = fakeApi();
+      const mcp = new ChatMcp(f.api, 's1');
+      await mcp.submitCallback('a', 'http://localhost/cb?code=1');
+      expect(calls(f)).toEqual([
+        ['mcp.submitCallback', undefined],
+        ['mcp.act', 'reconnect'],
+        ['mcp.list', undefined],
+      ]);
+      expect(f.request).toHaveBeenCalledWith('mcp.act', {
+        sessionId: 's1',
+        name: 'a',
+        action: 'reconnect',
+      });
+      mcp.stop();
+    });
+
+    it('a failing reconnect after a successful submit rejects with its error', async () => {
+      const f = fakeApi();
+      f.request.mockImplementation(async (method: string) => {
+        if (method === 'mcp.act') throw new Error('Server "a" is not responding');
+        return {};
+      });
+      const mcp = new ChatMcp(f.api, 's1');
+      await expect(mcp.submitCallback('a', 'http://localhost/cb?code=1')).rejects.toThrow(
+        'Server "a" is not responding',
+      );
+      mcp.stop();
+    });
+
+    it('a submit error does not reconnect', async () => {
+      const f = fakeApi();
+      f.request.mockImplementation(async (method: string) => {
+        if (method === 'mcp.submitCallback') throw new Error('Missing authorization code');
+        return {};
+      });
+      const mcp = new ChatMcp(f.api, 's1');
+      await expect(mcp.submitCallback('a', 'http://localhost/cb')).rejects.toThrow(
+        'Missing authorization code',
+      );
+      expect(calls(f).some((c) => c[0] === 'mcp.act')).toBe(false);
+      mcp.stop();
+    });
+  });
 });

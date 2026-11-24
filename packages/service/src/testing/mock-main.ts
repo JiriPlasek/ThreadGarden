@@ -102,8 +102,10 @@
  * `mock-slow` (Connecting…) and `mock-off` (Off). Chats in `proj-0` (and the
  * remote's `tg-cli`) also have `mock-etoro` in `.mcp.json`, unlisted until
  * approved (in-memory files); approving reconnects it, so it reads Connecting…
- * and then Connected. Signing in gives a link to the mock's own port; on This
- * PC's mock the server is Connected about 500 ms later, on the remote mock it
+ * and then Connected. Signing in gives a link to the mock's own port; as in
+ * Claude Code, a finished sign-in only saves the token and the server stays
+ * Needs sign-in until `reconnect` (Connecting…, then Connected). On This PC's
+ * mock the sign-in finishes about 500 ms after the link; on the remote mock it
  * waits for `submitCallback` with an address containing `code=` (anything else
  * is refused: `Missing authorization code`). The mock-only method
  * `mock.mcpReset` (local callers only) puts every chat's servers and the
@@ -330,12 +332,15 @@ class MockMcpFiles implements McpProjectFiles {
 class ScriptedSession extends FakeSession {
   /** This chat's fake MCP servers, by name (`mock-etoro` joins once reconnected). */
   private servers = startServers();
+  /** Servers whose sign-in finished (token saved); they still need a reconnect. */
+  private readonly tokens = new Set<string>();
   private readonly mcpTimers = new Set<ReturnType<typeof setTimeout>>();
 
   override readonly mcp: McpControls = {
     status: async () => [...this.servers.values()].map((s) => ({ ...s })),
     reconnect: async (name) => {
-      if (this.servers.get(name)?.status === 'needs-auth') return;
+      // As Claude Code: a server that needs sign-in only comes up once its token is saved.
+      if (this.servers.get(name)?.status === 'needs-auth' && !this.tokens.has(name)) return;
       this.connecting(name);
     },
     toggle: async (name, enabled) => {
@@ -346,8 +351,9 @@ class ScriptedSession extends FakeSession {
     authenticate: async (name) => {
       const server = this.servers.get(name);
       if (!server) throw new Error(`No MCP server named ${name}`);
-      // On This PC's mock the sign-in finishes by itself; the remote's waits for a pasted address.
-      if (!this.adapter.remote) this.later(() => this.setMcp(name, { status: 'connected' }));
+      // On This PC's mock the sign-in finishes by itself (the token is saved) but, as in Claude
+      // Code, the server stays Needs sign-in until reconnected; the remote's waits for a pasted address.
+      if (!this.adapter.remote) this.later(() => this.tokens.add(name));
       return {
         authUrl: `http://127.0.0.1:${this.adapter.port}/mock-oauth?server=${encodeURIComponent(name)}`,
         requiresUserAction: true,
@@ -360,10 +366,11 @@ class ScriptedSession extends FakeSession {
     submitCallback: async (name, url) => {
       if (!this.servers.has(name)) throw new Error(`No MCP server named ${name}`);
       if (!/[?&]code=/.test(url)) throw new Error('Missing authorization code');
-      this.connecting(name);
+      this.tokens.add(name);
     },
     clearAuth: async (name) => {
       if (!this.servers.has(name)) throw new Error(`No MCP server named ${name}`);
+      this.tokens.delete(name);
       this.setMcp(name, { status: 'needs-auth' });
     },
   };
@@ -373,6 +380,7 @@ class ScriptedSession extends FakeSession {
     for (const t of this.mcpTimers) clearTimeout(t);
     this.mcpTimers.clear();
     this.servers = startServers();
+    this.tokens.clear();
   }
 
   private later(fn: () => void): void {

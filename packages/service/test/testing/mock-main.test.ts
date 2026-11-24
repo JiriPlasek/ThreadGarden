@@ -335,7 +335,7 @@ describe('mock service: MCP servers in the chat (protocol 12)', () => {
     await eventually(async () => (await statusOf('mock-etoro')) === 'connected', 5_000);
   });
 
-  it('acts on servers: reconnect, turn off and on, clear sign-in; local sign-in connects by itself', async () => {
+  it('acts on servers: reconnect, turn off and on, clear sign-in; local sign-in connects after a reconnect', async () => {
     const { c, sessionId, statusOf } = await open(await start(), '/work/proj-0');
     const act = (name: string, action: string) => c.call('mcp.act', { sessionId, name, action });
     await act('context7', 'reconnect');
@@ -348,6 +348,11 @@ describe('mock service: MCP servers in the chat (protocol 12)', () => {
 
     const { url } = await c.call<{ url: string }>('mcp.signIn', { sessionId, name: 'mock-oauth' });
     expect(url).toBe(`http://127.0.0.1:${mock!.svc.port}/mock-oauth?server=mock-oauth`);
+    // The sign-in finishes by itself, but the server needs a reconnect to come up.
+    await new Promise((r) => setTimeout(r, 800));
+    expect(await statusOf('mock-oauth')).toBe('needs-auth');
+    await act('mock-oauth', 'reconnect');
+    expect(await statusOf('mock-oauth')).toBe('pending');
     await eventually(async () => (await statusOf('mock-oauth')) === 'connected', 5_000);
     await act('mock-oauth', 'clearAuth');
     expect(await statusOf('mock-oauth')).toBe('needs-auth');
@@ -370,6 +375,9 @@ describe('mock service: MCP servers in the chat (protocol 12)', () => {
       name: 'mock-oauth',
       url: 'http://localhost:1/callback?code=abc&state=x',
     });
+    // The token is saved, but the server stays down until reconnected.
+    expect(await statusOf('mock-oauth')).toBe('needs-auth');
+    await c.call('mcp.act', { sessionId, name: 'mock-oauth', action: 'reconnect' });
     await eventually(async () => (await statusOf('mock-oauth')) === 'connected', 5_000);
   });
 
