@@ -208,6 +208,8 @@ describe('protocol schemas', () => {
       'mcp.signIn',
       'mcp.submitCallback',
       'mcp.act',
+      'mcp.add',
+      'mcp.remove',
       'chat.wake',
       'alerts.setActive',
       'phoneAccess.get',

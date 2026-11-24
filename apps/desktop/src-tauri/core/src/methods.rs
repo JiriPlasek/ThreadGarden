@@ -425,6 +425,8 @@ pub const REFUSED: &[&str] = &[
     "mcp.signIn",
     "mcp.submitCallback",
     "mcp.act",
+    "mcp.add",
+    "mcp.remove",
     "chat.wake",
     // The desktop's plug setup dialog (finding and naming a plug): the phone takes typed details.
     "power.probe",

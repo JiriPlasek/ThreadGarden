@@ -3,6 +3,9 @@ import { z } from 'zod';
 /** Advertised in `hello` by a service that serves `mcp.*` and `chat.wake` (protocol 12). */
 export const MCP_CAPABILITY = 'mcp';
 
+/** Advertised in `hello` by a service that can add and remove MCP servers (`mcp.add`, `mcp.remove`). */
+export const MCP_CONFIG_CAPABILITY = 'mcp-config';
+
 export const MCP_ERRORS = {
   /** A Codex chat has no MCP servers to manage. */
   unsupported: 'MCP_UNSUPPORTED',
@@ -42,3 +45,25 @@ export const McpStateSchema = z.object({
   waiting: z.array(z.string()),
 });
 export type McpState = z.infer<typeof McpStateSchema>;
+
+/** Where Claude Code keeps a server: this project for me, every project for me, or `.mcp.json`. */
+export const McpScopeSchema = z.enum(['local', 'user', 'project']);
+export type McpScope = z.infer<typeof McpScopeSchema>;
+
+/** Letters, digits, `-` and `_` (Claude Code's rule); never a leading `-`, since the name is an argument. */
+export const MCP_SERVER_NAME = /^[A-Za-z0-9_][A-Za-z0-9_-]*$/;
+
+export const McpServerConfigSchema = z.discriminatedUnion('type', [
+  z.object({
+    type: z.literal('http'),
+    url: z.string().url(),
+    headers: z.record(z.string().min(1), z.string()).optional(),
+  }),
+  z.object({
+    type: z.literal('stdio'),
+    command: z.string().min(1),
+    args: z.array(z.string()).optional(),
+    env: z.record(z.string().min(1), z.string()).optional(),
+  }),
+]);
+export type McpServerConfig = z.infer<typeof McpServerConfigSchema>;

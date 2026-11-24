@@ -25,7 +25,12 @@ import {
   QueuedMessageSchema,
   ReturnedMessageSchema,
 } from './items.js';
-import { McpStateSchema } from './mcp.js';
+import {
+  MCP_SERVER_NAME,
+  McpScopeSchema,
+  McpServerConfigSchema,
+  McpStateSchema,
+} from './mcp.js';
 import {
   DeviceSchema,
   DeviceTokenSchema,
@@ -797,6 +802,20 @@ export const methods = {
       action: z.enum(['reconnect', 'enable', 'disable', 'clearAuth']),
     }),
     empty,
+  ),
+  // Behind the `mcp-config` capability. Refusals are `MCP_FAILED`, in Claude Code's words.
+  'mcp.add': def(
+    z.object({
+      sessionId: z.string(),
+      name: z.string().regex(MCP_SERVER_NAME),
+      scope: McpScopeSchema,
+      config: McpServerConfigSchema,
+    }),
+    z.object({ restartPending: z.boolean() }),
+  ),
+  'mcp.remove': def(
+    z.object({ sessionId: z.string(), name: z.string().min(1), scope: McpScopeSchema }),
+    z.object({ restartPending: z.boolean() }),
   ),
   /** Starts the chat's Claude Code process (resumes it) without sending a message. */
   'chat.wake': def(sessionIdOnly, empty),

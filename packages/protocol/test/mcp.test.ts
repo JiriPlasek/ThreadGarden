@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   CAPABILITIES,
   MCP_CAPABILITY,
+  MCP_CONFIG_CAPABILITY,
   MCP_ERRORS,
   McpServerSchema,
   McpStateSchema,
@@ -78,5 +79,44 @@ describe('protocol 12', () => {
     expect(
       p.safeParse({ sessionId: 's', name: 'n', url: 'http://localhost:1/cb?code=x' }).success,
     ).toBe(true);
+  });
+});
+
+describe('mcp.add and mcp.remove', () => {
+  const add = methods['mcp.add'].params;
+  const base = { sessionId: 's1', name: 'sentry', scope: 'local' };
+  const http = { type: 'http', url: 'https://mcp.sentry.dev/mcp' };
+
+  it("MCP_CONFIG_CAPABILITY is 'mcp-config' and not in CAPABILITIES", () => {
+    expect(MCP_CONFIG_CAPABILITY).toBe('mcp-config');
+    expect(CAPABILITIES).not.toContain('mcp-config');
+  });
+
+  it('are listed and not localOnly', () => {
+    for (const name of ['mcp.add', 'mcp.remove'] as const) {
+      expect(methods[name]).toBeDefined();
+      expect((methods[name] as { localOnly?: boolean }).localOnly).toBeFalsy();
+    }
+  });
+
+  it('mcp.add takes an http and a stdio server', () => {
+    const headers = { Authorization: 'Bearer x' };
+    expect(add.safeParse({ ...base, config: { ...http, headers } }).success).toBe(true);
+    const stdio = { type: 'stdio', command: 'npx', args: ['-y', 'pkg'], env: { KEY: 'v' } };
+    expect(add.safeParse({ ...base, scope: 'user', config: stdio }).success).toBe(true);
+    expect(methods['mcp.add'].result.safeParse({ restartPending: false }).success).toBe(true);
+    expect(
+      methods['mcp.remove'].params.safeParse({ sessionId: 's1', name: 'sentry', scope: 'project' })
+        .success,
+    ).toBe(true);
+  });
+
+  it('mcp.add refuses a bad name, URL, scope or command', () => {
+    for (const name of ['', '-x', 'a b']) {
+      expect(add.safeParse({ ...base, name, config: http }).success).toBe(false);
+    }
+    expect(add.safeParse({ ...base, config: { type: 'http', url: 'nope' } }).success).toBe(false);
+    expect(add.safeParse({ ...base, scope: 'global', config: http }).success).toBe(false);
+    expect(add.safeParse({ ...base, config: { type: 'stdio', command: '' } }).success).toBe(false);
   });
 });
