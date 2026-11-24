@@ -523,7 +523,7 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
     if (!deps.titles)
       throw new ServiceError('TITLE_GENERATION_FAILED', 'Chat naming is unavailable');
     try {
-      return await deps.titles.regenerate(p.sessionId, summary.cwd);
+      return await deps.titles.regenerate(p.sessionId, summary.cwd, p.apply);
     } catch {
       throw new ServiceError(
         'TITLE_GENERATION_FAILED',

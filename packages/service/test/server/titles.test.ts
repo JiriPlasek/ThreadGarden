@@ -159,6 +159,24 @@ describe('chat titles (service)', () => {
     expect(await titleOf(c, sessionId)).toBe('Login work');
   });
 
+  it('names separately without inserting a message or resuming the main conversation', async () => {
+    const adapter = new FakeAdapter();
+    answering(adapter, 'Safari login repair');
+    const c = await start(adapter);
+    const { sessionId } = await c.call<{ sessionId: string }>('chat.create', {
+      cwd: dir,
+      text: 'Repair Safari login redirects',
+    });
+    const fake = adapter.lastSession();
+    const sent = [...fake.sent];
+    await firstTurn(c, adapter, sessionId, 'Found the redirect bug.');
+    await eventually(async () => (await titleOf(c, sessionId)) === 'Safari login repair');
+    expect(adapter.started).toHaveLength(1);
+    expect(fake.sent).toEqual(sent);
+    expect(adapter.oneShots).toHaveLength(1);
+    expect(adapter.oneShots[0]!.sessionId).not.toBe(sessionId);
+  });
+
   it('a failed generation keeps the provisional title', async () => {
     const adapter = new FakeAdapter(); // the fake model fails by default
     const c = await start(adapter);

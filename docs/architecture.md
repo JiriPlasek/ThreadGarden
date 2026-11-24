@@ -493,6 +493,10 @@ not automatically taken over. A native rename relinquishes automatic naming,
 and names set in Threadgarden are protected by an atomic revision even when
 renamed away and back while a request is running.
 
+The magic wand beside the **Rename chat** field (also opened with F2) suggests
+a name into the draft only. Saving remains explicit; cancelling keeps the
+saved name and suggestion requests do not advance automatic checkpoints.
+
 **Regenerate name** in the chat header explicitly checks the current
 conversation, including old and paused chats, without resuming them. It works
 when automatic naming is off and can replace a custom name, but a newer
@@ -507,7 +511,9 @@ elsewhere still skip it (Ruling R33). Codex uses the original conversation's
 model, provider and login in an ephemeral native thread with tools, extensions,
 MCP servers and project instructions disabled, and verified read-only
 permissions. Title query processes are hidden from external chat listings
-while running and for 15 seconds afterwards.
+while running and for 15 seconds afterwards. Naming never sends a message to
+or resumes the source conversation, so it does not change that conversation's
+prompt cache. The isolated request has its own inference cost and may be uncached.
 
 **Analytics** (v1.3). Statistics come from the same `getSessionMessages`
 walk that indexes a session's text (`src/history/stats.ts`), so they cost

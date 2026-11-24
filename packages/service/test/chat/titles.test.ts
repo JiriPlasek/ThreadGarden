@@ -575,3 +575,22 @@ it('aborts a final freshness read without applying a title or checkpoint', async
     db.close();
   }
 });
+
+it('previews a name without changing metadata or automatic checkpoints', async () => {
+  const h = harness();
+  try {
+    h.db.setCustomTitle('c', 'My saved name');
+    h.exchange();
+    const revision = h.db.titleRevision('c');
+    const pending = h.titles.regenerate('c', '/w', false);
+    await h.flush();
+    await h.answer('Suggested login repair');
+    expect(await pending).toEqual({ title: 'Suggested login repair', changed: true });
+    expect(h.db.metaOf('c').customTitle).toBe('My saved name');
+    expect(h.db.metaOf('c').generatedTitle).toBeNull();
+    expect(h.db.titleRevision('c')).toBe(revision);
+    expect(h.db.titleCheck('c')).toBeUndefined();
+  } finally {
+    h.close();
+  }
+});

@@ -732,4 +732,14 @@
   {/if}
 </section>
 
-<RenameDialog chat={renaming} onSubmit={renameRenaming} onClose={() => (renaming = null)} />
+<RenameDialog
+  chat={renaming}
+  onSubmit={renameRenaming}
+  onSuggest={renaming
+    ? async (id) => {
+        if (!renaming || renaming.sessionId !== id) throw new Error('Chat is no longer selected');
+        return (await scopeOf(renaming.machineId).chats.regenerateTitle(id, false)).title;
+      }
+    : undefined}
+  onClose={() => (renaming = null)}
+/>

@@ -128,6 +128,25 @@ it('regenerates an old chat name from its conversation without starting or resum
   expect(opened.summary).toMatchObject({ title: 'Fix Safari callback handling', live: false });
 });
 
+it('suggests a name for a paused chat without saving or starting a conversation', async () => {
+  const adapter = new FakeAdapter();
+  addHistory(adapter, 'old-chat', 3);
+  adapter.oneShotReply = async () => JSON.stringify({ title: 'Suggested callback repair' });
+  await start(adapter);
+  await ok('meta.update', { sessionId: 'old-chat', customTitle: 'Saved name' });
+  const before = await ok<Opened>('chat.open', { sessionId: 'old-chat', tail: 100 });
+  expect(await ok('chat.regenerateTitle', { sessionId: 'old-chat', apply: false })).toEqual({
+    title: 'Suggested callback repair',
+    changed: true,
+  });
+  const after = await ok<Opened>('chat.open', { sessionId: 'old-chat', tail: 100 });
+  expect(after.items).toEqual(before.items);
+  expect(after.summary).toMatchObject({ title: 'Saved name', live: false });
+  expect(adapter.started).toHaveLength(0);
+  expect(adapter.oneShots).toHaveLength(1);
+  expect(adapter.oneShots[0]!.sessionId).not.toBe('old-chat');
+});
+
 it('rejects unknown naming requests and keeps the old title when generation fails', async () => {
   const adapter = new FakeAdapter();
   addHistory(adapter, 'known', 1);

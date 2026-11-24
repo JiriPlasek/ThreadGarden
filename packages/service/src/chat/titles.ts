@@ -147,6 +147,7 @@ type Job = {
   id: string;
   cwd: string;
   manual: boolean;
+  apply: boolean;
   resolve: (v: TitleResult) => void;
   reject: (e: unknown) => void;
 };
@@ -215,21 +216,21 @@ export class ChatTitles {
       this.deps.debug?.(`title of ${id}: ${errorText(e)}`),
     );
   }
-  regenerate(id: string, cwd: string): Promise<TitleResult> {
+  regenerate(id: string, cwd: string, apply = true): Promise<TitleResult> {
     if (this.disposed) return Promise.reject(new TitleError('Title service is stopped'));
     const existing = this.jobs.get(id);
     if (existing)
       return existing.then(
-        () => this.regenerate(id, cwd),
-        () => this.regenerate(id, cwd),
+        () => this.regenerate(id, cwd, apply),
+        () => this.regenerate(id, cwd, apply),
       );
-    return this.enqueue(id, cwd, true);
+    return this.enqueue(id, cwd, true, apply);
   }
-  private enqueue(id: string, cwd: string, manual: boolean): Promise<TitleResult> {
+  private enqueue(id: string, cwd: string, manual: boolean, apply = true): Promise<TitleResult> {
     const promise = new Promise<TitleResult>((resolve, reject) =>
       manual
-        ? this.queue.unshift({ id, cwd, manual, resolve, reject })
-        : this.queue.push({ id, cwd, manual, resolve, reject }),
+        ? this.queue.unshift({ id, cwd, manual, apply, resolve, reject })
+        : this.queue.push({ id, cwd, manual, apply, resolve, reject }),
     );
     this.jobs.set(id, promise);
     queueMicrotask(() => this.pump());
@@ -366,6 +367,11 @@ export class ChatTitles {
         (!manual && !this.deps.enabled())
       ) {
         job.resolve(unchanged());
+        return;
+      }
+      // Suggestions populate a rename draft only: no saved title or scheduling changes.
+      if (!job.apply) {
+        job.resolve({ title: title ?? displayed, changed: title !== null && title !== displayed });
         return;
       }
       db.setTitleCheck(id, { userId: latest, userCount: users.length, checkedAt: this.now() });

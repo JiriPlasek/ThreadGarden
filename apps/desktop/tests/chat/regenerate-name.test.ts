@@ -88,3 +88,93 @@ describe('regenerate chat name', () => {
     expect(server.calls('chat.regenerateTitle')).toHaveLength(0);
   });
 });
+
+it('F2 offers a wand that fills the rename field and waits for explicit save', async () => {
+  const { app, server, context } = await setup((s) => {
+    s.handlers['chat.regenerateTitle'] = () => ({ title: 'Suggested name', changed: true });
+  });
+  await app.chats.open('a');
+  const old = app.chats.get('a')!.summary!.title;
+  render(ChatHeader, { context, props: { chat: app.chats.get('a')! } });
+  await fireEvent.keyDown(window, { key: 'F2' });
+  await userEvent.click(await screen.findByRole('button', { name: 'Suggest chat name' }));
+  await waitFor(() =>
+    expect((screen.getByRole('textbox', { name: 'Chat title' }) as HTMLInputElement).value).toBe(
+      'Suggested name',
+    ),
+  );
+  expect(server.calls('chat.regenerateTitle')[0]?.params).toEqual({ sessionId: 'a', apply: false });
+  expect(server.calls('meta.update')).toHaveLength(0);
+  expect(app.chats.get('a')!.summary!.title).toBe(old);
+  await userEvent.click(screen.getByRole('button', { name: 'Rename' }));
+  await waitFor(() => expect(server.calls('meta.update')).toHaveLength(1));
+  expect(server.calls('meta.update')[0]?.params).toMatchObject({
+    sessionId: 'a',
+    customTitle: 'Suggested name',
+  });
+});
+
+it('keeps the rename draft on suggestion failure', async () => {
+  const { app, context } = await setup((s) => {
+    s.handlers['chat.regenerateTitle'] = () => {
+      throw new RpcFail('INTERNAL', 'Naming failed');
+    };
+  });
+  await app.chats.open('a');
+  render(ChatHeader, { context, props: { chat: app.chats.get('a')! } });
+  await fireEvent.keyDown(window, { key: 'F2' });
+  const input = await screen.findByRole('textbox', { name: 'Chat title' });
+  await userEvent.clear(input);
+  await userEvent.type(input, 'My draft');
+  await userEvent.click(screen.getByRole('button', { name: 'Suggest chat name' }));
+  expect((await screen.findByRole('alert')).textContent).toContain('Naming failed');
+  expect((input as HTMLInputElement).value).toBe('My draft');
+});
+
+it('blocks duplicate suggestions and ignores a late result after closing and reopening rename', async () => {
+  let resolve!: (value: { title: string; changed: boolean }) => void;
+  const { app, server, context } = await setup((s) => {
+    s.handlers['chat.regenerateTitle'] = () =>
+      new Promise((r) => {
+        resolve = r;
+      });
+  });
+  await app.chats.open('a');
+  const old = app.chats.get('a')!.summary!.title;
+  render(ChatHeader, { context, props: { chat: app.chats.get('a')! } });
+  await fireEvent.keyDown(window, { key: 'F2' });
+  const wand = await screen.findByRole('button', { name: 'Suggest chat name' });
+  await userEvent.click(wand);
+  expect((wand as HTMLButtonElement).disabled).toBe(true);
+  expect((screen.getByRole('button', { name: 'Rename' }) as HTMLButtonElement).disabled).toBe(true);
+  await fireEvent.click(wand);
+  expect(server.calls('chat.regenerateTitle')).toHaveLength(1);
+  await userEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  await fireEvent.keyDown(window, { key: 'F2' });
+  const input = await screen.findByRole('textbox', { name: 'Chat title' });
+  resolve({ title: 'Late suggestion', changed: true });
+  await waitFor(() => expect((input as HTMLInputElement).value).toBe(old));
+  expect(server.calls('meta.update')).toHaveLength(0);
+});
+
+it('routes rename suggestions to the remote chat machine', async () => {
+  const { app, server, remote, context } = await setupTwoMachines({
+    configureRemote: (s) => {
+      s.handlers['chat.regenerateTitle'] = () => ({ title: 'Remote suggestion', changed: true });
+    },
+  });
+  const scope = app.scopes.get(M1)!;
+  await scope.chats.open('a');
+  context.set(SCOPE_CONTEXT, scope);
+  render(ChatHeader, { context, props: { chat: scope.chats.get('a')! } });
+  await fireEvent.keyDown(window, { key: 'F2' });
+  await userEvent.click(await screen.findByRole('button', { name: 'Suggest chat name' }));
+  await waitFor(() =>
+    expect((screen.getByRole('textbox', { name: 'Chat title' }) as HTMLInputElement).value).toBe(
+      'Remote suggestion',
+    ),
+  );
+  expect(remote.calls('chat.regenerateTitle')[0]?.params).toEqual({ sessionId: 'a', apply: false });
+  expect(server.calls('chat.regenerateTitle')).toHaveLength(0);
+});

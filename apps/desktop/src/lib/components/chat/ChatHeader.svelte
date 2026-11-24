@@ -330,7 +330,7 @@
             onSelect={() => void regenerateName()}
           >
             <RefreshCwIcon class={regenerating ? 'animate-spin' : undefined} />
-            {regenerating ? 'Regenerating name…' : 'Regenerate name'}
+            {regenerating ? 'Regenerating name...' : 'Regenerate name'}
           </DropdownMenu.Item>
         {/if}
         <DropdownMenu.Separator />
@@ -638,6 +638,9 @@
 <RenameDialog
   chat={renaming ? summary : null}
   onSubmit={rename}
+  onSuggest={!readOnly && !chat.movedTo
+    ? async (id) => (await chats.regenerateTitle(id, false)).title
+    : undefined}
   onClose={() => (renaming = false)}
 />
 
