@@ -278,6 +278,29 @@ export class CodexSession implements AgentSession {
   }
 
   private async startTurn(messages: SDKUserMessage[], shown: Set<SDKUserMessage>): Promise<void> {
+    const textOf = (message: SDKUserMessage): string | undefined => {
+      const content = message.message.content;
+      if (typeof content === 'string') return content;
+      if (Array.isArray(content) && content.length === 1 && content[0]?.type === 'text')
+        return content[0].text;
+      return undefined;
+    };
+    if (messages.some((message) => textOf(message)?.trim().startsWith('/'))) {
+      if (messages.length !== 1 || textOf(messages[0]!)?.trim() !== '/compact')
+        throw new Error('Unsupported Codex command. Send /compact alone, without arguments.');
+      this.show(messages[0]!);
+      shown.add(messages[0]!);
+      // The native compaction emits turn/started and turn/completed asynchronously.
+      // Keep subsequent input queued even before its started notification arrives.
+      this.activeTurn = 'compact';
+      try {
+        await this.client.request('thread/compact/start', { threadId: this.record.threadId });
+      } catch (error) {
+        this.activeTurn = undefined;
+        throw error;
+      }
+      return;
+    }
     const input: Rec[] = [];
     for (const message of messages) {
       const content: unknown = message.message.content;
@@ -404,7 +427,7 @@ export class CodexSession implements AgentSession {
     await this.taskSource.stop(taskId);
   }
   async supportedCommands(): Promise<SlashCommand[]> {
-    return [];
+    return [{ name: 'compact', description: 'Compact the conversation context', argumentHint: '' }];
   }
   async supportedModels(): Promise<ModelInfo[]> {
     await this.ready;

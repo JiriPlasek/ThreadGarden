@@ -573,3 +573,34 @@ describe('Codex provider', () => {
     ).toBe(true);
   });
 });
+
+it('executes compact natively instead of sending slash text to the model', async () => {
+  const h = harness();
+  const session = h.create();
+  const c = await h.running();
+  c.event('turn/completed', {
+    threadId: 'thread-123',
+    turn: { id: 'turn-1', status: 'completed' },
+  });
+  expect(await session.supportedCommands()).toEqual([
+    { name: 'compact', description: 'Compact the conversation context', argumentHint: '' },
+  ]);
+  session.send({ text: '/compact' });
+  await vi.waitFor(() =>
+    expect(c.calls.some((x) => x.method === 'thread/compact/start')).toBe(true),
+  );
+  expect(c.calls.filter((x) => x.method === 'turn/start')).toHaveLength(1);
+});
+
+it('rejects unsupported Codex slash commands instead of treating them as model prompts', async () => {
+  const h = harness();
+  const session = h.create();
+  const c = await h.running();
+  c.event('turn/completed', {
+    threadId: 'thread-123',
+    turn: { id: 'turn-1', status: 'completed' },
+  });
+  session.send({ text: '/unknown' });
+  await vi.waitFor(() => expect(session.status).toBe('idle'));
+  expect(c.calls.filter((x) => x.method === 'turn/start')).toHaveLength(1);
+});
