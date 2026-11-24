@@ -1,3 +1,4 @@
+import { CODEX_COMMANDS, codexCommand, isBareCompact } from './codex-commands.js';
 /** Codex's thread/turn protocol translated at the existing chat event boundary. */
 import { randomUUID } from 'node:crypto';
 import os from 'node:os';
@@ -111,6 +112,7 @@ export class CodexSession implements AgentSession {
   private ready: Promise<void>;
   private closed = false;
   private activeTurn?: string;
+  private compacting = false;
   private starting = false;
   private stopping = false;
   private steeringBlockedTurn?: string;
@@ -225,19 +227,11 @@ export class CodexSession implements AgentSession {
   }
 
   private async drain(): Promise<void> {
-    if (this.starting || this.stopping || this.closed || !this.inputs.length) return;
-    const firstContent: unknown = this.inputs[0]?.message.content;
-    const firstText =
-      typeof firstContent === 'string'
-        ? firstContent
-        : Array.isArray(firstContent)
-          ? firstContent.map((block) => str(rec(block).text)).join('')
-          : '';
+    if (this.starting || this.stopping || this.compacting || this.closed || !this.inputs.length)
+      return;
     if (
       this.activeTurn &&
-      (this.activeTurn === 'compact' ||
-        this.steeringBlockedTurn === this.activeTurn ||
-        firstText.trimStart().startsWith('/'))
+      (this.steeringBlockedTurn === this.activeTurn || codexCommand(this.inputs[0]!))
     )
       return;
     this.starting = true;
@@ -380,24 +374,24 @@ export class CodexSession implements AgentSession {
   }
 
   private async startTurn(messages: SDKUserMessage[], shown: Set<SDKUserMessage>): Promise<void> {
-    const textOf = (message: SDKUserMessage): string | undefined => {
-      const content = message.message.content;
-      if (typeof content === 'string') return content;
-      if (Array.isArray(content) && content.length === 1 && content[0]?.type === 'text')
-        return content[0].text;
-      return undefined;
-    };
-    if (messages.some((message) => textOf(message)?.trim().startsWith('/'))) {
-      if (messages.length !== 1 || textOf(messages[0]!)?.trim() !== '/compact')
-        throw new Error('Unsupported Codex command. Send /compact alone, without arguments.');
+    if (messages.some((message) => codexCommand(message))) {
+      if (messages.length !== 1 || !isBareCompact(messages[0]!))
+        throw new Error(
+          'Unsupported Codex command. Send /compact alone, without arguments or attachments.',
+        );
+      this.completedWhileStarting = false;
+      this.turnUsage = undefined;
+      this.lastAssistant = undefined;
       this.show(messages[0]!);
       shown.add(messages[0]!);
       // The native compaction emits turn/started and turn/completed asynchronously.
       // Keep subsequent input queued even before its started notification arrives.
+      this.compacting = true;
       this.activeTurn = 'compact';
       try {
         await this.client.request('thread/compact/start', { threadId: this.record.threadId });
       } catch (error) {
+        this.compacting = false;
         this.activeTurn = undefined;
         throw error;
       }
@@ -520,7 +514,7 @@ export class CodexSession implements AgentSession {
     await this.taskSource.stop(taskId);
   }
   async supportedCommands(): Promise<SlashCommand[]> {
-    return [{ name: 'compact', description: 'Compact the conversation context', argumentHint: '' }];
+    return CODEX_COMMANDS;
   }
   async supportedModels(): Promise<ModelInfo[]> {
     await this.ready;
@@ -703,6 +697,7 @@ export class CodexSession implements AgentSession {
           this.item(rec(p.item), true);
           break;
         case 'turn/completed': {
+          this.compacting = false;
           this.completedWhileStarting = this.starting;
           for (const [id, text] of this.streamed) {
             this.lastAssistant = { id, content: [{ type: 'text', text }] };

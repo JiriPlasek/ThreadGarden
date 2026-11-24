@@ -47,7 +47,11 @@ const harness = (responses: Record<string, Rec> = {}) => {
         calls.push({ method, params });
         if (responses[method]) return responses[method]!;
         if (method === 'thread/start' || method === 'thread/resume')
-          return { thread: { id: 'thread-123' }, model: 'test-model' };
+          return {
+            thread: { id: 'thread-123' },
+            model: 'test-model',
+            sandbox: { type: 'readOnly' },
+          };
         if (method === 'turn/start') return { turn: { id: `turn-${++turns}` } };
         if (method === 'account/read') return { account: { type: 'chatgpt', planType: 'pro' } };
         if (method === 'model/list')
@@ -714,4 +718,43 @@ it('rejects unsupported Codex slash commands instead of treating them as model p
   session.send({ text: '/unknown' });
   await vi.waitFor(() => expect(session.status).toBe('idle'));
   expect(c.calls.filter((x) => x.method === 'turn/start')).toHaveLength(1);
+});
+
+it('does not reuse the preceding reply or usage when compacting', async () => {
+  const h = harness();
+  const session = h.create();
+  const c = await h.running();
+  c.event('item/completed', { item: { type: 'agentMessage', id: 'reply', text: 'Done' } });
+  c.event('thread/tokenUsage/updated', {
+    tokenUsage: { last: { inputTokens: 100, outputTokens: 20 }, modelContextWindow: 1000 },
+  });
+  c.event('turn/completed', { turn: { id: 'turn-1', status: 'completed' } });
+  await vi.waitFor(() => expect(session.status).toBe('idle'));
+  const before = h.codex.store
+    .messages(session.sessionId)
+    .filter((m) => m.type === 'assistant').length;
+  session.send({ text: '/compact' });
+  await vi.waitFor(() =>
+    expect(c.calls.some((x) => x.method === 'thread/compact/start')).toBe(true),
+  );
+  c.event('turn/started', { turn: { id: 'compact-1' } });
+  c.event('turn/completed', { turn: { id: 'compact-1', status: 'completed' } });
+  await vi.waitFor(() => expect(session.status).toBe('idle'));
+  const messages = h.codex.store.messages(session.sessionId);
+  expect(messages.filter((m) => m.type === 'assistant')).toHaveLength(before);
+  expect(messages.at(-1)).not.toHaveProperty('usage');
+});
+
+it('sends absolute paths as normal Codex prompts and rejects compact attachments', async () => {
+  const h = harness();
+  const session = h.create();
+  const c = await h.running();
+  c.event('turn/completed', { turn: { id: 'turn-1', status: 'completed' } });
+  session.send({ text: '/home/me/src/foo.ts has a bug' });
+  await vi.waitFor(() => expect(c.calls.filter((x) => x.method === 'turn/start')).toHaveLength(2));
+  c.event('turn/completed', { turn: { id: 'turn-2', status: 'completed' } });
+  session.send({ text: '/compact', images: [{ mediaType: 'image/png', dataBase64: 'AA==' }] });
+  await vi.waitFor(() => expect(session.status).toBe('idle'));
+  expect(c.calls.filter((x) => x.method === 'turn/start')).toHaveLength(2);
+  expect(c.calls.some((x) => x.method === 'thread/compact/start')).toBe(false);
 });
