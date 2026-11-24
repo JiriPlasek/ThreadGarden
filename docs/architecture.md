@@ -476,6 +476,31 @@ search ranks archived matches after all others and flags them, keeping up to
 3 places for them (at most half the results), and the UI lists them in their
 own group.
 
+**Continue with another agent.** A chat's state menu offers **Continue in Codex**
+or **Continue in Claude**, on its own connected machine. Confirmation creates
+a distinct native session in the same working folder; the source stays readable.
+The service uses the same merged SDK/live history as the chat, with a strict
+history read for established sessions. It writes a readable Markdown export
+under its data directory, then gives the target a short instruction to read it,
+inspect the current working tree and pick up the latest unfinished request.
+This makes no inference request to the source agent and does not import its
+native session, credentials, permissions or prompt cache. Images are explicitly
+marked as not copied; thinking and opaque provider records are omitted.
+
+The service checks the destination runtime and working folder before stopping
+anything. The source transfer lock excludes concurrent sends and moves. Tracked
+background tasks and known external processes block the operation; an unverified
+external check relies on the explicit stop confirmation, as resume already does.
+An owned source is interrupted, ended and awaited with a ten-second bound before
+the export and target creation. Queued messages return to the source draft by
+the normal stop path. The target uses its usual default model and permissions.
+
+A local `chat_continuations` relation links source and target in both directions.
+Client-chosen target ids make retries idempotent; an interrupted prepared
+handoff is recovered when its target does not yet exist. An orphan export can
+be replaced before target creation. The phone core refuses local `chat.continue`
+(it runs no agents); a remote machine's scope handles it normally.
+
 **Chat titles** (v1.2). Claude Code titles only its terminal sessions, so a
 chat Threadgarden starts gets a provisional title at once: the first sentence of the
 first line of its first message (also set when Threadgarden continues a chat that

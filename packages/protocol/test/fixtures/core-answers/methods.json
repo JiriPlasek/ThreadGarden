@@ -48,6 +48,7 @@
     "away.queue",
     "away.retry",
     "chat.archiveOlder",
+    "chat.continue",
     "chat.create",
     "chat.end",
     "chat.fork",

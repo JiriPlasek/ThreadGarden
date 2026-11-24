@@ -9,6 +9,10 @@ user; `stop` shuts it down. The per-user Windows zip is built with
 and updates are covered in [the Windows guide](../../docs/windows-machines.md).
 Native workers advertise no power capability and register no idle shutdown.
 
+Cross-agent continuation:
+
+- **Continue in Codex/Claude** creates a separate session in the same working folder, with a readable conversation export in Threadgarden's data directory and reciprocal chat links. It needs no inference from the source agent. It interrupts and ends an owned source first; tracked background tasks and known external processes must be stopped before continuing. The target uses its normal account, default model and permissions. Images, thinking and opaque provider records are omitted; no native session or prompt cache is converted.
+
 Codex support:
 
 - Install the Codex CLI and sign in with `codex login`. Choose one of its models in New chat's model picker. Models use their native display names; the internal `codex:` routing prefix is hidden. Models and reasoning levels come from the installed CLI's `model/list` catalog, including before any chat runs. `chat.models` marks one Codex row `isDefault`: the `model` in Codex's config (`config/read`) when the catalog has it, else the catalog's own default. Without a Codex CLI no Codex rows are offered; a CLI that can't list its models offers one `codex:default` row. Claude's rows come from a live Claude session and are kept in `ui_state` (`claudeModels`), so a picker has them after a restart; Claude Code's `default` row is not sent: the row it resolves to (`resolvedModel`) is marked `isDefault` instead, or, when no row covers it, it stays, named after its model. `THREADGARDEN_CODEX_PATH` overrides executable discovery; native binaries and npm's Windows launchers are supported. Claude's executable and Anthropic key are not required for Codex chats.

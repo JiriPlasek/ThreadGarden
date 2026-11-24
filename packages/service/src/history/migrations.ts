@@ -357,6 +357,14 @@ const steps: string[] = [
     mode TEXT NOT NULL
   );
   `,
+  `
+  CREATE TABLE IF NOT EXISTS chat_continuations (
+    session_id TEXT PRIMARY KEY,
+    source_session_id TEXT NOT NULL,
+    at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS chat_continuations_source ON chat_continuations (source_session_id, at);
+  `,
 ];
 
 /** Runs the steps not run yet; `upTo` stops early (tests build older schemas with it). */
