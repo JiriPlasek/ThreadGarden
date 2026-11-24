@@ -65,8 +65,8 @@
   /** The Add MCP server form replaces the list. */
   let adding = $state(false);
   /** The restart lines: shown while a change waits for the chat to restart. */
-  let addedPending = $state(false);
-  let removedPending = $state(false);
+  let addedPending = $state<string | null>(null);
+  let removedPending = $state<string | null>(null);
   /** The server a Remove confirmation is about. */
   let removing = $state<{ name: string; scope: McpScope } | null>(null);
   let removeOpen = $state(false);
@@ -97,6 +97,14 @@
   });
 
   $effect(() => {
+    // The restart lines end once the chat has restarted: the added server is
+    // listed, the removed one is gone.
+    const names = servers.map((s) => s.name);
+    if (addedPending !== null && names.includes(addedPending)) addedPending = null;
+    if (removedPending !== null && !names.includes(removedPending)) removedPending = null;
+  });
+
+  $effect(() => {
     if (open) return;
     errors = {};
     pasting = null;
@@ -105,8 +113,8 @@
     pasted = '';
     wakeError = null;
     adding = false;
-    addedPending = false;
-    removedPending = false;
+    addedPending = null;
+    removedPending = null;
     removing = null;
     removeOpen = false;
   });
@@ -171,7 +179,7 @@
 
   const add = async (name: string, scope: McpScope, config: McpServerConfig): Promise<void> => {
     const { restartPending } = await mcp.add(name, scope, config);
-    if (restartPending) addedPending = true;
+    if (restartPending) addedPending = name;
     adding = false;
   };
 
@@ -180,7 +188,7 @@
     busy = removing.name;
     try {
       const { restartPending } = await mcp.remove(removing.name, removing.scope);
-      if (restartPending) removedPending = true;
+      if (restartPending) removedPending = removing.name;
     } finally {
       busy = null;
     }
@@ -255,10 +263,10 @@
           >
         </div>
       {/if}
-      {#if addedPending}
+      {#if addedPending !== null}
         <p class="text-muted-foreground text-sm">{ADDED_AFTER_RESTART}</p>
       {/if}
-      {#if removedPending}
+      {#if removedPending !== null}
         <p class="text-muted-foreground text-sm">{REMOVED_AFTER_RESTART}</p>
       {/if}
       {#if servers.length === 0}

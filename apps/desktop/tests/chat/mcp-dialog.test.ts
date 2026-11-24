@@ -349,6 +349,33 @@ describe('McpServersDialog', () => {
     ).toBeTruthy();
   });
 
+  it('the restart lines go once the chat has restarted', async () => {
+    const mcp = fakeMcp([server({ name: 'a', source: 'user' })], {
+      remove: vi.fn(async () => ({ restartPending: true })),
+      add: vi.fn(async () => ({ restartPending: true })),
+    });
+    const { rerender } = show(mcp);
+    await userEvent.click(screen.getByRole('button', { name: 'More for a' }));
+    await userEvent.click(await screen.findByText('Remove'));
+    await userEvent.click(
+      within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Remove' }),
+    );
+    const removed = 'Removed. It disappears when this chat restarts between turns.';
+    await screen.findByText(removed);
+    await userEvent.click(screen.getByRole('button', { name: '+ Add server' }));
+    await userEvent.type(screen.getByLabelText('Name'), 'sentry');
+    await userEvent.type(screen.getByLabelText('URL'), 'https://mcp.example/mcp');
+    await userEvent.click(screen.getByRole('button', { name: 'Add' }));
+    const added = 'Added. It appears when this chat restarts between turns.';
+    await screen.findByText(added);
+    // The chat restarted: "a" is gone, "sentry" is listed.
+    await rerender({
+      mcp: fakeMcp([server({ name: 'sentry', source: 'user' })]) as unknown as ChatMcp,
+    });
+    await waitFor(() => expect(screen.queryByText(removed)).toBeNull());
+    expect(screen.queryByText(added)).toBeNull();
+  });
+
   it('confirming Remove keeps the MCP servers dialog open', async () => {
     const mcp = fakeMcp([server({ name: 'a', source: 'user' })]);
     show(mcp);
