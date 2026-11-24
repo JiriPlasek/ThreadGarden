@@ -929,6 +929,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         now: clock,
         ...(opts.sessionTimers ? { timers: opts.sessionTimers } : {}),
         isPinned: (id) => opened.isSessionPinned(id),
+        isMoving: (id) => moveLocks.isLocked(id),
         getSettings: () => opened.getSettings(),
         getPermissionMode: (id) => opened.getPermissionMode(id),
         onPermissionMode: (id, mode) => opened.setPermissionMode(id, mode),
