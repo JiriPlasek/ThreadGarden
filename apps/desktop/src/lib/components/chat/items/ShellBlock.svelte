@@ -154,6 +154,14 @@
     };
   });
 
+  /**
+   * A full reset (ESC c) sent through `write`. xterm only queues what is
+   * written and draws it later, while `reset()` acts at once: output still
+   * queued would land after the reset and show twice. In the data, the reset
+   * takes its turn after everything written before it.
+   */
+  const RESET = '\u001bc';
+
   // The scrollback, then each new chunk; a reset (or another run's output) redraws.
   let drawnOn: Terminal | null = null;
   $effect(() => {
@@ -161,20 +169,17 @@
     const out = output;
     if (!t) return;
     replaying = true;
-    if (drawnOn === t) t.reset();
+    const redraw = drawnOn === t;
     drawnOn = t;
     const text = out.text();
-    if (text) replay(t, text);
+    if (text || redraw) replay(t, (redraw ? RESET : '') + text);
     else {
       replaying = false;
       measure(t);
     }
     return out.listen((data, reset) => {
-      if (reset) {
-        replaying = true;
-        t.reset();
-        replay(t, data);
-      } else t.write(data, () => measure(t));
+      if (reset) replay(t, RESET + data);
+      else t.write(data, () => measure(t));
     });
   });
 

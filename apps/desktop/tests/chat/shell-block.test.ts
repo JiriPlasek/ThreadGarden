@@ -12,6 +12,7 @@ const h = vi.hoisted(() => {
     opts: Record<string, unknown>;
     data: ((d: string) => void) | null;
     disposed: boolean;
+    screen: string;
   };
   return {
     terms: [] as Fake[],
@@ -20,6 +21,15 @@ const h = vi.hoisted(() => {
     cursorY: 0,
     /** What the fake terminal answers a cursor-position query (ESC [ 6 n) with. */
     reply: '\u001b[1;1R',
+    /**
+     * Like xterm: `write` only queues, and the queue is parsed later (`flush`),
+     * while `reset()` acts at once. Off: every write is parsed when made.
+     */
+    queued: false,
+    pending: [] as Array<() => void>,
+    flush(): void {
+      for (const parse of this.pending.splice(0)) parse();
+    },
   };
 });
 
@@ -30,6 +40,8 @@ vi.mock('@xterm/xterm', () => ({
     data: ((d: string) => void) | null = null;
     disposed = false;
     lines: string[] = [];
+    /** What the terminal shows: the parsed writes since its last reset (`reset()` or ESC c). */
+    screen = '';
     element: { clientHeight: number };
     buffer: { active: object };
     cols: number;
@@ -60,13 +72,21 @@ vi.mock('@xterm/xterm', () => ({
     focus() {}
     reset() {
       this.ops.push(['reset']);
+      this.screen = '';
     }
     write(d: string, cb?: () => void) {
       this.ops.push(['write', d]);
-      if (h.lines) this.lines = h.lines.slice();
-      // A real terminal answers queries in what it writes through onData.
-      if (d.includes('\u001b[6n')) this.data?.(h.reply);
-      cb?.();
+      const parse = () => {
+        // ESC c (a full reset) in the data clears the screen where it stands.
+        const afterReset = d.split('\u001bc');
+        this.screen = afterReset.length > 1 ? afterReset.at(-1)! : this.screen + d;
+        if (h.lines) this.lines = h.lines.slice();
+        // A real terminal answers queries in what it writes through onData.
+        if (d.includes('\u001b[6n')) this.data?.(h.reply);
+        cb?.();
+      };
+      if (h.queued) h.pending.push(parse);
+      else parse();
     }
     resize(c: number, r: number) {
       this.ops.push(['resize', c, r]);
@@ -89,6 +109,7 @@ vi.mock('@xterm/addon-fit', () => ({
 }));
 
 import ShellBlock from '../../src/lib/components/chat/items/ShellBlock.svelte';
+import ShellBlockSpread from './ShellBlockSpread.svelte';
 
 const run = (over: Partial<ShellRun> = {}): ShellRun => ({
   runId: 'r1',
@@ -137,6 +158,8 @@ beforeEach(() => {
   h.dims = { cols: 80, rows: 24 };
   h.lines = null;
   h.cursorY = 0;
+  h.queued = false;
+  h.pending.length = 0;
   document.documentElement.style.removeProperty('--background');
   vi.restoreAllMocks();
 });
@@ -180,8 +203,45 @@ describe('ShellBlock', () => {
     const { term } = mount({ output });
     expect(term.ops).toEqual([['write', 'old\r\n']]);
     output.push(5, 'new');
+    expect(term.screen).toBe('old\r\nnew');
     output.reset('fresh', 0);
-    expect(term.ops.slice(1)).toEqual([['write', 'new'], ['reset'], ['write', 'fresh']]);
+    expect(term.screen).toBe('fresh');
+  });
+
+  describe('output waiting to be drawn (xterm parses writes later)', () => {
+    it('a redraw replaces it, never draws on top of it', () => {
+      h.queued = true;
+      const output = new ShellOutput();
+      output.reset('old\r\n', 0);
+      const { term } = mount({ output });
+      output.push(5, 'hi\r\n');
+      output.reset('old\r\nhi\r\n', 0);
+      h.flush();
+      expect(term.screen).toBe('old\r\nhi\r\n');
+    });
+
+    it('the run changing (it ended, its entry was added) shows the output once', async () => {
+      h.queued = true;
+      const output = new ShellOutput();
+      const block = {
+        run: run(),
+        output,
+        machineName: 'kumbal',
+        home: '/home/me',
+        onInput: vi.fn(),
+        onResize: vi.fn(),
+        onStop: vi.fn(),
+      };
+      const { rerender } = render(ShellBlockSpread, { block } as never);
+      const term = h.terms.at(-1)!;
+      h.flush();
+      output.push(0, 'hi\r\n');
+      const ended = run({ state: 'ended', exitCode: 0, endReason: 'exit', endedAt: Date.now() });
+      await rerender({ block: { ...block, run: ended } } as never);
+      await rerender({ block: { ...block, run: { ...ended, entryId: 'e1' } } } as never);
+      h.flush();
+      expect(term.screen).toBe('hi\r\n');
+    });
   });
 
   it("a replayed scrollback's terminal replies never reach the command", () => {

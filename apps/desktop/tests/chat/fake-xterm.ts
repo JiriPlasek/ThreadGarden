@@ -29,7 +29,9 @@ export class FakeTerminal {
     this.written = '';
   }
   write(data: string, done?: () => void): void {
-    this.written += data;
+    // ESC c (a full reset) clears what was written before it.
+    const afterReset = data.split('\u001bc');
+    this.written = afterReset.length > 1 ? afterReset.at(-1)! : this.written + data;
     done?.();
   }
   resize(cols: number, rows: number): void {

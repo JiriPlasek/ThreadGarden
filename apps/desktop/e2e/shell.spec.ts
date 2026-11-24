@@ -1,5 +1,6 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
-import { chatRow, markAllSeen, openApp, resetTabs, serviceCall } from './helpers';
+import { REMOTE_MOCK_PORT, REMOTE_PAIRING_CODE } from './env';
+import { chatRow, markAllSeen, openApp, remoteCall, resetTabs, serviceCall } from './helpers';
 
 /**
  * `!` commands in the chat (protocol 13) end to end, against the mock: both
@@ -16,6 +17,8 @@ const CHATS = [
   'session-650',
   'session-600',
 ];
+/** The remote mock's newest chat (as mcp.spec.ts), reached through This PC's relay. */
+const REMOTE_CHAT = 'session-19';
 const REPLY = 'This is the Threadgarden mock service answering.';
 const SUDO_INPUT = 'typed-blind-not-for-claude';
 
@@ -43,6 +46,35 @@ const openLiveChat = async (page: Page, sessionId: string): Promise<void> => {
   await composer(page).press('Enter');
   await expect(page.getByText(REPLY).first()).toBeVisible();
 };
+
+const forgetMachines = async (): Promise<void> => {
+  const paired = await serviceCall<{ id: string }[]>('machines.list', {});
+  for (const m of paired) await serviceCall('machines.remove', { machineId: m.id, revoke: true });
+};
+
+/** Settings → Machines → Add machine… with the remote mock's code (as mcp.spec.ts). */
+const pairUbuntu = async (page: Page): Promise<void> => {
+  const places = page.getByRole('navigation', { name: 'Places' });
+  await places.getByRole('button', { name: 'Settings' }).click();
+  const settings = page.getByRole('dialog', { name: 'Settings' });
+  await settings.getByRole('button', { name: 'Add machine…' }).click();
+  const add = page.getByRole('dialog', { name: 'Add machine' });
+  await add.getByLabel('Address').fill('127.0.0.1');
+  await add.getByText('More').click();
+  await add.getByLabel('Port').fill(String(REMOTE_MOCK_PORT));
+  await add.getByLabel('Pairing code').fill(REMOTE_PAIRING_CODE);
+  await add.getByRole('button', { name: 'Pair' }).click();
+  await expect(add).toBeHidden();
+  await expect(
+    settings.getByRole('group', { name: 'Ubuntu' }).getByText('On', { exact: true }),
+  ).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(settings).toBeHidden();
+};
+
+/** How often `text` shows in the block's terminal (its drawn rows, not the title). */
+const timesShown = async (page: Page, text: string): Promise<number> =>
+  (await block(page).locator('.xterm-rows').innerText()).split(text).length - 1;
 
 const run = async (page: Page, command: string): Promise<void> => {
   await composer(page).fill(`! ${command}`);
@@ -140,6 +172,30 @@ test('a flood stays responsive', async ({ page }) => {
   await expect(composer(page)).toContainText('still typing');
   await expect(block(page)).toContainText('✓ exit 0 ·', { timeout: 45_000 });
   await expect(block(page)).toContainText('output skipped here');
+});
+
+test('a command on a paired machine shows its output once, live', async ({ page }) => {
+  await forgetMachines();
+  try {
+    await openApp(page);
+    await pairUbuntu(page);
+    await (await chatRow(page, REMOTE_CHAT)).click();
+    await expect(page.getByTitle('Runs on Ubuntu')).toBeVisible();
+    await composer(page).fill('Hello from the shell test');
+    await composer(page).press('Enter');
+    await expect(page.getByText(REPLY).first()).toBeVisible();
+
+    await run(page, 'echo hi');
+    await expect(block(page)).toContainText('✓ exit 0 ·');
+    await expect(block(page).locator('.xterm-rows')).toContainText('mock: echo hi');
+    // A write still queued in the terminal is drawn within a frame or two.
+    await page.waitForTimeout(500);
+    expect(await timesShown(page, 'mock: echo hi')).toBe(1);
+  } finally {
+    await remoteCall('chat.end', { sessionId: REMOTE_CHAT }).catch(() => undefined);
+    await markAllSeen(remoteCall);
+    await forgetMachines();
+  }
 });
 
 test('New chat sends ! as text', async ({ page }) => {
