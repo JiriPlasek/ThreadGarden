@@ -959,6 +959,51 @@ describe('Codex provider', () => {
     );
   });
 
+  it('recycles completed legacy child turns and restarts their task only when another turn begins', async () => {
+    const h = harness();
+    const session = h.create();
+    const c = await h.running();
+    for (let i = 0; i < 129; i++) {
+      c.event('item/completed', {
+        item: {
+          id: `legacy-${i}`,
+          type: 'collabAgentToolCall',
+          tool: 'spawnAgent',
+          receiverThreadIds: [`legacy-child-${i}`],
+        },
+      });
+      c.event('turn/started', { threadId: `legacy-child-${i}`, turn: { id: `child-turn-${i}` } });
+      c.event('item/completed', {
+        threadId: `legacy-child-${i}`,
+        item: { id: `legacy-reply-${i}`, type: 'agentMessage', text: `legacy reply ${i}` },
+      });
+      c.event('turn/completed', {
+        threadId: `legacy-child-${i}`,
+        turn: { id: `child-turn-${i}`, status: 'completed' },
+      });
+    }
+    await vi.waitFor(() =>
+      expect(session.snapshot(1000).items).toContainEqual(
+        expect.objectContaining({
+          kind: 'assistantText',
+          markdown: 'legacy reply 128',
+          parentToolUseId: 'legacy-128',
+        }),
+      ),
+    );
+    expect(
+      session.snapshot(1000).tasks.find((task) => task.taskId === 'codex-agent-legacy-child-128')
+        ?.status,
+    ).toBe('completed');
+    c.event('turn/started', { threadId: 'legacy-child-128', turn: { id: 'followup-turn' } });
+    await vi.waitFor(() =>
+      expect(
+        session.snapshot(1000).tasks.find((task) => task.taskId === 'codex-agent-legacy-child-128')
+          ?.status,
+      ).toBe('running'),
+    );
+  });
+
   it('keeps slash commands queued for native command handling after the active turn', async () => {
     const h = harness();
     const session = h.create();

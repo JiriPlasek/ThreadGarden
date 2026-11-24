@@ -4,7 +4,9 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import type { ChatItem } from '@threadgarden/protocol';
 import { LiveSession } from '../../src/chat/live-session.js';
+import { Normalizer } from '../../src/chat/normalize.js';
 import type { PermissionMode } from '../../src/sdk/adapter.js';
 import { CodexAdapter } from '../../src/sdk/codex-adapter.js';
 import {
@@ -567,6 +569,35 @@ describe.skipIf(!enabled)('real Codex workflows', () => {
         parentToolUseId: spawnId,
       }),
     );
+    // Import through a fresh display store: the live journal cannot supply these children.
+    const imported = new CodexAdapter(path.join(h.root, 'import-view'));
+    adapters.push(new MultiAdapter(new FakeAdapter(), imported));
+    const threadId = str(
+      rec(h.calls.find((call) => call.method === 'thread/start')?.result?.thread).id,
+    );
+    const importedId = `codex-${threadId}`;
+    expect(await imported.history.list()).toContainEqual(
+      expect.objectContaining({ sessionId: importedId }),
+    );
+    const normalizer = new Normalizer();
+    const items = new Map<string, ChatItem>();
+    for (const message of await imported.history.messages(importedId))
+      for (const item of normalizer.push(message).items) items.set(item.id, item);
+    expect([...items.values()]).toContainEqual(
+      expect.objectContaining({
+        kind: 'assistantText',
+        markdown: expect.stringContaining('CHILD_CONVERSATION_DONE'),
+        parentToolUseId: spawnId,
+      }),
+    );
+    expect(
+      [...items.values()].filter(
+        (item) =>
+          item.kind === 'assistantText' &&
+          item.markdown.includes('CHILD_CONVERSATION_DONE') &&
+          item.parentToolUseId === spawnId,
+      ),
+    ).toHaveLength(1);
   });
 
   it('lists a real child agent in Activity and interrupts only that owned agent', async () => {

@@ -667,8 +667,29 @@ export class CodexSession implements AgentSession {
           parent_agent_id: str(p.threadId),
           codex_turn_id: str(p.turnId) || str(rec(p.turn).id) || undefined,
         };
+        if (message.method === 'turn/started') {
+          if (child.terminal)
+            this.agentStarted(str(p.threadId), child, 'Codex agent', str(rec(p.turn).id));
+          child.terminal = false;
+          return;
+        }
         if (message.method === 'turn/completed') {
+          child.terminal = true;
           this.finishStreams(str(p.threadId));
+          const status = str(rec(p.turn).status);
+          this.emit({
+            type: 'system',
+            subtype: 'task_notification',
+            task_id: `codex-agent-${str(p.threadId)}`,
+            status:
+              status === 'interrupted'
+                ? 'stopped'
+                : status === 'completed' || status === 'failed'
+                  ? status
+                  : 'unknown',
+            summary: 'Codex agent turn ended',
+            output_file: '',
+          });
           return;
         }
         if (!message.method?.startsWith('item/')) return;
