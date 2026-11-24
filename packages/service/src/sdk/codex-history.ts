@@ -219,36 +219,12 @@ export class CodexHistory {
   async messages(id: string): Promise<SessionMessage[]> {
     const record = this.store.read(id);
     if (!record?.threadId || !record.native) return this.store.messages(id);
+    const threadId = record.threadId;
     return this.inHome(record.home, async (client) => {
       const result = await client.request('thread/read', { threadId: record.threadId });
       const thread = rec(result.thread);
       this.remember(thread, record.home);
-      let turns: unknown[] = [];
-      if (thread.historyMode === 'paginated' || record.historyMode === 'paginated') {
-        let cursor: string | undefined;
-        const seen = new Set<string>();
-        do {
-          const page = await client.request('thread/turns/list', {
-            threadId: record.threadId,
-            limit: 100,
-            sortDirection: 'asc',
-            itemsView: 'full',
-            ...(cursor ? { cursor } : {}),
-          });
-          turns.push(...(Array.isArray(page.data) ? page.data : []));
-          cursor = str(page.nextCursor) || undefined;
-          if (cursor && seen.has(cursor)) throw new Error('Codex repeated a turns cursor');
-          if (cursor) seen.add(cursor);
-        } while (cursor);
-      } else {
-        const history = await client.request('thread/read', {
-          threadId: record.threadId,
-          includeTurns: true,
-        });
-        turns = Array.isArray(rec(history.thread).turns)
-          ? (rec(history.thread).turns as unknown[])
-          : [];
-      }
+      const turns = await this.turns(client, threadId, thread.historyMode ?? record.historyMode);
       const native = turns.flatMap((turn) =>
         turnMessages(id, rec(turn), record.model?.replace(/^codex:/, '')),
       );
@@ -259,6 +235,64 @@ export class CodexHistory {
         (a, b) => Date.parse(str(rec(a).timestamp)) - Date.parse(str(rec(b).timestamp)),
       );
     });
+  }
+
+  /** Read a descendant without importing it as another top-level chat. */
+  async subagentMessages(id: string, agentId: string): Promise<SessionMessage[]> {
+    const parent = this.store.read(id);
+    const childId = agentId.replace(/^codex-agent-/, '');
+    if (!parent?.threadId || !parent.native || !uuid.test(childId)) return [];
+    return this.inHome(parent.home, async (client) => {
+      const result = await client.request('thread/read', { threadId: childId });
+      const child = rec(result.thread);
+      let ancestor = str(child.parentThreadId);
+      const seen = new Set<string>([childId]);
+      while (ancestor && ancestor !== parent.threadId && seen.size < 64) {
+        if (!uuid.test(ancestor) || seen.has(ancestor)) return [];
+        seen.add(ancestor);
+        const next = await client.request('thread/read', { threadId: ancestor });
+        ancestor = str(rec(next.thread).parentThreadId);
+      }
+      if (ancestor !== parent.threadId) return [];
+      const turns = await this.turns(client, childId, child.historyMode);
+      return turns.flatMap((turn) =>
+        turnMessages(id, rec(turn), str(child.model) || parent.model?.replace(/^codex:/, '')),
+      );
+    });
+  }
+
+  private async turns(
+    client: CodexConnection,
+    threadId: string,
+    historyMode: unknown,
+  ): Promise<unknown[]> {
+    let turns: unknown[] = [];
+    if (historyMode === 'paginated') {
+      let cursor: string | undefined;
+      const seen = new Set<string>();
+      do {
+        const page = await client.request('thread/turns/list', {
+          threadId,
+          limit: 100,
+          sortDirection: 'asc',
+          itemsView: 'full',
+          ...(cursor ? { cursor } : {}),
+        });
+        turns.push(...(Array.isArray(page.data) ? page.data : []));
+        cursor = str(page.nextCursor) || undefined;
+        if (cursor && seen.has(cursor)) throw new Error('Codex repeated a turns cursor');
+        if (cursor) seen.add(cursor);
+      } while (cursor);
+    } else {
+      const history = await client.request('thread/read', {
+        threadId,
+        includeTurns: true,
+      });
+      turns = Array.isArray(rec(history.thread).turns)
+        ? (rec(history.thread).turns as unknown[])
+        : [];
+    }
+    return turns;
   }
 
   /** Overlapping callers (the poll and an on-demand check) share one pass. */

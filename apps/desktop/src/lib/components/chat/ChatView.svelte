@@ -38,6 +38,7 @@
   import { END_OTHER_DESCRIPTION, END_OTHER_TITLE } from './end-other';
   import RequestCard from './items/RequestCard.svelte';
   import MessageList from './MessageList.svelte';
+  import TimelineView from './TimelineView.svelte';
   import ScheduledSends from './ScheduledSends.svelte';
 
   /**
@@ -624,8 +625,14 @@
   let drawerOpen = $state(false);
   let drawer = $state<HTMLElement | null>(null);
 
+  let timelineActivityOpen = $state(false);
   const activityShown = $derived(
-    chat?.loaded === true && (overlay ? drawerOpen : settings.activityOpen),
+    chat?.loaded === true &&
+      (overlay
+        ? drawerOpen
+        : settings.chatView === 'timeline' && !readOnly
+          ? timelineActivityOpen
+          : settings.activityOpen),
   );
 
   const activityToggle = (): HTMLElement | null =>
@@ -648,6 +655,8 @@
   const toggleActivity = (): void => {
     if (!chats.get(sessionId)) return;
     if (overlay) void (drawerOpen ? closeDrawer() : openDrawer());
+    else if (settings.chatView === 'timeline' && !readOnly)
+      timelineActivityOpen = !timelineActivityOpen;
     else settings.setActivityOpen(!settings.activityOpen);
   };
 
@@ -703,7 +712,14 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div class="flex min-h-0 flex-1 flex-col" bind:this={root} {onkeydown}>
   {#if chat}
-    <ChatHeader {chat} {readOnly} activityOpen={activityShown} onToggleActivity={toggleActivity} />
+    <ChatHeader
+      {chat}
+      {readOnly}
+      activityOpen={activityShown}
+      onToggleActivity={toggleActivity}
+      viewMode={settings.chatView}
+      onViewModeChange={(mode) => settings.setChatView(mode)}
+    />
   {/if}
   {#if forkError}
     <div class="bg-destructive/10 text-destructive shrink-0 px-4 py-1 text-xs" role="alert">
@@ -754,6 +770,13 @@
         {#if fromQueue}
           <!-- Its first message waits below, with what happens next. -->
           <div class="min-h-0 flex-1"></div>
+        {:else if settings.chatView === 'timeline' && !readOnly}
+          <TimelineView
+            {sessionId}
+            revision={chat.seq}
+            load={() => chats.timeline(sessionId)}
+            detail={(blockId, offset) => chats.timelineDetail(sessionId, blockId, offset)}
+          />
         {:else if chat.items.length === 0}
           <div
             class="text-muted-foreground flex min-h-0 flex-1 items-center justify-center text-sm"
@@ -1028,7 +1051,7 @@
               </div>
             {/if}
             <!-- Hidden, not removed, while a request waits: the draft stays as typed. -->
-            <div class="contents" hidden={docked !== undefined}>
+            <div class="contents" hidden={docked !== undefined || settings.chatView === 'timeline'}>
               <Composer
                 bind:this={composer}
                 bind:editorElement={composerBox}

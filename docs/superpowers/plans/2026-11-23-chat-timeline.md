@@ -1,0 +1,26 @@
+# Chat Timeline Implementation Plan
+
+**Goal:** Inspect a long chat as calendar blocks for turns and delegated agents, without loading the entire transcript into the UI.
+
+**Design:** The user chose calendar blocks with a proportional vertical time axis, folded idle gaps, separate agent lanes, and a detail panel. A workflow is an ordinary chat, not a new runner. The existing conversation stays available. This change adds Timeline only, not the separately discussed Concise mode.
+
+**Architecture:** Project the service's existing complete history/live view into lightweight timeline blocks. Keep time and task interpretation in the service; layout and lane allocation belong to the desktop. Reuse normalized chat items for inspection. Read Claude history only through SDK methods; never infer missing dates from the current clock. Reuse the timestamps branch's Codex result correction.
+
+**Constraints:** No new dependencies. Unknown timing is never invented; undated entries are hidden from Timeline as requested in review. Live work must not disappear on a refresh. Detail requests validate block membership in the requested chat. Permission requests remain answerable through existing request cards; the message composer is hidden in Timeline without discarding drafts.
+
+- [x] Add timeline schemas and a pure projection with tests for turns, parallel agents, unknown times, background completion, and live work.
+- [x] Preserve tool start/end timestamps in normalization; expose timeline summaries and bounded detail reads through chat handlers. Test history spanning more than one conversation page.
+- [x] Add a remembered Conversation/Timeline selector, calendar layout with zoom and idle folding, keyboard-accessible blocks, and an inspector using existing message rendering.
+- [x] Verify projection, handlers, UI interactions, typecheck, formatting, and the runnable local app. Keep the prior combined review branch intact.
+
+Review found that an open inspector needed to refresh its messages as well as its block summary. It now reloads its selected pages with stale-response protection. The browser test inspects a turn while it runs and verifies its final report appears without reopening it. Historical Agent results whose SDK wrapper omits structured output use the explicit resume trailer to identify the subagent; its messages are still read only through the SDK.
+
+Visual review: every block now has a minimum labeled height. A shared piecewise axis expands short recorded intervals across all lanes, rather than covering the next entry or gap with an oversized card. The zoom tooltip discloses this; the timestamps and reported durations remain original. Clock ticks align to conventional local clock intervals, prompt starts show their timestamp, and gaps are retained across the entire history returned by the SDK. Goal lifetimes are not reconstructed from incomplete lifecycle data. The redundant Timeline summary bar is removed; compact navigation controls float in the corner.
+
+The view selector is a joined Conversation/Timeline button group on the second header row, with direct access on phones too. Segment subtitles show reported token totals and duration instead of completion labels. Turn totals include reported cached input; agent totals come from task usage or known SDK result metadata/trailers. Missing usage remains absent.
+
+Activity strips show recorded tool-pending intervals, reasoning observations, user prompts and assistant responses. Quiet time is unclassified, not inferred API waiting or thinking. Streamed observations retain only minutes with actual chunks, so a pause between chunks remains visible. Explicit native Codex item start/end times are preserved as known intervals; timestamp-only reasoning observations do not establish duration. Payloads use at most 1,440 minute-or-coarser bitmask samples, rendered into one bounded canvas per block via the shared time mapping. Subagent activity uses its own SDK history, with two concurrent readers, cached completed profiles and at most one SDK-only running-profile read per minute. Codex child reads validate ancestry and do not import children as top-level chats. Repeated exchanges with the same native child share one agent block. Failed child reads preserve the parent timeline. Multi-prompt agents expose their prompt count; inspection provides the legend and longest known tool interval.
+
+Timeline controls respect the actual scrollbar gutters. A collapsible Color meanings key explains activity colors and block tints. Browser coverage checks the scrollbar boundary, legend toggle, hidden composer, and draft preservation.
+
+Visual follow-up: status uses a faint fill and thin muted border so it does not compete with activity strips. Legend and navigation occupy a compact row above the scroll area; expanding the initially collapsed legend reserves layout space instead of covering blocks. Browser checks assert both stay above the scroll viewport.

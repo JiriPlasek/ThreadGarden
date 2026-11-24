@@ -24,6 +24,7 @@ import type {
   MovePeer,
   PromptSuggestion,
   QueuedMessage,
+  TimelineActivity,
 } from '@threadgarden/protocol';
 import { MOVE_ERRORS, PERMISSION_MODES } from '@threadgarden/protocol';
 import {
@@ -33,6 +34,8 @@ import {
   type UserInput,
 } from '../../chat/live-session.js';
 import { Normalizer, type LastReply } from '../../chat/normalize.js';
+import { projectTimeline } from '../../chat/timeline.js';
+import { timelineActivity, type TimelineObservation } from '../../chat/timeline-activity.js';
 import type { SessionHost } from '../../chat/session-host.js';
 import type { ChatTitles } from '../../chat/titles.js';
 import type { ResumeCheck } from '../../external/resume-safety.js';
@@ -133,6 +136,8 @@ type CacheEntry = {
   /** For history-only chats: the indexed `lastModified:fileSize` at read time. */
   key: string | undefined;
   items: ChatItem[];
+  observations: ReadonlyMap<string, TimelineObservation>;
+  agentActivity: Map<string, { signature: string; read: Promise<TimelineActivity | undefined> }>;
   /** The history's last main-thread reply (the header's fallback). */
   lastReply: LastReply | undefined;
   chars: number;
@@ -378,7 +383,11 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
    */
   const historyItems = async (
     sessionId: string,
-  ): Promise<{ items: ChatItem[]; lastReply: LastReply | undefined }> => {
+  ): Promise<{
+    items: ChatItem[];
+    lastReply: LastReply | undefined;
+    observations: ReadonlyMap<string, TimelineObservation>;
+  }> => {
     const owner = host.get(sessionId);
     const row = owner ? undefined : db.getSession(sessionId);
     const key = row ? `${row.lastModified}:${row.fileSize}` : undefined;
@@ -398,19 +407,28 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
     for (const item of normalizer.finish().items) byId.set(item.id, item);
     const items = [...byId.values()];
     const lastReply = normalizer.lastReply();
+    const observations = normalizer.activityTimes();
     forget(sessionId);
     // Only cache what has a validity window; and only if the chat was not
     // taken over or released while the read ran.
     if ((owner && host.get(sessionId) === owner) || (!owner && key !== undefined)) {
       const chars = items.reduce((n, i) => n + itemChars(i), 0);
-      historyCache.set(sessionId, { owner, key, items, lastReply, chars });
+      historyCache.set(sessionId, {
+        owner,
+        key,
+        items,
+        lastReply,
+        chars,
+        observations,
+        agentActivity: new Map(),
+      });
       cachedChars += chars;
       for (const old of historyCache.keys()) {
         if (cachedChars <= cacheBudget || old === sessionId) break;
         forget(old);
       }
     }
-    return { items, lastReply };
+    return { items, lastReply, observations };
   };
 
   /**
@@ -460,11 +478,13 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
     tasks: ChatTask[];
     promptSuggestion?: PromptSuggestion | null;
     queued: QueuedMessage[];
+    observations: ReadonlyMap<string, TimelineObservation>;
   }> => {
     let history: ChatItem[];
     let lastReply: LastReply | undefined;
+    let observations: ReadonlyMap<string, TimelineObservation> = new Map();
     try {
-      ({ items: history, lastReply } = await historyItems(sessionId));
+      ({ items: history, lastReply, observations } = await historyItems(sessionId));
     } catch (err) {
       // A chat Threadgarden runs may not have a transcript yet; a history-only chat needs one.
       if (!host.get(sessionId)) throw err;
@@ -487,6 +507,7 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
         header: fallback,
         tasks: [],
         queued: [],
+        observations,
       };
     }
     const snap = s.snapshot(Number.MAX_SAFE_INTEGER);
@@ -504,8 +525,110 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
       tasks: snap.tasks,
       promptSuggestion: snap.promptSuggestion,
       queued: snap.queued,
+      observations: new Map([...observations, ...s.activityTimes()]),
     };
   };
+
+  const timelineView = async (sessionId: string) => {
+    if (!catalog.summary(sessionId))
+      throw new ServiceError('NOT_FOUND', `Unknown chat ${sessionId}`);
+    const v = await view(sessionId);
+    const status = host.get(sessionId)?.status;
+    const now = (deps.now ?? Date.now)();
+    const timeline = projectTimeline(
+      v.items,
+      v.tasks,
+      status === 'working' || status === 'needsYou',
+      v.observations,
+      now,
+    );
+    const jobs = timeline.blocks.filter((b) => b.kind === 'agent' && timeline.agents.has(b.id));
+    const cache = historyCache.get(sessionId)?.agentActivity;
+    const readAgent = async (block: (typeof jobs)[number]): Promise<void> => {
+      const agentId = timeline.agents.get(block.id)!;
+      if (!adapter.getSubagentMessages || block.startedAt === undefined) return;
+      // Prefer already-streamed child activity. Running SDK-only agents refresh at most once a minute.
+      const children = (timeline.items.get(block.id) ?? []).filter(
+        (i) => 'parentToolUseId' in i && i.parentToolUseId,
+      );
+      if (
+        block.status === 'running' &&
+        children.some((i) => i.kind === 'toolCall' || v.observations.has(i.id))
+      )
+        return;
+      const mayChange =
+        block.status === 'running' || (block.status === 'unknown' && block.endedAt === undefined);
+      const signature = `${block.startedAt}:${block.endedAt}:${block.status}:${mayChange ? Math.floor(now / 60000) : ''}`;
+      let hit = cache?.get(agentId);
+      if (!hit || hit.signature !== signature) {
+        const read = (async () => {
+          const messages = await adapter.getSubagentMessages!(
+            sessionId,
+            agentId,
+            historyOf(sessionId),
+          );
+          const n = new Normalizer({ turnEnds: true });
+          const byId = new Map<string, ChatItem>();
+          for (const message of messages)
+            for (const item of n.push(message).items) byId.set(item.id, item);
+          return timelineActivity(
+            [...byId.values()],
+            n.activityTimes(),
+            block.startedAt,
+            block.endedAt,
+            block.status === 'running' ? now : undefined,
+          );
+        })();
+        hit = { signature, read };
+        cache?.set(agentId, hit);
+      }
+      try {
+        block.activity = (await hit.read) ?? block.activity;
+        if (
+          block.activity &&
+          block.status === 'unknown' &&
+          block.endedAt === undefined &&
+          block.activity.endedAt > block.activity.startedAt
+        )
+          block.endedAt = block.activity.endedAt;
+      } catch (err) {
+        // A missing/failed child transcript must not hide its parent chat's timeline.
+        if (cache?.get(agentId) === hit) cache.delete(agentId);
+        deps.onError(err, `timeline activity for ${sessionId}/${agentId}`);
+      }
+    };
+    let next = 0;
+    const worker = async () => {
+      while (next < jobs.length) await readAgent(jobs[next++]!);
+    };
+    await Promise.all([worker(), worker()]);
+    return timeline;
+  };
+
+  router.register('chat.timeline', async (p) => ({
+    blocks: (await timelineView(p.sessionId)).blocks,
+  }));
+  router.register('chat.timelineDetail', async (p) => {
+    const timeline = await timelineView(p.sessionId);
+    let items = timeline.items.get(p.blockId);
+    if (!items) throw new ServiceError('NOT_FOUND', 'This timeline block is no longer available');
+    const agentId = timeline.agents.get(p.blockId);
+    if (agentId && adapter.getSubagentMessages) {
+      const messages = await adapter.getSubagentMessages(
+        p.sessionId,
+        agentId,
+        historyOf(p.sessionId),
+      );
+      if (messages.length) {
+        const n = new Normalizer({ turnEnds: true });
+        const byId = new Map<string, ChatItem>();
+        for (const m of messages) for (const item of n.push(m).items) byId.set(item.id, item);
+        for (const item of n.finish().items) byId.set(item.id, item);
+        items = [...byId.values()];
+      }
+    }
+    return { items: items.slice(p.offset, p.offset + 100), hasMore: p.offset + 100 < items.length };
+  });
 
   router.register('chat.open', async (p) => {
     if (!catalog.summary(p.sessionId)) {

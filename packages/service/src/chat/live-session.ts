@@ -462,6 +462,10 @@ export class LiveSession {
     return this.tracker.list();
   }
 
+  activityTimes() {
+    return new Map(this.normalizer.activityTimes());
+  }
+
   /** How many published tasks are running (Ruling R29: such a chat counts as Running). */
   get runningTasks(): number {
     return this.publishedRunning;

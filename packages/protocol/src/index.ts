@@ -5,6 +5,7 @@ export * from './chat.js';
 export * from './permissions.js';
 export * from './order.js';
 export * from './tasks.js';
+export * from './timeline.js';
 export * from './events.js';
 export * from './usage.js';
 export * from './analytics.js';
