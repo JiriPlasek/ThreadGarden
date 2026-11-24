@@ -10,6 +10,7 @@ import {
   type ConnectCodex,
 } from '../../src/sdk/codex-client.js';
 import { Normalizer } from '../../src/chat/normalize.js';
+import { rec } from '../../src/sdk/codex-events.js';
 
 const A = '11111111-1111-4111-8111-111111111111';
 const B = '22222222-2222-4222-8222-222222222222';
@@ -63,6 +64,174 @@ const setup = (request: (method: string, params: Rec) => Promise<Rec> | Rec) => 
 };
 
 describe('native Codex history', () => {
+  it('bounds owned descendants and reports truncation without following interaction-only ids', async () => {
+    const children = Array.from(
+      { length: 40 },
+      (_, i) => `aaaaaaaa-aaaa-4aaa-8aaa-${String(i).padStart(12, '0')}`,
+    );
+    const h = setup((method, p) => {
+      if (method === 'thread/read') return { thread: thread(String(p.threadId)) };
+      if (method === 'thread/turns/list')
+        return {
+          data: [
+            {
+              id: 'turn',
+              status: 'completed',
+              items:
+                p.threadId === A
+                  ? [
+                      {
+                        id: 'interact',
+                        type: 'subAgentActivity',
+                        kind: 'interacted',
+                        agentThreadId: C,
+                      },
+                      {
+                        id: 'spawn-many',
+                        type: 'collabAgentToolCall',
+                        tool: 'spawnAgent',
+                        receiverThreadIds: children,
+                      },
+                    ]
+                  : [],
+            },
+          ],
+        };
+      return {};
+    });
+    h.store.save({ id: OWN, threadId: A, native: true, cwd: dir, createdAt: 1, updatedAt: 2 });
+    const messages = await h.history.messages(OWN);
+    expect(h.calls.filter((call) => call.method === 'thread/read')).toHaveLength(33);
+    expect(h.calls.some((call) => call.params.threadId === C)).toBe(false);
+    expect(messages.filter((message) => rec(message).subtype === 'informational')).toHaveLength(1);
+    expect(JSON.stringify(messages)).toContain('history traversal limit');
+  });
+
+  it('keeps root history usable when a child cannot be read or has conflicting ownership', async () => {
+    const h = setup((method, p) => {
+      if (method === 'thread/read') {
+        if (p.threadId === B) throw new Error('child unavailable');
+        return {
+          thread: thread(String(p.threadId), { parentThreadId: p.threadId === C ? B : undefined }),
+        };
+      }
+      if (method === 'thread/turns/list')
+        return {
+          data: [
+            {
+              id: 'turn',
+              status: 'completed',
+              items: [
+                { id: 'reply', type: 'agentMessage', text: 'root answer survives' },
+                {
+                  id: 'spawn',
+                  type: 'collabAgentToolCall',
+                  tool: 'spawnAgent',
+                  receiverThreadIds: [B, C],
+                },
+              ],
+            },
+          ],
+        };
+      return {};
+    });
+    h.store.save({ id: OWN, threadId: A, native: true, cwd: dir, createdAt: 1, updatedAt: 2 });
+    const messages = await h.history.messages(OWN);
+    expect(JSON.stringify(messages)).toContain('root answer survives');
+    expect(messages.filter((message) => rec(message).subtype === 'informational')).toHaveLength(2);
+    expect(
+      h.calls.some((call) => call.method === 'thread/turns/list' && call.params.threadId === C),
+    ).toBe(false);
+  });
+
+  it('hydrates owned child and grandchild turns in the original home without indexing them', async () => {
+    const h = setup((method, p) => {
+      if (method === 'thread/read')
+        return {
+          thread: thread(String(p.threadId), {
+            parentThreadId: p.threadId === B ? A : p.threadId === C ? B : undefined,
+          }),
+        };
+      if (method === 'thread/turns/list')
+        return {
+          data: [
+            {
+              id: `turn-${p.threadId}`,
+              status: 'completed',
+              items:
+                p.threadId === A
+                  ? [
+                      {
+                        id: 'spawn',
+                        type: 'subAgentActivity',
+                        kind: 'started',
+                        agentThreadId: B,
+                        model: 'child-model',
+                      },
+                      {
+                        id: 'completed',
+                        type: 'subAgentActivity',
+                        kind: 'completed',
+                        agentThreadId: B,
+                      },
+                    ]
+                  : p.threadId === B
+                    ? [
+                        { id: 'child-reply', type: 'agentMessage', text: 'child answer' },
+                        {
+                          id: 'spawn-grandchild',
+                          type: 'collabAgentToolCall',
+                          tool: 'spawnAgent',
+                          receiverThreadIds: [C, A],
+                        },
+                      ]
+                    : [{ id: 'grandchild-reply', type: 'agentMessage', text: 'grandchild answer' }],
+            },
+          ],
+        };
+      return {};
+    });
+    h.store.save({
+      id: OWN,
+      threadId: A,
+      native: true,
+      cwd: dir,
+      home: '/original',
+      createdAt: 1,
+      updatedAt: 2,
+    });
+    const messages = await h.history.messages(OWN);
+    expect(
+      messages.find((message) => JSON.stringify(message).includes('child answer')),
+    ).toMatchObject({ parent_tool_use_id: 'spawn', message: { model: 'test-model' } });
+    expect(
+      messages.find((message) => JSON.stringify(message).includes('grandchild answer')),
+    ).toMatchObject({ parent_tool_use_id: 'spawn-grandchild' });
+    expect(messages.filter((message) => rec(message).type === 'result')).toHaveLength(1);
+    expect(messages.find((message) => message.uuid === 'spawn-result')).toMatchObject({
+      message: {
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'spawn',
+            content: 'Codex agent completed',
+            is_error: false,
+          },
+        ],
+      },
+    });
+    const normalizer = new Normalizer();
+    const items = messages.flatMap((message) => normalizer.push(message).items);
+    expect(
+      items.find((item) => item.kind === 'assistantText' && item.markdown === 'child answer'),
+    ).toMatchObject({ parentToolUseId: 'spawn' });
+    expect(h.store.records().map((record) => record.id)).toEqual([OWN]);
+    expect(h.envs.every((env) => env.CODEX_HOME === '/original')).toBe(true);
+    expect(
+      h.calls.filter((call) => call.method === 'thread/read' && call.params.threadId === A),
+    ).toHaveLength(1);
+  });
+
   it('rejects an unfinished turn before attempting a native fork', async () => {
     const h = setup((method) => {
       if (method === 'thread/read') return { thread: thread(A) };
