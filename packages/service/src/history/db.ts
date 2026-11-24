@@ -718,6 +718,14 @@ export class Db implements LiveRegistry {
       .run(sessionId, t);
   }
 
+  /** Internal optimistic concurrency token; every manual rename advances it. */
+  titleRevision(sessionId: string): number {
+    return (
+      (this.raw.prepare('SELECT revision FROM title_revisions WHERE session_id = ?').get(sessionId)
+        ?.revision as number | undefined) ?? 0
+    );
+  }
+
   setSessionPinned(sessionId: string, pinned: boolean): void {
     this.raw
       .prepare(

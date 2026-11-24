@@ -376,3 +376,22 @@ describe('recentCwds (the push check before a shutdown)', () => {
     db.close();
   });
 });
+
+it('advances manual title revisions atomically even for repeated values and nested transactions', () => {
+  const db = openDb(':memory:');
+  try {
+    expect(db.titleRevision('c')).toBe(0);
+    db.setCustomTitle('c', 'A');
+    const first = db.titleRevision('c');
+    db.raw.exec('BEGIN');
+    db.setCustomTitle('c', 'A');
+    expect(db.titleRevision('c')).toBe(first + 1);
+    db.raw.exec('ROLLBACK');
+    expect(db.titleRevision('c')).toBe(first);
+    expect(db.metaOf('c').customTitle).toBe('A');
+    db.setCustomTitle('c', null);
+    expect(db.titleRevision('c')).toBe(first + 1);
+  } finally {
+    db.close();
+  }
+});

@@ -137,7 +137,9 @@ const unrefTimers: Pick<Timers, 'setTimeout' | 'clearTimeout'> = {
   clearTimeout: (h) => clearTimeout(h as NodeJS.Timeout),
 };
 
-const errorText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+class TitleError extends Error {}
+const errorText = (err: unknown): string =>
+  err instanceof TitleError ? err.message : 'Title generation failed';
 
 export type TitleMessage = { id: string; role: 'user' | 'assistant'; text: string };
 export type TitleResult = { title: string; changed: boolean };
@@ -214,7 +216,7 @@ export class ChatTitles {
     );
   }
   regenerate(id: string, cwd: string): Promise<TitleResult> {
-    if (this.disposed) return Promise.reject(new Error('Title service is stopped'));
+    if (this.disposed) return Promise.reject(new TitleError('Title service is stopped'));
     const existing = this.jobs.get(id);
     if (existing)
       return existing.then(
@@ -239,9 +241,9 @@ export class ChatTitles {
     if (index >= 0) {
       const job = this.queue.splice(index, 1)[0]!;
       this.jobs.delete(id);
-      job.reject(new Error('Chat was ended'));
+      job.reject(new TitleError('Chat was ended'));
     }
-    this.controllers.get(id)?.abort(new Error('Chat was ended'));
+    this.controllers.get(id)?.abort(new TitleError('Chat was ended'));
   }
   runningIds(): string[] {
     for (const [id, at] of this.recent)
@@ -255,9 +257,10 @@ export class ChatTitles {
     this.again.clear();
     for (const job of this.queue.splice(0)) {
       this.jobs.delete(job.id);
-      job.reject(new Error('Title service is stopped'));
+      job.reject(new TitleError('Title service is stopped'));
     }
-    for (const abort of this.running.keys()) abort.abort(new Error('Title service is stopped'));
+    for (const abort of this.running.keys())
+      abort.abort(new TitleError('Title service is stopped'));
   }
   private pump(): void {
     while (!this.disposed && this.running.size < (this.deps.concurrency ?? TITLE_CONCURRENCY)) {
@@ -271,11 +274,20 @@ export class ChatTitles {
     const abort = new AbortController();
     this.controllers.set(id, abort);
     this.running.set(abort, undefined);
-    let timer: unknown;
+    const stopped = new Promise<never>((_, reject) =>
+      abort.signal.addEventListener('abort', () => reject(abort.signal.reason), { once: true }),
+    );
+    const wait = <T>(operation: Promise<T>): Promise<T> => Promise.race([operation, stopped]);
+    const timer = this.timers.setTimeout(
+      () => abort.abort(new TitleError('Title generation timed out')),
+      this.deps.timeoutMs ?? TITLE_TIMEOUT_MS,
+    );
+    let failed = false;
     const unchanged = (): TitleResult => ({ title: this.displayed(id), changed: false });
     try {
       const { db } = this.deps;
       const captured = db.metaOf(id);
+      const revision = db.titleRevision(id);
       if (
         !manual &&
         (!this.deps.enabled() ||
@@ -285,7 +297,7 @@ export class ChatTitles {
         job.resolve(unchanged());
         return;
       }
-      const { filtered, users, latest } = context(await this.deps.conversation(id));
+      const { filtered, users, latest } = context(await wait(this.deps.conversation(id)));
       const check = db.titleCheck(id);
       if (
         !latest ||
@@ -301,21 +313,15 @@ export class ChatTitles {
         return;
       }
       const run = this.deps.run(id);
-      if (!run) throw new Error('The chat provider cannot run now');
+      if (!run) throw new TitleError('The chat provider cannot run now');
       const codex = isCodexSession(id);
-      const reason = codex ? undefined : await this.deps.routedElsewhere?.(cwd);
-      if (reason) throw new Error(`Titles skipped: ${reason} (Ruling R33)`);
+      const reason = codex
+        ? undefined
+        : await wait(Promise.resolve(this.deps.routedElsewhere?.(cwd)));
+      if (reason) throw new TitleError(`Titles skipped: ${reason} (Ruling R33)`);
       if (abort.signal.aborted) throw abort.signal.reason;
-      db.setTitleCheck(id, { userId: latest, userCount: users.length, checkedAt: this.now() });
       const queryId = randomUUID();
       this.running.set(abort, queryId);
-      const stopped = new Promise<never>((_, reject) =>
-        abort.signal.addEventListener('abort', () => reject(abort.signal.reason), { once: true }),
-      );
-      timer = this.timers.setTimeout(
-        () => abort.abort(new Error('Title generation timed out')),
-        this.deps.timeoutMs ?? TITLE_TIMEOUT_MS,
-      );
       const raw = await Promise.race([
         this.deps.adapter.oneShot({
           prompt: titlePrompt(this.displayed(id), filtered),
@@ -334,7 +340,7 @@ export class ChatTitles {
       try {
         decision = JSON.parse(raw);
       } catch {
-        throw new Error('Invalid title response');
+        throw new TitleError('Invalid title response');
       }
       if (
         !decision ||
@@ -342,23 +348,19 @@ export class ChatTitles {
         !('title' in decision) ||
         (decision.title !== null && typeof decision.title !== 'string')
       )
-        throw new Error('Invalid title response');
-      if (decision.title === null) {
-        job.resolve(unchanged());
-        return;
-      }
-      const title = sanitizeTitle(decision.title);
+        throw new TitleError('Invalid title response');
+      const title = decision.title === null ? null : sanitizeTitle(decision.title);
       if (
-        !title ||
-        decision.title.trim().length > FIRST_PROMPT_MAX ||
-        decision.title.includes('\n')
+        decision.title !== null &&
+        (!title || decision.title.trim().length > FIRST_PROMPT_MAX || decision.title.includes('\n'))
       )
-        throw new Error('The answer held no usable title');
-      const latestNow = context(await this.deps.conversation(id)).latest;
+        throw new TitleError('The answer held no usable title');
+      const latestNow = context(await wait(this.deps.conversation(id))).latest;
       const current = db.metaOf(id);
       if (
         abort.signal.aborted ||
         latestNow !== latest ||
+        db.titleRevision(id) !== revision ||
         current.customTitle !== captured.customTitle ||
         current.generatedTitle !== captured.generatedTitle ||
         (!manual && !this.deps.enabled())
@@ -366,16 +368,22 @@ export class ChatTitles {
         job.resolve(unchanged());
         return;
       }
+      db.setTitleCheck(id, { userId: latest, userCount: users.length, checkedAt: this.now() });
+      if (title === null) {
+        job.resolve(unchanged());
+        return;
+      }
       const changed = this.displayed(id) !== title;
-      if (manual) db.setCustomTitle(id, null);
       db.setGeneratedTitle(id, title);
+      if (manual) db.setCustomTitle(id, null);
       if (changed) {
         this.deps.titleChanged(id);
         this.deps.emit({ event: 'sessions.changed', data: { sessionIds: [id] } });
       }
       job.resolve({ title, changed });
     } catch (e) {
-      job.reject(e);
+      failed = true;
+      job.reject(e instanceof TitleError ? e : new TitleError('Title generation failed'));
     } finally {
       if (timer !== undefined) this.timers.clearTimeout(timer);
       const query = this.running.get(abort);
@@ -385,7 +393,7 @@ export class ChatTitles {
       this.jobs.delete(id);
       const cwdAgain = this.again.get(id);
       this.again.delete(id);
-      if (cwdAgain) this.turnEnded(id, cwdAgain);
+      if (cwdAgain && !failed) this.turnEnded(id, cwdAgain);
       this.pump();
     }
   }

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { ChatTitles, provisionalTitle, sanitizeTitle, titlePrompt } from '../../src/chat/titles.js';
 import { titleFor } from '../../src/history/catalog.js';
 import { openDb } from '../../src/history/db.js';
+import { ManualTimers } from './live-helpers.js';
 
 describe('provisionalTitle', () => {
   it('uses a readable paste label for provisional and history fallback titles', () => {
@@ -304,8 +305,7 @@ it('retries a failed attempt on new context and rejects a stale response', async
     await h.end();
     h.calls[0]!.reject(new Error('overloaded'));
     await h.flush();
-    await h.end();
-    expect(h.calls).toHaveLength(1);
+    expect(h.db.titleCheck('c')).toBeUndefined();
     h.exchange('Investigate cookie handling');
     await h.end();
     h.exchange('Actually fix Firefox redirects');
@@ -410,5 +410,174 @@ it('rejects malformed manual results and preserves the old custom title', async 
     expect(h.db.metaOf('c').customTitle).toBe('Custom title');
   } finally {
     h.close();
+  }
+});
+
+it('protects a manual title changed A to B and back to A while generating', async () => {
+  const h = harness();
+  try {
+    h.exchange();
+    h.db.setCustomTitle('c', 'A');
+    const result = h.titles.regenerate('c', '/w');
+    await h.flush();
+    h.db.setCustomTitle('c', 'B');
+    h.db.setCustomTitle('c', 'A');
+    await h.answer('Generated title');
+    expect(await result).toEqual({ title: 'A', changed: false });
+    expect(h.db.metaOf('c').customTitle).toBe('A');
+  } finally {
+    h.close();
+  }
+});
+it('releases hung context slots after timeout and disposal', async () => {
+  const db = openDb(':memory:');
+  const timers = new ManualTimers();
+  let reads = 0;
+  const titles = new ChatTitles({
+    db,
+    adapter: { oneShot: async () => '{"title":null}' },
+    enabled: () => true,
+    run: () => ({ claudePath: '/claude', env: {} }),
+    conversation: () => {
+      reads++;
+      return new Promise(() => {});
+    },
+    titleChanged: () => {},
+    emit: () => {},
+    timers,
+    now: timers.now,
+  });
+  try {
+    for (const id of ['a', 'b', 'c']) {
+      titles.started(id, '/w', 'Repair login');
+      titles.turnEnded(id, '/w');
+    }
+    await new Promise<void>((r) => setImmediate(r));
+    expect(reads).toBe(2);
+    timers.advance(20000);
+    await new Promise<void>((r) => setImmediate(r));
+    expect(reads).toBe(3);
+    const result = titles.regenerate('manual', '/w');
+    const rejected = expect(result).rejects.toThrow();
+    await new Promise<void>((r) => setImmediate(r));
+    titles.dispose();
+    await rejected;
+  } finally {
+    titles.dispose();
+    db.close();
+  }
+});
+it('does not spend established cooldown quota on a failed provider attempt', async () => {
+  const h = harness();
+  try {
+    h.titles.started('c', '/w', 'Repair login');
+    h.exchange();
+    await h.end();
+    await h.answer('Login repair');
+    h.exchange();
+    await h.end();
+    await h.answer(null);
+    h.exchange();
+    await h.end();
+    await h.answer(null);
+    for (let i = 0; i < 5; i++) h.exchange();
+    h.advance();
+    await h.end();
+    h.calls.at(-1)!.reject(new Error('provider failed'));
+    await h.flush();
+    expect(h.db.titleCheck('c')?.userCount).toBe(3);
+    await h.end();
+    expect(h.calls).toHaveLength(5);
+    await h.answer(null);
+    expect(h.db.titleCheck('c')?.userCount).toBe(8);
+  } finally {
+    h.close();
+  }
+});
+
+it('times out hung routing and never starts a provider after a forgotten request', async () => {
+  const db = openDb(':memory:');
+  const timers = new ManualTimers();
+  let routeResolve: (value: undefined) => void = () => {};
+  let calls = 0;
+  const titles = new ChatTitles({
+    db,
+    adapter: {
+      oneShot: async () => {
+        calls++;
+        return '{"title":null}';
+      },
+    },
+    enabled: () => true,
+    run: () => ({ claudePath: '/claude', env: {} }),
+    conversation: async () => [
+      { id: 'u', role: 'user', text: 'Repair Safari login' },
+      { id: 'a', role: 'assistant', text: 'Investigating the redirect' },
+    ],
+    routedElsewhere: () =>
+      new Promise((resolve) => {
+        routeResolve = resolve;
+      }),
+    titleChanged: () => {},
+    emit: () => {},
+    timers,
+    now: timers.now,
+  });
+  try {
+    const result = titles.regenerate('c', '/w');
+    const failure = expect(result).rejects.toThrow('timed out');
+    await new Promise<void>((r) => setImmediate(r));
+    timers.advance(20000);
+    await failure;
+    expect(db.titleCheck('c')).toBeUndefined();
+    const forgotten = titles.regenerate('c', '/w');
+    const rejected = expect(forgotten).rejects.toThrow('ended');
+    await new Promise<void>((r) => setImmediate(r));
+    titles.forget('c');
+    await rejected;
+    routeResolve(undefined);
+    await new Promise<void>((r) => setImmediate(r));
+    expect(calls).toBe(0);
+  } finally {
+    titles.dispose();
+    db.close();
+  }
+});
+it('aborts a final freshness read without applying a title or checkpoint', async () => {
+  const db = openDb(':memory:');
+  let reads = 0;
+  let resolveRead: (v: import('../../src/chat/titles.js').TitleMessage[]) => void = () => {};
+  const messages: import('../../src/chat/titles.js').TitleMessage[] = [
+    { id: 'u', role: 'user', text: 'Repair login' },
+    { id: 'a', role: 'assistant', text: 'Investigating login' },
+  ];
+  const titles = new ChatTitles({
+    db,
+    adapter: { oneShot: async () => '{"title":"Login repair"}' },
+    enabled: () => true,
+    run: () => ({ claudePath: '/claude', env: {} }),
+    conversation: async () =>
+      ++reads === 1
+        ? messages
+        : await new Promise((resolve) => {
+            resolveRead = resolve;
+          }),
+    titleChanged: () => {},
+    emit: () => {},
+  });
+  try {
+    const result = titles.regenerate('c', '/w');
+    const rejected = expect(result).rejects.toThrow('stopped');
+    await new Promise<void>((r) => setImmediate(r));
+    expect(reads).toBe(2);
+    titles.dispose();
+    await rejected;
+    resolveRead(messages);
+    await new Promise<void>((r) => setImmediate(r));
+    expect(db.titleCheck('c')).toBeUndefined();
+    expect(db.metaOf('c').generatedTitle).toBeNull();
+  } finally {
+    titles.dispose();
+    db.close();
   }
 });
