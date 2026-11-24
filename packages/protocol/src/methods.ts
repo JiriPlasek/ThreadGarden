@@ -807,14 +807,14 @@ export const methods = {
   'mcp.add': def(
     z.object({
       sessionId: z.string(),
-      name: z.string().regex(MCP_SERVER_NAME),
+      name: z.string().max(100).regex(MCP_SERVER_NAME),
       scope: McpScopeSchema,
       config: McpServerConfigSchema,
     }),
     z.object({ restartPending: z.boolean() }),
   ),
   'mcp.remove': def(
-    z.object({ sessionId: z.string(), name: z.string().min(1), scope: McpScopeSchema }),
+    z.object({ sessionId: z.string(), name: z.string().min(1).max(100), scope: McpScopeSchema }),
     z.object({ restartPending: z.boolean() }),
   ),
   /** Starts the chat's Claude Code process (resumes it) without sending a message. */

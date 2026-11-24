@@ -53,17 +53,27 @@ export type McpScope = z.infer<typeof McpScopeSchema>;
 /** Letters, digits, `-` and `_` (Claude Code's rule); never a leading `-`, since the name is an argument. */
 export const MCP_SERVER_NAME = /^[A-Za-z0-9_][A-Za-z0-9_-]*$/;
 
+const MCP_VALUE_MAX = 4000;
+const MCP_ENTRIES_MAX = 100;
+const mcpMap = z
+  .record(z.string().min(1).max(1000), z.string().max(MCP_VALUE_MAX))
+  .refine((r) => Object.keys(r).length <= MCP_ENTRIES_MAX, 'Too many entries');
+
 export const McpServerConfigSchema = z.discriminatedUnion('type', [
   z.object({
     type: z.literal('http'),
-    url: z.string().url(),
-    headers: z.record(z.string().min(1), z.string()).optional(),
+    url: z
+      .string()
+      .max(MCP_VALUE_MAX)
+      .url()
+      .refine((u) => /^https?:\/\//i.test(u), 'Must be an http(s) URL'),
+    headers: mcpMap.optional(),
   }),
   z.object({
     type: z.literal('stdio'),
-    command: z.string().min(1),
-    args: z.array(z.string()).optional(),
-    env: z.record(z.string().min(1), z.string()).optional(),
+    command: z.string().min(1).max(1000),
+    args: z.array(z.string().max(1000)).max(MCP_ENTRIES_MAX).optional(),
+    env: mcpMap.optional(),
   }),
 ]);
 export type McpServerConfig = z.infer<typeof McpServerConfigSchema>;

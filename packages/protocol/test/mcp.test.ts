@@ -119,4 +119,21 @@ describe('mcp.add and mcp.remove', () => {
     expect(add.safeParse({ ...base, scope: 'global', config: http }).success).toBe(false);
     expect(add.safeParse({ ...base, config: { type: 'stdio', command: '' } }).success).toBe(false);
   });
+
+  it('mcp.add takes http(s) URLs only', () => {
+    for (const url of ['file:///x', 'ftp://h', 'javascript:alert(1)']) {
+      expect(add.safeParse({ ...base, config: { type: 'http', url } }).success).toBe(false);
+    }
+    for (const url of ['https://mcp.sentry.dev/mcp', 'http://localhost:3000/mcp']) {
+      expect(add.safeParse({ ...base, config: { type: 'http', url } }).success).toBe(true);
+    }
+  });
+
+  it('mcp.add refuses over-limit input', () => {
+    expect(add.safeParse({ ...base, name: 'a'.repeat(101), config: http }).success).toBe(false);
+    const args = Array.from({ length: 101 }, () => 'x');
+    expect(add.safeParse({ ...base, config: { type: 'stdio', command: 'c', args } }).success).toBe(false);
+    const env = Object.fromEntries(Array.from({ length: 101 }, (_, i) => [`K${i}`, 'v']));
+    expect(add.safeParse({ ...base, config: { type: 'stdio', command: 'c', env } }).success).toBe(false);
+  });
 });
