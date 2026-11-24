@@ -598,6 +598,141 @@ describe('SessionHost', () => {
   });
 });
 
+describe('SessionHost.restartWhenIdle', () => {
+  it('restartWhenIdle restarts an idle chat with the same session id', async () => {
+    const ctx = setup();
+    const s = ctx.host.create('/proj', { text: 'hi' }, { model: 'claude-opus-5-5' });
+    const fake = ctx.adapter.lastSession();
+    fake.emit(result('r1'));
+    await settle();
+    ctx.pinned.add(s.sessionId); // not a reclaim: pinned chats restart too
+    const seqBefore = s.seq;
+
+    expect(ctx.host.restartWhenIdle(s.sessionId)).toBe(true);
+    expect(fake.closed).toBe(true);
+    expect(ctx.adapter.started).toHaveLength(2);
+    expect(ctx.adapter.lastSession().options).toMatchObject({
+      resume: s.sessionId,
+      cwd: '/proj',
+      model: 'claude-opus-5-5',
+    });
+    const again = ctx.host.get(s.sessionId)!;
+    expect(again.live).toBe(true);
+    expect(again.status).toBe('idle');
+    expect(again.since(seqBefore)).not.toBe('gap');
+    // Done: the next turn end starts nothing new.
+    again.send({ text: 'more' });
+    ctx.adapter.lastSession().emit(result('r2'));
+    await settle();
+    expect(ctx.adapter.started).toHaveLength(2);
+  });
+
+  it('restartWhenIdle waits for the turn to end', async () => {
+    const turns: string[] = [];
+    const ctx = setup({ onTurnEnded: (id) => turns.push(id) });
+    const s = ctx.host.create('/proj', { text: 'hi' });
+    const fake = ctx.adapter.lastSession();
+    expect(s.status).toBe('working');
+
+    expect(ctx.host.restartWhenIdle(s.sessionId)).toBe(false);
+    expect(ctx.adapter.started).toHaveLength(1);
+    expect(fake.closed).toBe(false);
+
+    fake.emit(result('r1'));
+    await settle();
+    expect(turns).toEqual([s.sessionId]);
+    expect(fake.closed).toBe(true);
+    expect(ctx.adapter.started).toHaveLength(2);
+    expect(ctx.adapter.lastSession().options.resume).toBe(s.sessionId);
+    expect(ctx.host.get(s.sessionId)!.live).toBe(true);
+  });
+
+  it('restartWhenIdle waits for permission requests and background tasks', async () => {
+    const ctx = setup();
+    ctx.host.start();
+    const s = ctx.host.create('/proj', { text: 'do it' });
+    const fake = ctx.adapter.lastSession();
+    const pending = fake.requestPermission('Bash', { command: 'x' }, { requestId: 'w1' });
+    await settle();
+    expect(s.status).toBe('needsYou');
+    expect(ctx.host.restartWhenIdle(s.sessionId)).toBe(false);
+    ctx.timers.advance(MIN); // a reclaim tick changes nothing while the request is open
+    expect(fake.closed).toBe(false);
+
+    s.respond('w1', { decision: 'allow' });
+    await pending;
+    // A background task started in this turn outlives it.
+    fake.emit(started('b1', { task_type: 'local_bash', is_backgrounded: true }));
+    fake.emit(result('r1'));
+    await settle();
+    expect(s.status).toBe('idle');
+    expect(s.runningTasks).toBe(1); // published with the status change
+    expect(fake.closed).toBe(false);
+    ctx.timers.advance(MIN);
+    expect(s.runningTasks).toBe(1);
+    expect(fake.closed).toBe(false);
+    expect(ctx.adapter.started).toHaveLength(1);
+
+    fake.emit(notification('b1', 'completed'));
+    await settle();
+    ctx.timers.advance(33);
+    expect(s.runningTasks).toBe(0);
+    expect(fake.closed).toBe(false); // waits for the next reclaim tick
+    ctx.timers.advance(MIN);
+    expect(fake.closed).toBe(true);
+    expect(ctx.adapter.started).toHaveLength(2);
+    expect(ctx.adapter.lastSession().options.resume).toBe(s.sessionId);
+    expect(ctx.host.get(s.sessionId)!.live).toBe(true);
+    ctx.host.dispose();
+  });
+
+  it('restartWhenIdle waits for queued messages', async () => {
+    const ctx = setup();
+    const s = ctx.host.create('/proj', { text: 'hi' });
+    const fake = ctx.adapter.lastSession();
+    expect(s.send({ text: 'and then' })).toEqual({ queued: true });
+    expect(ctx.host.restartWhenIdle(s.sessionId)).toBe(false);
+    // Claude Code goes straight on to the queued message: not a turn end yet.
+    fake.emit({ type: 'command_lifecycle', command_uuid: 'x', state: 'started' } as never);
+    fake.emit(result('r1'));
+    await settle();
+    expect(s.queued()).toHaveLength(1);
+    expect(fake.closed).toBe(false);
+    expect(ctx.adapter.started).toHaveLength(1);
+  });
+
+  it('an ended chat is not restarted later', async () => {
+    const ctx = setup();
+    ctx.host.start();
+    const s = ctx.host.create('/proj', { text: 'hi' });
+    expect(ctx.host.restartWhenIdle(s.sessionId)).toBe(false);
+    ctx.host.end(s.sessionId);
+
+    const again = ctx.host.ensureLive(s.sessionId, '/proj');
+    expect(ctx.adapter.started).toHaveLength(2);
+    again.send({ text: 'back' });
+    ctx.adapter.lastSession().emit(result('r1'));
+    await settle();
+    ctx.timers.advance(MIN);
+    expect(ctx.adapter.started).toHaveLength(2);
+    expect(ctx.adapter.lastSession().closed).toBe(false);
+    ctx.host.dispose();
+  });
+
+  it('a Codex chat is never restarted', async () => {
+    const ctx = setup();
+    const id = 'codex-cccccccc-cccc-cccc-cccc-cccccccccccc';
+    ctx.host.create('/proj', { text: 'hi' }, { model: 'codex:default' }, id);
+    const fake = ctx.adapter.lastSession();
+    fake.emit(result('r1'));
+    await settle();
+    expect(ctx.host.get(id)!.status).toBe('idle');
+    expect(ctx.host.restartWhenIdle(id)).toBe(false);
+    expect(fake.closed).toBe(false);
+    expect(ctx.adapter.started).toHaveLength(1);
+  });
+});
+
 describe('SessionHost.liveIn', () => {
   it('liveIn lists live Claude chats in the same folder', async () => {
     const ctx = setup();

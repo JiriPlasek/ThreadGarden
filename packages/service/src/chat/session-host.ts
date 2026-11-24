@@ -102,6 +102,8 @@ export class SessionHost {
   private readonly sessions = new Map<string, LiveSession>();
   /** Last seq of chats ended (forgotten) in this service run, by session id. */
   private readonly seqFloor = new Map<string, number>();
+  /** Live chats whose process must restart once nothing is in progress (`restartWhenIdle`). */
+  private readonly restartDue = new Set<string>();
   private readonly timers: Timers;
   private readonly seqBase: number;
   private reclaimTimer: unknown = undefined;
@@ -119,6 +121,13 @@ export class SessionHost {
         this.reclaimIdle(this.deps.now());
       } catch (err) {
         this.report(err, 'idle reclaim');
+      }
+      for (const id of [...this.restartDue]) {
+        try {
+          this.restartWhenIdle(id);
+        } catch (err) {
+          this.report(err, `restart (session ${id})`);
+        }
       }
     }, RECLAIM_INTERVAL_MS);
   }
@@ -184,7 +193,35 @@ export class SessionHost {
     );
     this.sessions.set(sessionId, s);
     this.seqFloor.delete(sessionId);
+    this.restartDue.delete(sessionId); // a new process reads the config afresh
     return s;
+  }
+
+  /**
+   * Restarts a Claude chat's process between turns (same session id, as after
+   * an idle reclaim, so its events, choices and permissions carry over), e.g.
+   * so it drops a removed MCP server. True when it restarted now. While a turn,
+   * a permission request, a queued message or a running task is in progress it
+   * returns false and the restart waits: retried when that chat's turn ends and
+   * on every reclaim tick. Forgotten when the chat stops being live. Pinned
+   * chats restart too (this is not a reclaim); a Codex chat never does.
+   */
+  restartWhenIdle(sessionId: string): boolean {
+    const s = this.sessions.get(sessionId);
+    if (!s?.live || isCodexSession(sessionId)) {
+      this.restartDue.delete(sessionId);
+      return false;
+    }
+    // A queued message keeps the chat `working` until Claude has answered it.
+    const busy = s.status !== 'idle' || s.pendingRequests().length > 0 || s.runningTasks > 0;
+    if (busy) {
+      this.restartDue.add(sessionId);
+      return false;
+    }
+    this.restartDue.delete(sessionId);
+    s.pause();
+    this.ensureLive(sessionId, s.cwd);
+    return true;
   }
 
   /** End session: closes the process and returns the chat to history. */
@@ -357,6 +394,7 @@ export class SessionHost {
 
   private forget(s: LiveSession): void {
     this.sessions.delete(s.sessionId);
+    this.restartDue.delete(s.sessionId);
     this.seqFloor.set(s.sessionId, s.seq);
   }
 
@@ -415,7 +453,13 @@ export class SessionHost {
       timers: this.timers,
       ...(describe ? { describe } : {}),
       ...(onError ? { onError } : {}),
-      ...(onTurnEnded ? { onTurnEnded } : {}),
+      onTurnEnded: (id, at) => {
+        try {
+          onTurnEnded?.(id, at);
+        } finally {
+          if (this.restartDue.has(id)) this.restartWhenIdle(id);
+        }
+      },
       ...(onActivity ? { onActivity } : {}),
       ...(onRunningTasks ? { onRunningTasks } : {}),
       ...(onRateLimit ? { onRateLimit } : {}),
