@@ -576,6 +576,7 @@ describe('chat header: state menu and hold details', () => {
       'Make active A (chat list)',
       'Put on hold… H (chat list)',
       'Archive E (chat list)',
+      'Continue in Codex…',
     ]);
     await userEvent.click(screen.getByRole('menuitem', { name: 'Make active' }));
     await waitFor(() =>
@@ -602,6 +603,7 @@ describe('chat header: state menu and hold details', () => {
       'Rename… F2',
       'Put on hold… H (chat list)',
       'Archive E (chat list)',
+      'Continue in Codex…',
     ]);
     await userEvent.click(screen.getByRole('menuitem', { name: 'Archive' }));
     const dialog = await screen.findByRole('alertdialog');

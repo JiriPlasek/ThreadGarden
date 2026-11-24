@@ -124,6 +124,7 @@ describe('protocol schemas', () => {
       'chat.older',
       'chat.since',
       'chat.create',
+      'chat.continue',
       'chat.send',
       'chat.interrupt',
       'chat.withdraw',

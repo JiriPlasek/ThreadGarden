@@ -55,6 +55,14 @@ import { UpdateStartResultSchema, UpdateStatusSchema } from './update.js';
 import { ScheduledSendSchema, UsageStateSchema } from './usage.js';
 
 const empty = z.object({});
+const NewChatSessionIdSchema = z.union([
+  z.string().uuid(),
+  z
+    .string()
+    .startsWith('codex-')
+    .refine((value) => z.string().uuid().safeParse(value.slice(6)).success),
+]);
+
 const sessionIdOnly = z.object({ sessionId: z.string() });
 const setValue = z.object({ sessionId: z.string(), value: z.string() });
 const lookupScope = z.object({ sessionId: z.string().optional(), cwd: z.string().optional() });
@@ -246,6 +254,9 @@ export const methods = {
       queued: z.array(QueuedMessageSchema).optional(),
       /** Protocol 9: where the chat went when it was moved away; absent or null otherwise. */
       movedTo: MovePeerSchema.nullable().optional(),
+      continuationLinks: z
+        .object({ from: z.string().optional(), to: z.array(z.string()) })
+        .optional(),
     }),
   ),
   'chat.older': def(
@@ -268,15 +279,16 @@ export const methods = {
       permissionMode: z.string().optional(),
       effort: z.string().optional(),
       /** Protocol 11: the chat's id (uuid), made by the desktop that wrote it while the machine was away. */
-      sessionId: z
-        .union([
-          z.string().uuid(),
-          z
-            .string()
-            .startsWith('codex-')
-            .refine((value) => z.string().uuid().safeParse(value.slice(6)).success),
-        ])
-        .optional(),
+      sessionId: NewChatSessionIdSchema.optional(),
+    }),
+    z.object({ sessionId: z.string() }),
+  ),
+  /** Starts the other agent in the same folder using a readable export. Confirmation ends the source session. */
+  'chat.continue': def(
+    z.object({
+      sessionId: z.string(),
+      targetSessionId: NewChatSessionIdSchema,
+      stopSource: z.literal(true),
     }),
     z.object({ sessionId: z.string() }),
   ),

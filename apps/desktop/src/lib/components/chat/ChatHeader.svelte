@@ -30,6 +30,7 @@
   import { ariaKeyShortcuts, isChatRenameKey, shortcut } from '#lib/shortcuts.js';
   import { taskRunning, type ChatState } from '#lib/state/chats.svelte.js';
   import { useApp, useScope } from '#lib/state/context.js';
+  import { newChatSessionId } from '#lib/state/refs.js';
   import { machineNameOf } from '#lib/state/machines.svelte.js';
   import { END_OTHER_DESCRIPTION, END_OTHER_TITLE } from './end-other';
   import { endSessionWarning } from './end-session';
@@ -68,7 +69,7 @@
     onToggleActivity?: () => void;
   } = $props();
 
-  const { machines, interaction, agents } = useApp();
+  const { machines, interaction, agents, tabs } = useApp();
   /** The chat's machine: its chat, project and bucket stores. */
   const { chats, places, buckets, sessions, machineId } = useScope();
   /** With more than one machine, the header names the chat's machine. */
@@ -216,6 +217,24 @@
     }
   };
 
+  const nextAgent = $derived(codex ? 'Claude' : 'Codex');
+  let confirmContinue = $state(false);
+  let continuation = $state<{ source: string; target: string; agent: string } | null>(null);
+  const prepareContinuation = (): void => {
+    if (readOnly || chat.movedTo) return;
+    continuation = {
+      source: sessionId,
+      target: newChatSessionId(codex ? undefined : 'codex:default'),
+      agent: nextAgent,
+    };
+    confirmContinue = true;
+  };
+  const continueNow = async (): Promise<void> => {
+    if (!continuation) return;
+    const id = await chats.continueWith(continuation.source, continuation.target);
+    tabs.openTab({ machineId, sessionId: id });
+  };
+
   let confirmEnd = $state(false);
   /** Background agents and processes that ending the session stops with the process. */
   const runningTasks = $derived(chat.tasks.filter(taskRunning));
@@ -335,6 +354,12 @@
               />{/if}
           </DropdownMenu.Item>
         {/if}
+        {#if !readOnly && !chat.movedTo}
+          <DropdownMenu.Separator />
+          <DropdownMenu.Item class="py-1 text-xs" onSelect={prepareContinuation}>
+            <ArrowRightLeftIcon /> Continue in {nextAgent}…
+          </DropdownMenu.Item>
+        {/if}
         {#if machines.several && !chat.movedTo && !codex && supportsMove(machines.get(machineId))}
           <DropdownMenu.Separator />
           <DropdownMenu.Item
@@ -442,6 +467,28 @@
     </div>
     {#if error}
       <p class="text-destructive px-3 pb-1 text-xs" role="alert">{error}</p>
+    {/if}
+    {#if chat.continuationLinks.from || chat.continuationLinks.to.length > 0}
+      <div
+        class="text-muted-foreground flex flex-wrap items-center gap-x-4 gap-y-1 border-t px-4 py-1.5 text-xs"
+      >
+        {#if chat.continuationLinks.from}
+          <button
+            class="hover:text-foreground underline underline-offset-2"
+            onclick={() => tabs.openTab({ machineId, sessionId: chat.continuationLinks.from! })}
+          >
+            Continued from {agentNameOf(runtimeOfChat(chat.continuationLinks.from))}
+          </button>
+        {/if}
+        {#each chat.continuationLinks.to as id (id)}
+          <button
+            class="hover:text-foreground underline underline-offset-2"
+            onclick={() => tabs.openTab({ machineId, sessionId: id })}
+          >
+            Continued in {agentNameOf(runtimeOfChat(id))}
+          </button>
+        {/each}
+      </div>
     {/if}
   </header>
 {:else}
@@ -607,6 +654,28 @@
         {/if}
       </div>
     </div>
+    {#if chat.continuationLinks.from || chat.continuationLinks.to.length > 0}
+      <div
+        class="text-muted-foreground flex flex-wrap items-center gap-x-4 gap-y-1 border-t px-4 py-1.5 text-xs"
+      >
+        {#if chat.continuationLinks.from}
+          <button
+            class="hover:text-foreground underline underline-offset-2"
+            onclick={() => tabs.openTab({ machineId, sessionId: chat.continuationLinks.from! })}
+          >
+            Continued from {agentNameOf(runtimeOfChat(chat.continuationLinks.from))}
+          </button>
+        {/if}
+        {#each chat.continuationLinks.to as id (id)}
+          <button
+            class="hover:text-foreground underline underline-offset-2"
+            onclick={() => tabs.openTab({ machineId, sessionId: id })}
+          >
+            Continued in {agentNameOf(runtimeOfChat(id))}
+          </button>
+        {/each}
+      </div>
+    {/if}
   </header>
 {/if}
 
@@ -650,4 +719,12 @@
   description={END_OTHER_DESCRIPTION}
   confirmLabel="End process"
   onConfirm={stopNow}
+/>
+
+<ConfirmDialog
+  bind:open={confirmContinue}
+  title="Continue in {continuation?.agent ?? nextAgent}?"
+  description="Starts a separate chat in the same folder using a readable copy of this conversation. The source session ends first; stop any background tasks or copies running outside Threadgarden before continuing. The original chat stays in your history. The new agent uses its normal permissions and reads the history using its own token allowance. Images are not copied."
+  confirmLabel="Continue in {continuation?.agent ?? nextAgent}"
+  onConfirm={continueNow}
 />

@@ -1112,6 +1112,8 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         },
       });
       const chatHandlers = registerChatHandlers(router, {
+        continuationDir: path.join(dataDir, 'handoffs'),
+        moveLocks,
         host: sessionHost,
         adapter,
         db: opened,

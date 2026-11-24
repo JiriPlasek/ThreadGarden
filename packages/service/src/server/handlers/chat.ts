@@ -14,6 +14,10 @@
  * `RESUME_BLOCKED` (§4.4, with the reason to show), `FORK_FAILED`,
  * `UNKNOWN_TASK`, `STOP_FAILED`, `INVALID_PARAMS`.
  */
+import { mkdir, writeFile, rm, stat } from 'node:fs/promises';
+import path from 'node:path';
+import { continuationPrompt, continuationTranscript } from '../../chat/continuation.js';
+import type { MoveLocks } from './move.js';
 import type {
   ChatHeaderInfo,
   ChatItem,
@@ -71,6 +75,8 @@ export const END_INDEX_WAIT_MS = 5_000;
 
 export type ChatHandlerDeps = {
   host: SessionHost;
+  continuationDir: string;
+  moveLocks: MoveLocks;
   adapter: AgentAdapter;
   db: Db;
   catalog: Catalog;
@@ -453,6 +459,7 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
    */
   const view = async (
     sessionId: string,
+    requireHistory = false,
   ): Promise<{
     items: ChatItem[];
     seq: number;
@@ -467,7 +474,7 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
       ({ items: history, lastReply } = await historyItems(sessionId));
     } catch (err) {
       // A chat Threadgarden runs may not have a transcript yet; a history-only chat needs one.
-      if (!host.get(sessionId)) throw err;
+      if (requireHistory || !host.get(sessionId)) throw err;
       deps.onError(err, `history of ${sessionId}`);
       history = [];
     }
@@ -526,6 +533,7 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
       promptSuggestion: v.promptSuggestion ?? null,
       queued: v.queued,
       movedTo: deps.awayTo?.(p.sessionId) ?? null,
+      continuationLinks: db.continuationLinks(p.sessionId),
     };
   });
 
@@ -556,6 +564,151 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
     if (!live && !row && !moved && !catalog.summary(sessionId)) return undefined;
     return live?.cwd ?? row?.cwd ?? moved?.cwd ?? null;
   };
+
+  // Keep retrying clients on one target; use the move lock to exclude sends and transfers.
+  const continuing = new Map<string, { source: string; job: Promise<{ sessionId: string }> }>();
+  router.register('chat.continue', async (p) => {
+    const pending = continuing.get(p.targetSessionId);
+    if (pending) {
+      if (pending.source !== p.sessionId)
+        throw new ServiceError('INVALID_PARAMS', 'This continuation belongs to another chat');
+      return pending.job;
+    }
+    const run = async (): Promise<{ sessionId: string }> => {
+      const id = p.sessionId;
+      const target = p.targetSessionId;
+      if (isCodexSession(id) === isCodexSession(target))
+        throw new ServiceError('INVALID_PARAMS', 'Choose the other agent for a continuation');
+      const prior = db.continuationSource(target);
+      if (prior !== undefined) {
+        if (prior !== id)
+          throw new ServiceError('INVALID_PARAMS', 'This continuation belongs to another chat');
+        // A persisted relation is also a prepared handoff. Recover if creation never happened.
+        if (knownCwd(target) !== undefined) return { sessionId: target };
+      }
+      const summary = catalog.summary(id);
+      const cwd = knownCwd(id);
+      if (!summary || !cwd)
+        throw new ServiceError('NOT_FOUND', 'The source chat or its working folder is unavailable');
+      if (knownCwd(target) !== undefined)
+        throw new ServiceError('INVALID_PARAMS', 'The target chat already exists');
+      if (deps.awayTo?.(id))
+        throw new ServiceError(
+          MOVE_ERRORS.moved,
+          'Open the source chat on the machine it moved to',
+        );
+      if (deps.moveLocks.isLocked(id))
+        throw new ServiceError(MOVE_ERRORS.moving, 'This chat is already being transferred');
+      deps.moveLocks.lock(id, target);
+      const file = path.join(deps.continuationDir, target + '.md');
+      let wrote = false;
+      let recorded = false;
+      let created = false;
+      try {
+        await requireRunnable(isCodexSession(target) ? 'codex:default' : undefined);
+        if (!(await stat(cwd).catch(() => null))?.isDirectory())
+          throw new ServiceError('NOT_FOUND', 'The source working folder is no longer available');
+        const source = host.get(id);
+        if (!source?.live) {
+          const safety = await deps.resumeCheck(id);
+          if (safety.status === 'blocked')
+            throw new ServiceError(
+              'RESUME_BLOCKED',
+              'Stop the source chat in its other process before continuing with another agent.',
+            );
+        }
+        if (source) {
+          let expired = false;
+          let timer: unknown;
+          const timers = deps.timers ?? realTimers;
+          const stop = async () => {
+            if (source.live) {
+              if (source.runningTasks > 0)
+                throw new ServiceError(
+                  'TASKS_RUNNING',
+                  "Stop the source chat's background tasks before continuing with another agent.",
+                );
+              await source.interrupt();
+              if (expired) return;
+              if (source.runningTasks > 0)
+                throw new ServiceError(
+                  'TASKS_RUNNING',
+                  "Stop the source chat's background tasks before continuing with another agent.",
+                );
+              deps.titles?.forget(id);
+              source.end();
+            }
+            await source.whenEnded();
+          };
+          try {
+            await Promise.race([
+              stop(),
+              new Promise<never>((_, reject) => {
+                timer = timers.setTimeout(() => {
+                  expired = true;
+                  reject(
+                    new ServiceError(
+                      'STOP_FAILED',
+                      'The source process has not stopped yet. Try again once it has ended.',
+                    ),
+                  );
+                }, 10_000);
+              }),
+            ]);
+          } finally {
+            if (timer !== undefined) timers.clearTimeout(timer);
+          }
+        }
+        const current = await view(
+          id,
+          db.getSession(id) !== undefined || historyOf(id).sessionStore !== undefined,
+        );
+        if (!current.items.some((item) => item.kind === 'user' || item.kind === 'assistantText'))
+          throw new ServiceError(
+            'NO_HISTORY',
+            'This chat has no readable conversation history to continue',
+          );
+        await mkdir(deps.continuationDir, { recursive: true });
+        await writeFile(file, continuationTranscript({ ...summary, cwd }, current.items), {
+          encoding: 'utf8',
+          mode: 0o600,
+          // No target exists yet; replace an export orphaned by an interrupted attempt.
+          flag: 'w',
+        });
+        wrote = true;
+        if (knownCwd(target) !== undefined)
+          throw new ServiceError('INVALID_PARAMS', 'The target chat already exists');
+        if (prior === undefined) {
+          db.recordContinuation(id, target, (deps.now ?? Date.now)());
+          recorded = true;
+        }
+        host.create(
+          cwd,
+          { text: continuationPrompt(isCodexSession(id) ? 'Codex' : 'Claude', file) },
+          isCodexSession(target) ? { model: 'codex:default' } : {},
+          target,
+        );
+        created = true;
+        nameChat(target, cwd, summary.title, false);
+        markSeen(target);
+        changed([id, target]);
+        return { sessionId: target };
+      } catch (error) {
+        if (recorded && !created) db.forgetContinuation(target);
+        if (wrote && !created) await rm(file, { force: true }).catch(() => {});
+        throw error;
+      } finally {
+        deps.moveLocks.unlock(id);
+      }
+    };
+    const job = run();
+    continuing.set(p.targetSessionId, { source: p.sessionId, job });
+    try {
+      return await job;
+    } finally {
+      continuing.delete(p.targetSessionId);
+    }
+  });
 
   router.register('chat.create', async (p) => {
     if (
@@ -615,6 +768,8 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
     if (away) throw new ServiceError(MOVE_ERRORS.moved, `This chat moved to ${away.name}`);
     const input = toInput(p);
     const s = await resumedOrLive(p.sessionId);
+    if (deps.moveLocks.isLocked(p.sessionId))
+      throw new ServiceError(MOVE_ERRORS.moving, 'This chat is being transferred');
     // Nothing gets lost in the archive or on hold: a chat being sent a message
     // (and perhaps running now) is active, even if the send itself then fails.
     activate(p.sessionId);
@@ -657,6 +812,8 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
       const check = await deps.resumeCheck(p.sessionId);
       if (check.status === 'blocked') throw new ServiceError('RESUME_BLOCKED', check.reason);
       forget(p.sessionId); // the resumed process's view starts from a fresh read
+      if (deps.moveLocks.isLocked(p.sessionId))
+        throw new ServiceError(MOVE_ERRORS.moving, 'This chat is being transferred');
       s = host.ensureLive(
         p.sessionId,
         cwd,

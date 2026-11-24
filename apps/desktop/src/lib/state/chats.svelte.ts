@@ -188,6 +188,8 @@ export class ChatState {
   /** `chat.items` events received but not yet applied (applied once per frame). */
   queued: ChatItemsEvent[] = [];
 
+  continuationLinks = $state<{ from?: string; to: string[] }>({ to: [] });
+
   constructor(readonly sessionId: string) {}
 }
 
@@ -383,6 +385,7 @@ export class ChatsState {
       // One that predates the queue list shows a queued message in the transcript at once.
       chat.queuedMessages = r.queued ?? [];
       chat.movedTo = r.movedTo ?? null;
+      chat.continuationLinks = r.continuationLinks ?? { to: [] };
       chat.seq = r.seq;
       chat.loaded = true;
       // Queued items at or below the snapshot are already part of it; applying a stale
@@ -510,6 +513,24 @@ export class ChatsState {
   withdraw = async (sessionId: string, messageId: string): Promise<ReturnedMessage> => {
     if (!this.api) throw new Error('Not connected to the Threadgarden service');
     return this.api.request('chat.withdraw', { sessionId, messageId });
+  };
+
+  /** A confirmed, same-machine handoff; never queue it while the service is offline. */
+  continueWith = async (sessionId: string, targetSessionId: string): Promise<string> => {
+    if (!this.api || this.api.status !== 'open')
+      throw new Error("Connect to this chat's machine before continuing with another agent");
+    const result = await this.api.request('chat.continue', {
+      sessionId,
+      targetSessionId,
+      stopSource: true,
+    });
+    const source = this.byId.get(sessionId);
+    if (source && !source.continuationLinks.to.includes(result.sessionId))
+      source.continuationLinks = {
+        ...source.continuationLinks,
+        to: [...source.continuationLinks.to, result.sessionId],
+      };
+    return result.sessionId;
   };
 
   /** Starts a chat in `cwd` with its first message; resolves to the new chat's id. */

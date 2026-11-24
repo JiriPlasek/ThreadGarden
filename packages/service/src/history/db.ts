@@ -230,6 +230,35 @@ export class Db implements LiveRegistry {
     this.raw.close();
   }
 
+  /** Local links between distinct native sessions continued with another agent. */
+  continuationSource(sessionId: string): string | undefined {
+    return this.raw
+      .prepare('SELECT source_session_id FROM chat_continuations WHERE session_id = ?')
+      .get(sessionId)?.source_session_id as string | undefined;
+  }
+
+  continuationLinks(sessionId: string): { from?: string; to: string[] } {
+    const from = this.continuationSource(sessionId);
+    const rows = this.raw
+      .prepare(
+        'SELECT session_id FROM chat_continuations WHERE source_session_id = ? ORDER BY at, session_id',
+      )
+      .all(sessionId);
+    return { ...(from === undefined ? {} : { from }), to: rows.map((r) => r.session_id as string) };
+  }
+
+  recordContinuation(source: string, target: string, at: number): void {
+    this.raw
+      .prepare(
+        'INSERT INTO chat_continuations (session_id, source_session_id, at) VALUES (?, ?, ?)',
+      )
+      .run(target, source, at);
+  }
+
+  forgetContinuation(target: string): void {
+    this.raw.prepare('DELETE FROM chat_continuations WHERE session_id = ?').run(target);
+  }
+
   // --- sessions -----------------------------------------------------------
 
   /** Writes session metadata; never touches the indexed_* marks. */
