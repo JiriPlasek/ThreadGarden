@@ -27,6 +27,7 @@ test.beforeEach(async () => {
   await forgetMachines();
   await serviceCall('mock.mcpReset', {});
   await remoteCall('mock.mcpReset', {});
+  await remoteCall('chat.end', { sessionId: REMOTE_CHAT });
   await resetTabs();
   await markAllSeen();
 });
@@ -51,6 +52,26 @@ const openLiveChat = async (page: Page, sessionId: string): Promise<void> => {
   await expect(page.getByRole('tab', { selected: true })).toHaveAttribute('data-tab', sessionId);
   await composer(page).fill('Hello from the MCP test');
   await composer(page).press('Enter');
+  await expect(page.getByText(REPLY).first()).toBeVisible();
+};
+
+/**
+ * Wakes the remote chat with one message. Its transcript changed seconds ago
+ * (the test before ended it), so Threadgarden may ask first: Continue here.
+ */
+const sayHelloOnRemote = async (page: Page): Promise<void> => {
+  await composer(page).fill('Hello from the MCP test');
+  await composer(page).press('Enter');
+  const ask = page.getByRole('alertdialog', { name: 'Continue this chat here?' });
+  // It asks within a moment, or not at all (the reply may already be in the transcript).
+  if (
+    await ask.waitFor({ timeout: 5_000 }).then(
+      () => true,
+      () => false,
+    )
+  ) {
+    await ask.getByRole('button', { name: 'Continue here' }).click();
+  }
   await expect(page.getByText(REPLY).first()).toBeVisible();
 };
 
@@ -135,9 +156,7 @@ test('sign in on the remote mock needs the pasted address', async ({ page }) => 
   await pairUbuntu(page);
   await (await chatRow(page, REMOTE_CHAT)).click();
   await expect(page.getByTitle(`Runs on ${MACHINE}`)).toBeVisible();
-  await composer(page).fill('Hello from the MCP test');
-  await composer(page).press('Enter');
-  await expect(page.getByText(REPLY).first()).toBeVisible();
+  await sayHelloOnRemote(page);
   await openDialog(page);
 
   const oauth = row(page, 'mock-oauth');
@@ -290,9 +309,7 @@ test('add on the remote mock', async ({ page }) => {
   await openApp(page);
   await pairUbuntu(page);
   await (await chatRow(page, REMOTE_CHAT)).click();
-  await composer(page).fill('Hello from the MCP test');
-  await composer(page).press('Enter');
-  await expect(page.getByText(REPLY).first()).toBeVisible();
+  await sayHelloOnRemote(page);
   await openDialog(page);
   const form = await fillHttp(page, 'remote-added', 'https://mcp.example.test/mcp');
   await form.getByRole('button', { name: 'Add', exact: true }).click();
