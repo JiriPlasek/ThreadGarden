@@ -48,11 +48,15 @@ export const maskValues = (text: string, config: McpServerConfig): string => {
 const ANSI = /\u001b\[[0-9;]*[A-Za-z]/g;
 const clean = (s: string): string => s.replace(ANSI, '').trim();
 
-/** The CLI must not think it runs inside a Claude Code session (it refuses stdin there). */
+/**
+ * The CLI must not think it runs inside a Claude Code session (it refuses stdin there).
+ * CLAUDE_CODE_GIT_BASH_PATH stays: on Windows the CLI needs it to find Git Bash.
+ */
 const childEnv = (env: Record<string, string | undefined>): NodeJS.ProcessEnv => {
   const out: NodeJS.ProcessEnv = {};
   for (const [k, v] of Object.entries(env)) {
-    if (k === 'CLAUDECODE' || k.startsWith('CLAUDE_CODE_')) continue;
+    if (k === 'CLAUDECODE' || (k.startsWith('CLAUDE_CODE_') && k !== 'CLAUDE_CODE_GIT_BASH_PATH'))
+      continue;
     out[k] = v;
   }
   return out;

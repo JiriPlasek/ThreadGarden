@@ -202,7 +202,7 @@ The dialog's **+ Add server** form and each row's **Remove** (with a confirmatio
 a machine that offers `mcp-config`. Threadgarden never writes Claude Code's config itself: the
 service runs Claude Code's own CLI, the same `claude` the SDK uses, in the chat's folder and with the
 chat's environment (`claude mcp add-json ... -` with the JSON on stdin, `claude mcp remove`; the
-child gets no `CLAUDECODE` or `CLAUDE_CODE_*` variables, or the CLI refuses stdin). The scopes are
+child gets no `CLAUDECODE` or `CLAUDE_CODE_*` variables except `CLAUDE_CODE_GIT_BASH_PATH`, or the CLI refuses stdin). The scopes are
 **Me, this project** (`local`, the default), **Me, every project** (`user`) and **Everyone**
 (`project`, saved in the project's `.mcp.json`, which is usually committed). Remove shows only for
 servers whose `source` is one of those three, and removes from that scope only; claude.ai

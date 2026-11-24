@@ -12,7 +12,7 @@ process.stdin.setEncoding('utf8');
 process.stdin.on('data', (d) => (stdin += d));
 process.stdin.on('end', () => {
   appendFileSync(process.env.TG_LOG, JSON.stringify({
-    argv: process.argv.slice(2), cwd: process.cwd(), stdin, env: { TG_PROBE: process.env.TG_PROBE, CLAUDECODE: process.env.CLAUDECODE, CLAUDE_CODE_ENTRYPOINT: process.env.CLAUDE_CODE_ENTRYPOINT },
+    argv: process.argv.slice(2), cwd: process.cwd(), stdin, env: { TG_PROBE: process.env.TG_PROBE, CLAUDECODE: process.env.CLAUDECODE, CLAUDE_CODE_ENTRYPOINT: process.env.CLAUDE_CODE_ENTRYPOINT, CLAUDE_CODE_GIT_BASH_PATH: process.env.CLAUDE_CODE_GIT_BASH_PATH },
   }) + '\\n');
   const mode = process.env.TG_MODE;
   if (mode === 'refuse') {
@@ -41,7 +41,12 @@ const setup = (mode = 'ok') => {
             argv: string[];
             cwd: string;
             stdin: string;
-            env: { TG_PROBE?: string; CLAUDECODE?: string; CLAUDE_CODE_ENTRYPOINT?: string };
+            env: {
+              TG_PROBE?: string;
+              CLAUDECODE?: string;
+              CLAUDE_CODE_ENTRYPOINT?: string;
+              CLAUDE_CODE_GIT_BASH_PATH?: string;
+            };
           },
       );
   const make = (timeoutMs?: number) =>
@@ -105,6 +110,22 @@ describe('cliMcpConfig', () => {
       delete process.env.CLAUDE_CODE_ENTRYPOINT;
     }
     expect(runs()[0]!.env).toEqual({ TG_PROBE: 'probe-1' });
+  });
+
+  it('keeps CLAUDE_CODE_GIT_BASH_PATH in the child env', async () => {
+    const { dir, runs, make } = setup();
+    process.env.CLAUDE_CODE_GIT_BASH_PATH = '/opt/git/bin/bash';
+    process.env.CLAUDE_CODE_ENTRYPOINT = 'x';
+    try {
+      await make().remove({ cwd: dir, scope: 'user', name: 'sentry' });
+    } finally {
+      delete process.env.CLAUDE_CODE_GIT_BASH_PATH;
+      delete process.env.CLAUDE_CODE_ENTRYPOINT;
+    }
+    expect(runs()[0]!.env).toEqual({
+      TG_PROBE: 'probe-1',
+      CLAUDE_CODE_GIT_BASH_PATH: '/opt/git/bin/bash',
+    });
   });
 
   it("a refusal rejects with Claude Code's words", async () => {
