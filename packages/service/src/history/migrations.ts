@@ -357,6 +357,18 @@ const steps: string[] = [
     mode TEXT NOT NULL
   );
   `,
+  `CREATE TABLE IF NOT EXISTS title_checks (
+    session_id TEXT PRIMARY KEY, user_id TEXT NOT NULL, user_count INTEGER NOT NULL, checked_at INTEGER NOT NULL
+  );`,
+  `CREATE TABLE IF NOT EXISTS title_revisions (session_id TEXT PRIMARY KEY, revision INTEGER NOT NULL);
+   CREATE TRIGGER IF NOT EXISTS title_revision_insert AFTER INSERT ON meta BEGIN
+     INSERT INTO title_revisions VALUES (NEW.session_id, 1)
+     ON CONFLICT(session_id) DO UPDATE SET revision = revision + 1;
+   END;
+   CREATE TRIGGER IF NOT EXISTS title_revision_update AFTER UPDATE OF custom_title ON meta BEGIN
+     INSERT INTO title_revisions VALUES (NEW.session_id, 1)
+     ON CONFLICT(session_id) DO UPDATE SET revision = revision + 1;
+   END;`,
 ];
 
 /** Runs the steps not run yet; `upTo` stops early (tests build older schemas with it). */

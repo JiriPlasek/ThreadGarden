@@ -108,6 +108,63 @@ const code = async (method: string, params: unknown) => (await call(method, para
 type Opened = { items: ChatItem[]; hasMore: boolean; seq: number; summary: { live: boolean } };
 const ids = (items: ChatItem[]) => items.map((i) => i.id);
 
+it('regenerates an old chat name from its conversation without starting or resuming it', async () => {
+  const adapter = new FakeAdapter();
+  addHistory(adapter, 'old-chat', 3);
+  adapter.oneShotReply = async () => JSON.stringify({ title: 'Fix Safari callback handling' });
+  await start(adapter);
+  await ok('settings.set', { autoTitles: false });
+  await ok('meta.update', { sessionId: 'old-chat', customTitle: 'Old name' });
+  expect(await ok('chat.regenerateTitle', { sessionId: 'old-chat', cwd: '/untrusted' })).toEqual({
+    title: 'Fix Safari callback handling',
+    changed: true,
+  });
+  expect(adapter.started).toHaveLength(0);
+  expect(adapter.oneShots).toHaveLength(1);
+  expect(adapter.oneShots[0]!.cwd).toBe(dir);
+  expect(adapter.oneShots[0]!.prompt).toContain('question 2');
+  expect(adapter.oneShots[0]!.prompt).toContain('answer 2');
+  const opened = await ok<Opened>('chat.open', { sessionId: 'old-chat', tail: 100 });
+  expect(opened.summary).toMatchObject({ title: 'Fix Safari callback handling', live: false });
+});
+
+it('suggests a name for a paused chat without saving or starting a conversation', async () => {
+  const adapter = new FakeAdapter();
+  addHistory(adapter, 'old-chat', 3);
+  adapter.oneShotReply = async () => JSON.stringify({ title: 'Suggested callback repair' });
+  await start(adapter);
+  await ok('meta.update', { sessionId: 'old-chat', customTitle: 'Saved name' });
+  const before = await ok<Opened>('chat.open', { sessionId: 'old-chat', tail: 100 });
+  expect(await ok('chat.regenerateTitle', { sessionId: 'old-chat', apply: false })).toEqual({
+    title: 'Suggested callback repair',
+    changed: true,
+  });
+  const after = await ok<Opened>('chat.open', { sessionId: 'old-chat', tail: 100 });
+  expect(after.items).toEqual(before.items);
+  expect(after.summary).toMatchObject({ title: 'Saved name', live: false });
+  expect(adapter.started).toHaveLength(0);
+  expect(adapter.oneShots).toHaveLength(1);
+  expect(adapter.oneShots[0]!.sessionId).not.toBe('old-chat');
+});
+
+it('rejects unknown naming requests and keeps the old title when generation fails', async () => {
+  const adapter = new FakeAdapter();
+  addHistory(adapter, 'known', 1);
+  await start(adapter);
+  await ok('meta.update', { sessionId: 'known', customTitle: 'Keep this name' });
+  expect(await code('chat.regenerateTitle', { sessionId: 'missing' })).toBe('NOT_FOUND');
+  expect(adapter.oneShots).toHaveLength(0);
+  adapter.oneShotReply = async () => {
+    throw new Error('Private provider response');
+  };
+  const failed = await call('chat.regenerateTitle', { sessionId: 'known' });
+  expect(failed.error?.code).toBe('TITLE_GENERATION_FAILED');
+  expect(failed.error?.message).not.toContain('Private provider response');
+  const opened = await ok<Opened>('chat.open', { sessionId: 'known', tail: 100 });
+  expect(opened.summary).toMatchObject({ title: 'Keep this name', live: false });
+  expect(adapter.started).toHaveLength(0);
+});
+
 it('chat.open and chat.since expose transient prompt predictions without adding history items', async () => {
   const adapter = new FakeAdapter();
   await start(adapter);

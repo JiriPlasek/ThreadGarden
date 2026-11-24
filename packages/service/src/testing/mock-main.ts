@@ -901,9 +901,10 @@ class ScriptedAdapter extends FakeAdapter {
   override async oneShot(o: OneShotOptions): Promise<string> {
     this.oneShots.push(o);
     await new Promise((r) => setTimeout(r, 500));
-    const message = /<first_message>\n([\s\S]*?)\n<\/first_message>/.exec(o.prompt)?.[1] ?? '';
+    const context = JSON.parse(o.prompt) as { conversation: { role: string; text: string }[] };
+    const message = context.conversation.find((m) => m.role === 'user')?.text ?? '';
     const words = message.split(/\s+/).filter(Boolean).slice(0, 4).join(' ');
-    return `Mock: ${words || 'new chat'}`;
+    return JSON.stringify({ title: `Mock: ${words || 'new chat'}` });
   }
 
   /**

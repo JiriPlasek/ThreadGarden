@@ -179,17 +179,13 @@ describe('settings dialog', () => {
     expect(env.app.settings.value.notifyOnFinish).toBe(false);
   });
 
-  it('v1.2: "Name new chats automatically" is on by default and can be turned off', async () => {
+  it('v1.2: "Name chats automatically" is on by default and can be turned off', async () => {
     const env = await withSettings();
     const dialog = await openDialog(env);
-    const toggle = within(dialog).getByLabelText(
-      /name new chats automatically \(Claude only; uses a small model\)/i,
-    ) as HTMLInputElement;
+    const toggle = within(dialog).getByLabelText(/^name chats automatically$/i) as HTMLInputElement;
     expect(toggle.checked).toBe(true);
     // Ruling R33: the toggle says when titles are skipped.
-    const hint = within(dialog).getByText(
-      'Skipped when your Claude settings route requests elsewhere (env, apiKeyHelper, cloud credentials).',
-    );
+    const hint = within(dialog).getByText(/Claude titles are skipped when your settings route/);
     expect(toggle.getAttribute('aria-describedby')).toBe(hint.id);
     expect(hint.id).not.toBe('');
     await userEvent.click(toggle);

@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ChatItem } from '@threadgarden/protocol';
+import { settingsDefaults, type ChatItem } from '@threadgarden/protocol';
 import { LiveSession, type LiveSessionDeps } from '../../src/chat/live-session.js';
 import { Normalizer } from '../../src/chat/normalize.js';
 import { CodexAdapter, codexPermissions } from '../../src/sdk/codex-adapter.js';
@@ -29,6 +29,7 @@ afterEach(async () => {
 const harness = (responses: Record<string, Rec> = {}) => {
   const connections: {
     client: CodexConnection;
+    env: NodeJS.ProcessEnv;
     event(method: string, params?: Rec, id?: number): void;
     exit(error: Error): void;
     calls: { method: string; params: Rec }[];
@@ -43,7 +44,7 @@ const harness = (responses: Record<string, Rec> = {}) => {
         calls.push({ method, params });
         if (responses[method]) return responses[method]!;
         if (method === 'thread/start' || method === 'thread/resume')
-          return { thread: { id: 'thread-123' }, model: 'test-model' };
+          return { thread: { id: 'thread-123' }, model: 'test-model', sandbox: { type: 'readOnly' } };
         if (method === 'turn/start') return { turn: { id: `turn-${++turns}` } };
         if (method === 'account/read') return { account: { type: 'chatgpt', planType: 'pro' } };
         if (method === 'model/list')
@@ -71,6 +72,7 @@ const harness = (responses: Record<string, Rec> = {}) => {
     };
     connections.push({
       client,
+      env: _env,
       calls,
       replies,
       event: (method, params = {}, id) =>
@@ -572,4 +574,110 @@ describe('Codex provider', () => {
       session.snapshot(100).items.some((i) => i.kind === 'system' && i.text.includes('Codex died')),
     ).toBe(true);
   });
+});
+
+it('generates Codex titles in a tool-less ephemeral native thread without Claude', async () => {
+  const h = harness({ 'config/read': { config: { mcp_servers: { private: {} } } } });
+  const sourceSessionId = 'codex-11111111-1111-4111-8111-111111111111';
+  h.codex.store.save({
+    id: sourceSessionId,
+    cwd: dir,
+    home: '/source-login',
+    model: 'codex:test-model',
+    modelProvider: 'custom',
+    createdAt: 1,
+    updatedAt: 1,
+  });
+  h.adapter.configure({ ...settingsDefaults, codexHome: '/configured-login' });
+  const controller = new AbortController();
+  const answer = h.adapter.oneShot({
+    sourceSessionId,
+    prompt: 'Title this chat',
+    systemPrompt: 'Return only a title',
+    model: 'codex:default',
+    cwd: dir,
+    env: {},
+    claudePath: '',
+    sessionId: 'title-query',
+    signal: controller.signal,
+  });
+  await vi.waitFor(() =>
+    expect(h.connections.at(-1)?.calls.some((c) => c.method === 'turn/start')).toBe(true),
+  );
+  const c = h.connections.at(-1)!;
+  expect(c.env.CODEX_HOME).toBe('/source-login');
+  const start = c.calls.find((c) => c.method === 'thread/start')!.params;
+  expect(start).toMatchObject({
+    model: 'test-model',
+    modelProvider: 'custom',
+    ephemeral: true,
+    approvalPolicy: 'never',
+    dynamicTools: [],
+    environments: [],
+    selectedCapabilityRoots: [],
+    config: {
+      'features.shell_tool': false,
+      'features.unified_exec': false,
+      'tools.update_plan.enabled': false,
+      mcp_servers: { private: { enabled: false } },
+    },
+  });
+  c.event('item/completed', {
+    threadId: 'thread-123',
+    turnId: 'turn-1',
+    item: { id: 'answer', type: 'agentMessage', text: 'Native Codex chat titles' },
+  });
+  c.event('turn/completed', {
+    threadId: 'thread-123',
+    turn: { id: 'turn-1', status: 'completed' },
+  });
+  expect(await answer).toBe('Native Codex chat titles');
+  expect(h.claude.oneShots).toHaveLength(0);
+  expect(c.client.close).toHaveBeenCalled();
+});
+
+it.each([{ config: undefined }, { config: [] }])(
+  'fails closed before a Codex title turn with invalid configuration $config',
+  async ({ config }) => {
+    const h = harness({ 'config/read': { config } });
+    await expect(
+      h.adapter.oneShot({
+        prompt: 'Title',
+        systemPrompt: 'Title only',
+        model: 'codex:default',
+        cwd: dir,
+        env: {},
+        claudePath: '',
+        sessionId: 'title-query',
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow('effective configuration');
+    const c = h.connections.at(-1)!;
+    expect(c.calls.some((x) => x.method === 'thread/start' || x.method === 'turn/start')).toBe(
+      false,
+    );
+    expect(c.client.close).toHaveBeenCalled();
+  },
+);
+
+it('closes a Codex title query on cancellation', async () => {
+  const h = harness({ 'config/read': { config: {} } });
+  const controller = new AbortController();
+  const answer = h.adapter.oneShot({
+    prompt: 'Title',
+    systemPrompt: 'Title only',
+    model: 'codex:default',
+    cwd: dir,
+    env: {},
+    claudePath: '',
+    sessionId: 'title-query',
+    signal: controller.signal,
+  });
+  const rejected = expect(answer).rejects.toThrow('cancelled');
+  await vi.waitFor(() =>
+    expect(h.connections.at(-1)?.calls.some((x) => x.method === 'turn/start')).toBe(true),
+  );
+  controller.abort(new Error('cancelled'));
+  await rejected;
+  expect(h.connections.at(-1)!.client.close).toHaveBeenCalled();
 });

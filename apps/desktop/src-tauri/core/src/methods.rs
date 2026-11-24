@@ -372,6 +372,7 @@ pub const REFUSED: &[&str] = &[
     "chat.setEffort",
     "chat.respond",
     "chat.fork",
+    "chat.regenerateTitle",
     "chat.resumeCheck",
     "chat.resumeCommand",
     "chat.stopTask",

@@ -34,7 +34,8 @@ import {
 } from '../../chat/live-session.js';
 import { Normalizer, type LastReply } from '../../chat/normalize.js';
 import type { SessionHost } from '../../chat/session-host.js';
-import type { ChatTitles } from '../../chat/titles.js';
+import type { ChatTitles, TitleMessage } from '../../chat/titles.js';
+import { titleMessages } from '../../chat/title-context.js';
 import type { ResumeCheck } from '../../external/resume-safety.js';
 import type { Catalog } from '../../history/catalog.js';
 import type { Db } from '../../history/db.js';
@@ -258,6 +259,8 @@ const storedModels = (value: unknown): Model[] | undefined => {
 };
 
 export type ChatHandlers = {
+  /** Main user/assistant text from the same merged view the chat displays. */
+  conversation: (sessionId: string) => Promise<TitleMessage[]>;
   /** What `chat.send` does (scheduled sends go out through it). */
   send: (p: {
     sessionId: string;
@@ -507,6 +510,28 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
     };
   };
 
+  const conversation = async (sessionId: string): Promise<TitleMessage[]> =>
+    titleMessages((await view(sessionId)).items);
+
+  router.register('chat.regenerateTitle', async (p) => {
+    if (deps.isMoving?.(p.sessionId))
+      throw new ServiceError(MOVE_ERRORS.moving, 'This chat is being moved to another machine');
+    const away = deps.awayTo?.(p.sessionId);
+    if (away) throw new ServiceError(MOVE_ERRORS.moved, `This chat moved to ${away.name}`);
+    const summary = catalog.summary(p.sessionId);
+    if (!summary?.cwd) throw new ServiceError('NOT_FOUND', `Unknown chat ${p.sessionId}`);
+    if (!deps.titles)
+      throw new ServiceError('TITLE_GENERATION_FAILED', 'Chat naming is unavailable');
+    try {
+      return await deps.titles.regenerate(p.sessionId, summary.cwd, p.apply);
+    } catch {
+      throw new ServiceError(
+        'TITLE_GENERATION_FAILED',
+        'Could not generate a chat name. Your current name was kept. Try again.',
+      );
+    }
+  });
+
   router.register('chat.open', async (p) => {
     if (!catalog.summary(p.sessionId)) {
       throw new ServiceError('NOT_FOUND', `Unknown chat ${p.sessionId}`);
@@ -701,7 +726,7 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
    */
   router.register('chat.end', async (p) => {
     if (host.get(p.sessionId)) {
-      deps.titles?.forget(p.sessionId); // a first turn cut short gets no generated title
+      deps.titles?.forget(p.sessionId); // cancel naming work belonging to the ended process
       release(p.sessionId);
       const timers = deps.timers ?? realTimers;
       let timer: unknown;
@@ -845,5 +870,5 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
     return [...(lastModels ?? []), ...codex];
   });
 
-  return { send, requireRunnable, release };
+  return { send, requireRunnable, release, conversation };
 };

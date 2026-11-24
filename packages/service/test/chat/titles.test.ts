@@ -1,22 +1,8 @@
 /** v1.2 C1: provisional and generated chat titles (Threadgarden's own metadata). */
-import type { EventMsg } from '@threadgarden/protocol';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import {
-  ChatTitles,
-  TITLE_CONCURRENCY,
-  TITLE_GHOST_GRACE_MS,
-  TITLE_INPUT_MAX,
-  TITLE_MODEL,
-  TITLE_SYSTEM_PROMPT,
-  TITLE_TIMEOUT_MS,
-  provisionalTitle,
-  sanitizeTitle,
-  titlePrompt,
-  type TitleRun,
-} from '../../src/chat/titles.js';
+import { describe, expect, it } from 'vitest';
+import { ChatTitles, provisionalTitle, sanitizeTitle, titlePrompt } from '../../src/chat/titles.js';
 import { titleFor } from '../../src/history/catalog.js';
-import { openDb, type Db } from '../../src/history/db.js';
-import type { OneShotOptions } from '../../src/sdk/adapter.js';
+import { openDb } from '../../src/history/db.js';
 import { ManualTimers } from './live-helpers.js';
 
 describe('provisionalTitle', () => {
@@ -130,333 +116,488 @@ describe('sanitizeTitle', () => {
 });
 
 describe('titlePrompt', () => {
-  it('holds the first message and the start of the reply, at most 2,000 characters', () => {
-    const p = titlePrompt('Fix the login bug', 'Sure, let me look at the auth module.');
-    expect(p).toContain('Fix the login bug');
-    expect(p).toContain('Sure, let me look at the auth module.');
-    const long = titlePrompt('u'.repeat(5000), 'a'.repeat(5000));
-    expect(long.length).toBeLessThanOrEqual(TITLE_INPUT_MAX);
-    // Both parts are represented even when the message alone is too long.
-    expect(long).toContain('uuuu');
-    expect(long).toContain('aaaa');
-  });
-
-  it('works with only one of the two, and is empty with neither', () => {
-    expect(titlePrompt('', 'Here is the image description')).toContain('image description');
-    expect(titlePrompt('Only a question', '')).toContain('Only a question');
-    expect(titlePrompt('  ', '\n')).toBe('');
+  it('includes the displayed title and first and recent conversation within 12000 characters', () => {
+    const messages = Array.from({ length: 40 }, (_, i) => ({
+      id: String(i),
+      role: i % 2 ? ('assistant' as const) : ('user' as const),
+      text: `message-${i}:` + '\\"'.repeat(5000),
+    }));
+    const prompt = titlePrompt('Existing overall title', messages);
+    expect(prompt.length).toBeLessThanOrEqual(12000);
+    const value = JSON.parse(prompt);
+    expect(value.currentTitle).toBe('Existing overall title');
+    expect(value.conversation[0].text).toContain('message-0:');
+    expect(value.conversation[1].text).toContain('message-1:');
+    expect(value.conversation.at(-1).text).toContain('message-39:');
+    expect(value.conversation.some((m: { text: string }) => m.text.startsWith('message-20:'))).toBe(
+      false,
+    );
+    expect(value.conversation.at(-1).role).toBe('assistant');
   });
 });
 
-// ── ChatTitles ──────────────────────────────────────────────────────────────
-
-type Call = {
-  o: OneShotOptions;
-  resolve: (s: string) => void;
-  reject: (e: Error) => void;
-};
-
-/** One-shot calls the test answers by hand. */
-class Model {
-  readonly calls: Call[] = [];
-  oneShot = (o: OneShotOptions): Promise<string> =>
-    new Promise<string>((resolve, reject) => this.calls.push({ o, resolve, reject }));
-}
-
-const flush = async (): Promise<void> => {
-  for (let i = 0; i < 10; i++) await new Promise<void>((r) => setImmediate(r));
-};
-
-let db: Db;
-let model: Model;
-let timers: ManualTimers;
-let events: EventMsg[];
-let enabled: boolean;
-let run: TitleRun | undefined;
-let replies: Map<string, string>;
-let debug: string[];
-let routed: string | undefined;
-let titles: ChatTitles;
-
-beforeEach(() => {
-  db = openDb(':memory:');
-  model = new Model();
-  timers = new ManualTimers();
-  events = [];
-  enabled = true;
-  run = { claudePath: '/bin/claude', env: { PATH: '/usr/bin', ANTHROPIC_API_KEY: 'sk-x' } };
-  replies = new Map();
-  debug = [];
-  routed = undefined;
-  titles = new ChatTitles({
+it('defers then names clarified context', async () => {
+  const db = openDb(':memory:');
+  let messages = [
+    { id: '1', role: 'user' as const, text: 'Help me with this' },
+    { id: '2', role: 'assistant' as const, text: 'What would you like to do?' },
+  ];
+  const calls: { resolve: (s: string) => void }[] = [];
+  const titles = new ChatTitles({
     db,
-    adapter: model,
-    enabled: () => enabled,
-    run: () => run,
-    firstReply: (id) => replies.get(id) ?? '',
+    adapter: { oneShot: () => new Promise((resolve) => calls.push({ resolve })) },
+    enabled: () => true,
+    run: () => ({ claudePath: '/claude', env: {} }),
+    conversation: async () => messages,
     titleChanged: () => {},
-    emit: (e) => events.push(e),
-    debug: (m) => debug.push(m),
-    routedElsewhere: async () => routed,
-    timers,
-    now: timers.now,
+    emit: () => {},
   });
-});
-afterEach(() => {
+  const flush = async () => {
+    for (let i = 0; i < 10; i++) await new Promise<void>((r) => setImmediate(r));
+  };
+  titles.started('c', '/w', 'Help me with this');
+  titles.turnEnded('c', '/w');
+  await flush();
+  calls[0]!.resolve('{"title":null}');
+  await flush();
+  expect(db.metaOf('c').generatedTitle).toBeNull();
+  messages = [
+    ...messages,
+    { id: '3', role: 'user', text: 'Repair Safari login redirects' },
+    { id: '4', role: 'assistant', text: 'I found the redirect failure' },
+  ];
+  messages.push(
+    { id: '5', role: 'user', text: 'Check Safari cookies too' },
+    { id: '6', role: 'assistant', text: 'Checking cookie persistence' },
+    { id: '7', role: 'user', text: 'Fix the redirect cookie handling' },
+    { id: '8', role: 'assistant', text: 'Found the underlying cause' },
+  );
+  titles.turnEnded('c', '/w');
+  await flush();
+  expect(calls).toHaveLength(2);
+  calls[1]!.resolve('{"title":"Safari login redirect repair"}');
+  await flush();
+  expect(db.metaOf('c').generatedTitle).toBe('Safari login redirect repair');
+  const result = titles.regenerate('c', '/w');
+  await flush();
+  db.setCustomTitle('c', 'My manual title');
+  calls[2]!.resolve('{"title":"Other title"}');
+  expect(await result).toEqual({ title: 'My manual title', changed: false });
   titles.dispose();
   db.close();
 });
 
-const titleOf = (id: string) => titleFor({ ...db.metaOf(id), ...db.getSession(id) });
-
-describe('ChatTitles', () => {
-  it('sets the provisional title at once when Threadgarden starts a chat', () => {
-    expect(titles.started('c1', '/w', 'Fix the login bug. It fails on Safari.')).toBe(true);
-    expect(db.metaOf('c1').autoTitle).toBe('Fix the login bug.');
-    expect(titleOf('c1')).toBe('Fix the login bug.');
-    // Nothing is generated before the first turn ends.
-    expect(model.calls).toHaveLength(0);
-  });
-
-  it('a first message without text sets no provisional title', () => {
-    expect(titles.started('c1', '/w', '')).toBe(false);
-    expect(db.metaOf('c1').autoTitle).toBeNull();
-  });
-
-  it('startedIfUntitled only touches chats without any title', () => {
-    db.upsertSession(
-      { sessionId: 'named', summary: 'Claude Code title', lastModified: 1, firstPrompt: 'hello' },
-      'p',
-    );
-    expect(titles.startedIfUntitled('named', '/w', 'A new message')).toBe(false);
-    expect(db.metaOf('named').autoTitle).toBeNull();
-    // No row and no Threadgarden title: untitled.
-    expect(titles.startedIfUntitled('bare', '/w', 'Continue the migration work')).toBe(true);
-    expect(db.metaOf('bare').autoTitle).toBe('Continue the migration work');
-    // Now it has one: a later message changes nothing.
-    expect(titles.startedIfUntitled('bare', '/w', 'Something else')).toBe(false);
-    expect(db.metaOf('bare').autoTitle).toBe('Continue the migration work');
-  });
-
-  it('generates a title after the first turn with the documented request', async () => {
-    titles.started('c1', '/work/proj', 'Fix the login bug on Safari');
-    replies.set('c1', 'Let me look at the redirect handling in auth.ts.');
-    titles.turnEnded('c1');
-    await flush();
-    expect(model.calls).toHaveLength(1);
-    const o = model.calls[0]!.o;
-    expect(o).toMatchObject({
-      model: TITLE_MODEL,
-      systemPrompt: TITLE_SYSTEM_PROMPT,
-      cwd: '/work/proj',
-      claudePath: '/bin/claude',
-      env: { PATH: '/usr/bin', ANTHROPIC_API_KEY: 'sk-x' },
+const harness = () => {
+  const db = openDb(':memory:');
+  let now = 0;
+  let enabled = true;
+  const messages: import('../../src/chat/titles.js').TitleMessage[] = [];
+  const calls: {
+    resolve: (s: string) => void;
+    reject: (e: Error) => void;
+    options: import('../../src/sdk/adapter.js').OneShotOptions;
+  }[] = [];
+  const create = () =>
+    new ChatTitles({
+      db,
+      adapter: {
+        oneShot: (options) =>
+          new Promise((resolve, reject) => calls.push({ resolve, reject, options })),
+      },
+      conversation: async () => [...messages],
+      enabled: () => enabled,
+      now: () => now,
+      run: () => ({ claudePath: '/claude', env: {} }),
+      titleChanged: () => {},
+      emit: () => {},
     });
-    expect(TITLE_MODEL).toBe('haiku');
-    expect(o.prompt).toContain('Fix the login bug on Safari');
-    expect(o.prompt).toContain('redirect handling');
-    expect(o.signal.aborted).toBe(false);
-
-    model.calls[0]!.resolve('"Safari login redirect fix."\n');
-    await flush();
-    expect(db.metaOf('c1').generatedTitle).toBe('Safari login redirect fix');
-    expect(titleOf('c1')).toBe('Safari login redirect fix');
-    expect(events).toEqual([{ event: 'sessions.changed', data: { sessionIds: ['c1'] } }]);
-  });
-
-  it('a failure keeps the provisional title silently (debug log only)', async () => {
-    titles.started('c1', '/w', 'Fix the login bug');
-    titles.turnEnded('c1');
-    await flush();
-    model.calls[0]!.reject(new Error('model overloaded'));
-    await flush();
-    expect(db.metaOf('c1').generatedTitle).toBeNull();
-    expect(titleOf('c1')).toBe('Fix the login bug');
-    expect(events).toEqual([]);
-    expect(debug.join('\n')).toMatch(/model overloaded/);
-  });
-
-  it('an unusable answer counts as a failure', async () => {
-    titles.started('c1', '/w', 'Fix the login bug');
-    titles.turnEnded('c1');
-    await flush();
-    model.calls[0]!.resolve('  "" ');
-    await flush();
-    expect(db.metaOf('c1').generatedTitle).toBeNull();
-    expect(events).toEqual([]);
-  });
-
-  it('gives up after 20 s and aborts the query', async () => {
-    titles.started('c1', '/w', 'Fix the login bug');
-    titles.turnEnded('c1');
-    await flush();
-    const call = model.calls[0]!;
-    timers.advance(TITLE_TIMEOUT_MS - 1);
-    await flush();
-    expect(call.o.signal.aborted).toBe(false);
-    timers.advance(1);
-    await flush();
-    expect(call.o.signal.aborted).toBe(true);
-    expect(debug.join('\n')).toMatch(/timed out/);
-    // A late answer is ignored.
-    call.resolve('Too late title');
-    await flush();
-    expect(db.metaOf('c1').generatedTitle).toBeNull();
-    expect(events).toEqual([]);
-  });
-
-  it('generates at most once per chat', async () => {
-    titles.started('c1', '/w', 'Fix the login bug');
-    titles.turnEnded('c1');
-    titles.turnEnded('c1');
-    await flush();
-    model.calls[0]!.reject(new Error('nope'));
-    await flush();
-    // Started again (e.g. an untitled-chat path) and another turn: still no second try.
-    titles.started('c1', '/w', 'Fix the login bug again');
-    titles.turnEnded('c1');
-    await flush();
-    expect(model.calls).toHaveLength(1);
-  });
-
-  it('only chats Threadgarden started are titled', async () => {
-    titles.turnEnded('history-chat');
-    await flush();
-    expect(model.calls).toHaveLength(0);
-  });
-
-  it('does nothing when the setting is off', async () => {
-    enabled = false;
-    titles.started('c1', '/w', 'Fix the login bug');
-    titles.turnEnded('c1');
-    await flush();
-    expect(model.calls).toHaveLength(0);
-    expect(titleOf('c1')).toBe('Fix the login bug');
-  });
-
-  it('skips when Claude Code cannot run (missing, or an API key is required and not set)', async () => {
-    run = undefined;
-    titles.started('c1', '/w', 'Fix the login bug');
-    titles.turnEnded('c1');
-    await flush();
-    expect(model.calls).toHaveLength(0);
-    expect(db.metaOf('c1').generatedTitle).toBeNull();
-  });
-
-  it('skips a chat the user renamed meanwhile', async () => {
-    titles.started('c1', '/w', 'Fix the login bug');
-    db.setCustomTitle('c1', 'My name for it');
-    titles.turnEnded('c1');
-    await flush();
-    expect(model.calls).toHaveLength(0);
-  });
-
-  it(`runs at most ${TITLE_CONCURRENCY} generations at a time`, async () => {
-    expect(TITLE_CONCURRENCY).toBe(2);
-    for (const id of ['a', 'b', 'c', 'd']) {
-      titles.started(id, '/w', `Message for ${id}`);
-      titles.turnEnded(id);
+  let titles = create();
+  const flush = async () => {
+    for (let i = 0; i < 10; i++) await new Promise<void>((r) => setImmediate(r));
+  };
+  const exchange = (text = 'Investigate the Safari login redirect failure') => {
+    messages.push(
+      { id: String(messages.length), role: 'user', text },
+      {
+        id: String(messages.length + 1),
+        role: 'assistant',
+        text: 'Investigated the redirect implementation',
+      },
+    );
+  };
+  return {
+    db,
+    calls,
+    messages,
+    exchange,
+    flush,
+    get titles() {
+      return titles;
+    },
+    end: async () => {
+      titles.turnEnded('c', '/w');
+      await flush();
+    },
+    answer: async (title: string | null) => {
+      calls.at(-1)!.resolve(JSON.stringify({ title }));
+      await flush();
+    },
+    restart: () => {
+      titles.dispose();
+      titles = create();
+    },
+    advance: () => {
+      now += 30 * 60 * 1000;
+    },
+    disable: () => {
+      enabled = false;
+    },
+    close: () => {
+      titles.dispose();
+      db.close();
+    },
+  };
+};
+it('checks after messages 1 and 4, then requires five messages and 30 minutes across restarts', async () => {
+  const h = harness();
+  try {
+    h.titles.started('c', '/w', 'Repair login');
+    let expectedCalls = 0;
+    for (let count = 1; count <= 15; count++) {
+      h.exchange();
+      if ([9, 14].includes(count)) {
+        await h.end();
+        expect(h.calls).toHaveLength(expectedCalls);
+        h.restart();
+        h.advance();
+      }
+      await h.end();
+      const due = [1, 4, 9, 14].includes(count);
+      if (due) expectedCalls++;
+      expect(h.calls).toHaveLength(expectedCalls);
+      if (due) await h.answer(null);
+      h.restart();
+      await h.end();
+      expect(h.calls).toHaveLength(expectedCalls);
     }
-    await flush();
-    expect(model.calls.map((c) => c.o.prompt.includes('Message for a'))).toEqual([true, false]);
-    expect(model.calls).toHaveLength(2);
-    model.calls[0]!.resolve('Title A');
-    await flush();
-    expect(model.calls).toHaveLength(3);
-    model.calls[1]!.reject(new Error('fail B'));
-    await flush();
-    expect(model.calls).toHaveLength(4);
-    model.calls[2]!.resolve('Title C');
-    model.calls[3]!.resolve('Title D');
-    await flush();
-    expect(['a', 'b', 'c', 'd'].map((id) => db.metaOf(id).generatedTitle)).toEqual([
-      'Title A',
-      null,
-      'Title C',
-      'Title D',
-    ]);
-  });
+  } finally {
+    h.close();
+  }
+});
+it('allows explicit regeneration of old custom chats with automatic naming disabled', async () => {
+  const h = harness();
+  try {
+    h.disable();
+    h.db.setCustomTitle('c', 'My old title');
+    h.exchange();
+    await h.end();
+    expect(h.calls).toHaveLength(0);
+    const result = h.titles.regenerate('c', '/w');
+    await h.flush();
+    await h.answer('Safari login repair');
+    expect(await result).toEqual({ title: 'Safari login repair', changed: true });
+    expect(h.db.metaOf('c').customTitle).toBeNull();
+  } finally {
+    h.close();
+  }
+});
+it('retries a failed attempt on new context and rejects a stale response', async () => {
+  const h = harness();
+  try {
+    h.titles.started('c', '/w', 'Repair login');
+    h.exchange();
+    await h.end();
+    h.calls[0]!.reject(new Error('overloaded'));
+    await h.flush();
+    expect(h.db.titleCheck('c')).toBeUndefined();
+    h.exchange('Investigate cookie handling');
+    await h.end();
+    h.exchange('Actually fix Firefox redirects');
+    await h.answer('Stale Safari title');
+    expect(h.db.metaOf('c').generatedTitle).toBeNull();
+    await h.end();
+    await h.answer('Firefox redirect repair');
+    expect(h.db.metaOf('c').generatedTitle).toBe('Firefox redirect repair');
+  } finally {
+    h.close();
+  }
+});
+it('locks automatic naming after a manual title and excludes acknowledgement turns', async () => {
+  const h = harness();
+  try {
+    h.titles.started('c', '/w', 'Repair login');
+    h.exchange();
+    await h.end();
+    await h.answer(null);
+    h.messages.push(
+      { id: 'ack', role: 'user', text: 'thanks' },
+      { id: 'reply', role: 'assistant', text: 'You are welcome' },
+    );
+    await h.end();
+    expect(h.calls).toHaveLength(1);
+    h.db.setCustomTitle('c', 'My title');
+    h.exchange();
+    await h.end();
+    expect(h.calls).toHaveLength(1);
+  } finally {
+    h.close();
+  }
+});
+it('serializes each chat and limits provider calls globally to two', async () => {
+  const h = harness();
+  try {
+    h.exchange();
+    for (const id of ['a', 'b', 'c']) h.titles.started(id, '/w', 'Repair login');
+    h.titles.turnEnded('a', '/w');
+    h.titles.turnEnded('a', '/w');
+    h.titles.turnEnded('b', '/w');
+    h.titles.turnEnded('c', '/w');
+    await h.flush();
+    expect(h.calls).toHaveLength(2);
+    h.calls[0]!.resolve('{"title":null}');
+    await h.flush();
+    expect(h.calls).toHaveLength(3);
+    h.calls[1]!.resolve('{"title":null}');
+    h.calls[2]!.resolve('{"title":null}');
+    await h.flush();
+    expect(h.calls).toHaveLength(3);
+  } finally {
+    h.close();
+  }
+});
 
-  it('dispose aborts running generations and drops queued ones', async () => {
+it('retains native Codex dispatch and tracks query ghost sessions', async () => {
+  const h = harness();
+  try {
+    h.exchange();
+    h.titles.started('codex-00000000-0000-0000-0000-000000000001', '/w', 'Repair login');
+    h.titles.turnEnded('codex-00000000-0000-0000-0000-000000000001', '/w');
+    await h.flush();
+    const options = h.calls[0]!.options;
+    expect(options.model).toBe('codex:default');
+    expect(options.sourceSessionId).toBe('codex-00000000-0000-0000-0000-000000000001');
+    expect(h.titles.runningIds()).toContain(options.sessionId);
+    h.calls[0]!.resolve('{"title":"Safari login repair"}');
+    await h.flush();
+    expect(h.titles.runningIds()).toContain(options.sessionId);
+    h.advance();
+    expect(h.titles.runningIds()).toEqual([]);
+  } finally {
+    h.close();
+  }
+});
+it('aborts provider queries on shutdown without applying late titles', async () => {
+  const h = harness();
+  try {
+    h.exchange();
+    h.titles.started('c', '/w', 'Repair login');
+    await h.end();
+    h.titles.dispose();
+    expect(h.calls[0]!.options.signal.aborted).toBe(true);
+    h.calls[0]!.resolve('{"title":"Late title"}');
+    await h.flush();
+    expect(h.db.metaOf('c').generatedTitle).toBeNull();
+  } finally {
+    h.close();
+  }
+});
+it('rejects malformed manual results and preserves the old custom title', async () => {
+  const h = harness();
+  try {
+    h.exchange();
+    h.db.setCustomTitle('c', 'Custom title');
+    const promise = h.titles.regenerate('c', '/w');
+    const failure = expect(promise).rejects.toThrow('Invalid title response');
+    await h.flush();
+    h.calls[0]!.resolve('untrusted raw model output');
+    await failure;
+    expect(h.db.metaOf('c').customTitle).toBe('Custom title');
+  } finally {
+    h.close();
+  }
+});
+
+it('protects a manual title changed A to B and back to A while generating', async () => {
+  const h = harness();
+  try {
+    h.exchange();
+    h.db.setCustomTitle('c', 'A');
+    const result = h.titles.regenerate('c', '/w');
+    await h.flush();
+    h.db.setCustomTitle('c', 'B');
+    h.db.setCustomTitle('c', 'A');
+    await h.answer('Generated title');
+    expect(await result).toEqual({ title: 'A', changed: false });
+    expect(h.db.metaOf('c').customTitle).toBe('A');
+  } finally {
+    h.close();
+  }
+});
+it('releases hung context slots after timeout and disposal', async () => {
+  const db = openDb(':memory:');
+  const timers = new ManualTimers();
+  let reads = 0;
+  const titles = new ChatTitles({
+    db,
+    adapter: { oneShot: async () => '{"title":null}' },
+    enabled: () => true,
+    run: () => ({ claudePath: '/claude', env: {} }),
+    conversation: () => {
+      reads++;
+      return new Promise(() => {});
+    },
+    titleChanged: () => {},
+    emit: () => {},
+    timers,
+    now: timers.now,
+  });
+  try {
     for (const id of ['a', 'b', 'c']) {
-      titles.started(id, '/w', `Message for ${id}`);
-      titles.turnEnded(id);
+      titles.started(id, '/w', 'Repair login');
+      titles.turnEnded(id, '/w');
     }
-    await flush();
+    await new Promise<void>((r) => setImmediate(r));
+    expect(reads).toBe(2);
+    timers.advance(20000);
+    await new Promise<void>((r) => setImmediate(r));
+    expect(reads).toBe(3);
+    const result = titles.regenerate('manual', '/w');
+    const rejected = expect(result).rejects.toThrow();
+    await new Promise<void>((r) => setImmediate(r));
     titles.dispose();
-    await flush();
-    expect(model.calls.every((c) => c.o.signal.aborted)).toBe(true);
-    expect(model.calls).toHaveLength(2);
-    model.calls[0]!.resolve('Late');
-    await flush();
-    expect(db.metaOf('a').generatedTitle).toBeNull();
+    await rejected;
+  } finally {
+    titles.dispose();
+    db.close();
+  }
+});
+it('does not spend the message interval on a failed provider attempt', async () => {
+  const h = harness();
+  try {
+    h.titles.started('c', '/w', 'Repair login');
+    h.exchange();
+    await h.end();
+    await h.answer('Login repair');
+    for (let i = 0; i < 3; i++) h.exchange();
+    await h.end();
+    await h.answer(null);
+    for (let i = 0; i < 5; i++) h.exchange();
+    h.advance();
+    await h.end();
+    h.calls.at(-1)!.reject(new Error('provider failed'));
+    await h.flush();
+    expect(h.db.titleCheck('c')?.userCount).toBe(4);
+    await h.end();
+    expect(h.calls).toHaveLength(4);
+    await h.answer(null);
+    expect(h.db.titleCheck('c')?.userCount).toBe(9);
+  } finally {
+    h.close();
+  }
+});
+
+it('times out hung routing and never starts a provider after a forgotten request', async () => {
+  const db = openDb(':memory:');
+  const timers = new ManualTimers();
+  let routeResolve: (value: undefined) => void = () => {};
+  let calls = 0;
+  const titles = new ChatTitles({
+    db,
+    adapter: {
+      oneShot: async () => {
+        calls++;
+        return '{"title":null}';
+      },
+    },
+    enabled: () => true,
+    run: () => ({ claudePath: '/claude', env: {} }),
+    conversation: async () => [
+      { id: 'u', role: 'user', text: 'Repair Safari login' },
+      { id: 'a', role: 'assistant', text: 'Investigating the redirect' },
+    ],
+    routedElsewhere: () =>
+      new Promise((resolve) => {
+        routeResolve = resolve;
+      }),
+    titleChanged: () => {},
+    emit: () => {},
+    timers,
+    now: timers.now,
   });
-
-  // ── fix round 1 ──
-
-  it('R33: skips when settings could route sessions elsewhere, logging the reason once', async () => {
-    routed = '/cfg/settings.json sets env';
-    for (const id of ['a', 'b']) {
-      titles.started(id, '/w', `Message for ${id}`);
-      titles.turnEnded(id);
-    }
-    await flush();
-    expect(model.calls).toHaveLength(0);
-    expect(db.metaOf('a').autoTitle).toBe('Message for a');
-    expect(debug.filter((m) => m.includes('sets env'))).toHaveLength(1);
+  try {
+    const result = titles.regenerate('c', '/w');
+    const failure = expect(result).rejects.toThrow('timed out');
+    await new Promise<void>((r) => setImmediate(r));
+    timers.advance(20000);
+    await failure;
+    expect(db.titleCheck('c')).toBeUndefined();
+    const forgotten = titles.regenerate('c', '/w');
+    const rejected = expect(forgotten).rejects.toThrow('ended');
+    await new Promise<void>((r) => setImmediate(r));
+    titles.forget('c');
+    await rejected;
+    routeResolve(undefined);
+    await new Promise<void>((r) => setImmediate(r));
+    expect(calls).toBe(0);
+  } finally {
+    titles.dispose();
+    db.close();
+  }
+});
+it('aborts a final freshness read without applying a title or checkpoint', async () => {
+  const db = openDb(':memory:');
+  let reads = 0;
+  let resolveRead: (v: import('../../src/chat/titles.js').TitleMessage[]) => void = () => {};
+  const messages: import('../../src/chat/titles.js').TitleMessage[] = [
+    { id: 'u', role: 'user', text: 'Repair login' },
+    { id: 'a', role: 'assistant', text: 'Investigating login' },
+  ];
+  const titles = new ChatTitles({
+    db,
+    adapter: { oneShot: async () => '{"title":"Login repair"}' },
+    enabled: () => true,
+    run: () => ({ claudePath: '/claude', env: {} }),
+    conversation: async () =>
+      ++reads === 1
+        ? messages
+        : await new Promise((resolve) => {
+            resolveRead = resolve;
+          }),
+    titleChanged: () => {},
+    emit: () => {},
   });
+  try {
+    const result = titles.regenerate('c', '/w');
+    const rejected = expect(result).rejects.toThrow('stopped');
+    await new Promise<void>((r) => setImmediate(r));
+    expect(reads).toBe(2);
+    titles.dispose();
+    await rejected;
+    resolveRead(messages);
+    await new Promise<void>((r) => setImmediate(r));
+    expect(db.titleCheck('c')).toBeUndefined();
+    expect(db.metaOf('c').generatedTitle).toBeNull();
+  } finally {
+    titles.dispose();
+    db.close();
+  }
+});
 
-  it('gives each one-shot a fresh session id, listed in runningIds while it runs', async () => {
-    titles.started('a', '/w', 'Message for a');
-    titles.started('b', '/w', 'Message for b');
-    expect(titles.runningIds()).toEqual([]);
-    titles.turnEnded('a');
-    titles.turnEnded('b');
-    await flush();
-    const ids = model.calls.map((c) => c.o.sessionId);
-    expect(ids).toHaveLength(2);
-    for (const id of ids) expect(id).toMatch(/^[0-9a-f-]{36}$/);
-    expect(new Set(ids).size).toBe(2);
-    expect(ids).not.toContain('a');
-    expect(titles.runningIds().sort()).toEqual([...ids].sort());
-    model.calls[0]!.resolve('Title A');
-    model.calls[1]!.reject(new Error('fail'));
-    await flush();
-    // Kept while their processes may still exit (fix round 2), then gone.
-    timers.advance(TITLE_GHOST_GRACE_MS);
-    expect(titles.runningIds()).toEqual([]);
-  });
-
-  it('forget drops a chat whose session ended before its first turn did', async () => {
-    titles.started('a', '/w', 'Message for a');
-    titles.forget('a');
-    titles.turnEnded('a');
-    await flush();
-    expect(model.calls).toHaveLength(0);
-    // The provisional title stays.
-    expect(db.metaOf('a').autoTitle).toBe('Message for a');
-  });
-
-  // ── fix round 2 ──
-
-  it(`keeps a finished query's id in runningIds for ${TITLE_GHOST_GRACE_MS} ms (its process is still exiting)`, async () => {
-    expect(TITLE_GHOST_GRACE_MS).toBe(15_000);
-    titles.started('a', '/w', 'Message for a');
-    titles.started('b', '/w', 'Message for b');
-    titles.turnEnded('a');
-    titles.turnEnded('b');
-    await flush();
-    const [ida, idb] = model.calls.map((c) => c.o.sessionId) as [string, string];
-    model.calls[0]!.resolve('Title A');
-    await flush();
-    timers.advance(10_000);
-    model.calls[1]!.reject(new Error('fail'));
-    await flush();
-    // Both settled; both processes may still be listed by `claude agents`.
-    expect(titles.runningIds().sort()).toEqual([ida, idb].sort());
-    timers.advance(TITLE_GHOST_GRACE_MS - 10_000);
-    expect(titles.runningIds()).toEqual([idb]);
-    timers.advance(10_000);
-    expect(titles.runningIds()).toEqual([]);
-  });
+it('previews a name without changing metadata or automatic checkpoints', async () => {
+  const h = harness();
+  try {
+    h.db.setCustomTitle('c', 'My saved name');
+    h.exchange();
+    const revision = h.db.titleRevision('c');
+    const pending = h.titles.regenerate('c', '/w', false);
+    await h.flush();
+    await h.answer('Suggested login repair');
+    expect(await pending).toEqual({ title: 'Suggested login repair', changed: true });
+    expect(h.db.metaOf('c').customTitle).toBe('My saved name');
+    expect(h.db.metaOf('c').generatedTitle).toBeNull();
+    expect(h.db.titleRevision('c')).toBe(revision);
+    expect(h.db.titleCheck('c')).toBeUndefined();
+  } finally {
+    h.close();
+  }
 });

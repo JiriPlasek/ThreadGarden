@@ -573,6 +573,7 @@ describe('chat header: state menu and hold details', () => {
 
     expect(await openStateMenu()).toEqual([
       'Rename… F2',
+      'Regenerate name',
       'Make active A (chat list)',
       'Put on hold… H (chat list)',
       'Archive E (chat list)',
@@ -600,6 +601,7 @@ describe('chat header: state menu and hold details', () => {
     render(BucketsHarness, { context, props: { chat: app.chats.get('s')! } });
     expect(await openStateMenu()).toEqual([
       'Rename… F2',
+      'Regenerate name',
       'Put on hold… H (chat list)',
       'Archive E (chat list)',
     ]);

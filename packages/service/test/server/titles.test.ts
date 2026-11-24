@@ -67,7 +67,7 @@ const firstTurn = async (c: TestClient, adapter: FakeAdapter, sessionId: string,
 
 /** A one-shot model that answers `title` and records what it was asked. */
 const answering = (adapter: FakeAdapter, title: string) => {
-  adapter.oneShotReply = async () => title;
+  adapter.oneShotReply = async () => JSON.stringify({ title });
 };
 
 const historyChat = (adapter: FakeAdapter, sessionId: string, summary: string) => {
@@ -143,15 +143,38 @@ describe('chat titles (service)', () => {
     expect(asked.prompt).toContain('Fix the login bug on Safari');
     expect(asked.prompt).toContain('Let me check the redirect handler.');
 
-    // A second turn never asks again.
-    await c.call('chat.send', { sessionId, text: 'And on Firefox?' });
-    adapter.lastSession().emit(result('r2'));
-    await new Promise((r) => setTimeout(r, 50));
-    expect(adapter.oneShots).toHaveLength(1);
+    // Refinement waits for three more substantive user messages.
+    adapter.oneShotReply = async () => JSON.stringify({ title: null });
+    for (let i = 2; i <= 4; i++) {
+      await c.call('chat.send', { sessionId, text: `Check browser redirect case ${i}` });
+      adapter.lastSession().emit(assistantText(`a${i}`, 'The same redirect fix applies.'));
+      adapter.lastSession().emit(result(`r${i}`));
+      await new Promise((r) => setTimeout(r, 50));
+      expect(adapter.oneShots).toHaveLength(i === 4 ? 2 : 1);
+    }
+    expect(await titleOf(c, sessionId)).toBe('Safari OAuth login fix');
 
     // The user's own name wins.
     await c.call('meta.update', { sessionId, customTitle: 'Login work' });
     expect(await titleOf(c, sessionId)).toBe('Login work');
+  });
+
+  it('names separately without inserting a message or resuming the main conversation', async () => {
+    const adapter = new FakeAdapter();
+    answering(adapter, 'Safari login repair');
+    const c = await start(adapter);
+    const { sessionId } = await c.call<{ sessionId: string }>('chat.create', {
+      cwd: dir,
+      text: 'Repair Safari login redirects',
+    });
+    const fake = adapter.lastSession();
+    const sent = [...fake.sent];
+    await firstTurn(c, adapter, sessionId, 'Found the redirect bug.');
+    await eventually(async () => (await titleOf(c, sessionId)) === 'Safari login repair');
+    expect(adapter.started).toHaveLength(1);
+    expect(fake.sent).toEqual(sent);
+    expect(adapter.oneShots).toHaveLength(1);
+    expect(adapter.oneShots[0]!.sessionId).not.toBe(sessionId);
   });
 
   it('a failed generation keeps the provisional title', async () => {
@@ -293,28 +316,28 @@ describe('chat titles (service)', () => {
       sessionIds: [ghost, 'elsewhere-1'],
     });
     expect(listed.items.map((s) => s.sessionId)).toEqual(['elsewhere-1']);
-    answer('Login bug fix');
+    answer(JSON.stringify({ title: 'Login bug fix' }));
     await eventually(async () => (await titleOf(c, sessionId)) === 'Login bug fix');
   });
 
-  it('a chat ended before its first turn finished is never titled later', async () => {
+  it('a provisional name can recover when an interrupted chat is continued later', async () => {
     const adapter = new FakeAdapter();
-    answering(adapter, 'Should not appear');
+    answering(adapter, 'Fix Safari redirect handling');
     const c = await start(adapter);
     const { sessionId } = await c.call<{ sessionId: string }>('chat.create', {
       cwd: dir,
       text: 'Fix the login bug',
     });
     await c.call('chat.end', { sessionId });
-    // Resumed later; its next turn is not a first turn Threadgarden saw.
+    expect(adapter.oneShots).toHaveLength(0);
+    // A later completed exchange gives the provisional name another chance.
     adapter.sessions.set(sessionId, {
       info: { sessionId, summary: '', lastModified: 1, cwd: dir },
       messages: [],
     });
-    await c.call('chat.send', { sessionId, text: 'Second' });
+    await c.call('chat.send', { sessionId, text: 'Continue the Safari redirect fix' });
     await firstTurn(c, adapter, sessionId, 'Reply.');
-    await new Promise((r) => setTimeout(r, 100));
-    expect(adapter.oneShots).toHaveLength(0);
-    expect(await titleOf(c, sessionId)).toBe('Fix the login bug');
+    await eventually(async () => (await titleOf(c, sessionId)) === 'Fix Safari redirect handling');
+    expect(adapter.oneShots).toHaveLength(1);
   });
 });

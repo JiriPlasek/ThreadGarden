@@ -718,6 +718,14 @@ export class Db implements LiveRegistry {
       .run(sessionId, t);
   }
 
+  /** Internal optimistic concurrency token; every manual rename advances it. */
+  titleRevision(sessionId: string): number {
+    return (
+      (this.raw.prepare('SELECT revision FROM title_revisions WHERE session_id = ?').get(sessionId)
+        ?.revision as number | undefined) ?? 0
+    );
+  }
+
   setSessionPinned(sessionId: string, pinned: boolean): void {
     this.raw
       .prepare(
@@ -746,6 +754,32 @@ export class Db implements LiveRegistry {
          ON CONFLICT(session_id) DO UPDATE SET auto_title = excluded.auto_title`,
       )
       .run(sessionId, title?.trim() || null);
+  }
+
+  titleCheck(
+    sessionId: string,
+  ): { userId: string; userCount: number; checkedAt: number } | undefined {
+    const row = this.raw
+      .prepare('SELECT user_id, user_count, checked_at FROM title_checks WHERE session_id = ?')
+      .get(sessionId);
+    return row
+      ? {
+          userId: row.user_id as string,
+          userCount: row.user_count as number,
+          checkedAt: row.checked_at as number,
+        }
+      : undefined;
+  }
+
+  setTitleCheck(
+    sessionId: string,
+    check: { userId: string; userCount: number; checkedAt: number },
+  ): void {
+    this.raw
+      .prepare(
+        `INSERT INTO title_checks VALUES (?, ?, ?, ?) ON CONFLICT(session_id) DO UPDATE SET user_id=excluded.user_id, user_count=excluded.user_count, checked_at=excluded.checked_at`,
+      )
+      .run(sessionId, check.userId, check.userCount, check.checkedAt);
   }
 
   /** The small model's title; `null` clears it. */

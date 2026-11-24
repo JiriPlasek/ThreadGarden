@@ -133,6 +133,7 @@ describe('protocol schemas', () => {
       'chat.setEffort',
       'chat.respond',
       'chat.fork',
+      'chat.regenerateTitle',
       'chat.resumeCheck',
       'chat.commands',
       'chat.models',

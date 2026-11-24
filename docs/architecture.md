@@ -476,30 +476,44 @@ search ranks archived matches after all others and flags them, keeping up to
 3 places for them (at most half the results), and the UI lists them in their
 own group.
 
-**Chat titles** (v1.2). Claude Code titles only its terminal sessions, so a
-chat Threadgarden starts gets a provisional title at once: the first sentence of the
-first line of its first message (also set when Threadgarden continues a chat that
-has no title of any kind). After the chat's first turn, if "Name new chats
-automatically" (`autoTitles`, on by default) is on, the service asks a small
-model for a 3–6 word title, at most once per chat, at most two at a time and
-with a 20 s timeout. The request is one Agent SDK `query()` with a string
-prompt, which starts one more `claude` process: model `haiku`, a naming system
-prompt, the first message and the start of the first reply (2,000 characters
-in all), `persistSession: false` (`--no-session-persistence`: no transcript),
-`settingSources: []`, no tools (`tools: []`, `strictMcpConfig`), one turn and
-no thinking, with the same `claude`, environment and authentication as the
-user's chats. Because it loads no settings, it is skipped (Ruling R33) when
-the user, project or local settings set `env`, `apiKeyHelper`,
-`awsAuthRefresh`, `awsCredentialExport`, `gcpAuthRefresh` or
-`otelHeadersHelper`, or cannot be parsed, so it never goes around the
-provider the user chose. The answer is cleaned (its first line, without
-quotes, labels or end punctuation; more than 10 words is no title) and stored
-in Threadgarden's own `chat_titles` table, next to the provisional title; any failure
-keeps the provisional title and is logged at debug level, without content. A
-generated title is cleared when Claude Code's own title of the chat changes
-later (a rename in the terminal). While the query's process runs it is listed
-by `claude agents`: the poller counts its session id as Threadgarden's own while it
-runs and for 15 s after it ends, so it never shows as an external chat.
+**Chat titles.** A new chat gets a provisional title from its first message.
+With "Name chats automatically" (`autoTitles`, on by default) enabled,
+Threadgarden considers the first and recent substantive main-thread user and
+assistant messages (at most 12,000 characters). Tools, child transcripts,
+internal handoff notes, queued messages and unfinished output are excluded.
+The model returns a short title, or an explicit keep/defer decision if the
+current name is adequate or the task is still unclear.
+
+An initial check runs after the first substantive user message receives a reply.
+The next check requires three additional substantive user messages; subsequent
+checks require five additional messages and at least 30 minutes since the last valid check. Checkpoints survive service restarts;
+opening a chat alone never generates a title. A failed check keeps the old
+name and does not consume the refinement interval. Existing native names are
+not automatically taken over. A native rename relinquishes automatic naming,
+and names set in Threadgarden are protected by an atomic revision even when
+renamed away and back while a request is running.
+
+The magic wand beside the **Rename chat** field (also opened with F2) suggests
+a name into the draft only. Saving remains explicit; cancelling keeps the
+saved name and suggestion requests do not advance automatic checkpoints.
+
+**Regenerate name** in the chat header explicitly checks the current
+conversation, including old and paused chats, without resuming them. It works
+when automatic naming is off and can replace a custom name, but a newer
+message or intervening rename prevents stale work from overwriting it.
+Requests are serialized per chat, with at most two running globally and a
+20-second timeout covering preparation as well as model work. Names remain
+Threadgarden metadata; no native transcript or title is written.
+
+Claude title requests use one tool-less, nonpersistent Agent SDK query through
+`haiku`, with the user's authentication. Settings that could route the query
+elsewhere still skip it (Ruling R33). Codex uses the original conversation's
+model, provider and login in an ephemeral native thread with tools, extensions,
+MCP servers and project instructions disabled, and verified read-only
+permissions. Title query processes are hidden from external chat listings
+while running and for 15 seconds afterwards. Naming never sends a message to
+or resumes the source conversation, so it does not change that conversation's
+prompt cache. The isolated request has its own inference cost and may be uncached.
 
 **Analytics** (v1.3). Statistics come from the same `getSessionMessages`
 walk that indexes a session's text (`src/history/stats.ts`), so they cost
@@ -1288,12 +1302,13 @@ no Claude Code, and the app contains no Node.
   (Windows Credential Manager, macOS Keychain, Secret Service), sent to the
   service after each `hello`, and held there in memory only, never stored or
   logged.
-- **Title requests** (v1.2). With "Name new chats automatically" on, the
-  first message of each chat Threadgarden starts and the start of its first reply
-  (2,000 characters at most) are sent once more, to Claude Code's `haiku`,
-  through the user's own `claude` and authentication, with no tools, no
-  settings and no transcript; never when settings route requests elsewhere
-  (Ruling R33).
+- **Title requests.** With "Name chats automatically" on, bounded excerpts of
+  the main user/assistant conversation (12,000 characters at most) are sent to
+  the chat's provider for initial naming and occasional refinements. An
+  explicit **Regenerate name** does the same when the setting is off. Codex
+  uses the conversation's model, provider and original login in an ephemeral,
+  tool-less, read-only thread; Claude uses a tool-less, nonpersistent `haiku`
+  query through the user's Claude authentication, respecting Ruling R33.
 - **Folders and git** ([Projects](#projects)). Threadgarden makes new folders
   and runs `git init` or `git clone` in them (New project, Clone), and never
   changes or removes a folder it did not make. `gh` and git never prompt, and

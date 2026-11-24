@@ -82,7 +82,7 @@ it('a full service lifecycle leaves the Claude config dir untouched', async () =
 
   const adapter = new FakeAdapter();
   // v1.2 C1: the new chat below gets a generated title (the fake adapter's one-shot path).
-  adapter.oneShotReply = async () => 'Generated chat title';
+  adapter.oneShotReply = async () => JSON.stringify({ title: 'Generated chat title' });
   for (const id of sessions) {
     adapter.sessions.set(id, {
       info: { sessionId: id, summary: `Chat ${id}`, lastModified: 1, fileSize: 10, cwd: project },

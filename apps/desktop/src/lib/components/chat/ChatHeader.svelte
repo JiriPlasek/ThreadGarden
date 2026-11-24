@@ -9,6 +9,7 @@
   import InboxIcon from '@lucide/svelte/icons/inbox';
   import PauseIcon from '@lucide/svelte/icons/pause';
   import PencilIcon from '@lucide/svelte/icons/pencil';
+  import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
   import PowerIcon from '@lucide/svelte/icons/power';
   import TerminalIcon from '@lucide/svelte/icons/terminal';
   import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
@@ -171,6 +172,19 @@
   );
 
   let error = $state<string | null>(null);
+  let regenerating = $state(false);
+  const regenerateName = async (): Promise<void> => {
+    if (regenerating || readOnly || chat.movedTo) return;
+    regenerating = true;
+    error = null;
+    try {
+      await chats.regenerateTitle(sessionId);
+    } catch (err) {
+      error = err instanceof Error ? err.message : String(err);
+    } finally {
+      regenerating = false;
+    }
+  };
   let confirmBypass = $state(false);
   let bypassSession: string | null = null;
   const changePermissionMode = (event: Event & { currentTarget: HTMLSelectElement }): void => {
@@ -308,6 +322,17 @@
           <PencilIcon /> Rename…
           {#if !isPhone}<ShortcutHint combos={shortcut('chat-rename').combos} />{/if}
         </DropdownMenu.Item>
+        {#if !readOnly && !chat.movedTo}
+          <DropdownMenu.Item
+            class="py-1 text-xs"
+            disabled={regenerating}
+            aria-busy={regenerating}
+            onSelect={() => void regenerateName()}
+          >
+            <RefreshCwIcon class={regenerating ? 'animate-spin' : undefined} />
+            {regenerating ? 'Regenerating name...' : 'Regenerate name'}
+          </DropdownMenu.Item>
+        {/if}
         <DropdownMenu.Separator />
         <!-- The list's keys act on the chat list's cursor, so their hints say so; the phone has none. -->
         {#if bucket !== 'active'}
@@ -613,6 +638,9 @@
 <RenameDialog
   chat={renaming ? summary : null}
   onSubmit={rename}
+  onSuggest={!readOnly && !chat.movedTo
+    ? async (id) => (await chats.regenerateTitle(id, false)).title
+    : undefined}
   onClose={() => (renaming = false)}
 />
 
