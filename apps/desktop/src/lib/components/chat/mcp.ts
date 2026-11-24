@@ -42,7 +42,7 @@ export const sourceLabel = (source: string): string => {
 };
 
 export type PrimaryAction = 'approve' | 'signIn' | 'claudeAiSignIn' | 'reconnect' | 'turnOn';
-export type MenuAction = 'reconnect' | 'turnOff' | 'clearAuth';
+export type MenuAction = 'reconnect' | 'turnOff' | 'clearAuth' | 'remove';
 
 export const primaryAction = (s: McpServer): PrimaryAction | null => {
   switch (s.status) {
