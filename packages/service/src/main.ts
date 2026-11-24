@@ -934,8 +934,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
           opened.setTurnEnded(id, at);
           emitChat({ event: 'sessions.changed', data: { sessionIds: [id] } });
           // v1.2 C1: a new chat's first turn is over: it gets its generated title.
-          if (isCodexSession(id)) titlesRef.current?.forget(id);
-          else titlesRef.current?.turnEnded(id);
+          titlesRef.current?.turnEnded(id);
         },
         // v1.1 §4: live activity may reorder the projects.
         onActivity: () => projectOrderRef.current?.notify(),
@@ -1055,7 +1054,8 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         adapter,
         enabled: () => opened.getSettings().autoTitles,
         // Exactly when a chat could start (`API_KEY_REQUIRED`, `CLAUDE_MISSING`).
-        run: () => {
+        run: (id) => {
+          if (isCodexSession(id)) return { claudePath: '', env: sessionEnvOf() };
           const c = claude.current;
           if ((opts.apiKeyOnly === true && apiKey === null) || !c || !('path' in c)) {
             return undefined;

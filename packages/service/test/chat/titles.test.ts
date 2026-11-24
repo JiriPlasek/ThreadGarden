@@ -460,3 +460,18 @@ describe('ChatTitles', () => {
     expect(titles.runningIds()).toEqual([]);
   });
 });
+
+it('generates Codex titles through the Codex provider without Claude routing checks', async () => {
+  routed = 'Claude settings route elsewhere';
+  titles.started('codex-11111111-1111-4111-8111-111111111111', '/work/proj', 'Fix login');
+  titles.turnEnded('codex-11111111-1111-4111-8111-111111111111');
+  await flush();
+  expect(model.calls).toHaveLength(1);
+  expect(model.calls[0]!.o).toMatchObject({
+    model: 'codex:default',
+    sourceSessionId: 'codex-11111111-1111-4111-8111-111111111111',
+  });
+  model.calls[0]!.resolve('Codex login redirect fix');
+  await flush();
+  expect(db.metaOf('codex-11111111-1111-4111-8111-111111111111').generatedTitle).toBe('Codex login redirect fix');
+});

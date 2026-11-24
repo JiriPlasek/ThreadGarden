@@ -334,11 +334,12 @@
               type="checkbox"
               bind:checked={form.autoTitles}
               aria-describedby="settings-auto-titles-hint"
-            /> Name new chats automatically (Claude only; uses a small model)
+            /> Name new chats automatically
           </label>
           <!-- Ruling R33: titles never go around the provider the user's settings choose. -->
           <p id="settings-auto-titles-hint" class="text-muted-foreground pl-6 text-xs">
-            Skipped when your Claude settings route requests elsewhere (env, apiKeyHelper, cloud
+            Uses a small model for Claude and the conversation's model for Codex. Claude titles are
+            skipped when your settings route requests elsewhere (env, apiKeyHelper, cloud
             credentials).
           </p>
         </div>
