@@ -2,13 +2,20 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { PROTOCOL_VERSION, type EventMsg, type McpState } from '@threadgarden/protocol';
+import {
+  PROTOCOL_VERSION,
+  type EventMsg,
+  type McpScope,
+  type McpServerConfig,
+  type McpState,
+} from '@threadgarden/protocol';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Logger } from '../../src/logger.js';
 import type { McpProjectFiles } from '../../src/mcp/project-files.js';
 import { startService, type ServiceHandle, type StartOptions } from '../../src/main.js';
 import { FakeAdapter } from '../../src/testing/fake-adapter.js';
-import { init, settle } from '../chat/live-helpers.js';
+import { CONFIG_SEEN_BY, type McpConfig } from '../../src/mcp/config.js';
+import { init, result, settle } from '../chat/live-helpers.js';
 import { TestClient } from '../e2e/ws-client.js';
 
 let dir: string;
@@ -48,6 +55,31 @@ const logger: Logger = {
   error: (m) => void errors.push(m),
   flush: async () => {},
 };
+
+/** Records calls; on success it shows (or drops) the server in the live fake session. */
+class FakeConfig implements McpConfig {
+  calls: { op: string; cwd: string; scope: McpScope; name: string; config?: McpServerConfig }[] =
+    [];
+  reject: Error | undefined;
+  constructor(private readonly adapter: FakeAdapter) {}
+  async add(o: { cwd: string; scope: McpScope; name: string; config: McpServerConfig }) {
+    this.calls.push({ op: 'add', ...o });
+    if (this.reject) throw this.reject;
+    this.adapter.lastSession().mcpServers.push({
+      name: o.name,
+      status: 'connected',
+      source: o.scope,
+      scope: o.scope,
+      config: { ...o.config },
+    } as never);
+  }
+  async remove(o: { cwd: string; scope: McpScope; name: string }) {
+    this.calls.push({ op: 'remove', ...o });
+    if (this.reject) throw this.reject;
+    const s = this.adapter.lastSession();
+    s.mcpServers = s.mcpServers.filter((x) => x.name !== o.name);
+  }
+}
 
 const start = async (adapter: FakeAdapter, over: Partial<StartOptions> = {}) => {
   svc = await startService({
@@ -259,6 +291,163 @@ describe('mcp.*', () => {
         client: 't',
       });
       expect(hello.machine.capabilities).toContain('mcp');
+      await client?.close();
+      client = undefined;
+      await svc?.close();
+      svc = undefined;
+    }
+  });
+
+  describe('add and remove', () => {
+    const http = { type: 'http', url: 'https://x.example/mcp', headers: { A: 'SECRET' } } as const;
+    const setup = async () => {
+      const adapter = new FakeAdapter();
+      const config = new FakeConfig(adapter);
+      const c = await start(adapter, { mcpConfig: config });
+      const id = await create(c);
+      return { adapter, config, c, id, fake: adapter.lastSession() };
+    };
+    const addParams = (id: string) => ({
+      sessionId: id,
+      name: 'web',
+      scope: 'local',
+      config: http,
+    });
+    const removeParams = (id: string, scope = 'local') => ({ sessionId: id, name: 'web', scope });
+
+    it("add runs in the chat's folder with the chosen scope", async () => {
+      const { config, c, id } = await setup();
+      await c.call('mcp.add', addParams(id));
+      expect(config.calls).toEqual([
+        { op: 'add', cwd: dir, scope: 'local', name: 'web', config: http },
+      ]);
+    });
+
+    it("add refuses a Codex chat and a chat that isn't running", async () => {
+      const { c } = await setup();
+      await expect(c.call('mcp.add', addParams(codexId))).rejects.toMatchObject({
+        code: 'MCP_UNSUPPORTED',
+      });
+      await expect(c.call('mcp.add', addParams('paused'))).rejects.toMatchObject({
+        code: 'NOT_LIVE',
+      });
+    });
+
+    it("add shows Claude Code's refusal as is", async () => {
+      const { config, c, id } = await setup();
+      config.reject = new Error('MCP server web already exists in local config');
+      await expect(c.call('mcp.add', addParams(id))).rejects.toMatchObject({
+        code: 'MCP_FAILED',
+        message: 'MCP server web already exists in local config',
+      });
+    });
+
+    it('a refusal that repeats a value is masked', async () => {
+      const { config, c, id } = await setup();
+      config.reject = new Error('bad header Bearer SECRET');
+      const params = { ...addParams(id), config: { ...http, headers: { A: 'Bearer SECRET' } } };
+      await expect(c.call('mcp.add', params)).rejects.toMatchObject({
+        code: 'MCP_FAILED',
+        message: 'bad header •••',
+      });
+      expect(errors.join('\n')).not.toContain('SECRET');
+    });
+
+    it('mcp.changed never carries header or environment values', async () => {
+      const { c, id } = await setup();
+      await c.call('mcp.add', addParams(id));
+      await c.waitFor(changed(id));
+      expect(JSON.stringify(c.events)).not.toContain('SECRET');
+      expect(errors.join('\n')).not.toContain('SECRET');
+    });
+
+    it('the added server appears in the list', async () => {
+      const { c, id } = await setup();
+      await c.call('mcp.add', { ...addParams(id), scope: 'user' });
+      const state = await c.call<McpState>('mcp.list', { sessionId: id });
+      expect(state.servers.find((x) => x.name === 'web')?.source).toBe('user');
+    });
+
+    it.runIf(CONFIG_SEEN_BY.add === 'reconnect')(
+      'add reconnects the new server in this chat',
+      async () => {
+        const { c, id, fake } = await setup();
+        expect(await c.call('mcp.add', addParams(id))).toEqual({ restartPending: false });
+        expect(fake.mcpCalls).toContainEqual({ op: 'reconnect', name: 'web' });
+      },
+    );
+
+    it.runIf(CONFIG_SEEN_BY.remove === 'restart')('remove restarts an idle chat', async () => {
+      const { adapter, c, id, fake } = await setup();
+      fake.emit(result('r1'));
+      await settle();
+      expect(await c.call('mcp.remove', removeParams(id))).toEqual({ restartPending: false });
+      expect(adapter.started).toHaveLength(2);
+    });
+
+    it.runIf(CONFIG_SEEN_BY.remove === 'restart')(
+      'remove during a turn says restartPending',
+      async () => {
+        const { adapter, c, id } = await setup();
+        expect(await c.call('mcp.remove', removeParams(id))).toEqual({ restartPending: true });
+        expect(adapter.started).toHaveLength(1);
+      },
+    );
+
+    it("a failure after adding doesn't fail the add", async () => {
+      const { c, id, fake } = await setup();
+      fake.mcpError = new Error('reconnect exploded SECRET-LINK');
+      expect(await c.call('mcp.add', addParams(id))).toEqual({ restartPending: false });
+      expect(errors.join('\n')).not.toContain('SECRET');
+    });
+
+    it.runIf(CONFIG_SEEN_BY.remove === 'restart')(
+      "a restart that throws doesn't fail the remove",
+      async () => {
+        const { adapter, c, id, fake } = await setup();
+        fake.emit(result('r1'));
+        await settle();
+        adapter.start = () => {
+          throw new Error('cannot start SECRET');
+        };
+        expect(await c.call('mcp.remove', removeParams(id))).toEqual({ restartPending: false });
+        expect(errors.join('\n')).not.toContain('SECRET');
+      },
+    );
+
+    it("add during a turn doesn't interrupt it", async () => {
+      const { c, id, fake } = await setup();
+      await c.call('mcp.add', addParams(id));
+      await settle();
+      expect(fake.interrupted).toBe(0);
+      const statuses = c.events.filter((e) => e.event === 'chat.status');
+      expect((statuses.at(-1)!.data as { status: string }).status).toBe('working');
+    });
+
+    it("remove runs claude mcp remove with the row's scope", async () => {
+      const { config, c, id } = await setup();
+      await c.call('mcp.remove', removeParams(id, 'project'));
+      expect(config.calls).toEqual([{ op: 'remove', cwd: dir, scope: 'project', name: 'web' }]);
+    });
+
+    it("remove shows Claude Code's refusal as is", async () => {
+      const { config, c, id } = await setup();
+      config.reject = new Error('No MCP server named "web" in user scope');
+      await expect(c.call('mcp.remove', removeParams(id, 'user'))).rejects.toMatchObject({
+        code: 'MCP_FAILED',
+        message: 'No MCP server named "web" in user scope',
+      });
+    });
+  });
+
+  it('hello advertises mcp-config, local and headless', async () => {
+    for (const over of [{}, { headless: true }]) {
+      const c = await start(new FakeAdapter(), over);
+      const hello = await c.call<{ machine: { capabilities: string[] } }>('hello', {
+        protocolVersion: PROTOCOL_VERSION,
+        client: 't',
+      });
+      expect(hello.machine.capabilities).toContain('mcp-config');
       await client?.close();
       client = undefined;
       await svc?.close();
