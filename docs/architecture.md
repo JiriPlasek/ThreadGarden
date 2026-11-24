@@ -230,7 +230,7 @@ service and the UI; the service validates every request.
   surfaces as any failed request). A machine outside that window shows as
   needing attention ("Different Threadgarden version").
 - **Requests** `{id, method, params}` → `{id, result}` or `{id, error: {code,
-message}}`. Error codes the UI acts on include `GAP`, `RESUME_BLOCKED`,
+  message}}`. Error codes the UI acts on include `GAP`, `RESUME_BLOCKED`,
   `CLAUDE_MISSING`, `NOT_LIVE`, `NOT_FOUND`, `FORK_FAILED` and
   `INVALID_PARAMS`. Methods cover places and lists (`places.counts`,
   `sessions.list`, `projects.*`, `search.quick`), chats (`chat.open`,
@@ -315,7 +315,7 @@ project) and an FTS5 trigram table of user and assistant text. Tool calls,
 tool results and thinking are not indexed. A session's text is capped at 2 Mi
 characters, keeping the most recent text. Re-indexing a session pages through
 its messages (yielding to the event loop between pages), writes the new text
-as a staged _generation_ of FTS rows, and makes it current with one short
+as a staged *generation* of FTS rows, and makes it current with one short
 statement; old generations are deleted afterwards. A failure part-way leaves
 the previous text searchable, and the event loop never blocks on a large
 session. A full sync runs at every start in the background; the UI shows
@@ -376,7 +376,7 @@ hash of the project id, each with at least 4.5:1 contrast to white.
 
 **Catalog and paging.** Lists combine three sources: index rows, Threadgarden's own
 live chats (status, what they wait for) and external sessions. The live and
-external rows (the _overlay_) are small and change constantly, so they are
+external rows (the *overlay*) are small and change constantly, so they are
 returned in full on the first page of any place; later pages are index rows
 only, keyset-paged and excluding overlay ids, so the cursor never drifts when
 a chat changes status. Hidden projects stay visible in Needs you and Running
@@ -404,7 +404,7 @@ Code reports what happens to each message with `command_lifecycle` frames
 (`queued`, `started` when a turn takes it up, then `completed` or
 `cancelled`), and `system/status` and `result` frames list the messages a
 turn has read. Until a message sent while Claude works is `started`, the
-service keeps it out of the transcript and lists it as _queued_ in
+service keeps it out of the transcript and lists it as *queued* in
 `chat.status` and `chat.open` (`queued`); then it joins the transcript where
 Claude read it, which is also where history has it. The UI shows queued
 messages after the conversation, greyed out, as the terminal does (the queue
@@ -480,8 +480,14 @@ own group.
 chat Threadgarden starts gets a provisional title at once: the first sentence of the
 first line of its first message (also set when Threadgarden continues a chat that
 has no title of any kind). After the chat's first turn, if "Name new chats
-automatically" (`autoTitles`, on by default) is on, the service asks the chat's provider for a 3–6 word title, at most once per chat, at most two at a time and
-with a 20 s timeout. Codex uses the conversation's model, provider and original login in a separate ephemeral app-server thread, following Codex's isolated title-request configuration: built-in tools, extensions, all configured MCP servers, environment access and project instructions are disabled. The thread must confirm read-only permissions. Titles remain local metadata and Claude is not required.
+automatically" (`autoTitles`, on by default) is on, the service asks the chat's
+provider for a 3–6 word title, at most once per chat, at most two at a time and
+with a 20 s timeout. Codex uses the conversation's model, provider and original
+login in a separate ephemeral app-server thread, following Codex's isolated
+title-request configuration: built-in tools, extensions, all configured MCP
+servers, environment access and project instructions are disabled. The thread
+must confirm read-only permissions. Titles remain local metadata and Claude
+is not required.
 
 For Claude, the request is one Agent SDK `query()` with a string
 prompt, which starts one more `claude` process: model `haiku`, a naming system
@@ -524,7 +530,7 @@ transaction adds and subtracts them in `stats_all_*`, the sums over every
 session, so the all-projects view never scans per session.
 
 Sessions indexed before statistics existed (`version` missing or older
-than `STATS_VERSION`) are _backfilled_: after a full sync the indexer
+than `STATS_VERSION`) are *backfilled*: after a full sync the indexer
 reads them again through the SDK, four per turn of its serial queue
 (refreshes of changed chats run between turns) with the usual event-loop
 yields between slices of 100 messages, and writes only statistics; the
@@ -1080,7 +1086,6 @@ from the store and stays indexed, so `chat.open` still shows it. Forking a
 
 **Before anything moves** (`move.check` on the source, `move.target` on the
 target, both read-only):
-
 - **Busy:** a live chat mid-turn (`turn`), waiting on a permission prompt or a
   question (`prompt`), or with background tasks running (`subagents`) can't
   move. The dialog offers Stop the chat: the turn's stop, or for background
@@ -1110,7 +1115,6 @@ the chat instead.
 
 **The move** is driven by the desktop (`apps/desktop/src/lib/move/move-chat.svelte.ts`),
 which talks to both services; neither service calls the other.
-
 1. `move.exportBegin {sessionId, exportId}` on the source. The desktop makes
    `exportId`, and the same id again (a lost answer) gives the same answer. It
    **locks** the chat first and only then checks it is not busy, so no turn
@@ -1165,9 +1169,9 @@ which talks to both services; neither service calls the other.
 6. The **tab** follows the chat to the target.
 7. **Claude's first note:** one user message sent in the chat on the target,
    whose first line is `[Threadgarden] This chat moved from ‹source› to
-‹target›.` (`move/note.ts`). It names the folder, the repo and the branch,
+   ‹target›.` (`move/note.ts`). It names the folder, the repo and the branch,
    asks Claude to clone the repo into the folder if it is empty (`git clone
-‹origin› .`), else fetch, and then check out the branch, never to stash, reset, overwrite or switch a working
+   ‹origin› .`), else fetch, and then check out the branch, never to stash, reset, overwrite or switch a working
    copy with changes or one other chats use (stop and ask instead), and says
    what Move anyway left behind. The chat shows it with a small **Sent by
    Threadgarden** label and no Fork. If it fails to send, the chat on the
@@ -1293,7 +1297,10 @@ no Claude Code, and the app contains no Node.
   logged.
 - **Title requests** (v1.2). With "Name new chats automatically" on, the
   first message of each chat Threadgarden starts and the start of its first reply
-  (2,000 characters at most) are sent once more to the chat's provider. Codex uses the conversation's model, provider and login in a separate ephemeral native thread, with tools and extensions disabled and read-only permissions. Claude uses Claude Code's `haiku`,
+  (2,000 characters at most) are sent once more to the chat's provider. Codex
+  uses the conversation's model, provider and login in a separate ephemeral
+  native thread, with tools and extensions disabled and read-only permissions.
+  Claude uses Claude Code's `haiku`,
   through the user's own `claude` and authentication, with no tools, no
   settings and no transcript; never when settings route requests elsewhere
   (Ruling R33).
@@ -1359,23 +1366,23 @@ session, and `pnpm test:e2e` for the UI in Chromium against the mock service.
 CI runs them with `THREADGARDEN_PERF_SLACK=3`. Measured on the development machine
 (Windows 11) with slack 1:
 
-| What                                                                             | Budget      | Measured                                     |
-| -------------------------------------------------------------------------------- | ----------- | -------------------------------------------- |
-| Full-text search over 1,000 sessions                                             | 150 ms      | max 15.7 ms                                  |
-| Quick switcher query (service side)                                              | 50 ms       | max 10.4 ms                                  |
-| `@` suggestions over 200k files                                                  | 50 ms       | max 17.3 ms                                  |
-| Event-loop delay while building a 200k-file index                                | 50 ms       | max 15.0 ms                                  |
-| Event-loop delay while indexing a 20 MB session                                  | 50 ms       | max 9.2 ms (221 ms total)                    |
-| Event-loop delay while finding the icons of 50 worst-case projects at once       | 50 ms       | max 17.3 ms (577 ms total)                   |
-| Service idle memory after indexing 1,000 sessions                                | 150 MB      | 101.6 MB RSS (112.0 MB with v1.3 statistics) |
-| `analytics.get` over 5,000 sessions in a year, any range, all or one project     | 50 ms       | max 22.3 ms ("all time"; 30 days 5.8 ms)     |
-| Gathering statistics of the 2,000-message (20 MB) session                        | 20 ms       | 3.6 ms collect, 0.8 ms write                 |
-| Event-loop delay while backfilling statistics (the 20 MB session and 200 others) | 50 ms       | max 5.8 ms (144 ms total)                    |
-| Search / `analytics.get` while 1,000 sessions are backfilled                     | 150 / 50 ms | max 25.0 / 4.9 ms                            |
-| Switching to an open tab                                                         | 50 ms       | median 9.5 ms                                |
-| Opening a history chat                                                           | 150 ms      | median 22.0 ms                               |
-| Ctrl+K, per keystroke (UI, end to end)                                           | 50 ms       | max 22.5 ms                                  |
-| Composer keystroke                                                               | 16 ms       | median 1.3 ms, p90 2.2 ms                    |
+| What | Budget | Measured |
+| --- | --- | --- |
+| Full-text search over 1,000 sessions | 150 ms | max 15.7 ms |
+| Quick switcher query (service side) | 50 ms | max 10.4 ms |
+| `@` suggestions over 200k files | 50 ms | max 17.3 ms |
+| Event-loop delay while building a 200k-file index | 50 ms | max 15.0 ms |
+| Event-loop delay while indexing a 20 MB session | 50 ms | max 9.2 ms (221 ms total) |
+| Event-loop delay while finding the icons of 50 worst-case projects at once | 50 ms | max 17.3 ms (577 ms total) |
+| Service idle memory after indexing 1,000 sessions | 150 MB | 101.6 MB RSS (112.0 MB with v1.3 statistics) |
+| `analytics.get` over 5,000 sessions in a year, any range, all or one project | 50 ms | max 22.3 ms ("all time"; 30 days 5.8 ms) |
+| Gathering statistics of the 2,000-message (20 MB) session | 20 ms | 3.6 ms collect, 0.8 ms write |
+| Event-loop delay while backfilling statistics (the 20 MB session and 200 others) | 50 ms | max 5.8 ms (144 ms total) |
+| Search / `analytics.get` while 1,000 sessions are backfilled | 150 / 50 ms | max 25.0 / 4.9 ms |
+| Switching to an open tab | 50 ms | median 9.5 ms |
+| Opening a history chat | 150 ms | median 22.0 ms |
+| Ctrl+K, per keystroke (UI, end to end) | 50 ms | max 22.5 ms |
+| Composer keystroke | 16 ms | median 1.3 ms, p90 2.2 ms |
 
 UI timings run from the input event to the DOM showing the result plus a
 forced layout. Against a real history of about 500 sessions, the bundled
@@ -1429,9 +1436,9 @@ Checked on 2026-10-30 with Claude Code 2.1.314 and
 subscription, using the opt-in real test
 (`pnpm --filter @threadgarden/service test:real`, `test/real/smoke.real.test.ts`).
 
-| Session environment                   | `accountInfo()`                                                                                                                 | `system/init` `apiKeySource`   |
-| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- | ------------------------------ |
-| No `ANTHROPIC_API_KEY`                | `apiProvider: "firstParty"`, `subscriptionType` set (the plan name), `email` set, no `apiKeySource`, no `tokenSource`           | `"none"`                       |
+| Session environment | `accountInfo()` | `system/init` `apiKeySource` |
+| --- | --- | --- |
+| No `ANTHROPIC_API_KEY` | `apiProvider: "firstParty"`, `subscriptionType` set (the plan name), `email` set, no `apiKeySource`, no `tokenSource` | `"none"` |
 | `ANTHROPIC_API_KEY` set (dummy value) | `apiProvider: "firstParty"`, `apiKeySource: "ANTHROPIC_API_KEY"`, `tokenSource: "claude.ai"`, no `subscriptionType`, no `email` | not observed (no turn was run) |
 
 What this shows:
@@ -1686,7 +1693,7 @@ Decisions made during the build that change behaviour described in the design:
 - **Indexing defers Threadgarden's own streaming chats.** A transcript that grows
   with every streamed message is re-indexed once its turn ends, not on every
   watcher event.
-- **Paused chats and external sessions.** Only a _live_ Threadgarden chat (one with
+- **Paused chats and external sessions.** Only a *live* Threadgarden chat (one with
   a process) counts as Threadgarden's own: when a paused or failed chat is running in
   a terminal, it is listed as that external session and resume is blocked.
 - **Release configuration.** Bundling the sidecar and the service is in a
