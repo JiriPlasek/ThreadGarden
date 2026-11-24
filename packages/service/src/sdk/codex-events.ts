@@ -80,6 +80,39 @@ export const itemMessages = (
       const summary = (Array.isArray(item.summary) ? item.summary : []).map(str).join('\n');
       return completed && summary ? [assistant([{ type: 'thinking', thinking: summary }])] : [];
     }
+    case 'subAgentActivity':
+      if (item.kind === 'started')
+        return [
+          assistant([
+            {
+              type: 'tool_use',
+              id,
+              name: 'Agent',
+              input: {
+                description: str(item.agentPath) || 'Codex agent',
+                subagent_type: 'Codex agent',
+                ...(item.model ? { model: item.model } : {}),
+              },
+            },
+          ]),
+        ];
+      return completed
+        ? [
+            envelope(
+              sessionId,
+              id,
+              {
+                type: 'system',
+                subtype: item.kind === 'interacted' ? 'task_progress' : 'task_notification',
+                task_id: `codex-agent-${str(item.agentThreadId)}`,
+                status: item.kind === 'interrupted' ? 'stopped' : str(item.kind),
+                summary: `Codex agent ${str(item.kind)}`,
+                output_file: '',
+              },
+              end,
+            ),
+          ]
+        : [];
     case 'contextCompaction':
       return completed
         ? [envelope(sessionId, id, { type: 'system', subtype: 'compact_boundary' }, end)]

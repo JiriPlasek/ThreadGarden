@@ -14,6 +14,7 @@
  * `RESUME_BLOCKED` (§4.4, with the reason to show), `FORK_FAILED`,
  * `UNKNOWN_TASK`, `STOP_FAILED`, `INVALID_PARAMS`.
  */
+import { CODEX_COMMANDS } from '../../sdk/codex-commands.js';
 import type {
   ChatHeaderInfo,
   ChatItem,
@@ -797,14 +798,14 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
    * (and overall) is remembered for chats without one (new or history chats).
    */
   router.register('chat.commands', async (p) => {
-    if (p.sessionId && isCodexSession(p.sessionId)) return [];
     const cwd =
       p.cwd ??
       (p.sessionId === undefined
         ? undefined
         : (host.get(p.sessionId)?.cwd ?? db.getSession(p.sessionId)?.cwd ?? undefined));
     const s = liveFor(p.sessionId, cwd);
-    if (s && isCodexSession(s.sessionId)) return [];
+    if (s && isCodexSession(s.sessionId)) return (await s.supportedCommands()).map(toCommand);
+    if (p.sessionId && isCodexSession(p.sessionId)) return CODEX_COMMANDS.map(toCommand);
     if (s) {
       try {
         const list = (await s.supportedCommands()).map(toCommand);

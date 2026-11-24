@@ -658,6 +658,15 @@ describe('chat handlers', () => {
     expect(adapter.lastSession().options.claudePath).toBe('/opt/claude/claude');
   });
 
+  it('offers native Codex commands before a paused chat has a running process', async () => {
+    await start(new FakeAdapter());
+    expect(
+      await ok('chat.commands', { sessionId: 'codex-11111111-1111-4111-8111-111111111111' }),
+    ).toEqual([
+      { name: 'compact', description: 'Compact the conversation context', argumentHint: '' },
+    ]);
+  });
+
   it('chat.commands and chat.models come from a live session and are remembered', async () => {
     const adapter = new FakeAdapter();
     await start(adapter);

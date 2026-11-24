@@ -4,7 +4,9 @@ import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import type { ChatItem } from '@threadgarden/protocol';
 import { LiveSession } from '../../src/chat/live-session.js';
+import { Normalizer } from '../../src/chat/normalize.js';
 import type { PermissionMode } from '../../src/sdk/adapter.js';
 import { CodexAdapter } from '../../src/sdk/codex-adapter.js';
 import {
@@ -45,7 +47,7 @@ afterEach(async (context) => {
                 ['item/completed', 'turn/completed', 'error'].includes(event.method ?? '') ||
                 event.id !== undefined,
             ),
-            calls: h.calls.filter((call) => /thread\/start|turn\/start/.test(call.method)),
+            calls: h.calls.filter((call) => /thread\/start|turn\/(start|steer)/.test(call.method)),
           },
           null,
           2,
@@ -102,7 +104,9 @@ const fixture = async () => {
         try {
           const result = await real.request(method, params);
           if (
-            /^(thread\/start|thread\/resume|turn\/start|thread\/backgroundTerminals\/)/.test(method)
+            /^(thread\/start|thread\/resume|turn\/(start|steer)|thread\/backgroundTerminals\/)/.test(
+              method,
+            )
           )
             call.result = result;
           return result;
@@ -163,7 +167,18 @@ const fixture = async () => {
       .find((event) => event.method === 'turn/completed' && event.params?.threadId === rootId);
     expect(rec(turn?.params?.turn).status).toBe('completed');
   };
-  return { root, cwd, outside, events, calls, create, done, readThread, client: () => client };
+  return {
+    root,
+    cwd,
+    outside,
+    events,
+    calls,
+    create,
+    done,
+    readThread,
+    adapter,
+    client: () => client,
+  };
 };
 
 const powershellWrite = (file: string, text: string) =>
@@ -175,6 +190,39 @@ const exists = async (file: string) =>
   );
 
 describe.skipIf(!enabled)('real Codex workflows', () => {
+  it('forks a completed native turn without changing its source history', async () => {
+    const h = await fixture();
+    const session = h.create('Reply exactly FORK_FIXTURE_OK. Do not call any tools.');
+    await h.done(session);
+    session.send({ text: 'Reply exactly AFTER_FORK_CUTOFF. Do not call any tools.' });
+    await h.done(session);
+    const source = rec((await h.readThread()).thread);
+    const before = await h.client().request('thread/turns/list', {
+      threadId: source.id,
+      limit: 100,
+      sortDirection: 'asc',
+      itemsView: 'full',
+    });
+    const messages = await h.adapter.getSessionMessages(session.sessionId);
+    const user = messages.find((message) => message.type === 'user');
+    expect(user?.uuid).toBeTruthy();
+    const fork = await h.adapter.forkSession(session.sessionId, { upToMessageId: user!.uuid });
+    expect(fork.sessionId).not.toBe(session.sessionId);
+    const forkInfo = await h.adapter.getSessionInfo(fork.sessionId);
+    expect(forkInfo?.cwd).toBe(h.cwd);
+    const forkMessages = await h.adapter.getSessionMessages(fork.sessionId);
+    expect(JSON.stringify(forkMessages)).toContain('FORK_FIXTURE_OK');
+    expect(JSON.stringify(forkMessages)).not.toContain('AFTER_FORK_CUTOFF');
+    expect(forkMessages.some((message) => message.type === 'user')).toBe(true);
+    const after = await h.client().request('thread/turns/list', {
+      threadId: source.id,
+      limit: 100,
+      sortDirection: 'asc',
+      itemsView: 'full',
+    });
+    expect(after.data).toEqual(before.data);
+  });
+
   it('runs an ordinary read-only shell command without escalation', async () => {
     const h = await fixture();
     const session = h.create(
@@ -476,6 +524,82 @@ describe.skipIf(!enabled)('real Codex workflows', () => {
     await h.done(session);
   });
 
+  it('renders native child conversation and command output beneath its spawn call', async () => {
+    const h = await fixture();
+    const session = h.create(
+      'Use spawn_agent to create exactly one child with this task: "Run powershell -NoProfile -Command "Write-Output CHILD_LIVE_OUTPUT; Start-Sleep -Seconds 8" using exec_command with yield_time_ms=10000, then reply CHILD_CONVERSATION_DONE. Do not inspect files or do other work." Wait for the child to finish, then reply PARENT_DONE. Do not close the child.',
+      'bypassPermissions',
+    );
+    await eventually(
+      () =>
+        session
+          .snapshot(200)
+          .items.some(
+            (item) =>
+              item.kind === 'toolCall' &&
+              item.status === 'running' &&
+              item.resultText?.includes('CHILD_LIVE_OUTPUT') === true &&
+              !!item.parentToolUseId,
+          ),
+      'live child command output',
+      45_000,
+    );
+    await h.done(session);
+    const spawn = h.events.find(
+      (event) =>
+        event.method === 'item/completed' &&
+        ((rec(event.params?.item).type === 'collabAgentToolCall' &&
+          rec(event.params?.item).tool === 'spawnAgent') ||
+          (rec(event.params?.item).type === 'subAgentActivity' &&
+            rec(event.params?.item).kind === 'started')),
+    );
+    const spawnId = str(rec(spawn?.params?.item).id);
+    expect(spawnId).not.toBe('');
+    expect(session.snapshot(200).items).toContainEqual(
+      expect.objectContaining({
+        kind: 'assistantText',
+        markdown: expect.stringContaining('CHILD_CONVERSATION_DONE'),
+        parentToolUseId: spawnId,
+      }),
+    );
+    expect(session.snapshot(200).items).toContainEqual(
+      expect.objectContaining({
+        kind: 'toolCall',
+        resultText: expect.stringContaining('CHILD_LIVE_OUTPUT'),
+        parentToolUseId: spawnId,
+      }),
+    );
+    // Import through a fresh display store: the live journal cannot supply these children.
+    const imported = new CodexAdapter(path.join(h.root, 'import-view'));
+    adapters.push(new MultiAdapter(new FakeAdapter(), imported));
+    const threadId = str(
+      rec(h.calls.find((call) => call.method === 'thread/start')?.result?.thread).id,
+    );
+    const importedId = `codex-${threadId}`;
+    expect(await imported.history.list()).toContainEqual(
+      expect.objectContaining({ sessionId: importedId }),
+    );
+    const normalizer = new Normalizer();
+    const items = new Map<string, ChatItem>();
+    for (const message of await imported.history.messages(importedId))
+      for (const item of normalizer.push(message).items) items.set(item.id, item);
+    expect([...items.values()]).toContainEqual(
+      expect.objectContaining({
+        kind: 'assistantText',
+        markdown: expect.stringContaining('CHILD_CONVERSATION_DONE'),
+        parentToolUseId: spawnId,
+      }),
+    );
+    expect(
+      [...items.values()].filter(
+        (item) =>
+          item.kind === 'assistantText' &&
+          item.markdown.includes('CHILD_CONVERSATION_DONE') &&
+          item.parentToolUseId === spawnId,
+      ),
+    ).toHaveLength(1);
+  });
+
   it('lists a real child agent in Activity and interrupts only that owned agent', async () => {
     const h = await fixture();
     const session = h.create(
@@ -505,28 +629,46 @@ describe.skipIf(!enabled)('real Codex workflows', () => {
     await h.done(session);
   });
 
-  it('queues two inputs behind a real running turn and interrupts subsequent running work', async () => {
+  it('steers two inputs into a real running turn and interrupts subsequent running work', async () => {
     const h = await fixture();
     const session = h.create(
-      'Run powershell -NoProfile -Command "Start-Sleep -Seconds 4" with exec_command and yield_time_ms=1000, wait for completion, then reply FIRST_DONE. Do not use other tools.',
+      'Run powershell -NoProfile -Command "Start-Sleep -Seconds 8" with exec_command and yield_time_ms=1000, wait for completion, then reply FIRST_DONE. Do not use other tools.',
       'bypassPermissions',
     );
     await eventually(
       () => h.events.some((event) => rec(event.params?.item).type === 'commandExecution'),
       'running command',
     );
-    expect(session.send({ text: 'For the next answer remember the word QUEUE_ALPHA.' })).toEqual({
+    expect(session.send({ text: 'For this answer remember the word QUEUE_ALPHA.' })).toEqual({
       queued: true,
     });
     expect(
       session.send({ text: 'Reply with QUEUE_ALPHA and QUEUE_BETA together. Do not use tools.' }),
     ).toEqual({ queued: true });
     await eventually(
-      () => h.events.filter((event) => event.method === 'turn/completed').length >= 2,
-      'queued turn completion',
+      () => h.events.some((event) => event.method === 'turn/completed'),
+      'steered turn completion',
     );
     await h.done(session);
-    expect(h.calls.filter((call) => call.method === 'turn/start')).toHaveLength(2);
+    expect(h.calls.filter((call) => call.method === 'turn/start')).toHaveLength(1);
+    const steers = h.calls.filter((call) => call.method === 'turn/steer');
+    expect(steers).toHaveLength(2);
+    for (const steer of steers) {
+      expect(steer.error).toBeUndefined();
+      expect(steer.result?.turnId).toBe(steer.params.expectedTurnId);
+      expect(h.events).toContainEqual(
+        expect.objectContaining({
+          method: 'item/started',
+          params: expect.objectContaining({
+            item: expect.objectContaining({
+              type: 'userMessage',
+              clientId: steer.params.clientUserMessageId,
+            }),
+          }),
+        }),
+      );
+    }
+    expect(session.queued()).toEqual([]);
     expect(session.snapshot(100).items).toContainEqual(
       expect.objectContaining({
         kind: 'assistantText',
@@ -545,7 +687,7 @@ describe.skipIf(!enabled)('real Codex workflows', () => {
     );
     await session.interrupt();
     await eventually(
-      () => h.events.filter((event) => event.method === 'turn/completed').length >= 3,
+      () => h.events.filter((event) => event.method === 'turn/completed').length >= 2,
       'interrupted turn completion',
     );
     expect(

@@ -101,16 +101,8 @@ export class CodexTasks {
       if (cursor) seen.add(cursor);
     } while (cursor);
     if (this.closed) return;
-    for (const [id] of this.tasks)
-      if (!next.has(id))
-        this.emit({
-          type: 'system',
-          subtype: 'task_notification',
-          task_id: id,
-          status: 'completed',
-          summary: 'Codex task ended',
-          output_file: '',
-        });
+    // A missing task has an unknown outcome. The level reconciles that absence
+    // without replacing an authoritative failed/stopped/completed native edge.
     this.tasks = next;
     this.emit({
       type: 'system',

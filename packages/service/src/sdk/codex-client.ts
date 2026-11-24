@@ -12,6 +12,16 @@ export type RpcMessage = {
   method?: string;
   params?: Record<string, unknown>;
 };
+/** A definite server rejection, unlike a timeout whose acceptance is unknown. */
+export class CodexRpcError extends Error {
+  constructor(
+    message: string,
+    readonly code?: number,
+  ) {
+    super(message);
+  }
+}
+
 export interface CodexConnection {
   request(method: string, params: Record<string, unknown>): Promise<Record<string, unknown>>;
   notify(method: string, params: Record<string, unknown>): void;
@@ -123,14 +133,17 @@ const connector =
       try {
         const message = JSON.parse(line) as RpcMessage & {
           result?: Record<string, unknown>;
-          error?: { message?: string };
+          error?: { message?: string; code?: number };
         };
         const p =
           typeof message.id === 'number' && !message.method ? pending.get(message.id) : undefined;
         if (p) {
           pending.delete(message.id as number);
           clearTimeout(p.timer);
-          if (message.error) p.reject(new Error(message.error.message ?? 'Codex RPC failed'));
+          if (message.error)
+            p.reject(
+              new CodexRpcError(message.error.message ?? 'Codex RPC failed', message.error.code),
+            );
           else p.resolve(message.result ?? {});
         } else onMessage(message);
       } catch (error) {

@@ -30,6 +30,11 @@
   /** Images no tag in the text stands for: shown below it. */
   const untagged = $derived(untaggedImages(display, item.images ?? []));
   const fromThreadgarden = $derived(isThreadgardenNote(item.text));
+  const forkLabel = $derived(
+    actions.agentName === 'Codex'
+      ? 'Fork through this completed turn (includes its reply)'
+      : 'Fork from this message',
+  );
 </script>
 
 <div class="group bg-muted/70 relative rounded-lg px-3 py-2 text-sm">
@@ -65,8 +70,8 @@
     <button
       type="button"
       class="text-muted-foreground hover:text-foreground hover:bg-background absolute top-1.5 right-1.5 rounded p-1 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
-      aria-label="Fork from this message"
-      title="Fork from this message"
+      aria-label={forkLabel}
+      title={forkLabel}
       onclick={() => actions.fork?.(item.id)}
     >
       <GitForkIcon class="size-4" aria-hidden="true" />

@@ -1,4 +1,6 @@
+import { CODEX_COMMANDS, codexCommand, isBareCompact } from './codex-commands.js';
 /** Codex's thread/turn protocol translated at the existing chat event boundary. */
+import { codexOneShot } from './codex-one-shot.js';
 import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
@@ -7,6 +9,7 @@ import type {
   AgentSession,
   Effort,
   ModelInfo,
+  OneShotOptions,
   PermissionMode,
   SDKMessage,
   SDKUserMessage,
@@ -14,6 +17,7 @@ import type {
   StartOptions,
 } from './adapter.js';
 import {
+  CodexRpcError,
   connectCodex,
   initializeCodex,
   type CodexConnection,
@@ -110,12 +114,38 @@ export class CodexSession implements AgentSession {
   private ready: Promise<void>;
   private closed = false;
   private activeTurn?: string;
+  private compacting = false;
   private starting = false;
+  private stopping = false;
+  private steeringBlockedTurn?: string;
   private completedWhileStarting = false;
   private inputs: SDKUserMessage[] = [];
+  private submitted = new Map<
+    SDKUserMessage,
+    { turnId: string; settled: boolean; completed: boolean }
+  >();
   private streamed = new Map<string, string>();
   private tools = new Set<string>();
+  private output = new Map<string, string>();
+  private reasoning = new Map<string, Map<number, string>>();
+  private children = new Map<
+    string,
+    {
+      parent: string;
+      toolId?: string;
+      model?: string;
+      terminal: boolean;
+      activityId?: string;
+      runId?: string;
+      buffered: RpcMessage[];
+    }
+  >();
+  private childCapacityNotified = false;
+  private taskRun = 0;
+  private context?: { parent_tool_use_id: string; parent_agent_id: string; codex_turn_id?: string };
+  private streamContexts = new Map<string, typeof this.context>();
   private approvals = new Map<number | string, AbortController>();
+  private approvalThreads = new Map<number | string, string>();
   private turnUsage?: Rec;
   private previousUsageTotal?: Rec;
   private nativeCollaboration?: Rec;
@@ -218,26 +248,78 @@ export class CodexSession implements AgentSession {
   }
 
   private async drain(): Promise<void> {
-    if (this.starting || this.activeTurn || this.closed) return;
+    if (this.starting || this.stopping || this.compacting || this.closed || !this.inputs.length)
+      return;
+    if (
+      this.activeTurn &&
+      (this.steeringBlockedTurn === this.activeTurn || codexCommand(this.inputs[0]!))
+    )
+      return;
     this.starting = true;
-    // Capture before initialization: inputs arriving during startup belong to the next turn.
-    const messages = this.inputs.splice(0);
+    // Capture before initialization; later inputs steer as soon as the first turn is active.
+    const messages = this.inputs.splice(0, 1);
     const shown = new Set<SDKUserMessage>();
+    let steering = false;
     try {
       await this.ready;
       if (this.closed) return;
-      // Match LiveSession's queued-input semantics: one subsequent turn consumes the batch.
+      // Requests are serialized so one message can never be sent to two turns.
       if (messages.length === 0) return;
       try {
-        await this.startTurn(messages, shown);
+        if (this.activeTurn) {
+          steering = true;
+          const expectedTurnId = this.activeTurn;
+          for (const message of messages)
+            this.submitted.set(message, {
+              turnId: expectedTurnId,
+              settled: false,
+              completed: false,
+            });
+          try {
+            await this.client.request('turn/steer', {
+              threadId: this.record.threadId,
+              expectedTurnId,
+              input: this.input(messages),
+              ...(messages[0]?.uuid ? { clientUserMessageId: messages[0].uuid } : {}),
+            });
+            for (const message of messages) this.settleSubmitted(message);
+          } catch (error) {
+            // A rejected precondition means none of this input was consumed. Transport
+            // failures are ambiguous and must never replay input into a second turn.
+            if (
+              error instanceof CodexRpcError &&
+              error.code === -32600 &&
+              (/^no active turn to steer$/.test(error.message) ||
+                /^expected active turn id `[^`]+` but found `[^`]+`$/.test(error.message))
+            ) {
+              // Completion may arrive after this rejection. Wait for that native
+              // event instead of racing another turn/start against the old turn.
+              this.steeringBlockedTurn = expectedTurnId;
+              for (const message of messages) this.submitted.delete(message);
+              if (this.stopping) {
+                for (const message of messages)
+                  if (message.uuid) this.lifecycle(message.uuid, 'cancelled');
+              } else this.inputs.unshift(...messages);
+              return;
+            }
+            // A definite refusal can be returned; a timeout stays pending until
+            // native consumption or turn completion resolves its ambiguity.
+            for (const message of messages) {
+              if (error instanceof CodexRpcError) this.cancelSubmitted(message);
+              else this.settleSubmitted(message);
+            }
+            throw error;
+          }
+        } else await this.startTurn(messages, shown);
       } catch (error) {
         // One turn failing (rejected, timed out, unsupported input) leaves the thread usable;
         // a dead app-server fails the whole session through onExit instead.
         if (this.closed) return;
-        for (const message of messages) if (!shown.has(message)) this.show(message);
+        if (!steering) for (const message of messages) if (!shown.has(message)) this.show(message);
         const text = error instanceof Error ? error.message : String(error);
         const id = randomUUID();
         this.turnError(id, text);
+        if (steering) return;
         this.emit(
           {
             type: 'result',
@@ -251,9 +333,21 @@ export class CodexSession implements AgentSession {
       }
     } finally {
       this.starting = false;
-      if (!this.activeTurn && this.inputs.length && !this.closed)
+      if (this.inputs.length && !this.closed && !this.stopping)
         void this.drain().catch((error: unknown) => this.fail(error));
     }
+  }
+
+  private cancelSubmitted(message: SDKUserMessage): void {
+    if (!this.submitted.delete(message)) return;
+    if (message.uuid) this.lifecycle(message.uuid, 'cancelled');
+  }
+
+  private settleSubmitted(message: SDKUserMessage): void {
+    const submitted = this.submitted.get(message);
+    if (!submitted) return; // Native consumption may precede the RPC response.
+    submitted.settled = true;
+    if (submitted.completed) this.cancelSubmitted(message);
   }
 
   private show(message: SDKUserMessage): void {
@@ -277,7 +371,7 @@ export class CodexSession implements AgentSession {
     );
   }
 
-  private async startTurn(messages: SDKUserMessage[], shown: Set<SDKUserMessage>): Promise<void> {
+  private input(messages: SDKUserMessage[]): Rec[] {
     const input: Rec[] = [];
     for (const message of messages) {
       const content: unknown = message.message.content;
@@ -296,6 +390,36 @@ export class CodexSession implements AgentSession {
           });
         } else throw new Error(`Unsupported Codex input: ${str(b.type)}`);
       }
+    }
+    return input;
+  }
+
+  private async startTurn(messages: SDKUserMessage[], shown: Set<SDKUserMessage>): Promise<void> {
+    if (messages.some((message) => codexCommand(message))) {
+      if (messages.length !== 1 || !isBareCompact(messages[0]!))
+        throw new Error(
+          'Unsupported Codex command. Send /compact alone, without arguments or attachments.',
+        );
+      this.completedWhileStarting = false;
+      this.turnUsage = undefined;
+      this.lastAssistant = undefined;
+      this.show(messages[0]!);
+      shown.add(messages[0]!);
+      // The native compaction emits turn/started and turn/completed asynchronously.
+      // Keep subsequent input queued even before its started notification arrives.
+      this.compacting = true;
+      this.activeTurn = 'compact';
+      try {
+        await this.client.request('thread/compact/start', { threadId: this.record.threadId });
+      } catch (error) {
+        this.compacting = false;
+        this.activeTurn = undefined;
+        throw error;
+      }
+      return;
+    }
+    const input = this.input(messages);
+    for (const message of messages) {
       this.show(message);
       shown.add(message);
     }
@@ -341,16 +465,23 @@ export class CodexSession implements AgentSession {
 
   /** As Claude Code's Esc: messages still waiting for a turn are cancelled with the turn. */
   async interrupt(): Promise<void> {
-    for (const message of this.inputs.splice(0))
-      if (message.uuid) this.lifecycle(message.uuid, 'cancelled');
-    await this.ready;
-    // A click while turn/start is pending still interrupts the turn it creates.
-    while (this.starting && !this.closed) await new Promise((resolve) => setTimeout(resolve, 10));
-    if (this.activeTurn)
-      await this.client.request('turn/interrupt', {
-        threadId: this.record.threadId,
-        turnId: this.activeTurn,
-      });
+    this.stopping = true;
+    try {
+      for (const message of this.inputs.splice(0))
+        if (message.uuid) this.lifecycle(message.uuid, 'cancelled');
+      await this.ready;
+      // A click while turn/start is pending still interrupts the turn it creates.
+      while ((this.starting || this.activeTurn === 'compact') && !this.closed)
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      if (this.activeTurn)
+        await this.client.request('turn/interrupt', {
+          threadId: this.record.threadId,
+          turnId: this.activeTurn,
+        });
+    } finally {
+      this.stopping = false;
+      if (this.inputs.length) void this.drain().catch((error: unknown) => this.fail(error));
+    }
   }
 
   async cancelQueued(uuid: string): Promise<boolean> {
@@ -404,7 +535,7 @@ export class CodexSession implements AgentSession {
     await this.taskSource.stop(taskId);
   }
   async supportedCommands(): Promise<SlashCommand[]> {
-    return [];
+    return CODEX_COMMANDS;
   }
   async supportedModels(): Promise<ModelInfo[]> {
     await this.ready;
@@ -438,6 +569,7 @@ export class CodexSession implements AgentSession {
     this.taskSource?.close();
     for (const controller of this.approvals.values()) controller.abort();
     this.approvals.clear();
+    this.approvalThreads.clear();
     this.client.close();
     this.messages.end();
   }
@@ -466,6 +598,7 @@ export class CodexSession implements AgentSession {
       parent_agent_id: null,
       ...message,
       ...(this.activeTurn ? { codex_turn_id: this.activeTurn } : {}),
+      ...this.context,
     } as unknown as SDKMessage;
     if (persist) this.store.append(this.record, envelope);
     this.messages.push(envelope);
@@ -479,7 +612,9 @@ export class CodexSession implements AgentSession {
         message: {
           id,
           role: 'assistant',
-          model: codexModel(this.record.model),
+          model: this.context
+            ? this.children.get(this.context.parent_agent_id)?.model
+            : codexModel(this.record.model),
           content,
           ...(usage ? { usage } : {}),
         },
@@ -490,6 +625,7 @@ export class CodexSession implements AgentSession {
 
   private onMessage(message: RpcMessage): void {
     if (this.closed) return;
+    const previousContext = this.context;
     try {
       const p = message.params ?? {};
       // Requests come before the thread filter: this app-server only runs this chat's thread
@@ -502,9 +638,62 @@ export class CodexSession implements AgentSession {
         const id = p.requestId as number | string;
         this.approvals.get(id)?.abort();
         this.approvals.delete(id);
+        this.approvalThreads.delete(id);
         return;
       }
-      if (p.threadId && this.record.threadId && p.threadId !== this.record.threadId) return;
+      if (message.method === 'turn/completed')
+        this.finishApprovals(str(p.threadId) || this.record.threadId!);
+      if (message.method === 'thread/started') {
+        const thread = rec(p.thread);
+        const parent =
+          str(thread.parentThreadId) ||
+          str(rec(rec(rec(thread.source).subAgent).thread_spawn).parent_thread_id);
+        if (parent === this.record.threadId || this.children.has(parent))
+          this.child(str(thread.id), parent, str(thread.model));
+        return;
+      }
+      if (p.threadId && this.record.threadId && p.threadId !== this.record.threadId) {
+        const child = this.children.get(str(p.threadId));
+        if (!child) return;
+        if (!child.toolId) {
+          // A child may speak before spawn completion supplies receiver IDs.
+          // Final native items retain complete content if old partials are evicted.
+          if (child.buffered.length === 256) child.buffered.shift();
+          child.buffered.push(message);
+          return;
+        }
+        this.context = {
+          parent_tool_use_id: child.toolId,
+          parent_agent_id: str(p.threadId),
+          codex_turn_id: str(p.turnId) || str(rec(p.turn).id) || undefined,
+        };
+        if (message.method === 'turn/started') {
+          if (child.terminal)
+            this.agentStarted(str(p.threadId), child, 'Codex agent', str(rec(p.turn).id));
+          child.terminal = false;
+          return;
+        }
+        if (message.method === 'turn/completed') {
+          child.terminal = true;
+          this.finishStreams(str(p.threadId));
+          const status = str(rec(p.turn).status);
+          this.emit({
+            type: 'system',
+            subtype: 'task_notification',
+            task_id: `codex-agent-${str(p.threadId)}`,
+            status:
+              status === 'interrupted'
+                ? 'stopped'
+                : status === 'completed' || status === 'failed'
+                  ? status
+                  : 'unknown',
+            summary: 'Codex agent turn ended',
+            output_file: '',
+          });
+          return;
+        }
+        if (!message.method?.startsWith('item/')) return;
+      } else this.context = undefined;
       switch (message.method) {
         case 'turn/started':
           this.activeTurn = str(rec(p.turn).id);
@@ -555,6 +744,52 @@ export class CodexSession implements AgentSession {
           }
           break;
         }
+        case 'item/reasoning/summaryTextDelta': {
+          const id = str(p.itemId);
+          const index = typeof p.summaryIndex === 'number' ? p.summaryIndex : 0;
+          const summary = this.reasoning.get(id) ?? new Map<number, string>();
+          summary.set(index, (summary.get(index) ?? '') + str(p.delta));
+          this.reasoning.set(id, summary);
+          this.assistant(
+            id,
+            [
+              {
+                type: 'thinking',
+                thinking: [...summary]
+                  .sort(([a], [b]) => a - b)
+                  .map(([, text]) => text)
+                  .join('\n'),
+              },
+            ],
+            false,
+          );
+          break;
+        }
+        case 'item/commandExecution/outputDelta':
+        case 'item/fileChange/outputDelta':
+        case 'item/mcpToolCall/progress': {
+          const id = str(p.itemId);
+          const text =
+            (this.output.get(id) ?? '') +
+            (message.method === 'item/mcpToolCall/progress' ? `${str(p.message)}\n` : str(p.delta));
+          this.output.set(id, text.slice(0, 20_001));
+          this.emit({
+            type: 'user',
+            uuid: `${id}-result`,
+            message: {
+              role: 'user',
+              content: [
+                {
+                  type: 'tool_result',
+                  tool_use_id: id,
+                  content: this.output.get(id),
+                  is_partial: true,
+                },
+              ],
+            },
+          });
+          break;
+        }
         case 'item/agentMessage/delta': {
           const id = str(p.itemId);
           if (!this.streamed.has(id)) {
@@ -569,6 +804,7 @@ export class CodexSession implements AgentSession {
               },
             });
           }
+          this.streamContexts.set(id, this.context);
           this.streamed.set(id, (this.streamed.get(id) ?? '') + str(p.delta));
           this.emit({
             type: 'stream_event',
@@ -587,15 +823,15 @@ export class CodexSession implements AgentSession {
           this.item(rec(p.item), true);
           break;
         case 'turn/completed': {
+          this.compacting = false;
           this.completedWhileStarting = this.starting;
-          for (const [id, text] of this.streamed) {
-            this.lastAssistant = { id, content: [{ type: 'text', text }] };
-            this.assistant(id, this.lastAssistant.content);
-          }
-          this.streamed.clear();
-          for (const controller of this.approvals.values()) controller.abort();
-          this.approvals.clear();
+          this.finishStreams();
           const turn = rec(p.turn);
+          for (const [message, submitted] of this.submitted) {
+            if (submitted.turnId !== str(turn.id)) continue;
+            submitted.completed = true;
+            if (submitted.settled) this.cancelSubmitted(message);
+          }
           const failed = turn.status === 'failed';
           if (this.lastAssistant && this.turnUsage)
             this.assistant(this.lastAssistant.id, this.lastAssistant.content, true, this.turnUsage);
@@ -630,21 +866,96 @@ export class CodexSession implements AgentSession {
       }
     } catch (error) {
       this.fail(error);
+    } finally {
+      this.context = previousContext;
     }
   }
 
   private item(item: Rec, completed: boolean): void {
-    if (item.type === 'userMessage') return; // Sent input is echoed under the client's own UUID.
+    if (item.type === 'userMessage') {
+      for (const [message] of this.submitted) {
+        if (message.uuid && message.uuid === str(item.clientId)) {
+          this.submitted.delete(message);
+          this.show(message);
+        }
+      }
+      if (!this.context) return; // Main input is echoed under the client's own UUID.
+    }
+    if (item.type === 'subAgentActivity' && item.kind === 'interacted') {
+      const child = this.child(
+        str(item.agentThreadId),
+        this.context?.parent_agent_id || this.record.threadId!,
+        str(item.model),
+      );
+      if (!child) return;
+      child.terminal = false;
+      if (child.toolId) {
+        this.agentStarted(str(item.agentThreadId), child, str(item.agentPath), str(item.id));
+        for (const event of child.buffered.splice(0)) this.onMessage(event);
+        return;
+      }
+      // Resume excludes old turns. The first owned interaction is sufficient
+      // evidence to show and route this child without loading unrelated history.
+      item = { ...item, kind: 'started' };
+    }
     const id = str(item.id);
     if (!id) return;
     if (item.type === 'agentMessage' && completed) {
-      this.lastAssistant = { id, content: [{ type: 'text', text: str(item.text) }] };
+      if (!this.context)
+        this.lastAssistant = { id, content: [{ type: 'text', text: str(item.text) }] };
       this.streamed.delete(id);
+      this.streamContexts.delete(id);
+    }
+    if (completed) {
+      this.reasoning.delete(id);
+      if (this.output.has(id) && !str(item.aggregatedOutput) && item.type === 'commandExecution')
+        item = { ...item, aggregatedOutput: this.output.get(id) };
+      this.output.delete(id);
+    }
+    if (item.type === 'subAgentActivity' && item.kind !== 'started') {
+      const child = this.children.get(str(item.agentThreadId));
+      if (completed && child?.toolId && item.kind !== 'interacted') {
+        child.terminal = true;
+        this.emit(
+          {
+            type: 'user',
+            uuid: `${child.toolId}-result`,
+            message: {
+              role: 'user',
+              content: [
+                {
+                  type: 'tool_result',
+                  tool_use_id: child.toolId,
+                  content: `Codex agent ${str(item.kind)}`,
+                  is_error: item.kind === 'failed',
+                },
+              ],
+            },
+          },
+          true,
+        );
+        this.emit({
+          type: 'system',
+          subtype: 'task_notification',
+          task_id: `codex-agent-${str(item.agentThreadId)}`,
+          status:
+            item.kind === 'interrupted'
+              ? 'stopped'
+              : item.kind === 'failed'
+                ? 'failed'
+                : 'completed',
+          summary: `Codex agent ${str(item.kind)}`,
+          output_file: '',
+        });
+      }
+      return;
     }
     const messages = itemMessages(
       this.record.id,
       item,
-      codexModel(this.record.model),
+      this.context
+        ? this.children.get(this.context.parent_agent_id)?.model
+        : codexModel(this.record.model),
       completed,
       Date.now(),
     );
@@ -656,13 +967,128 @@ export class CodexSession implements AgentSession {
     );
     for (const message of messages) {
       if (isTool && message.type === 'assistant' && this.tools.has(id)) continue;
-      this.emit(message as unknown as Rec, true);
+      this.emit(
+        {
+          ...(message as unknown as Rec),
+          ...(item.type === 'subAgentActivity' ? { codex_activity_only: true } : {}),
+        },
+        true,
+      );
     }
     if (isTool) {
       if (completed) this.tools.delete(id);
       else this.tools.add(id);
     }
-    if (item.type === 'collabAgentToolCall' && completed) void this.taskSource?.refresh();
+    if (item.type === 'subAgentActivity' && item.kind === 'started') {
+      const child = this.child(
+        str(item.agentThreadId),
+        this.context?.parent_agent_id || this.record.threadId!,
+        str(item.model),
+      );
+      if (child) {
+        child.toolId ??= id;
+        this.agentStarted(str(item.agentThreadId), child, str(item.agentPath));
+        for (const event of child.buffered.splice(0)) this.onMessage(event);
+      }
+    }
+    if (item.type === 'collabAgentToolCall') {
+      if (item.tool === 'spawnAgent') {
+        const parent =
+          str(item.senderThreadId) || this.context?.parent_agent_id || this.record.threadId!;
+        for (const childId of Array.isArray(item.receiverThreadIds) ? item.receiverThreadIds : []) {
+          const child = this.child(str(childId), parent, str(item.model));
+          if (!child) continue;
+          child.toolId ??= id;
+          this.agentStarted(str(childId), child, str(item.prompt));
+          for (const event of child.buffered.splice(0)) this.onMessage(event);
+        }
+      }
+      if (completed) void this.taskSource?.refresh();
+    }
+  }
+
+  private child(id: string, parent: string, model?: string) {
+    if (!id || id === this.record.threadId) return undefined;
+    const existing = this.children.get(id);
+    if (existing) {
+      if (model) existing.model = model;
+      return existing;
+    }
+    if (this.children.size >= 128) {
+      const terminal = [...this.children].find(([, child]) => child.terminal);
+      if (terminal) this.children.delete(terminal[0]);
+      else {
+        if (!this.childCapacityNotified) {
+          this.childCapacityNotified = true;
+          this.emit(
+            {
+              type: 'system',
+              subtype: 'informational',
+              level: 'warning',
+              content:
+                'Live output is limited to 128 active Codex agents. Additional agent output is omitted until a slot is available.',
+            },
+            true,
+          );
+        }
+        return undefined;
+      }
+    }
+    const child = {
+      parent,
+      terminal: false,
+      model: model || undefined,
+      buffered: [] as RpcMessage[],
+      toolId: undefined as string | undefined,
+    };
+    this.children.set(id, child);
+    return child;
+  }
+
+  private agentStarted(
+    id: string,
+    child: { parent: string; toolId?: string; model?: string; activityId?: string; runId?: string },
+    description: string,
+    activityId = child.toolId,
+  ): void {
+    // Task tracking orders run IDs; native call IDs are random rather than ordered.
+    if (child.activityId !== activityId || !child.runId) {
+      child.activityId = activityId;
+      child.runId = String(++this.taskRun).padStart(16, '0');
+    }
+    this.emit({
+      type: 'system',
+      subtype: 'task_started',
+      run_id: child.runId,
+      is_backgrounded: true,
+      task_id: `codex-agent-${id}`,
+      task_type: 'local_agent',
+      tool_use_id: child.toolId,
+      description: description || 'Codex agent',
+      ...(child.parent !== this.record.threadId
+        ? { parent_task_id: `codex-agent-${child.parent}` }
+        : {}),
+    });
+  }
+
+  private finishStreams(childId?: string): void {
+    for (const [id, text] of this.streamed) {
+      if (this.streamContexts.get(id)?.parent_agent_id !== childId) continue;
+      const content = [{ type: 'text', text }];
+      if (!childId) this.lastAssistant = { id, content };
+      this.assistant(id, content);
+      this.streamed.delete(id);
+      this.streamContexts.delete(id);
+    }
+  }
+
+  private finishApprovals(threadId: string): void {
+    for (const [id, owner] of this.approvalThreads) {
+      if (owner !== threadId) continue;
+      this.approvals.get(id)?.abort();
+      this.approvals.delete(id);
+      this.approvalThreads.delete(id);
+    }
   }
 
   private async approve(message: RpcMessage): Promise<void> {
@@ -679,6 +1105,7 @@ export class CodexSession implements AgentSession {
     }
     const controller = new AbortController();
     this.approvals.set(id, controller);
+    this.approvalThreads.set(id, str(p.threadId) || this.record.threadId!);
     const questions = Array.isArray(p.questions) ? p.questions.map(rec) : [];
     const input = question
       ? { questions: questions.map((q) => ({ ...q, multiSelect: false })) }
@@ -721,6 +1148,7 @@ export class CodexSession implements AgentSession {
       } else this.client.reply(id, { decision: allowed ? 'accept' : 'decline' });
     } finally {
       this.approvals.delete(id);
+      this.approvalThreads.delete(id);
     }
   }
 }
@@ -815,6 +1243,9 @@ export class CodexAdapter {
       this.store,
       this.connect,
     );
+  }
+  oneShot(options: OneShotOptions, modelProvider?: string): Promise<string> {
+    return codexOneShot(options, this.connect, modelProvider);
   }
   async models(env: NodeJS.ProcessEnv): Promise<ModelInfo[]> {
     const client = this.connect(

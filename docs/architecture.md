@@ -480,9 +480,16 @@ own group.
 chat Threadgarden starts gets a provisional title at once: the first sentence of the
 first line of its first message (also set when Threadgarden continues a chat that
 has no title of any kind). After the chat's first turn, if "Name new chats
-automatically" (`autoTitles`, on by default) is on, the service asks a small
-model for a 3–6 word title, at most once per chat, at most two at a time and
-with a 20 s timeout. The request is one Agent SDK `query()` with a string
+automatically" (`autoTitles`, on by default) is on, the service asks the chat's
+provider for a 3–6 word title, at most once per chat, at most two at a time and
+with a 20 s timeout. Codex uses the conversation's model, provider and original
+login in a separate ephemeral app-server thread, following Codex's isolated
+title-request configuration: built-in tools, extensions, all configured MCP
+servers, environment access and project instructions are disabled. The thread
+must confirm read-only permissions. Titles remain local metadata and Claude
+is not required.
+
+For Claude, the request is one Agent SDK `query()` with a string
 prompt, which starts one more `claude` process: model `haiku`, a naming system
 prompt, the first message and the start of the first reply (2,000 characters
 in all), `persistSession: false` (`--no-session-persistence`: no transcript),
@@ -1290,7 +1297,10 @@ no Claude Code, and the app contains no Node.
   logged.
 - **Title requests** (v1.2). With "Name new chats automatically" on, the
   first message of each chat Threadgarden starts and the start of its first reply
-  (2,000 characters at most) are sent once more, to Claude Code's `haiku`,
+  (2,000 characters at most) are sent once more to the chat's provider. Codex
+  uses the conversation's model, provider and login in a separate ephemeral
+  native thread, with tools and extensions disabled and read-only permissions.
+  Claude uses Claude Code's `haiku`,
   through the user's own `claude` and authentication, with no tools, no
   settings and no transcript; never when settings route requests elsewhere
   (Ruling R33).

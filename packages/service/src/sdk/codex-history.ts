@@ -10,7 +10,7 @@ import {
   type CodexConnection,
   type ConnectCodex,
 } from './codex-client.js';
-import { millis, rec, str, turnMessages, type Rec } from './codex-events.js';
+import { envelope, finite, millis, rec, str, turnMessages, type Rec } from './codex-events.js';
 import { CodexStore, type CodexRecord } from './codex-store.js';
 
 const SOURCES = ['cli', 'vscode', 'exec', 'appServer', 'unknown'];
@@ -223,41 +223,254 @@ export class CodexHistory {
       const result = await client.request('thread/read', { threadId: record.threadId });
       const thread = rec(result.thread);
       this.remember(thread, record.home);
-      let turns: unknown[] = [];
-      if (thread.historyMode === 'paginated' || record.historyMode === 'paginated') {
-        let cursor: string | undefined;
-        const seen = new Set<string>();
-        do {
-          const page = await client.request('thread/turns/list', {
-            threadId: record.threadId,
-            limit: 100,
-            sortDirection: 'asc',
-            itemsView: 'full',
-            ...(cursor ? { cursor } : {}),
-          });
-          turns.push(...(Array.isArray(page.data) ? page.data : []));
-          cursor = str(page.nextCursor) || undefined;
-          if (cursor && seen.has(cursor)) throw new Error('Codex repeated a turns cursor');
-          if (cursor) seen.add(cursor);
-        } while (cursor);
-      } else {
-        const history = await client.request('thread/read', {
-          threadId: record.threadId,
-          includeTurns: true,
-        });
-        turns = Array.isArray(rec(history.thread).turns)
-          ? (rec(history.thread).turns as unknown[])
-          : [];
-      }
+      const turns = await this.turns(client, record, thread);
       const native = turns.flatMap((turn) =>
         turnMessages(id, rec(turn), record.model?.replace(/^codex:/, '')),
       );
+      native.push(...(await this.descendants(client, id, record.threadId!, turns)));
       const journal = this.store.messages(id);
       const byId = new Map<string, SessionMessage>();
       for (const message of [...native, ...journal]) byId.set(message.uuid, message);
       return [...byId.values()].sort(
         (a, b) => Date.parse(str(rec(a).timestamp)) - Date.parse(str(rec(b).timestamp)),
       );
+    });
+  }
+
+  /** Follow only explicit spawn ownership, with bounded work even for malformed trees. */
+  private async descendants(
+    client: CodexConnection,
+    id: string,
+    root: string,
+    turns: unknown[],
+  ): Promise<SessionMessage[]> {
+    const messages: SessionMessage[] = [];
+    const seen = new Set([root]);
+    const notices = new Set<string>();
+    const notice = (key: string, parentTool: string | undefined, text: string): void => {
+      if (notices.has(key)) return;
+      notices.add(key);
+      messages.push(
+        envelope(id, `${root}-child-history-${key}`, {
+          type: 'system',
+          subtype: 'informational',
+          level: 'warning',
+          content: text,
+          ...(parentTool ? { parent_tool_use_id: parentTool } : {}),
+        }) as SessionMessage,
+      );
+    };
+    const walk = async (
+      parent: string,
+      history: unknown[],
+      depth: number,
+      enclosingTool?: string,
+    ): Promise<void> => {
+      const spawns = new Map<string, { toolId: string; model?: string }>();
+      for (const turn of history)
+        for (const value of Array.isArray(rec(turn).items) ? (rec(turn).items as unknown[]) : []) {
+          const item = rec(value);
+          const toolId = str(item.id);
+          const children =
+            item.type === 'subAgentActivity' && item.kind === 'started'
+              ? [item.agentThreadId]
+              : item.type === 'collabAgentToolCall' &&
+                  item.tool === 'spawnAgent' &&
+                  Array.isArray(item.receiverThreadIds)
+                ? item.receiverThreadIds
+                : [];
+          if (!toolId) continue;
+          for (const value of children) {
+            const child = str(value);
+            if (uuid.test(child) && !spawns.has(child))
+              spawns.set(child, { toolId, model: str(item.model) || undefined });
+          }
+        }
+      for (const [childId, spawn] of spawns) {
+        if (seen.has(childId)) continue;
+        if (depth >= 8 || seen.size >= 33) {
+          notice(
+            'limit',
+            enclosingTool,
+            'Some Codex agent history was omitted because the history traversal limit was reached.',
+          );
+          continue;
+        }
+        seen.add(childId);
+        try {
+          const result = await client.request('thread/read', { threadId: childId });
+          const child = rec(result.thread);
+          const legacyParent = str(
+            rec(rec(rec(child.source).subAgent).thread_spawn).parent_thread_id,
+          );
+          if (
+            str(child.id) !== childId ||
+            (child.parentThreadId && child.parentThreadId !== parent) ||
+            (legacyParent && legacyParent !== parent)
+          ) {
+            notice(
+              childId,
+              spawn.toolId,
+              'This Codex agent history is unavailable because its native ownership metadata does not match.',
+            );
+            continue;
+          }
+          const record: CodexRecord = {
+            id,
+            threadId: childId,
+            cwd: '',
+            createdAt: 0,
+            updatedAt: 0,
+          };
+          const childTurns = await this.turns(client, record, child, 10, () =>
+            notice(
+              childId,
+              spawn.toolId,
+              'This Codex agent history is truncated because its page limit was reached.',
+            ),
+          );
+          const model = str(child.model) || spawn.model;
+          for (const turn of childTurns)
+            for (const message of turnMessages(id, rec(turn), model)) {
+              if (rec(message).type === 'result') continue;
+              messages.push({
+                ...message,
+                parent_tool_use_id: spawn.toolId,
+                parent_agent_id: childId,
+              } as SessionMessage);
+            }
+          await walk(childId, childTurns, depth + 1, spawn.toolId);
+        } catch (error) {
+          notice(
+            childId,
+            spawn.toolId,
+            `This Codex agent history is unavailable: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      }
+      // Modern lifecycle events identify the original spawn by thread rather than tool id.
+      for (const turn of history)
+        for (const value of Array.isArray(rec(turn).items) ? (rec(turn).items as unknown[]) : []) {
+          const item = rec(value);
+          const spawn = spawns.get(str(item.agentThreadId));
+          if (
+            !spawn ||
+            item.type !== 'subAgentActivity' ||
+            !['completed', 'failed', 'interrupted'].includes(str(item.kind))
+          )
+            continue;
+          messages.push(
+            envelope(
+              id,
+              `${spawn.toolId}-result`,
+              {
+                type: 'user',
+                ...(enclosingTool ? { parent_tool_use_id: enclosingTool } : {}),
+                ...(parent !== root ? { parent_agent_id: parent } : {}),
+                message: {
+                  role: 'user',
+                  content: [
+                    {
+                      type: 'tool_result',
+                      tool_use_id: spawn.toolId,
+                      content: `Codex agent ${str(item.kind)}`,
+                      is_error: item.kind === 'failed',
+                    },
+                  ],
+                },
+              },
+              finite(item.completedAtMs) ??
+                finite(item.startedAtMs) ??
+                millis(rec(turn).completedAt),
+            ) as SessionMessage,
+          );
+        }
+    };
+    await walk(root, turns, 0);
+    return messages;
+  }
+
+  private async turns(
+    client: CodexConnection,
+    record: CodexRecord,
+    thread: Rec,
+    maxPages = Number.POSITIVE_INFINITY,
+    onLimit?: () => void,
+  ): Promise<unknown[]> {
+    let turns: unknown[] = [];
+    if (thread.historyMode === 'paginated' || record.historyMode === 'paginated') {
+      let cursor: string | undefined;
+      const seen = new Set<string>();
+      let pages = 0;
+      do {
+        const page = await client.request('thread/turns/list', {
+          threadId: record.threadId,
+          limit: 100,
+          sortDirection: 'asc',
+          itemsView: 'full',
+          ...(cursor ? { cursor } : {}),
+        });
+        turns.push(...(Array.isArray(page.data) ? page.data : []));
+        cursor = str(page.nextCursor) || undefined;
+        if (++pages >= maxPages) {
+          if (cursor) onLimit?.();
+          break;
+        }
+        if (cursor && seen.has(cursor)) throw new Error('Codex repeated a turns cursor');
+        if (cursor) seen.add(cursor);
+      } while (cursor);
+    } else {
+      const history = await client.request('thread/read', {
+        threadId: record.threadId,
+        includeTurns: true,
+      });
+      turns = Array.isArray(rec(history.thread).turns)
+        ? (rec(history.thread).turns as unknown[])
+        : [];
+    }
+    return turns;
+  }
+
+  /** The UI explicitly offers to fork through the selected message's whole turn. */
+  async fork(id: string, options: { upToMessageId?: string }): Promise<{ sessionId: string }> {
+    const source = this.store.read(id);
+    if (!source?.threadId) throw new Error('No saved Codex thread to fork');
+    return this.inHome(source.home, async (client) => {
+      let lastTurnId: string | undefined;
+      if (options.upToMessageId) {
+        const result = await client.request('thread/read', { threadId: source.threadId });
+        const turns = await this.turns(client, source, rec(result.thread));
+        for (const value of turns) {
+          const turn = rec(value);
+          const messages = turnMessages(id, turn).filter(
+            (message) => rec(message).type !== 'result',
+          );
+          if (
+            turn.status === 'completed' &&
+            messages.some((message) => message.uuid === options.upToMessageId)
+          )
+            lastTurnId = str(turn.id) || undefined;
+        }
+        if (!lastTurnId)
+          throw new Error('Choose a message in a completed Codex turn to fork this chat.');
+      }
+      const result = await client.request('thread/fork', {
+        threadId: source.threadId,
+        ...(source.modelProvider ? { modelProvider: source.modelProvider } : {}),
+        ...(source.model ? { model: source.model.replace(/^codex:/, '') } : {}),
+        ...(lastTurnId ? { lastTurnId } : {}),
+        excludeTurns: true,
+      });
+      const thread = rec(result.thread);
+      if (str(thread.id) === source.threadId) throw new Error('Codex did not create a new thread');
+      const fork = this.remember(thread, source.home);
+      fork.createdHere = true;
+      fork.preservePermissions = true;
+      if (result.model) fork.model = `codex:${str(result.model)}`;
+      if (result.reasoningEffort) fork.effort = str(result.reasoningEffort);
+      if (result.modelProvider) fork.modelProvider = str(result.modelProvider);
+      this.store.save(fork);
+      return { sessionId: fork.id };
     });
   }
 

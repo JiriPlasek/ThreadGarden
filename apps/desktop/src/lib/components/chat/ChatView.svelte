@@ -14,7 +14,7 @@
   import XIcon from '@lucide/svelte/icons/x';
   import { tick, untrack } from 'svelte';
   import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
-  import { agentNameOf, isCodexChat, runtimeOfChat } from '#lib/runtime.js';
+  import { agentNameOf, runtimeOfChat } from '#lib/runtime.js';
   import Composer from '#lib/components/composer/Composer.svelte';
   import SetupScreen from '#lib/components/SetupScreen.svelte';
   import { imageCountText } from '#lib/format/images.js';
@@ -271,7 +271,10 @@
 
   // ── sending and resume safety ───────────────────────────────────────────
 
+  let sendingMessage = $state(false);
+  let checkingResume = $state(false);
   const deliver = async (text: string, images: ImageRef[]): Promise<boolean> => {
+    sendingMessage = true;
     try {
       await chats.send(sessionId, text, images);
       blocked = null;
@@ -283,6 +286,8 @@
         sendError = err instanceof Error ? err.message : String(err);
       }
       return false;
+    } finally {
+      sendingMessage = false;
     }
   };
   let implementingPlan = $state(false);
@@ -355,11 +360,14 @@
     if (!c) return false;
     if (c.ownedLive) return deliver(text, images);
     let check: ResumeCheck;
+    checkingResume = true;
     try {
       check = await chats.resumeCheck(sessionId);
     } catch (err) {
       sendError = err instanceof Error ? err.message : String(err);
       return false;
+    } finally {
+      checkingResume = false;
     }
     if (check.status === 'blocked') {
       blocked = { reason: check.reason, canStop: check.canStop, command: null, copied: false };
@@ -754,7 +762,7 @@
         {#if fromQueue}
           <!-- Its first message waits below, with what happens next. -->
           <div class="min-h-0 flex-1"></div>
-        {:else if chat.items.length === 0}
+        {:else if chat.items.length === 0 && !working}
           <div
             class="text-muted-foreground flex min-h-0 flex-1 items-center justify-center text-sm"
           >
@@ -770,7 +778,7 @@
             hasMore={chat.hasMore}
             loadingOlder={chat.loadingOlder}
             onLoadOlder={() => void chats.loadOlder(sessionId)}
-            onFork={readOnly || isCodexChat(sessionId) ? undefined : fork}
+            onFork={readOnly ? undefined : fork}
             requests={readOnly ? undefined : requests}
             requestsDocked={!readOnly}
             tasks={machineAway ? [] : chat.tasks}
@@ -991,6 +999,11 @@
             {/each}
             {#if sendError}
               <p class="text-destructive text-xs" role="alert">{sendError}</p>
+            {/if}
+            {#if checkingResume || sendingMessage}
+              <p class="text-muted-foreground text-xs" role="status">
+                {checkingResume ? `Connecting to ${agentName}…` : `Sending to ${agentName}…`}
+              </p>
             {/if}
             {#if machineAway && queueRefusal}
               <p class="text-xs text-amber-900 dark:text-amber-200" role="status">

@@ -169,7 +169,7 @@ export class MultiAdapter implements AgentAdapter {
     id: string,
     options: { upToMessageId?: string },
   ): Promise<{ sessionId: string }> {
-    if (isCodexSession(id)) throw new Error('Forking Codex conversations is not available yet.');
+    if (isCodexSession(id)) return this.codex.history.fork(id, options);
     return this.claude.forkSession(id, options);
   }
   async importSession(id: string, store: SessionStore, options: ImportOptions): Promise<void> {
@@ -178,6 +178,22 @@ export class MultiAdapter implements AgentAdapter {
     return this.claude.importSession(id, store, options);
   }
   oneShot(options: OneShotOptions): Promise<string> {
+    if (isCodexModel(options.model)) {
+      const record = options.sourceSessionId
+        ? this.codex.store.read(options.sourceSessionId)
+        : undefined;
+      return this.codex.oneShot(
+        {
+          ...options,
+          model: record?.model ?? options.model,
+          env: {
+            ...this.runtimeEnv(options.env),
+            ...(record?.home ? { CODEX_HOME: record.home } : {}),
+          },
+        },
+        record?.modelProvider,
+      );
+    }
     return this.claude.oneShot(options);
   }
 }

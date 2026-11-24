@@ -684,6 +684,10 @@ export class ChatsState {
     const peek = this.peeks.get(e.sessionId);
     if (peek) {
       const next: ChatSummary = { ...peek, status: e.status };
+      if (LIVE_STATUSES.includes(e.status)) {
+        next.external = null;
+        next.live = true;
+      }
       if (e.waitingFor === undefined) delete next.waitingFor;
       else next.waitingFor = e.waitingFor;
       this.peeks.set(e.sessionId, next);
@@ -709,6 +713,11 @@ export class ChatsState {
       chat.tasks = e.tasks;
     } else {
       chat.status = e.status;
+      // These events come from the service's owned LiveSession. A pre-takeover
+      // summary may still call it external until the next history refresh.
+      if (LIVE_STATUSES.includes(e.status) && chat.summary?.external) {
+        chat.summary = { ...chat.summary, external: null, live: true, status: e.status };
+      }
       chat.promptSuggestion =
         e.status === 'idle' && e.promptSuggestion?.id !== chat.dismissedSuggestionId
           ? (e.promptSuggestion ?? null)
