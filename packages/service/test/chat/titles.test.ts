@@ -1,12 +1,6 @@
 /** v1.2 C1: provisional and generated chat titles (Threadgarden's own metadata). */
 import { describe, expect, it } from 'vitest';
-import {
-  TITLE_INPUT_MAX,
-  ChatTitles,
-  provisionalTitle,
-  sanitizeTitle,
-  titlePrompt,
-} from '../../src/chat/titles.js';
+import { ChatTitles, provisionalTitle, sanitizeTitle, titlePrompt } from '../../src/chat/titles.js';
 import { titleFor } from '../../src/history/catalog.js';
 import { openDb } from '../../src/history/db.js';
 
@@ -121,25 +115,25 @@ describe('sanitizeTitle', () => {
 });
 
 describe('titlePrompt', () => {
-  it('holds the first message and the start of the reply, at most 2,000 characters', () => {
-    const p = titlePrompt('Fix the login bug', 'Sure, let me look at the auth module.');
-    expect(p).toContain('Fix the login bug');
-    expect(p).toContain('Sure, let me look at the auth module.');
-    const long = titlePrompt('u'.repeat(5000), 'a'.repeat(5000));
-    expect(long.length).toBeLessThanOrEqual(TITLE_INPUT_MAX);
-    // Both parts are represented even when the message alone is too long.
-    expect(long).toContain('uuuu');
-    expect(long).toContain('aaaa');
-  });
-
-  it('works with only one of the two, and is empty with neither', () => {
-    expect(titlePrompt('', 'Here is the image description')).toContain('image description');
-    expect(titlePrompt('Only a question', '')).toContain('Only a question');
-    expect(titlePrompt('  ', '\n')).toBe('');
+  it('includes the displayed title and first and recent conversation within 12000 characters', () => {
+    const messages = Array.from({ length: 40 }, (_, i) => ({
+      id: String(i),
+      role: i % 2 ? ('assistant' as const) : ('user' as const),
+      text: `message-${i}:` + '\\"'.repeat(5000),
+    }));
+    const prompt = titlePrompt('Existing overall title', messages);
+    expect(prompt.length).toBeLessThanOrEqual(12000);
+    const value = JSON.parse(prompt);
+    expect(value.currentTitle).toBe('Existing overall title');
+    expect(value.conversation[0].text).toContain('message-0:');
+    expect(value.conversation[1].text).toContain('message-1:');
+    expect(value.conversation.at(-1).text).toContain('message-39:');
+    expect(value.conversation.some((m: { text: string }) => m.text.startsWith('message-20:'))).toBe(
+      false,
+    );
+    expect(value.conversation.at(-1).role).toBe('assistant');
   });
 });
-
-// ── ChatTitles ──────────────────────────────────────────────────────────────
 
 it('defers then names clarified context', async () => {
   const db = openDb(':memory:');
