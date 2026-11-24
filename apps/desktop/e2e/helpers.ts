@@ -214,7 +214,11 @@ export const chatRow = async (page: Page, sessionId: string): Promise<Locator> =
     .poll(
       async () => {
         if ((await row.count()) > 0) return true;
-        await box.evaluate((el) => (el.scrollTop += el.clientHeight * 0.8));
+        await box.evaluate((el) => {
+          // Past the end: start over, as a row that arrives late lands above where we scrolled to.
+          if (el.scrollTop + el.clientHeight >= el.scrollHeight - 1) el.scrollTop = 0;
+          else el.scrollTop += el.clientHeight * 0.8;
+        });
         return false;
       },
       { message: `chat list row ${sessionId}`, intervals: [50] },
