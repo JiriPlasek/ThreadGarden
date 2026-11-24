@@ -196,3 +196,105 @@ test('a paused chat offers Wake the chat', async ({ page }) => {
   await expect(row(page, 'github')).toContainText('Connected');
   await expect(row(page, 'mock-etoro')).toContainText('Not approved');
 });
+
+/** The dialog's + Add server form, filled for an http server (one header). */
+const fillHttp = async (page: Page, name: string, url: string): Promise<Locator> => {
+  await dialog(page).getByRole('button', { name: '+ Add server' }).click();
+  await dialog(page).getByLabel('Name').fill(name);
+  await dialog(page).getByLabel('URL', { exact: true }).fill(url);
+  return dialog(page);
+};
+
+test('add an http server; it appears and offers Sign in', async ({ page }) => {
+  await openLiveChat(page, LIVE_CHAT);
+  await openDialog(page);
+  const form = await fillHttp(page, 'mock-added', 'https://mcp.example.test/mcp');
+  await form.getByRole('button', { name: '+ add' }).click();
+  await form.getByLabel('Header name 1').fill('Authorization');
+  await form.getByLabel('Header value 1').fill('Bearer E2E-SECRET');
+  // Masked while typed.
+  await expect(form.getByLabel('Header value 1')).toHaveAttribute('type', 'password');
+  await form.getByRole('button', { name: 'Add', exact: true }).click();
+
+  const added = row(page, 'mock-added');
+  await expect(added).toContainText('local');
+  await expect(added).toContainText('Needs sign-in');
+  await expect(added.getByRole('button', { name: 'Sign in' })).toBeVisible();
+  expect(await page.content()).not.toContain('E2E-SECRET');
+});
+
+test('add a stdio server with arguments and environment', async ({ page }) => {
+  await openLiveChat(page, LIVE_CHAT);
+  await openDialog(page);
+  const form = dialog(page);
+  await form.getByRole('button', { name: '+ Add server' }).click();
+  await form.getByLabel('Name').fill('mock-stdio');
+  await form.getByText('Command (stdio)').click();
+  await form.getByLabel('Command', { exact: true }).fill('npx');
+  await form.getByLabel('Arguments (one per line)').fill('-y\nsome-mcp-server');
+  await form.getByRole('button', { name: '+ add' }).click();
+  await form.getByLabel('Environment name 1').fill('API_KEY');
+  await form.getByLabel('Environment value 1').fill('E2E-ENV-SECRET');
+  await form.getByRole('button', { name: 'Add', exact: true }).click();
+
+  await expect(row(page, 'mock-stdio')).toContainText('Connected');
+  expect(await page.content()).not.toContain('E2E-ENV-SECRET');
+});
+
+test("a taken name shows Claude Code's words", async ({ page }) => {
+  await openLiveChat(page, LIVE_CHAT);
+  await openDialog(page);
+  const form = await fillHttp(page, 'github', 'https://mcp.example.test/mcp');
+  await form.getByLabel('Me, every project').check();
+  await form.getByRole('button', { name: 'Add', exact: true }).click();
+  await expect(form.getByRole('alert')).toContainText(
+    'MCP server github already exists in user config',
+  );
+});
+
+test('remove asks first, then the row goes', async ({ page }) => {
+  await openLiveChat(page, LIVE_CHAT);
+  await openDialog(page);
+  const off = row(page, 'mock-off');
+  await off.getByRole('button', { name: 'More for mock-off' }).click();
+  await page.getByRole('menuitem', { name: 'Remove' }).click();
+  const confirm = page.getByRole('alertdialog', { name: 'Remove mock-off?' });
+  await expect(confirm).toContainText('stops using it');
+  // Cancelling keeps it.
+  await confirm.getByRole('button', { name: 'Cancel' }).click();
+  await expect(confirm).toBeHidden();
+  await expect(off).toBeVisible();
+
+  await off.getByRole('button', { name: 'More for mock-off' }).click();
+  await page.getByRole('menuitem', { name: 'Remove' }).click();
+  await confirm.getByRole('button', { name: 'Remove' }).click();
+  await expect(row(page, 'mock-off')).toHaveCount(0);
+});
+
+test('no Remove for claude.ai and plugin servers', async ({ page }) => {
+  await openLiveChat(page, LIVE_CHAT);
+  await openDialog(page);
+  for (const name of ['mock-notion', 'context7']) {
+    const r = row(page, name);
+    await expect(r).toBeVisible();
+    const more = r.getByRole('button', { name: `More for ${name}` });
+    if ((await more.count()) > 0) {
+      await more.click();
+      await expect(page.getByRole('menuitem', { name: 'Remove' })).toHaveCount(0);
+      await page.keyboard.press('Escape');
+    }
+  }
+});
+
+test('add on the remote mock', async ({ page }) => {
+  await openApp(page);
+  await pairUbuntu(page);
+  await (await chatRow(page, REMOTE_CHAT)).click();
+  await composer(page).fill('Hello from the MCP test');
+  await composer(page).press('Enter');
+  await expect(page.getByText(REPLY).first()).toBeVisible();
+  await openDialog(page);
+  const form = await fillHttp(page, 'remote-added', 'https://mcp.example.test/mcp');
+  await form.getByRole('button', { name: 'Add', exact: true }).click();
+  await expect(row(page, 'remote-added')).toContainText('Needs sign-in');
+});

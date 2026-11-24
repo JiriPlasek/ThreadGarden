@@ -513,6 +513,7 @@ test("the phone layout opens the MCP servers dialog from the chat's menu", async
   await expect(dialog.getByTestId('mcp-row').filter({ hasText: 'mock-etoro' })).toContainText(
     'Not approved',
   );
+  await expect(dialog.getByRole('button', { name: '+ Add server' })).toBeVisible();
   // Fits the screen.
   const box = await dialog.boundingBox();
   expect(box!.x + box!.width).toBeLessThanOrEqual(412);

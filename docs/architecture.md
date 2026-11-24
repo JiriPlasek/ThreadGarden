@@ -195,6 +195,28 @@ the browser ended up at ("Paste the address from your browser's address bar").
 Claude Code saves the token after a sign-in but does not reconnect the server,
 so the dialog reconnects it after a pasted address and, on This PC, offers
 "I've signed in" to do the same.
+**Add server and Remove** (`mcp.add`, `mcp.remove`; the capability `mcp-config`, added at runtime
+beside `mcp`; the design is `docs/superpowers/specs/2026-11-24-mcp-add-server-design.md`, with what
+the spike found in [the spike results](superpowers/specs/2026-11-24-mcp-add-server-spike-results.md)).
+The dialog's **+ Add server** form and each row's **Remove** (with a confirmation) are there only on
+a machine that offers `mcp-config`. Threadgarden never writes Claude Code's config itself: the
+service runs Claude Code's own CLI, the same `claude` the SDK uses, in the chat's folder and with the
+chat's environment (`claude mcp add-json ... -` with the JSON on stdin, `claude mcp remove`; the
+child gets no `CLAUDECODE` or `CLAUDE_CODE_*` variables, or the CLI refuses stdin). The scopes are
+**Me, this project** (`local`, the default), **Me, every project** (`user`) and **Everyone**
+(`project`, saved in the project's `.mcp.json`, which is usually committed). Remove shows only for
+servers whose `source` is one of those three, and removes from that scope only; claude.ai
+connectors and plugin servers get none. Header and environment values (API keys) are masked in the
+form, go to the CLI only on stdin (never in process arguments), and are never logged or put in an
+event, an error or the database; a refusal from Claude Code is shown word for word with any such
+value replaced by `•••`. The status entries of http servers carry header values in `config`, so no
+status entry is ever passed on, only the fields the protocol defines. A live chat picks an added
+server up by reconnecting it (`reconnectMcpServer`), which works in every scope. A removed server
+stays in the live session until its process restarts, so the service restarts the chat's process
+between turns: it waits for the turn to end, for open requests, queued messages and running tasks,
+and for 30 s of quiet on its periodic retry; until then the dialog says it disappears when the chat
+restarts. The mock fakes both (a removal shows at once there, so the restart line isn't covered
+by the end-to-end tests).
 A chat that isn't running offers **Wake the chat** (`chat.wake`), which goes
 through the same resume-safety check as sending. Codex chats have none of this.
 
@@ -291,7 +313,7 @@ service and the UI; the service validates every request.
   `MOVING`, `MOVED`, `BUSY`, `TOO_LARGE`, `EXPIRED` and `ALREADY_HERE`
   ([Moving a chat](#moving-a-chat)). Protocol 12 adds `mcp.list`, `.approve`,
   `.signIn`, `.submitCallback` and `.act`, `chat.wake`, the event `mcp.changed`
-  and the capability `mcp` ("MCP servers" under Lifecycle).
+  and the capability `mcp` ("MCP servers" under Lifecycle). It also adds `mcp.add` and `mcp.remove` under the runtime capability `mcp-config` (no protocol bump).
 - **Local-only methods** (v1.4). Every request is dispatched with its
   origin, `local` (the loopback server) or `remote` (the TLS listener), and
   a method registered `localOnly` answers `FORBIDDEN` to a remote caller
