@@ -155,6 +155,21 @@ test('sign in on the remote mock needs the pasted address', async ({ page }) => 
   await expect(field).toHaveCount(0);
 });
 
+test('sign in on This PC: "I\'ve signed in" reconnects', async ({ page }) => {
+  await openLiveChat(page, LIVE_CHAT);
+  await openDialog(page);
+  const oauth = row(page, 'mock-oauth');
+  await oauth.getByRole('button', { name: 'Sign in' }).click();
+  await expect(oauth.getByText('Finish signing in in your browser, then:')).toBeVisible();
+  // The mock's simulated browser saves the token on its own; the server still needs the
+  // reconnect. Clicking before that falls back to Needs sign-in, so click until it connects.
+  await expect(async () => {
+    await oauth.getByRole('button', { name: "I've signed in" }).click({ timeout: 2000 });
+    await expect(oauth).toContainText('Connected', { timeout: 1500 });
+  }).toPass({ timeout: 15_000 });
+  await expect(oauth.getByText('Finish signing in in your browser, then:')).toHaveCount(0);
+});
+
 test('a paused chat offers Wake the chat', async ({ page }) => {
   await openApp(page);
   await (await chatRow(page, PAUSED_CHAT)).click();

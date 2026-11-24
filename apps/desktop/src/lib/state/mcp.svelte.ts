@@ -64,10 +64,12 @@ export class ChatMcp {
   /**
    * Claude Code saves the token after a good address but does not reconnect the
    * server, so this does (then reloads, as every action does). A refused address
-   * rejects before any reconnect.
+   * rejects before any reconnect. `onSaved` runs once the address was accepted
+   * (the code is spent), before the reconnect.
    */
-  submitCallback = async (name: string, url: string): Promise<void> => {
+  submitCallback = async (name: string, url: string, onSaved?: () => void): Promise<void> => {
     await this.api.request('mcp.submitCallback', { sessionId: this.sessionId, name, url });
+    onSaved?.();
     await this.act(name, 'reconnect');
   };
 

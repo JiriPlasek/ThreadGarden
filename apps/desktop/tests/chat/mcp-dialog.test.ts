@@ -85,7 +85,11 @@ describe('McpServersDialog', () => {
     const field = await screen.findByLabelText("Paste the address from your browser's address bar");
     await userEvent.type(field, 'http://localhost:1234/cb?code=x');
     await userEvent.click(screen.getByRole('button', { name: 'Finish sign-in' }));
-    expect(mcp.submitCallback).toHaveBeenCalledWith('api', 'http://localhost:1234/cb?code=x');
+    expect(mcp.submitCallback).toHaveBeenCalledWith(
+      'api',
+      'http://localhost:1234/cb?code=x',
+      expect.any(Function),
+    );
   });
 
   it('the paste field goes away once the server is no longer waiting for sign-in', async () => {
@@ -120,6 +124,65 @@ describe('McpServersDialog', () => {
     await waitFor(() =>
       expect(screen.queryByText('Finish signing in in your browser, then:')).toBeNull(),
     );
+  });
+
+  it('the line stays through Connecting…, and a fall back to Needs sign-in says so', async () => {
+    const mcp = fakeMcp([server({ name: 'api', status: 'needs-auth', canSignIn: true })]);
+    const { rerender } = show(mcp, { remote: false });
+    const LINE = 'Finish signing in in your browser, then:';
+    const NOTE = 'Not signed in yet — finish in your browser, then try again.';
+    const as = async (status: McpServer['status']) => {
+      mcp.state.servers = [server({ name: 'api', status, canSignIn: true })];
+      await rerender({ mcp: { ...mcp, state: { ...mcp.state } } as unknown as ChatMcp });
+    };
+    await userEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await screen.findByText(LINE);
+    expect(screen.queryByText(NOTE)).toBeNull();
+    await userEvent.click(screen.getByRole('button', { name: "I've signed in" }));
+    await as('pending');
+    expect(screen.getByText(LINE)).toBeTruthy();
+    await as('needs-auth');
+    expect(await screen.findByText(LINE)).toBeTruthy();
+    expect(await screen.findByText(NOTE)).toBeTruthy();
+  });
+
+  it('a reconnect error from "I\'ve signed in" shows under the row; the button is off while busy', async () => {
+    let fail!: (e: Error) => void;
+    const mcp = fakeMcp([server({ name: 'api', status: 'needs-auth', canSignIn: true })], {
+      act: vi.fn(
+        () =>
+          new Promise<void>((_, reject) => {
+            fail = reject;
+          }),
+      ),
+    });
+    show(mcp, { remote: false });
+    await userEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await userEvent.click(await screen.findByRole('button', { name: "I've signed in" }));
+    const button = () => screen.getByRole('button', { name: "I've signed in" }) as HTMLButtonElement;
+    await waitFor(() => expect(button().disabled).toBe(true));
+    fail(new Error('Server "api" is not responding'));
+    await waitFor(() =>
+      expect(screen.getByRole('alert').textContent).toBe('Server "api" is not responding'),
+    );
+    expect(button().disabled).toBe(false);
+  });
+
+  it('remote: the paste field clears once the address is accepted, even if the reconnect fails', async () => {
+    const mcp = fakeMcp([server({ name: 'api', status: 'needs-auth', canSignIn: true })], {
+      submitCallback: vi.fn(async (_n: string, _u: string, onSaved?: () => void) => {
+        onSaved?.();
+        throw new Error('Server "api" is not responding');
+      }),
+    });
+    show(mcp, { remote: true });
+    await userEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    await userEvent.type(await screen.findByLabelText(/Paste the address/), 'http://l/cb?code=x');
+    await userEvent.click(screen.getByRole('button', { name: 'Finish sign-in' }));
+    await waitFor(() =>
+      expect(screen.getByRole('alert').textContent).toBe('Server "api" is not responding'),
+    );
+    expect(screen.queryByLabelText(/Paste the address/)).toBeNull();
   });
 
   it("a remote machine has the paste field and no \"I've signed in\"", async () => {

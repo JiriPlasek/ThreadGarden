@@ -49,6 +49,8 @@
   let pasted = $state('');
   /** The server whose browser sign-in on This PC is under way: "I've signed in" reconnects it. */
   let finishing = $state<string | null>(null);
+  /** "I've signed in" was clicked for `finishing`: if it falls back to Needs sign-in, say so. */
+  let tried = $state(false);
   let busy = $state<string | null>(null);
   let wakeError = $state<string | null>(null);
 
@@ -69,8 +71,12 @@
 
   $effect(() => {
     // The "I've signed in" line belongs to a sign-in that is still waiting.
-    const waiting = mcp.state?.servers.find((s) => s.name === finishing)?.status === 'needs-auth';
-    if (finishing !== null && !waiting) finishing = null;
+    // It stays through Connecting…, which may fall back to Needs sign-in.
+    const status = mcp.state?.servers.find((s) => s.name === finishing)?.status;
+    if (finishing !== null && status !== 'needs-auth' && status !== 'pending') {
+      finishing = null;
+      tried = false;
+    }
   });
 
   $effect(() => {
@@ -78,6 +84,7 @@
     errors = {};
     pasting = null;
     finishing = null;
+    tried = false;
     pasted = '';
     wakeError = null;
   });
@@ -105,14 +112,16 @@
         pasted = '';
       } else if (url) {
         finishing = name;
+        tried = false;
       }
     });
 
   const finish = (name: string): Promise<void> =>
     run(name, async () => {
-      await mcp.submitCallback(name, pasted.trim());
-      pasting = null;
-      pasted = '';
+      await mcp.submitCallback(name, pasted.trim(), () => {
+        pasting = null;
+        pasted = '';
+      });
     });
 
   const primary = (s: McpServer, a: PrimaryAction): Promise<void> => {
@@ -243,17 +252,24 @@
                 >
               </div>
             {/if}
-            {#if finishing === s.name && s.status === 'needs-auth'}
+            {#if finishing === s.name}
               <div class="flex items-center gap-2 text-xs">
                 <span>Finish signing in in your browser, then:</span>
                 <Button
                   size="sm"
                   variant="outline"
                   disabled={busy !== null}
-                  onclick={() => run(s.name, () => mcp.act(s.name, 'reconnect'))}
-                  >I've signed in</Button
+                  onclick={() => {
+                    tried = true;
+                    void run(s.name, () => mcp.act(s.name, 'reconnect'));
+                  }}>I've signed in</Button
                 >
               </div>
+              {#if tried && s.status === 'needs-auth' && busy === null}
+                <p class="text-muted-foreground text-xs">
+                  Not signed in yet — finish in your browser, then try again.
+                </p>
+              {/if}
             {/if}
             {#if errors[s.name]}
               <p class="text-destructive text-xs break-words" role="alert">{errors[s.name]}</p>
