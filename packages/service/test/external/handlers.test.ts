@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ExternalPoller } from '../../src/external/poller.js';
-import { registerExternalHandlers } from '../../src/server/handlers/external.js';
+import { registerExternalHandlers, makeResumeChecker } from '../../src/server/handlers/external.js';
 import { Router } from '../../src/server/router.js';
 
 const NOW = 5_000_000;
@@ -43,6 +43,55 @@ const setup = (run: () => Promise<string>, withPoller = true) => {
 };
 
 describe('external handlers', () => {
+  it('resumes an unchanged automatically paused Codex chat without repeating the unavailable-runtime dialog', async () => {
+    const unchanged = vi.fn(async () => true);
+    const check = makeResumeChecker({
+      lastModifiedOf: () => NOW - 1,
+      now: () => NOW,
+      canResumeAutomatically: unchanged,
+    });
+    expect(await check('codex-11111111-2222-4333-8444-555555555555')).toMatchObject({
+      status: 'ok',
+      recentlyModified: false,
+    });
+    unchanged.mockResolvedValue(false);
+    expect(await check('codex-11111111-2222-4333-8444-555555555555')).toMatchObject({
+      status: 'unverified',
+      recentlyModified: true,
+    });
+  });
+
+  it('still blocks a Codex chat reported in another process before considering an idle checkpoint', async () => {
+    const unchanged = vi.fn(async () => true);
+    const poller = new ExternalPoller(
+      async () => '[]',
+      () => new Set(),
+      () => {},
+      {
+        codexEnabled: () => true,
+        codex: async () => [
+          {
+            sessionId: 'codex-11111111-2222-4333-8444-555555555555',
+            cwd: '/p',
+            kind: 'codex',
+            startedAt: 1,
+            status: 'busy',
+            raw: {},
+          },
+        ],
+      },
+    );
+    const check = makeResumeChecker({
+      poller,
+      lastModifiedOf: () => 1,
+      now: () => NOW,
+      canResumeAutomatically: unchanged,
+    });
+    expect(await check('codex-11111111-2222-4333-8444-555555555555')).toMatchObject({
+      status: 'blocked',
+    });
+    expect(unchanged).not.toHaveBeenCalled();
+  });
   it('chat.resumeCheck polls fresh and blocks live sessions', async () => {
     const run = vi.fn(async () => JSON.stringify(AGENTS));
     const t = setup(run);

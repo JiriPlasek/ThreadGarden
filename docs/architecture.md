@@ -157,7 +157,11 @@ chat that is idle (no turn running, nothing waiting on the user) for 15 minutes
 paused, and the next message resumes it transparently. Pinned chats, chats
 waiting on the user and chats with a running background task (Ruling R29:
 closing the process would kill it) are never reclaimed. Closing a tab never
-ends a session.
+ends a session. Codex idle pauses retain a history checkpoint: the next send
+resumes without another handoff prompt only when fresh SDK metadata (modification
+time and size) matches it and no other runtime reports the chat as open. Changed
+or unverifiable history, explicit End, and service restarts still use the normal
+handoff check.
 **Stop** (or Esc) interrupts only the current turn: Threadgarden declares the SDK's
 `perTaskStopAffordance` (it renders a Stop per task, wired to `stop_task`), so
 the CLI spares running background agents and processes, which are stopped one

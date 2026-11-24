@@ -161,6 +161,7 @@ export class CodexSession implements AgentSession {
     this.record.threadId = str(rec(result.thread).id);
     if (!this.record.threadId) throw new Error('Codex returned no thread id');
     if (/^[0-9a-f-]{36}$/.test(this.record.threadId)) this.record.native = true;
+    this.record.nativePath = str(rec(result.thread).path) || this.record.nativePath;
     this.record.historyMode = str(rec(result.thread).historyMode) || this.record.historyMode;
     this.record.runtimeVersion = str(rec(result.thread).cliVersion) || this.record.runtimeVersion;
     this.record.modelProvider = str(result.modelProvider) || this.record.modelProvider;
@@ -440,6 +441,10 @@ export class CodexSession implements AgentSession {
     this.approvals.clear();
     this.client.close();
     this.messages.end();
+  }
+
+  historyInfo() {
+    return this.store.info(this.record.id);
   }
 
   private fail(error: unknown): void {

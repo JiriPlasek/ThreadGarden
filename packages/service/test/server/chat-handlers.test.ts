@@ -1188,3 +1188,36 @@ describe('ids from a client that retries (a machine that is away)', () => {
     expect(hello.machine.capabilities).toContain('away');
   });
 });
+
+it('does not repeat the unverified Codex handoff after an unchanged automatic idle pause', async () => {
+  const adapter = Object.assign(new FakeAdapter(), { requireCodex: async () => {} });
+  const id = 'codex-11111111-2222-4333-8444-555555555555';
+  addHistory(adapter, id, 1);
+  await start(adapter);
+  expect(await ok('chat.resumeCheck', { sessionId: id })).toMatchObject({ status: 'unverified' });
+  // First handoff is explicitly accepted, as the UI's Continue here action does.
+  await ok('chat.send', { sessionId: id, text: 'Take over here' });
+  const fake = adapter.lastSession();
+  const info = adapter.sessions.get(id)!.info;
+  info.lastModified = Date.now();
+  info.fileSize = 100;
+  fake.historyInfo = () => info;
+  fake.emit(result('done'));
+  await settle();
+  expect(svc!.host!.reclaimIdle(Date.now() + 16 * 60_000)).toBe(1);
+  expect(await ok('chat.resumeCheck', { sessionId: id })).toMatchObject({
+    status: 'ok',
+    recentlyModified: false,
+  });
+  await ok('chat.send', { sessionId: id, text: 'Back after a break' });
+  expect(adapter.started).toHaveLength(2);
+  const resumed = adapter.lastSession();
+  resumed.historyInfo = () => info;
+  resumed.emit(result('done-again'));
+  await settle();
+  svc!.host!.reclaimIdle(Date.now() + 16 * 60_000);
+  info.lastModified++;
+  expect(await ok('chat.resumeCheck', { sessionId: id })).toMatchObject({ status: 'unverified' });
+  await ok('chat.end', { sessionId: id });
+  expect(await ok('chat.resumeCheck', { sessionId: id })).toMatchObject({ status: 'unverified' });
+});

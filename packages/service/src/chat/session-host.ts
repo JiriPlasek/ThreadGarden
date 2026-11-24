@@ -181,6 +181,26 @@ export class SessionHost {
     return s;
   }
 
+  /** Reuse a previous handoff only after an automatic pause and a fresh, matching SDK revision. */
+  async canResumeAutomatically(sessionId: string): Promise<boolean> {
+    const current = this.sessions.get(sessionId);
+    const checkpoint = current?.idleResumeInfo;
+    if (!current || current.live || current.status !== 'paused' || !checkpoint) return false;
+    try {
+      const info = await this.deps.adapter.getSessionInfo(sessionId);
+      return (
+        this.sessions.get(sessionId) === current &&
+        !current.live &&
+        current.status === 'paused' &&
+        info?.lastModified === checkpoint.lastModified &&
+        info.fileSize === checkpoint.fileSize
+      );
+    } catch (err) {
+      this.report(err, `check paused history (session ${sessionId})`);
+      return false;
+    }
+  }
+
   /** End session: closes the process and returns the chat to history. */
   end(sessionId: string): void {
     const s = this.sessions.get(sessionId);

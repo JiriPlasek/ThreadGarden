@@ -97,6 +97,7 @@ export class FakeSession implements AgentSession {
   account: AccountInfo = {};
   /** v1.3 B: the experimental usage reading; absent unless a test (or the mock) sets one. */
   usage?: () => Promise<unknown>;
+  historyInfo?: () => SDKSessionInfo | undefined;
 
   private readonly queue: SDKMessage[] = [];
   private waiter: (() => void) | undefined;

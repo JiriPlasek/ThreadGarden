@@ -17,6 +17,8 @@ export type ExternalHandlerDeps = {
   externalUsable?: () => boolean;
   /** `SDKSessionInfo.lastModified` from the history index; never a transcript stat. */
   lastModifiedOf: (sessionId: string) => number | undefined;
+  /** An owned runtime was automatically paused and its freshly read history is unchanged. */
+  canResumeAutomatically?: (sessionId: string) => Promise<boolean>;
   /** Where `claude` was found, or why not; undefined while unknown. */
   claude: () => ClaudeFound | ClaudeProblem | undefined;
   /** Settles once a search for `claude` in progress has finished (answers wait for it). */
@@ -49,17 +51,26 @@ export const makeResumeChecker =
   (
     deps: Pick<
       ExternalHandlerDeps,
-      'poller' | 'externalUsable' | 'lastModifiedOf' | 'now' | 'located'
+      'poller' | 'externalUsable' | 'lastModifiedOf' | 'now' | 'located' | 'canResumeAutomatically'
     >,
   ) =>
   async (sessionId: string): Promise<ResumeCheck> => {
-    if (isCodexSession(sessionId))
-      return checkResume({
+    if (isCodexSession(sessionId)) {
+      const check = checkResume({
         sessionId,
         external: (await deps.poller?.current('codex')) ?? null,
         lastModified: deps.lastModifiedOf(sessionId) ?? 0,
         now: (deps.now ?? Date.now)(),
       });
+      if (check.status !== 'blocked' && (await deps.canResumeAutomatically?.(sessionId))) {
+        return {
+          status: 'ok',
+          reason: 'This chat was automatically paused here and its history is unchanged.',
+          recentlyModified: false,
+        };
+      }
+      return check;
+    }
     await deps.located?.();
     return checkResume({
       sessionId,

@@ -147,6 +147,8 @@ export interface AgentSession {
    * leniently and fall back to the rate-limit events on any failure.
    */
   usage?: () => Promise<unknown>;
+  /** Current history metadata of this owned runtime, captured before an automatic idle pause. */
+  historyInfo?(): SDKSessionInfo | undefined;
   close(): void;
 }
 
