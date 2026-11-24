@@ -170,6 +170,22 @@ test('sign in on This PC: "I\'ve signed in" reconnects', async ({ page }) => {
   await expect(oauth.getByText('Finish signing in in your browser, then:')).toHaveCount(0);
 });
 
+test('Forget sign-in drops a signed-in server back to Needs sign-in', async ({ page }) => {
+  await openLiveChat(page, LIVE_CHAT);
+  await openDialog(page);
+  const oauth = row(page, 'mock-oauth');
+  await oauth.getByRole('button', { name: 'Sign in' }).click();
+  await expect(async () => {
+    await oauth.getByRole('button', { name: "I've signed in" }).click({ timeout: 2000 });
+    await expect(oauth).toContainText('Connected', { timeout: 1500 });
+  }).toPass({ timeout: 15_000 });
+
+  await oauth.getByRole('button', { name: 'More for mock-oauth' }).click();
+  await page.getByRole('menuitem', { name: /^Forget sign-in on/ }).click();
+  await expect(oauth).toContainText('Needs sign-in');
+  await expect(oauth.getByRole('button', { name: 'Sign in' })).toBeVisible();
+});
+
 test('a paused chat offers Wake the chat', async ({ page }) => {
   await openApp(page);
   await (await chatRow(page, PAUSED_CHAT)).click();

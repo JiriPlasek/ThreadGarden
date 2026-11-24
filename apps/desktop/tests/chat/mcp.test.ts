@@ -154,6 +154,57 @@ describe('ChatMcp', () => {
     mcp.stop();
   });
 
+  describe('clearAuth reconnects the server', () => {
+    const calls = (f: ReturnType<typeof fakeApi>) =>
+      f.request.mock.calls.map((c) => [c[0], (c[1] as { action?: string }).action]);
+
+    it('clearAuth, then reconnect that server, then reload', async () => {
+      const f = fakeApi();
+      const mcp = new ChatMcp(f.api, 's1');
+      await mcp.act('a', 'clearAuth');
+      expect(calls(f)).toEqual([
+        ['mcp.act', 'clearAuth'],
+        ['mcp.act', 'reconnect'],
+        ['mcp.list', undefined],
+      ]);
+      mcp.stop();
+    });
+
+    it('a clearAuth error does not reconnect', async () => {
+      const f = fakeApi();
+      f.request.mockImplementation(async () => {
+        throw new Error('nope');
+      });
+      const mcp = new ChatMcp(f.api, 's1');
+      await expect(mcp.act('a', 'clearAuth')).rejects.toThrow('nope');
+      expect(calls(f)).toEqual([['mcp.act', 'clearAuth']]);
+      mcp.stop();
+    });
+
+    it('a failing reconnect rejects with its error', async () => {
+      const f = fakeApi();
+      f.request.mockImplementation(async (_m: string, p: object) => {
+        if ((p as { action?: string }).action === 'reconnect')
+          throw new Error('Server "a" is not responding');
+        return {};
+      });
+      const mcp = new ChatMcp(f.api, 's1');
+      await expect(mcp.act('a', 'clearAuth')).rejects.toThrow('Server "a" is not responding');
+      mcp.stop();
+    });
+
+    it('other actions do not reconnect', async () => {
+      const f = fakeApi();
+      const mcp = new ChatMcp(f.api, 's1');
+      await mcp.act('a', 'disable');
+      expect(calls(f)).toEqual([
+        ['mcp.act', 'disable'],
+        ['mcp.list', undefined],
+      ]);
+      mcp.stop();
+    });
+  });
+
   describe('submitCallback reconnects the server', () => {
     const calls = (f: ReturnType<typeof fakeApi>) =>
       f.request.mock.calls.map((c) => [c[0], (c[1] as { action?: string }).action]);
