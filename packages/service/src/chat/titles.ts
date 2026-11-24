@@ -16,6 +16,7 @@
  * `TITLE_CONCURRENCY` at a time; only chats Threadgarden started (or continued
  * while they had no title at all) are named, never history-only or external ones.
  */
+import { isCodexSession } from '../sdk/providers.js';
 import { randomUUID } from 'node:crypto';
 import { messagePreview, type EventMsg } from '@threadgarden/protocol';
 import { FIRST_PROMPT_MAX, UNTITLED_TITLE, titleFor } from '../history/catalog.js';
@@ -138,7 +139,7 @@ export const titlePrompt = (first: string, reply: string): string => {
 
 // ── ChatTitles ────────────────────────────────────────────────────────────────
 
-/** How to run Claude Code for a generation now: the sessions' `claude` and environment. */
+/** The provider's environment, plus the executable path for Claude requests. */
 export type TitleRun = { claudePath: string; env: Record<string, string | undefined> };
 
 export type ChatTitlesDeps = {
@@ -151,7 +152,7 @@ export type ChatTitlesDeps = {
    * (`claude` not found, or an API-key-only build without a key: exactly
    * when starting a chat would be refused).
    */
-  run: () => TitleRun | undefined;
+  run: (sessionId: string) => TitleRun | undefined;
   /** The start of the chat's first assistant reply (empty if none). */
   firstReply: (sessionId: string) => string;
   /** Threadgarden's title of a chat changed (updates cached lists). */
@@ -282,12 +283,13 @@ export class ChatTitles {
     try {
       const { db } = this.deps;
       if (!this.deps.enabled() || db.metaOf(sessionId).customTitle) return;
-      const run = this.deps.run();
+      const codex = isCodexSession(sessionId);
+      const run = this.deps.run(sessionId);
       if (!run) {
-        this.deps.debug?.(`title of ${sessionId}: skipped, Claude Code cannot run now`);
+        this.deps.debug?.(`title of ${sessionId}: skipped, provider cannot run now`);
         return;
       }
-      const reason = await this.deps.routedElsewhere?.(p.cwd);
+      const reason = codex ? undefined : await this.deps.routedElsewhere?.(p.cwd);
       if (reason) {
         if (!this.logged.has(reason)) {
           this.logged.add(reason);
@@ -313,7 +315,8 @@ export class ChatTitles {
         this.deps.adapter.oneShot({
           prompt,
           systemPrompt: TITLE_SYSTEM_PROMPT,
-          model: TITLE_MODEL,
+          model: codex ? 'codex:default' : TITLE_MODEL,
+          ...(codex ? { sourceSessionId: sessionId } : {}),
           cwd: p.cwd,
           env: run.env,
           claudePath: run.claudePath,

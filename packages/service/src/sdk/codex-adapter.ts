@@ -1,5 +1,6 @@
 import { CODEX_COMMANDS, codexCommand, isBareCompact } from './codex-commands.js';
 /** Codex's thread/turn protocol translated at the existing chat event boundary. */
+import { codexOneShot } from './codex-one-shot.js';
 import { randomUUID } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
@@ -8,6 +9,7 @@ import type {
   AgentSession,
   Effort,
   ModelInfo,
+  OneShotOptions,
   PermissionMode,
   SDKMessage,
   SDKUserMessage,
@@ -939,6 +941,9 @@ export class CodexAdapter {
       this.store,
       this.connect,
     );
+  }
+  oneShot(options: OneShotOptions, modelProvider?: string): Promise<string> {
+    return codexOneShot(options, this.connect, modelProvider);
   }
   async models(env: NodeJS.ProcessEnv): Promise<ModelInfo[]> {
     const client = this.connect(

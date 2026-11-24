@@ -94,13 +94,15 @@ export type ImportOptions = { dir?: string; includeSubagents: boolean };
 // ── v1.2 C1: chat titles ──
 
 /**
- * A one-shot, tool-less question to a model through Claude Code (title
- * generation): one turn, no transcript, no settings loaded.
+ * A one-shot, tool-less question for title generation. Claude uses one turn
+ * without settings or persistence; Codex uses an isolated ephemeral native thread.
  */
 export type OneShotOptions = {
+  /** Source conversation for provider and account routing; never resumed. */
+  sourceSessionId?: string;
   prompt: string;
   systemPrompt: string;
-  /** A model alias Claude Code's `--model` accepts (e.g. `haiku`) or a model id. */
+  /** A Claude model alias/id, or a provider-qualified `codex:` model. */
   model: string;
   cwd: string;
   /** The same environment as the user's sessions (Threadgarden's API key included). */
