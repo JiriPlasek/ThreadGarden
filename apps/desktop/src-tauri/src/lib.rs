@@ -10,6 +10,8 @@
 #[cfg(any(target_os = "android", test))]
 pub mod android;
 #[cfg(desktop)]
+pub mod chat_files;
+#[cfg(desktop)]
 pub mod discovery;
 #[cfg(desktop)]
 pub mod dropped;
@@ -200,6 +202,20 @@ fn set_tray_needs_you(app: AppHandle, count: u32) -> Result<(), String> {
     tray::set_needs_you(&app, count).map_err(|e| e.to_string())
 }
 
+/// Open a local document only after native validation; never execute model-linked programs.
+#[cfg(desktop)]
+#[tauri::command]
+async fn open_chat_file(app: AppHandle, path: String, cwd: String) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    blocking(move || {
+        let target = chat_files::document_path(&path, &cwd)?;
+        app.opener()
+            .open_path(target.to_string_lossy(), None::<String>)
+            .map_err(|e| e.to_string())
+    })
+    .await
+}
+
 /// How this copy was installed (releases spec §6): whether it can update itself.
 #[cfg(desktop)]
 #[tauri::command]
@@ -222,7 +238,7 @@ pub fn run() {
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
-        // Links are routed explicitly by the UI (http/https only, ruling R23).
+        // Links are routed explicitly by the UI; documents use the validated native command.
         .plugin(
             tauri_plugin_opener::Builder::new()
                 .open_js_links_on_click(false)
@@ -251,6 +267,7 @@ pub fn run() {
             app_quit,
             set_tray_needs_you,
             read_dropped_image,
+            open_chat_file,
             install_kind,
         ])
         .setup(|app| {

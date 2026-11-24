@@ -12,6 +12,7 @@ export type RequestActions = {
 /** Chat-level actions deep item renderers can trigger (absent outside a chat view). */
 export type ChatActions = {
   agentName?: string;
+  fileLocation?: { cwd: string; local: boolean };
   /** Forks the chat up to this user message; undefined when forking is unavailable. */
   fork?: (itemId: string) => void;
   /** Undefined where requests cannot be answered (read-only renderings). */

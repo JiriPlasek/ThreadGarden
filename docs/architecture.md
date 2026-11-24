@@ -1624,7 +1624,11 @@ Decisions made during the build that change behaviour described in the design:
   CSP allows only local, `data:` and `blob:` images); they render as links.
   Pasted and dropped images in the composer work as designed.
 - **Links** open in the system browser through the opener plugin
-  (http/https only), never inside the app.
+  (http/https), never inside the app. User-clicked local document links open through the
+  native shell with the default application; relative paths resolve from the chat's
+  working folder. Remote-chat paths are never opened on this PC. Native validation
+  requires an existing file with an allowed document extension and rejects programs,
+  scripts, shortcuts and network paths. Opener errors are shown in the chat.
 - **Dropped files** (§6.4). Dropped PNG, JPEG, GIF and WebP files up to 5 MB
   are attached as images; any other dropped file becomes an `@` mention
   (relative to the chat's folder when inside it, else the quoted absolute

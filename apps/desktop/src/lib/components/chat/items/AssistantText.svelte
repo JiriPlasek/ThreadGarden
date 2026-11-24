@@ -2,7 +2,14 @@
   import type { ChatItem } from '@threadgarden/protocol';
   import { onDestroy } from 'svelte';
   import { highlightCached, needsHighlight, renderCached, renderMarkdown } from '#lib/markdown.js';
-  import { copyText, openExternal } from '#lib/native.js';
+  import { copyText, openExternal, openChatFile } from '#lib/native.js';
+
+  import { chatActions } from '../context';
+  import { fileLinkPath, isWebLink } from '#lib/chat-links.js';
+  import { copyMarkdownSelection } from '#lib/markdown-copy.js';
+
+  const actions = chatActions();
+  let linkError = $state<string | null>(null);
 
   /**
    * Assistant markdown. While streaming the text is re-rendered at most once per
@@ -94,13 +101,39 @@
     if (!link) return;
     e.preventDefault();
     const href = link.getAttribute('href');
-    if (open && href) openExternal(href).catch(() => {});
+    if (!open || !href) return;
+    linkError = null;
+    const follow = async (): Promise<void> => {
+      if (isWebLink(href)) {
+        await openExternal(href);
+        return;
+      }
+      const path = fileLinkPath(href);
+      if (!path) return;
+      const location = actions.fileLocation;
+      if (!location?.local)
+        throw new Error('This file belongs to another machine or has no local chat folder.');
+      await openChatFile(path, location.cwd);
+    };
+    void follow().catch((error: unknown) => {
+      linkError = error instanceof Error ? error.message : String(error);
+    });
   };
 </script>
 
 <!-- Clicks are delegated from the rendered links and buttons, which handle the keyboard themselves. -->
 <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-<div class="md text-sm" class:streaming={item.streaming} {onclick} {onauxclick}>
+<div
+  class="md text-sm"
+  class:streaming={item.streaming}
+  {onclick}
+  {onauxclick}
+  oncopy={copyMarkdownSelection}
+>
   <!-- Sanitized by DOMPurify (markdown.ts). -->
   {@html html}
 </div>
+
+{#if linkError}<p role="alert" class="text-destructive text-sm">
+    Could not open link: {linkError}
+  </p>{/if}

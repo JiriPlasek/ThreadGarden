@@ -764,6 +764,10 @@
           <MessageList
             bind:this={list}
             items={chat.items}
+            fileLocation={{
+              cwd: chat.summary?.cwd ?? '',
+              local: entry?.local === true && copiedAt === null,
+            }}
             {agentName}
             queued={chat.queuedMessages}
             onWithdraw={readOnly ? undefined : removeQueued}
