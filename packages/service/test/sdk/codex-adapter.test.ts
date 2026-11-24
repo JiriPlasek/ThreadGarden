@@ -489,6 +489,26 @@ describe('Codex provider', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(c.calls.filter((call) => call.method === 'turn/steer')).toHaveLength(0);
     expect(session.queued().map((m) => m.text)).toEqual(['/compact', 'after command']);
+    c.event('turn/completed', { turn: { id: 'turn-1', status: 'completed' } });
+    await vi.waitFor(() =>
+      expect(c.calls.some((call) => call.method === 'thread/compact/start')).toBe(true),
+    );
+    c.event('turn/started', { turn: { id: 'native-compact' } });
+    session.send({ text: 'during compaction' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(c.calls.filter((call) => call.method === 'turn/steer')).toHaveLength(0);
+    expect(session.queued().map((m) => m.text)).toEqual(['after command', 'during compaction']);
+    c.event('turn/completed', { turn: { id: 'native-compact', status: 'completed' } });
+    await vi.waitFor(() =>
+      expect(c.calls.filter((call) => call.method === 'turn/start')).toHaveLength(2),
+    );
+    await vi.waitFor(() =>
+      expect(c.calls.filter((call) => call.method === 'turn/steer')).toHaveLength(1),
+    );
+    expect(c.calls.find((call) => call.method === 'turn/steer')?.params).toMatchObject({
+      expectedTurnId: 'turn-2',
+      input: [{ type: 'text', text: 'during compaction', text_elements: [] }],
+    });
   });
 
   it('steers active turns and acknowledges input only after native acceptance', async () => {
