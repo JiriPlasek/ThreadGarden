@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -72,7 +72,9 @@ describe('cliMcpConfig', () => {
     expect(r!.argv).toEqual(addJsonArgs('sentry', 'local'));
     expect(JSON.parse(r!.stdin)).toEqual(config);
     expect(r!.argv.join(' ')).not.toContain('Bearer SECRET');
-    expect(path.resolve(r!.cwd).toLowerCase()).toBe(path.resolve(dir).toLowerCase());
+    // Real paths: on macOS the temp dir is under /var, a link to /private/var.
+    const real = (p: string): string => realpathSync.native(path.resolve(p)).toLowerCase();
+    expect(real(r!.cwd)).toBe(real(dir));
     expect(r!.env.TG_PROBE).toBe('probe-1');
   });
 
