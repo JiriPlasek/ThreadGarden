@@ -27,7 +27,7 @@
   - menu item `Remove`;
   - confirmation: title `Remove ‹name›?`, text `Claude Code on ‹machine› stops using it for ‹scope label›.`, button `Remove`;
   - the restart copy (only on the restart branch): `Added. It appears when this chat restarts between turns.` and `Removed. It disappears when this chat restarts between turns.`
-- Run pnpm with `--config.verify-deps-before-run=false`, and don't reinstall node_modules. `@threadgarden/protocol` resolves via aliases. For Rust: `PATH="/c/Users/drnek/.rustup/toolchains/1.99.1-x86_64-pc-windows-msvc/bin:$PATH"` and `cargo.exe`. Commits carry no Claude attribution. Stay on `feat/mcp-add`, never push.
+- Run pnpm with `--config.verify-deps-before-run=false`, and don't reinstall node_modules. `@threadgarden/protocol` resolves via aliases. For Rust: `PATH="$HOME/.rustup/toolchains/1.99.1-x86_64-pc-windows-msvc/bin:$PATH"` and `cargo.exe`. Commits carry no Claude attribution. Stay on `feat/mcp-add`, never push.
 
 ## Review Focus
 
