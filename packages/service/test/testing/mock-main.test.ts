@@ -1082,9 +1082,12 @@ describe('mock service: ! commands', () => {
   }, 30_000);
 
   it('n aborts sudo with exit 1, and Ctrl-C ends sleep with 130', async () => {
-    const { c, run, ended } = await open();
+    const { c, run, ended, output } = await open();
     const sudo = await run('sudo true');
+    // Type after each prompt, as a person does: the fake drops what comes before.
+    await eventually(async () => output(sudo.runId).includes('password for mock: '), 5_000);
     await c.call('shell.input', { runId: sudo.runId, data: 'pw\r' });
+    await eventually(async () => output(sudo.runId).includes('[Y/n] '), 5_000);
     await c.call('shell.input', { runId: sudo.runId, data: 'n\r' });
     expect(await ended(sudo.runId)).toMatchObject({ data: { exitCode: 1 } });
     const sleep = await run('sleep 30');

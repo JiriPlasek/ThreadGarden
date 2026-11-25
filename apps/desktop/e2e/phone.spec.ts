@@ -1,6 +1,6 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { FAKE_PLUG, FAKE_SWITCH_PASSWORD, FAKE_SWITCH_PORT } from './env';
-import { markAllSeen, phoneCall, remoteCall } from './helpers';
+import { chatRow, markAllSeen, phoneCall, remoteCall } from './helpers';
 
 /**
  * The phone layout (phone plan, Task 12) at a phone's viewport with touch,
@@ -43,7 +43,8 @@ const openProject = async (page: Page): Promise<void> => {
 /** From the places: chat `sessionId` of tg-cli. */
 const openChat = async (page: Page, sessionId: string): Promise<void> => {
   await openProject(page);
-  await row(page, sessionId).tap();
+  // The list draws only the rows in view: scroll to it, as chats other specs made sit above.
+  await (await chatRow(page, sessionId)).tap();
   await expect(composer(page)).toBeVisible();
 };
 
