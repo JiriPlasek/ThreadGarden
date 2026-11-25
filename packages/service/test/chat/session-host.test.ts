@@ -375,6 +375,14 @@ describe('SessionHost', () => {
     },
   );
 
+  it('as root, a chat with no remembered mode continues in Ask before acting, not a Bypass default', () => {
+    const ctx = setup({ canBypass: () => false });
+    ctx.settings.defaultPermissionMode = 'bypassPermissions';
+    ctx.host.ensureLive('old', '/proj');
+    expect(ctx.adapter.lastSession().options.permissionMode).toBe('default');
+    ctx.host.stopAll();
+  });
+
   it('as root, other modes start as asked and without a note', () => {
     const ctx = setup({ canBypass: () => false });
     ctx.settings.defaultPermissionMode = 'auto';

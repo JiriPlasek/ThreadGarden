@@ -17,7 +17,7 @@
 **Environment**
 - Agent environment: run pnpm as `pnpm --config.verify-deps-before-run=false …`, and never run a bare `pnpm install`.
 - To run one test file, run `pnpm --config.verify-deps-before-run=false exec vitest run <path>` from the package directory.
-- Rust: `PATH="/c/Users/drnek/.rustup/toolchains/1.99.1-x86_64-pc-windows-msvc/bin:$PATH" cargo.exe test`.
+- Rust: `PATH="$HOME/.rustup/toolchains/1.99.1-x86_64-pc-windows-msvc/bin:$PATH" cargo.exe test`.
 - Commits carry **no** Claude attribution lines.
 
 **Protocol**
