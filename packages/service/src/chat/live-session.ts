@@ -86,6 +86,7 @@ import type { ShellLine } from '../shell/shell-line.js';
 import { ECHOES, bashEntry } from '../shell/terminal-text.js';
 import { EventLog, type ChatEvent, type ChatEventDraft } from './event-log.js';
 import { Normalizer, deriveStatus } from './normalize.js';
+import { ScheduleTracker } from './schedule.js';
 import { TaskTracker, runningCount, taskEnded, taskRunning } from './tasks.js';
 
 /** Threadgarden's record of which sessions have a live process (Task 6 backs it with the db). */
@@ -368,6 +369,7 @@ export class LiveSession {
   private lastFlushAt = Number.NEGATIVE_INFINITY;
   // chat.tasks coalescing
   private readonly tracker: TaskTracker;
+  private readonly schedule: ScheduleTracker;
   private tasksDirty = false;
   private tasksTimer: unknown = undefined;
   private lastTasksFlushAt = Number.NEGATIVE_INFINITY;
@@ -388,6 +390,7 @@ export class LiveSession {
     this.timers = deps.timers ?? realTimers;
     this.normalizer = this.newNormalizer();
     this.tracker = new TaskTracker({ now: deps.now });
+    this.schedule = new ScheduleTracker(deps.now);
     this.chosen = {
       ...(deps.model === undefined ? {} : { model: deps.model }),
       ...(deps.effort === undefined ? {} : { effort: deps.effort }),
@@ -520,6 +523,15 @@ export class LiveSession {
    */
   get appending(): boolean {
     return this.appended.size > 0;
+  }
+
+  /**
+   * The process holds a `/loop` wake-up or a scheduled prompt: closing it would
+   * drop the timer, so it is neither reclaimed nor restarted, and its machine
+   * stays awake.
+   */
+  get scheduled(): boolean {
+    return this.session !== null && this.schedule.pending;
   }
 
   /** A `!` command is running in this chat. */
@@ -907,6 +919,7 @@ export class LiveSession {
     if (this.session !== session) return; // closed on purpose (end / pause / stop all)
     this.run?.kill(); // first, so nothing is appended
     this.session = null;
+    this.schedule.clear();
     this.cancelAllPending();
     this.forgetTasks();
     this.guard('registry.markEnded', () => this.deps.registry.markEnded(this.id));
@@ -929,6 +942,7 @@ export class LiveSession {
     const session = this.session;
     if (session) {
       this.session = null;
+      this.schedule.clear();
       this.cancelAllPending();
       this.forgetTasks();
       this.abandonQueued();
@@ -955,6 +969,7 @@ export class LiveSession {
       if (this.tracker.apply(m)) this.scheduleTasks();
     });
     this.guard('usage limits', () => this.noteLimits(m));
+    this.guard('schedule', () => this.schedule.apply(m));
     if (isMcpStatusMessage(m)) this.guard('onMcpChange', () => this.deps.onMcpChange?.(this.id));
     // Before the normalizer: a message the `result` lists as read goes before the result item.
     this.guard('message queue', () => this.noteQueue(m));

@@ -15,7 +15,13 @@ import { Router } from '../../src/server/router.js';
 import { startService } from '../../src/main.js';
 import { generateCorpus } from '../../src/testing/corpus.js';
 
-type S = { live: boolean; status: ChatStatus; runningAgents?: number; lastActivity?: number };
+type S = {
+  live: boolean;
+  status: ChatStatus;
+  runningAgents?: number;
+  scheduled?: boolean;
+  lastActivity?: number;
+};
 type E = { status?: string; state?: string };
 
 const MIN = 60_000;
@@ -37,6 +43,16 @@ const rig = (o: { minutes?: number | null } = {}) => {
 };
 
 describe('idle: what is busy', () => {
+  it('a live idle chat holding a /loop timer is busy', () => {
+    const { s, m } = rig();
+    s.sessions = [{ live: true, status: 'idle', scheduled: true }];
+    m.tick();
+    expect(m.busy).toBe(true);
+    s.sessions = [{ live: false, status: 'paused', scheduled: true }];
+    m.tick();
+    expect(m.busy).toBe(false);
+  });
+
   it('needsYou without running tasks is idle; working is busy; an external busy session is busy', () => {
     const { s, m } = rig();
     s.sessions = [{ live: true, status: 'needsYou' }];

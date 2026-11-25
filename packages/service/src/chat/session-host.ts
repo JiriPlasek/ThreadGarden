@@ -218,7 +218,7 @@ export class SessionHost {
    * Restarts a Claude chat's process between turns (same session id, as after
    * an idle reclaim, so its events, choices and permissions carry over), e.g.
    * so it drops a removed MCP server. True when it restarted now. While a turn,
-   * a permission request, a queued message or a running task is in progress it
+   * a permission request, a queued message, a running task or a `/loop` timer is in progress it
    * returns false and the restart waits: retried when that chat's turn ends and
    * on every reclaim tick (once the chat has been quiet for `RESTART_QUIET_MS`).
    * It also waits while the chat is being moved. Forgotten when the chat stops
@@ -244,6 +244,7 @@ export class SessionHost {
       s.status !== 'idle' ||
       s.pendingRequests().length > 0 ||
       s.runningTasks > 0 ||
+      s.scheduled ||
       this.deps.isMoving?.(sessionId) === true ||
       (quiet && last !== null && this.deps.now() - last < RESTART_QUIET_MS);
     if (busy) {
@@ -300,8 +301,9 @@ export class SessionHost {
 
   /**
    * Closes live chats idle for at least `idleReclaimMinutes` (never pinned,
-   * never waiting on the user, never with running background tasks or a
-   * running `!` command: closing the process would kill them, Ruling R29);
+   * never waiting on the user, never with running background tasks, a
+   * running `!` command or a `/loop` timer: closing the process would kill
+   * them, Ruling R29);
    * they become `paused`. Returns
    * how many. A failure for one session is reported and the pass continues.
    */
@@ -315,7 +317,7 @@ export class SessionHost {
         if (!s.live || s.status !== 'idle' || s.idleSince === null) continue;
         if (now - s.idleSince < limit) continue;
         if (s.pendingRequests().length > 0 || this.deps.isPinned(id)) continue;
-        if (s.runningTasks > 0) continue;
+        if (s.runningTasks > 0 || s.scheduled) continue;
         s.pause();
         count++;
       } catch (err) {
@@ -372,12 +374,15 @@ export class SessionHost {
     runningTasks?: number;
     /** `runningTasks` without background shells. */
     runningAgents?: number;
+    /** The process holds a `/loop` wake-up or a scheduled prompt. */
+    scheduled?: true;
   }[] {
     return [...this.sessions.values()].map((s) => {
       const waitingFor = s.waitingFor();
       const lastActivity = s.lastActivity;
       const runningTasks = s.live ? s.runningTasks : 0;
       const runningAgents = s.live ? s.runningAgents : 0;
+      const scheduled = s.live && s.scheduled;
       return {
         sessionId: s.sessionId,
         cwd: s.cwd,
@@ -387,6 +392,7 @@ export class SessionHost {
         ...(lastActivity === null ? {} : { lastActivity }),
         ...(runningTasks > 0 ? { runningTasks } : {}),
         ...(runningAgents > 0 ? { runningAgents } : {}),
+        ...(scheduled ? { scheduled: true as const } : {}),
       };
     });
   }

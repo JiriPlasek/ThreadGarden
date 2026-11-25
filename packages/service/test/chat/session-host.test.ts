@@ -1,3 +1,4 @@
+import { WAKE_GRACE_MS } from '../../src/chat/schedule.js';
 import { describe, expect, it } from 'vitest';
 import {
   settingsDefaults,
@@ -187,6 +188,78 @@ describe('SessionHost', () => {
     expect(host.reclaimIdle(timers.now() + 60 * MIN)).toBe(1);
     expect(fake.closed).toBe(true);
     expect(host.get(s.sessionId)?.status).toBe('paused');
+  });
+
+  it('reclaimIdle and restartWhenIdle spare a chat holding a /loop wake-up', async () => {
+    const ctx = setup();
+    const { host, timers } = ctx;
+    const { s, fake } = await idleChat(ctx);
+    const wake = (id: string, input: unknown, out: unknown) => {
+      fake.emit({
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'tool_use', id, name: 'ScheduleWakeup', input }],
+        },
+        parent_tool_use_id: null,
+      } as never);
+      fake.emit({
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [{ type: 'tool_result', tool_use_id: id, content: 'ok' }],
+        },
+        parent_tool_use_id: null,
+        tool_use_result: out,
+      } as never);
+    };
+    wake(
+      'w1',
+      { delaySeconds: 3600, prompt: '/loop check' },
+      { scheduledFor: timers.now() + 60 * MIN },
+    );
+    fake.emit(result('r-wake'));
+    await settle();
+    expect(s.status).toBe('idle');
+    expect(s.scheduled).toBe(true);
+    expect(host.list().find((c) => c.sessionId === s.sessionId)?.scheduled).toBe(true);
+
+    expect(host.reclaimIdle(timers.now() + 30 * MIN)).toBe(0);
+    expect(host.restartWhenIdle(s.sessionId)).toBe(false);
+    expect(fake.closed).toBe(false);
+
+    // The loop stops: the waiting restart runs when that turn ends.
+    wake('w2', { stop: true }, { stopped: true, cancelledWakeups: 1 });
+    await settle();
+    expect(s.scheduled).toBe(false);
+    expect(fake.closed).toBe(false);
+    fake.emit(result('r-stop'));
+    await settle();
+    expect(fake.closed).toBe(true);
+    expect(s.scheduled).toBe(false);
+  });
+
+  it('reclaimIdle closes a chat once its /loop wake-up is long past', async () => {
+    const ctx = setup();
+    const { host, timers } = ctx;
+    const { s, fake } = await idleChat(ctx);
+    fake.emit({
+      type: 'assistant',
+      message: {
+        role: 'assistant',
+        content: [
+          { type: 'tool_use', id: 'w1', name: 'ScheduleWakeup', input: { delaySeconds: 60 } },
+        ],
+      },
+      parent_tool_use_id: null,
+    } as never);
+    fake.emit(result('r-wake'));
+    await settle();
+    expect(s.scheduled).toBe(true);
+    timers.advance(60_000 + WAKE_GRACE_MS);
+    expect(s.scheduled).toBe(false);
+    expect(host.reclaimIdle(timers.now() + 60 * MIN)).toBe(1);
+    expect(fake.closed).toBe(true);
   });
 
   it('reclaimIdle never closes needsYou or pinned', async () => {
