@@ -673,6 +673,22 @@ describe('SessionHost: ! commands', () => {
     ctx.host.dispose();
   });
 
+  it('restartWhenIdle right after a command waits until its entries can be saved', async () => {
+    const ctx = shellSetup();
+    ctx.host.start();
+    const { s, fake } = await idleChat(ctx);
+    s.startCommand('echo hi', SIZE);
+    ctx.pty.last().exit(0);
+    expect(s.appending).toBe(true);
+    expect(ctx.host.restartWhenIdle(s.sessionId)).toBe(false);
+    expect(fake.closed).toBe(false);
+    // No answer ever comes: the tick restarts it after the quiet time.
+    ctx.timers.advance(MIN);
+    ctx.timers.advance(MIN);
+    expect(fake.closed).toBe(true);
+    ctx.host.dispose();
+  });
+
   it('commandRun finds a run by id', async () => {
     const ctx = shellSetup();
     const { s } = await idleChat(ctx, '/a');

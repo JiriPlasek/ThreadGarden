@@ -514,6 +514,14 @@ export class LiveSession {
     return agents + (this.runningCommand ? 1 : 0);
   }
 
+  /**
+   * A finished `!` command's entries were sent and Claude Code hasn't answered
+   * them yet, so they may not be saved to the chat.
+   */
+  get appending(): boolean {
+    return this.appended.size > 0;
+  }
+
   /** A `!` command is running in this chat. */
   get runningCommand(): boolean {
     return this.run?.running === true;

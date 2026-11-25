@@ -236,13 +236,16 @@ export class SessionHost {
       return false;
     }
     const last = s.lastActivity;
+    // Entries Claude Code hasn't answered yet may not be saved: wait for quiet,
+    // so a lost answer can't hold the restart off for good.
+    const quiet = needQuiet || s.appending;
     // A queued message keeps the chat `working` until Claude has answered it.
     const busy =
       s.status !== 'idle' ||
       s.pendingRequests().length > 0 ||
       s.runningTasks > 0 ||
       this.deps.isMoving?.(sessionId) === true ||
-      (needQuiet && last !== null && this.deps.now() - last < RESTART_QUIET_MS);
+      (quiet && last !== null && this.deps.now() - last < RESTART_QUIET_MS);
     if (busy) {
       this.restartDue.add(sessionId);
       return false;
