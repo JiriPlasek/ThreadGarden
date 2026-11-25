@@ -224,6 +224,7 @@ export const chatRow = async (page: Page, sessionId: string): Promise<Locator> =
       { message: `chat list row ${sessionId}`, intervals: [50] },
     )
     .toBe(true);
-  await row.scrollIntoViewIfNeeded();
+  // The list can redraw between finding the row and scrolling to it: try again.
+  await expect(async () => row.scrollIntoViewIfNeeded({ timeout: 2_000 })).toPass();
   return row;
 };
