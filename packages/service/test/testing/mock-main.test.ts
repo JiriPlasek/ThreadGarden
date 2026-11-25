@@ -384,6 +384,69 @@ describe('mock service: MCP servers in the chat (protocol 12)', () => {
     await eventually(async () => (await statusOf('mock-oauth')) === 'connected', 5_000);
   });
 
+  describe('adding and removing servers', () => {
+    const http = { type: 'http', url: 'https://example.com/mcp' };
+    const add = (c: TestClient, sessionId: string, name: string, scope = 'local') =>
+      c.call('mcp.add', { sessionId, scope, name, config: http });
+
+    it('adding a server lists it in this chat', async () => {
+      const { c, sessionId, list } = await open(await start(), '/work/other');
+      await add(c, sessionId, 'extra');
+      const added = (await list()).servers.find((s) => s.name === 'extra');
+      expect(added).toMatchObject({ status: 'needs-auth', source: 'local' });
+    });
+
+    it('a user server shows in every chat, a local one only in its folder', async () => {
+      const { c, sessionId } = await open(await start(), '/work/other');
+      await add(c, sessionId, 'mine-everywhere', 'user');
+      await add(c, sessionId, 'mine-here');
+      const second = await c.call<{ sessionId: string }>('chat.create', {
+        cwd: '/work/elsewhere',
+        text: 'hi',
+      });
+      await c.waitFor(chatStatus(second.sessionId, 'idle'), 10_000);
+      const names = (await c.call<Listed>('mcp.list', { sessionId: second.sessionId })).servers.map(
+        (s) => s.name,
+      );
+      expect(names).toContain('mine-everywhere');
+      expect(names).not.toContain('mine-here');
+    });
+
+    it("a taken name is refused in Claude Code's words", async () => {
+      const { c, sessionId } = await open(await start(), '/work/other');
+      await expect(add(c, sessionId, 'github', 'user')).rejects.toMatchObject({
+        message: expect.stringContaining('MCP server github already exists in user config'),
+      });
+      await expect(add(c, sessionId, 'mock-off')).rejects.toMatchObject({
+        message: expect.stringContaining('MCP server mock-off already exists in local config'),
+      });
+    });
+
+    it('removing mock-off takes it off the list; an unknown name is refused', async () => {
+      const { c, sessionId, statusOf } = await open(await start(), '/work/other');
+      await c.call('mcp.remove', { sessionId, scope: 'local', name: 'mock-off' });
+      expect(await statusOf('mock-off')).toBeUndefined();
+      await expect(
+        c.call('mcp.remove', { sessionId, scope: 'user', name: 'nope' }),
+      ).rejects.toMatchObject({
+        message: expect.stringContaining('No MCP server named "nope" in user scope'),
+      });
+      await add(c, sessionId, 'extra');
+      await c.call('mcp.remove', { sessionId, scope: 'local', name: 'extra' });
+      expect(await statusOf('extra')).toBeUndefined();
+    });
+
+    it('mock.mcpReset forgets added and removed servers', async () => {
+      const { c, sessionId, statusOf } = await open(await start(), '/work/other');
+      await add(c, sessionId, 'extra');
+      await c.call('mcp.remove', { sessionId, scope: 'user', name: 'github' });
+      expect(await statusOf('github')).toBeUndefined();
+      await c.call('mock.mcpReset', {});
+      expect(await statusOf('extra')).toBeUndefined();
+      expect(await statusOf('github')).toBe('connected');
+    });
+  });
+
   it('mock.mcpReset forgets approvals', async () => {
     const { c, sessionId, list, statusOf } = await open(await start(), '/work/proj-0');
     await c.call('mcp.approve', { sessionId, name: 'mock-etoro' });

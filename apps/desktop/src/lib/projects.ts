@@ -4,6 +4,7 @@
  */
 import {
   MCP_CAPABILITY,
+  MCP_CONFIG_CAPABILITY,
   MOVE_CAPABILITY,
   PROJECTS_CAPABILITY,
   SHELL_CAPABILITY,
@@ -44,6 +45,10 @@ export const supportsMove = (m: MachineEntry | undefined): boolean =>
 /** The machine's service can list and manage a chat's MCP servers. */
 export const supportsMcp = (m: MachineEntry | undefined): boolean =>
   !!m?.info?.capabilities.includes(MCP_CAPABILITY);
+
+/** The machine's service can add and remove MCP servers (not only list them). */
+export const supportsMcpConfig = (m: MachineEntry | undefined): boolean =>
+  !!m?.info?.capabilities.includes(MCP_CONFIG_CAPABILITY);
 
 /** The machine's service can run `!` commands in a chat. */
 export const supportsShell = (m: MachineEntry | undefined): boolean =>

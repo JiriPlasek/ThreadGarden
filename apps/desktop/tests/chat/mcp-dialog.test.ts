@@ -30,6 +30,12 @@ const fakeMcp = (servers: McpServer[], over: Record<string, unknown> = {}) => ({
   signIn: vi.fn<(name: string) => Promise<string | null>>(async () => 'https://auth.example/start'),
   submitCallback: vi.fn<(name: string, url: string) => Promise<void>>(async () => {}),
   act: vi.fn<(name: string, action: string) => Promise<void>>(async () => {}),
+  add: vi.fn<
+    (name: string, scope: string, config: unknown) => Promise<{ restartPending: boolean }>
+  >(async () => ({ restartPending: false })),
+  remove: vi.fn<(name: string, scope: string) => Promise<{ restartPending: boolean }>>(
+    async () => ({ restartPending: false }),
+  ),
   ...over,
 });
 
@@ -38,6 +44,7 @@ const show = (mcp: ReturnType<typeof fakeMcp>, over: Record<string, unknown> = {
     open: true,
     mcp: mcp as unknown as ChatMcp,
     live: true,
+    canConfigure: true,
     remote: false,
     machineName: 'Ubuntu PC',
     onWake: async () => {},
@@ -234,5 +241,169 @@ describe('McpServersDialog', () => {
     await userEvent.click(screen.getByRole('button', { name: 'More for files' }));
     await userEvent.click(await screen.findByText('Turn off in this project'));
     expect(mcp.act).toHaveBeenCalledWith('files', 'disable');
+  });
+
+  it('Add server opens the form and an add returns to the list', async () => {
+    const mcp = fakeMcp([server({ name: 'files' })]);
+    show(mcp);
+    await userEvent.click(screen.getByRole('button', { name: '+ Add server' }));
+    expect(screen.getByText('Add MCP server')).toBeTruthy();
+    expect(screen.queryAllByTestId('mcp-row')).toHaveLength(0);
+    await userEvent.type(screen.getByLabelText('Name'), 'sentry');
+    await userEvent.type(screen.getByLabelText('URL'), 'https://mcp.example/mcp');
+    await userEvent.click(screen.getByRole('button', { name: 'Add' }));
+    await waitFor(() => expect(screen.getAllByTestId('mcp-row')).toHaveLength(1));
+    expect(mcp.add).toHaveBeenCalledWith('sentry', 'local', {
+      type: 'http',
+      url: 'https://mcp.example/mcp',
+    });
+    expect(screen.queryByText('Add MCP server')).toBeNull();
+    expect(screen.queryByText(/^Added\./)).toBeNull();
+  });
+
+  it('+ Add server sits in the body, not in the title row', () => {
+    show(fakeMcp([server()]));
+    const add = screen.getByRole('button', { name: '+ Add server' });
+    const title = screen.getByText('MCP servers (this chat)');
+    expect(title.parentElement?.contains(add)).toBe(false);
+    expect(title.contains(add)).toBe(false);
+  });
+
+  it("no Add server without mcp-config or when the chat isn't running", () => {
+    const { unmount } = show(fakeMcp([server()]), { canConfigure: false });
+    expect(screen.queryByRole('button', { name: '+ Add server' })).toBeNull();
+    unmount();
+    show(fakeMcp([server()]), { live: false });
+    expect(screen.queryByRole('button', { name: '+ Add server' })).toBeNull();
+  });
+
+  it('restartPending says when the server appears', async () => {
+    const mcp = fakeMcp([server()], {
+      add: vi.fn(async () => ({ restartPending: true })),
+    });
+    show(mcp);
+    await userEvent.click(screen.getByRole('button', { name: '+ Add server' }));
+    await userEvent.type(screen.getByLabelText('Name'), 'sentry');
+    await userEvent.type(screen.getByLabelText('URL'), 'https://mcp.example/mcp');
+    await userEvent.click(screen.getByRole('button', { name: 'Add' }));
+    expect(
+      await screen.findByText('Added. It appears when this chat restarts between turns.'),
+    ).toBeTruthy();
+    expect(screen.getAllByTestId('mcp-row')).toHaveLength(1);
+  });
+
+  it('Remove is in the menu for local, user and project servers only', async () => {
+    const mcp = fakeMcp([
+      server({ name: 'p', source: 'project' }),
+      server({ name: 'u', source: 'user' }),
+      server({ name: 'l', source: 'local' }),
+      server({ name: 'c', source: 'claudeai', claudeAi: true }),
+      server({ name: 'x', source: 'plugin:foo' }),
+    ]);
+    show(mcp);
+    for (const name of ['p', 'u', 'l']) {
+      await userEvent.click(screen.getByRole('button', { name: `More for ${name}` }));
+      expect(await screen.findByText('Remove')).toBeTruthy();
+      await userEvent.keyboard('{Escape}');
+      await waitFor(() => expect(screen.queryByText('Remove')).toBeNull());
+    }
+    for (const name of ['c', 'x']) {
+      await userEvent.click(screen.getByRole('button', { name: `More for ${name}` }));
+      await screen.findByText('Reconnect');
+      expect(screen.queryByText('Remove')).toBeNull();
+      await userEvent.keyboard('{Escape}');
+      await waitFor(() => expect(screen.queryByText('Reconnect')).toBeNull());
+    }
+  });
+
+  it('Remove asks first, naming the server and the scope, then removes from that scope', async () => {
+    const mcp = fakeMcp([server({ name: 'a', source: 'user' })]);
+    show(mcp);
+    await userEvent.click(screen.getByRole('button', { name: 'More for a' }));
+    await userEvent.click(await screen.findByText('Remove'));
+    expect(await screen.findByText('Remove a?')).toBeTruthy();
+    expect(
+      screen.getByText('Claude Code on Ubuntu PC stops using it for Me, every project.'),
+    ).toBeTruthy();
+    expect(mcp.remove).not.toHaveBeenCalled();
+    const confirm = within(screen.getByRole('alertdialog')).getByRole('button', {
+      name: 'Remove',
+    });
+    await userEvent.click(confirm);
+    await waitFor(() => expect(mcp.remove).toHaveBeenCalledWith('a', 'user'));
+    expect(screen.queryByText(/^Removed\./)).toBeNull();
+  });
+
+  it('a removal that needs a restart says so', async () => {
+    const mcp = fakeMcp([server({ name: 'a', source: 'user' })], {
+      remove: vi.fn(async () => ({ restartPending: true })),
+    });
+    show(mcp);
+    await userEvent.click(screen.getByRole('button', { name: 'More for a' }));
+    await userEvent.click(await screen.findByText('Remove'));
+    await userEvent.click(
+      within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Remove' }),
+    );
+    expect(
+      await screen.findByText('Removed. It disappears when this chat restarts between turns.'),
+    ).toBeTruthy();
+  });
+
+  it('the restart lines go once the chat has restarted', async () => {
+    const mcp = fakeMcp([server({ name: 'a', source: 'user' })], {
+      remove: vi.fn(async () => ({ restartPending: true })),
+      add: vi.fn(async () => ({ restartPending: true })),
+    });
+    const { rerender } = show(mcp);
+    await userEvent.click(screen.getByRole('button', { name: 'More for a' }));
+    await userEvent.click(await screen.findByText('Remove'));
+    await userEvent.click(
+      within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Remove' }),
+    );
+    const removed = 'Removed. It disappears when this chat restarts between turns.';
+    await screen.findByText(removed);
+    await userEvent.click(screen.getByRole('button', { name: '+ Add server' }));
+    await userEvent.type(screen.getByLabelText('Name'), 'sentry');
+    await userEvent.type(screen.getByLabelText('URL'), 'https://mcp.example/mcp');
+    await userEvent.click(screen.getByRole('button', { name: 'Add' }));
+    const added = 'Added. It appears when this chat restarts between turns.';
+    await screen.findByText(added);
+    // The chat restarted: "a" is gone, "sentry" is listed.
+    await rerender({
+      mcp: fakeMcp([server({ name: 'sentry', source: 'user' })]) as unknown as ChatMcp,
+    });
+    await waitFor(() => expect(screen.queryByText(removed)).toBeNull());
+    expect(screen.queryByText(added)).toBeNull();
+  });
+
+  it('confirming Remove keeps the MCP servers dialog open', async () => {
+    const mcp = fakeMcp([server({ name: 'a', source: 'user' })]);
+    show(mcp);
+    await userEvent.click(screen.getByRole('button', { name: 'More for a' }));
+    await userEvent.click(await screen.findByText('Remove'));
+    await userEvent.click(
+      within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Remove' }),
+    );
+    await waitFor(() => expect(mcp.remove).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(screen.getByText('MCP servers (this chat)')).toBeTruthy();
+    expect(screen.getByRole('button', { name: '+ Add server' })).toBeTruthy();
+  });
+
+  it("a refused remove shows Claude Code's words", async () => {
+    const mcp = fakeMcp([server({ name: 'a', source: 'user' })], {
+      remove: vi.fn(async () => {
+        throw new Error('No MCP server named "a" in user scope');
+      }),
+    });
+    show(mcp);
+    await userEvent.click(screen.getByRole('button', { name: 'More for a' }));
+    await userEvent.click(await screen.findByText('Remove'));
+    await userEvent.click(
+      within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Remove' }),
+    );
+    expect((await within(screen.getByRole('alertdialog')).findByRole('alert')).textContent).toBe(
+      'No MCP server named "a" in user scope',
+    );
   });
 });

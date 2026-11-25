@@ -25,7 +25,7 @@
   import { rowPx } from '#lib/interface-scale.js';
   import { ariaKeyShortcuts, formatCombos, shortcut } from '#lib/shortcuts.js';
   import { retryOldCopy } from '#lib/move/move-chat.svelte.js';
-  import { supportsMcp, supportsShell } from '#lib/projects.js';
+  import { supportsMcp, supportsMcpConfig, supportsShell } from '#lib/projects.js';
   import { copyText } from '#lib/native.js';
   import { RequestError } from '#lib/service/client.js';
   import type { ResumeCheck } from '#lib/state/chats.svelte.js';
@@ -1283,6 +1283,7 @@
     bind:open={mcpOpen}
     {mcp}
     live={chat?.ownedLive === true}
+    canConfigure={supportsMcpConfig(entry)}
     remote={!entry?.local}
     {machineName}
     onWake={wakeChat}

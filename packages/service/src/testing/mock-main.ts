@@ -111,6 +111,13 @@
  * `mock.mcpReset` (local callers only) puts every chat's servers and the
  * approvals back to the start.
  *
+ * Adding and removing servers (`mcp.add` / `mcp.remove`): `MockMcpConfig` stands in for Claude
+ * Code's CLI, with its texts. An added server shows in the chat at once (`user` in every chat,
+ * `local` and `project` in that folder): http is Needs sign-in, stdio is Connected. A removed one
+ * is gone at once too, for `github` (user), `mock-off` (local) and `mock-etoro` (project) as well;
+ * the chat's process restarts between turns and a new one reads the same list. `mock.mcpReset`
+ * forgets every add and remove.
+ *
  * `!` commands (protocol 13): both mocks run them in a fake terminal
  * (`mock-pty.ts`) scripted by the command: `sudo …` asks for a password
  * (never echoed), then `Do you want to continue? [Y/n]`, then draws a coloured
@@ -131,6 +138,8 @@ import {
   UpdateFailureSchema,
   VERSION_PATTERN,
   type GitState,
+  type McpScope,
+  type McpServerConfig,
   type UpdateFailure,
   type UpdateStage,
   type UpdateStartResult,
@@ -146,6 +155,7 @@ import {
   normalisePairingCode,
 } from '../machine/devices.js';
 import { startService, type ServiceHandle } from '../main.js';
+import type { McpConfig } from '../mcp/config.js';
 import type { McpProjectFiles } from '../mcp/project-files.js';
 import { CREATE_IN_KEY } from '../projects/maker.js';
 import { mockPty } from './mock-pty.js';
@@ -328,6 +338,90 @@ class MockMcpFiles implements McpProjectFiles {
   }
 }
 
+/** Where the CLI keeps a server of each scope, as a server's `source` says it. */
+const SOURCE_OF_SCOPE = { local: 'local', user: 'user', project: 'project' } as const;
+/** Claude Code's words for a scope in a refusal (spike results). */
+const SCOPE_PLACE = { local: 'local config', user: 'user config', project: '.mcp.json' } as const;
+const NOT_FOUND_PLACE = { local: 'local scope', user: 'user scope', project: '.mcp.json' } as const;
+const DUPLICATE_ERROR = (name: string, scope: McpScope): string =>
+  `MCP server ${name} already exists in ${SCOPE_PLACE[scope]}`;
+const NOT_FOUND_ERROR = (name: string, scope: McpScope): string =>
+  `No MCP server named "${name}" in ${NOT_FOUND_PLACE[scope]}`;
+
+const SCOPES = ['local', 'user', 'project'] as const;
+
+type MockEntry = { cwd: string; scope: McpScope; name: string };
+
+/**
+ * The mock's fake `claude mcp add-json` / `remove`: in memory, until `mock.mcpReset`. Sessions
+ * read it, so a chat's new process sees the same servers as the old one.
+ */
+class MockMcpConfig implements McpConfig {
+  private added: (MockEntry & { type: 'http' | 'stdio' })[] = [];
+  private hidden: MockEntry[] = [];
+
+  /** Whether an entry of `scope` is seen from `cwd`: `user` by every chat, the rest by its folder. */
+  private seen(e: MockEntry, cwd: string, scope: McpScope): boolean {
+    return e.scope === scope && (scope === 'user' || e.cwd === cwd);
+  }
+
+  /** Fixed servers of `scope` that the chat in `cwd` has, not removed. */
+  private fixedNames(cwd: string, scope: McpScope): string[] {
+    const names = [...startServers().values()]
+      .filter((s) => s.source === SOURCE_OF_SCOPE[scope])
+      .map((s) => s.name);
+    if (scope === 'project' && hasProjectServer(cwd)) names.push(MOCK_PROJECT_SERVER);
+    return names.filter((n) => !this.isHidden(cwd, scope, n));
+  }
+
+  isHidden(cwd: string, scope: McpScope, name: string): boolean {
+    return this.hidden.some((h) => this.seen(h, cwd, scope) && h.name === name);
+  }
+
+  /** Servers added for the chat in `cwd`, as Claude Code lists them. */
+  addedFor(cwd: string): McpServerStatus[] {
+    return this.added
+      .filter((a) => this.seen(a, cwd, a.scope))
+      .map(
+        (a) =>
+          ({
+            name: a.name,
+            status: a.type === 'http' ? 'needs-auth' : 'connected',
+            source: SOURCE_OF_SCOPE[a.scope],
+            scope: SOURCE_OF_SCOPE[a.scope],
+            config: { type: a.type },
+          }) as McpServerStatus,
+      );
+  }
+
+  async add(o: {
+    cwd: string;
+    scope: McpScope;
+    name: string;
+    config: McpServerConfig;
+  }): Promise<void> {
+    const taken =
+      this.fixedNames(o.cwd, o.scope).includes(o.name) ||
+      this.added.some((a) => this.seen(a, o.cwd, o.scope) && a.name === o.name);
+    if (taken) throw new Error(DUPLICATE_ERROR(o.name, o.scope));
+    this.hidden = this.hidden.filter((h) => !(this.seen(h, o.cwd, o.scope) && h.name === o.name));
+    this.added.push({ cwd: o.cwd, scope: o.scope, name: o.name, type: o.config.type });
+  }
+
+  async remove(o: { cwd: string; scope: McpScope; name: string }): Promise<void> {
+    const i = this.added.findIndex((a) => this.seen(a, o.cwd, o.scope) && a.name === o.name);
+    if (i >= 0) this.added.splice(i, 1);
+    else if (this.fixedNames(o.cwd, o.scope).includes(o.name)) {
+      this.hidden.push({ cwd: o.cwd, scope: o.scope, name: o.name });
+    } else throw new Error(NOT_FOUND_ERROR(o.name, o.scope));
+  }
+
+  reset(): void {
+    this.added = [];
+    this.hidden = [];
+  }
+}
+
 /** A fake Claude Code session that answers every message with the script above. */
 class ScriptedSession extends FakeSession {
   /** This chat's fake MCP servers, by name (`mock-etoro` joins once reconnected). */
@@ -338,9 +432,38 @@ class ScriptedSession extends FakeSession {
   private readonly forgotten = new Set<string>();
   private readonly mcpTimers = new Set<ReturnType<typeof setTimeout>>();
 
+  /** Names in `servers` that came from `MockMcpConfig` (added through `mcp.add`). */
+  private readonly addedNames = new Set<string>();
+
+  /** Brings `servers` in line with the mock's added and removed servers (see `MockMcpConfig`). */
+  private sync(): void {
+    const cwd = this.options.cwd ?? '';
+    const config = this.adapter.mcpConfig;
+    const added = config.addedFor(cwd);
+    for (const [name, server] of [...this.servers]) {
+      const scope = SCOPES.find((sc) => SOURCE_OF_SCOPE[sc] === server.source);
+      const gone = this.addedNames.has(name)
+        ? !added.some((a) => a.name === name)
+        : scope !== undefined && config.isHidden(cwd, scope, name);
+      if (gone) {
+        this.servers.delete(name);
+        this.addedNames.delete(name);
+      }
+    }
+    for (const a of added) {
+      if (this.servers.has(a.name)) continue;
+      this.servers.set(a.name, a);
+      this.addedNames.add(a.name);
+    }
+  }
+
   override readonly mcp: McpControls = {
-    status: async () => [...this.servers.values()].map((s) => ({ ...s })),
+    status: async () => {
+      this.sync();
+      return [...this.servers.values()].map((s) => ({ ...s }));
+    },
     reconnect: async (name) => {
+      this.sync();
       // As Claude Code: a server that needs sign-in only comes up once its token is saved.
       if (this.servers.get(name)?.status === 'needs-auth' && !this.tokens.has(name)) return;
       // A connected server whose token was forgotten drops to Needs sign-in on reconnect.
@@ -351,11 +474,13 @@ class ScriptedSession extends FakeSession {
       this.connecting(name);
     },
     toggle: async (name, enabled) => {
+      this.sync();
       if (!this.servers.has(name)) throw new Error(`No MCP server named ${name}`);
       if (enabled) this.connecting(name);
       else this.setMcp(name, { status: 'disabled' });
     },
     authenticate: async (name) => {
+      this.sync();
       const server = this.servers.get(name);
       if (!server) throw new Error(`No MCP server named ${name}`);
       // On This PC's mock the sign-in finishes by itself (the token is saved) but, as in Claude
@@ -371,11 +496,13 @@ class ScriptedSession extends FakeSession {
       };
     },
     submitCallback: async (name, url) => {
+      this.sync();
       if (!this.servers.has(name)) throw new Error(`No MCP server named ${name}`);
       if (!/[?&]code=/.test(url)) throw new Error('Missing authorization code');
       this.tokens.add(name);
     },
     clearAuth: async (name) => {
+      this.sync();
       if (!this.servers.has(name)) throw new Error(`No MCP server named ${name}`);
       // As Claude Code: the token goes, the live connection stays until a reconnect.
       this.tokens.delete(name);
@@ -388,6 +515,7 @@ class ScriptedSession extends FakeSession {
     for (const t of this.mcpTimers) clearTimeout(t);
     this.mcpTimers.clear();
     this.servers = startServers();
+    this.addedNames.clear();
     this.tokens.clear();
     this.forgotten.clear();
   }
@@ -1019,6 +1147,9 @@ class ScriptedAdapter extends FakeAdapter {
   /** Until when the mock account is refused ("limit"); 0 when it is not. */
   limitedUntil = 0;
 
+  /** The fake `claude mcp add-json` / `remove`; sessions read it, so a restarted chat agrees. */
+  readonly mcpConfig = new MockMcpConfig();
+
   /** The mock service's port (the fake sign-in link points at it); set once it listens. */
   port = 0;
 
@@ -1032,6 +1163,7 @@ class ScriptedAdapter extends FakeAdapter {
 
   /** `mock.mcpReset`: every chat's fake servers back to the start. */
   resetMcp(): void {
+    this.mcpConfig.reset();
     for (const s of this.started) if (s instanceof ScriptedSession) s.resetMcp();
   }
 
@@ -1728,6 +1860,7 @@ export const startMockService = async (o: MockOptions = {}): Promise<MockService
       moveGit: mockMoveGit,
       mcpFiles,
       shell: { pty: mockPty, line: (command) => ({ file: 'mock-sh', args: ['-c', command] }) },
+      mcpConfig: adapter.mcpConfig,
       projectIconSearch: async (projectPath) => {
         const dir = iconDirs.get(projectPath.replace(/\\/g, '/'));
         return dir ? findProjectIcon(dir) : null;

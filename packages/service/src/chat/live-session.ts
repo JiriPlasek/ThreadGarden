@@ -487,6 +487,11 @@ export class LiveSession {
     return { ...this.chosen };
   }
 
+  /** The store a chat moved here lives in; undefined for a local chat. */
+  get sessionStore(): SessionStore | undefined {
+    return this.deps.sessionStore;
+  }
+
   /** The current process's tasks (subagents, background shells, …). */
   tasks(): ChatTask[] {
     return this.tracker.list();

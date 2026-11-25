@@ -425,6 +425,8 @@ pub const REFUSED: &[&str] = &[
     "mcp.signIn",
     "mcp.submitCallback",
     "mcp.act",
+    "mcp.add",
+    "mcp.remove",
     "chat.wake",
     // A chat's `!` commands: the phone's own core has no chats.
     "shell.start",

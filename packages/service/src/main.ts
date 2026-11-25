@@ -7,6 +7,7 @@ import {
   AWAY_CAPABILITY,
   CAPABILITIES,
   MCP_CAPABILITY,
+  MCP_CONFIG_CAPABILITY,
   POWER_CAPABILITY,
   SHELL_CAPABILITY,
   PROTOCOL_VERSION,
@@ -58,6 +59,7 @@ import { registerAwayHandlers } from './server/handlers/away.js';
 import { registerCopyHandlers } from './server/handlers/copies.js';
 import { registerChatHandlers } from './server/handlers/chat.js';
 import { registerMcpHandlers } from './server/handlers/mcp.js';
+import { cliMcpConfig, type McpConfig } from './mcp/config.js';
 import { registerShellHandlers } from './server/handlers/shell.js';
 import { loadPty, type PtyFactory } from './shell/pty.js';
 import { shellLine, type ShellLine } from './shell/shell-line.js';
@@ -172,6 +174,8 @@ export type StartOptions = {
    * program that runs a command (default: Claude Code's own shell; tests inject a fake).
    */
   shell?: { pty: PtyFactory | null; line?: (command: string) => ShellLine };
+  /** Adds and removes MCP servers (Claude Code's CLI). Default: the real CLI. */
+  mcpConfig?: McpConfig;
   /** Runs `git` and `gh` for New project and Clone (default: the real ones); tests inject a fake. */
   projectTools?: Tools;
   /**
@@ -398,11 +402,18 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
             ...CAPABILITIES,
             AWAY_CAPABILITY,
             MCP_CAPABILITY,
+            MCP_CONFIG_CAPABILITY,
             ...shellCapability,
             ...(platform === 'linux' ? [POWER_CAPABILITY] : []),
             ...(canUpdate() ? [UPDATE_CAPABILITY] : []),
           ]
-        : [...CAPABILITIES, AWAY_CAPABILITY, MCP_CAPABILITY, ...shellCapability],
+        : [
+            ...CAPABILITIES,
+            AWAY_CAPABILITY,
+            MCP_CAPABILITY,
+            MCP_CONFIG_CAPABILITY,
+            ...shellCapability,
+          ],
       // The platform stays linux, as its paths are; the app shows it as Windows (WSL).
       ...(wsl ? { host: 'wsl' as const } : {}),
     };
@@ -969,6 +980,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         now: clock,
         ...(opts.sessionTimers ? { timers: opts.sessionTimers } : {}),
         isPinned: (id) => opened.isSessionPinned(id),
+        isMoving: (id) => moveLocks.isLocked(id),
         getSettings: () => opened.getSettings(),
         getPermissionMode: (id) => opened.getPermissionMode(id),
         onPermissionMode: (id, mode) => opened.setPermissionMode(id, mode),
@@ -1192,6 +1204,16 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       mcpRef.current = registerMcpHandlers(router, {
         host: sessionHost,
         files: opts.mcpFiles ?? diskProjectFiles,
+        config:
+          opts.mcpConfig ??
+          cliMcpConfig({
+            claude: async () => {
+              await whenLocated();
+              return claude.current ?? { detail: 'Claude Code has not been located yet.' };
+            },
+            env: sessionEnvOf,
+          }),
+        restart: (id) => sessionHost.restartWhenIdle(id),
         emit: (e) => emitChat(e),
         onError,
       });

@@ -4,8 +4,14 @@
  * Every control failure becomes `MCP_FAILED` carrying Claude Code's own words,
  * which the router never logs. Nothing here passes params or results (sign-in
  * links, callback URLs) to `onError`.
+ *
+ * `mcp.add` / `mcp.remove` hand the change to Claude Code's CLI (`McpConfig`); header
+ * and environment values only ever reach `config.add`, and are masked out of any
+ * refusal before it is shown. A failure after the change itself (the reconnect or
+ * restart that makes the chat see it) never fails the call.
  */
 import { MCP_ERRORS, type EventMsg, type McpState } from '@threadgarden/protocol';
+import { CONFIG_SEEN_BY, maskValues, type McpConfig } from '../../mcp/config.js';
 import type { SessionHost } from '../../chat/session-host.js';
 import type { McpControls } from '../../sdk/adapter.js';
 import { isCodexSession } from '../../sdk/providers.js';
@@ -18,6 +24,9 @@ export const registerMcpHandlers = (
   deps: {
     host: SessionHost;
     files: McpProjectFiles;
+    config: McpConfig;
+    /** `host.restartWhenIdle`: true when the chat restarted now. Needed when a change is seen by restart. */
+    restart?: (sessionId: string) => boolean;
     emit: (e: EventMsg) => void;
     onError: (err: unknown, context: string) => void;
   },
@@ -137,6 +146,56 @@ export const registerMcpHandlers = (
     });
     await refresh(p.sessionId);
     return {};
+  });
+
+  /** Makes the live chat see a change Claude Code's CLI just made; answers `restartPending`. */
+  const seen = async (
+    sessionId: string,
+    name: string,
+    how: 'status' | 'reconnect' | 'restart',
+    controls: McpControls,
+  ): Promise<boolean> => {
+    let restartPending = false;
+    try {
+      if (how === 'reconnect') await controls.reconnect(name);
+      else if (how === 'restart') restartPending = !(deps.restart?.(sessionId) ?? false);
+    } catch {
+      // The change happened; the row shows the server's own status. Only the chat and server
+      // are named: Claude Code's message may carry more.
+      deps.onError(new Error(`could not apply the change in chat ${sessionId} for ${name}`), 'mcp');
+    }
+    return restartPending;
+  };
+
+  router.register('mcp.add', async (p) => {
+    const s = live(p.sessionId);
+    const controls = s.mcpControls();
+    try {
+      await deps.config.add({ cwd: s.cwd, scope: p.scope, name: p.name, config: p.config });
+    } catch (err) {
+      throw err instanceof ServiceError
+        ? err
+        : new ServiceError(
+            MCP_ERRORS.failed,
+            maskValues(err instanceof Error ? err.message : String(err), p.config),
+          );
+    }
+    const restartPending = await seen(p.sessionId, p.name, CONFIG_SEEN_BY.add, controls);
+    await refresh(p.sessionId);
+    return { restartPending };
+  });
+
+  router.register('mcp.remove', async (p) => {
+    const s = live(p.sessionId);
+    const controls = s.mcpControls();
+    try {
+      await deps.config.remove({ cwd: s.cwd, scope: p.scope, name: p.name });
+    } catch (err) {
+      throw failed(err);
+    }
+    const restartPending = await seen(p.sessionId, p.name, CONFIG_SEEN_BY.remove, controls);
+    await refresh(p.sessionId);
+    return { restartPending };
   });
 
   return { refresh };

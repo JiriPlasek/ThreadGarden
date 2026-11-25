@@ -1,5 +1,6 @@
 import { screen, waitFor, within } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
+import { MCP_CAPABILITY, MCP_CONFIG_CAPABILITY } from '@threadgarden/protocol';
 import { describe, expect, it } from 'vitest';
 import { RpcFail } from '../service/fake-ws';
 import { mcpState, openStateMenu, renderChat } from './mcp-harness';
@@ -88,6 +89,25 @@ describe('the MCP banner', () => {
     await openMenu();
     await userEvent.click(await screen.findByRole('menuitem', { name: /MCP servers…/ }));
     expect(await screen.findByText('MCP servers (this chat)')).toBeTruthy();
+  });
+});
+
+describe('Add server', () => {
+  const addButton = async (capabilities: string[]): Promise<HTMLElement | null> => {
+    await renderChat({ capabilities });
+    await openMenu();
+    await userEvent.click(await screen.findByRole('menuitem', { name: /MCP servers…/ }));
+    await screen.findByText('MCP servers (this chat)');
+    await screen.findByText('broken');
+    return screen.queryByRole('button', { name: '+ Add server' });
+  };
+
+  it('Add server only on a machine with mcp-config', async () => {
+    expect(await addButton(['remote', MCP_CAPABILITY, MCP_CONFIG_CAPABILITY])).toBeTruthy();
+  });
+
+  it('no Add server on a machine without mcp-config', async () => {
+    expect(await addButton(['remote', MCP_CAPABILITY])).toBeNull();
   });
 });
 
