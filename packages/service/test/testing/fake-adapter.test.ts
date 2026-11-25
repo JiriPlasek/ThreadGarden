@@ -101,6 +101,31 @@ describe('FakeAdapter sessions', () => {
     expect(session.stoppedTasks).toEqual(['b1', 'b2']);
   });
 
+  it('records MCP calls and rejects with mcpError', async () => {
+    const session = new FakeAdapter().start(options());
+    session.mcpServers = [{ name: 'a', status: 'connected' }];
+    session.authResult = { authUrl: 'http://auth/x' };
+    await expect(session.mcp!.status()).resolves.toEqual(session.mcpServers);
+    await session.mcp!.reconnect('a');
+    await session.mcp!.toggle('a', false);
+    await expect(session.mcp!.authenticate('a', 'http://r')).resolves.toEqual(session.authResult);
+    await session.mcp!.submitCallback('a', 'http://x/cb');
+    await session.mcp!.clearAuth('a');
+    expect(session.mcpCalls).toEqual([
+      { op: 'status', name: '' },
+      { op: 'reconnect', name: 'a' },
+      { op: 'toggle', name: 'a', arg: false },
+      { op: 'authenticate', name: 'a', arg: 'http://r' },
+      { op: 'submitCallback', name: 'a', arg: 'http://x/cb' },
+      { op: 'clearAuth', name: 'a' },
+    ]);
+    session.mcpError = new Error('boom');
+    await expect(session.mcp!.reconnect('b')).rejects.toThrow('boom');
+    await expect(session.mcp!.status()).rejects.toThrow('boom');
+    expect(session.mcpCalls.at(-2)).toEqual({ op: 'reconnect', name: 'b' });
+    expect(session.mcpCalls).toHaveLength(8);
+  });
+
   it('requestPermission invokes the canUseTool given at start', async () => {
     const canUseTool = vi.fn<CanUseTool>(async () => ({ behavior: 'deny', message: 'no' }));
     const session = new FakeAdapter().start(options(canUseTool));

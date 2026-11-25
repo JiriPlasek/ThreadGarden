@@ -26,6 +26,13 @@ import {
   ReturnedMessageSchema,
 } from './items.js';
 import {
+  MCP_LIMITS,
+  MCP_SERVER_NAME,
+  McpScopeSchema,
+  McpServerConfigSchema,
+  McpStateSchema,
+} from './mcp.js';
+import {
   DeviceSchema,
   DeviceTokenSchema,
   MachineAddressSchema,
@@ -773,6 +780,50 @@ export const methods = {
   'away.cancel': def(z.object({ id: z.string() }), empty),
   /** Tries the machine's failed messages again. */
   'away.retry': def(machineIdOnly, empty),
+  // ── MCP servers in the chat (protocol 12) ──────────────────────────────────
+  // Open to paired devices. Errors: `MCP_ERRORS`, plus `NOT_LIVE`, `NOT_FOUND`,
+  // `INVALID_PARAMS` and `RESUME_BLOCKED`.
+  'mcp.list': def(sessionIdOnly, McpStateSchema),
+  /** Approves a project server (`unapproved`) for this chat's folder. */
+  'mcp.approve': def(z.object({ sessionId: z.string(), name: z.string() }), empty),
+  /** The sign-in URL to open; null when there is nothing to open (already signed in). */
+  'mcp.signIn': def(
+    z.object({ sessionId: z.string(), name: z.string() }),
+    z.object({ url: z.string().nullable() }),
+  ),
+  /** Hands over the address the browser ended up at after sign-in. */
+  'mcp.submitCallback': def(
+    z.object({ sessionId: z.string(), name: z.string(), url: z.string().url() }),
+    empty,
+  ),
+  'mcp.act': def(
+    z.object({
+      sessionId: z.string(),
+      name: z.string(),
+      action: z.enum(['reconnect', 'enable', 'disable', 'clearAuth']),
+    }),
+    empty,
+  ),
+  // Behind the `mcp-config` capability. Refusals are `MCP_FAILED`, in Claude Code's words.
+  'mcp.add': def(
+    z.object({
+      sessionId: z.string(),
+      name: z.string().max(MCP_LIMITS.name).regex(MCP_SERVER_NAME),
+      scope: McpScopeSchema,
+      config: McpServerConfigSchema,
+    }),
+    z.object({ restartPending: z.boolean() }),
+  ),
+  'mcp.remove': def(
+    z.object({
+      sessionId: z.string(),
+      name: z.string().min(1).max(MCP_LIMITS.name),
+      scope: McpScopeSchema,
+    }),
+    z.object({ restartPending: z.boolean() }),
+  ),
+  /** Starts the chat's Claude Code process (resumes it) without sending a message. */
+  'chat.wake': def(sessionIdOnly, empty),
   // ── the phone (no protocol bump: local to the phone's core only) ──────────
   /**
    * The chat on the phone's screen, which the core's alert links leave out;

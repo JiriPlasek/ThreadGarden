@@ -37,12 +37,12 @@ use secrets::Secrets;
 use store::Store;
 
 /// The protocol version the core speaks (`PROTOCOL_VERSION` in `packages/protocol`, pinned by the contract test).
-pub const PROTOCOL_VERSION: u32 = 11;
+pub const PROTOCOL_VERSION: u32 = 12;
 /// Largest request frame accepted, in bytes (`MAX_REQUEST_BYTES` in `packages/protocol`).
 pub const MAX_REQUEST_BYTES: usize = 32 * 1024 * 1024;
 /// The protocol versions a machine may speak to this phone (`REMOTE_PROTOCOL_RANGE`):
 /// its own, one older and one newer.
-pub const REMOTE_PROTOCOL_RANGE: (u64, u64) = (10, 12);
+pub const REMOTE_PROTOCOL_RANGE: (u64, u64) = (11, 13);
 
 /// `acceptsRemoteProtocol` of `packages/protocol`: a whole number in
 /// `REMOTE_PROTOCOL_RANGE` (pinned by `test/fixtures/protocol-range.json`).

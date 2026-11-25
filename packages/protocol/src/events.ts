@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { McpStateSchema } from './mcp.js';
 import { AwayItemSchema, AwayStateSchema } from './away.js';
 import { ChatHeaderInfoSchema, ChatStatusSchema, PromptSuggestionSchema } from './chat.js';
 import { ChatItemSchema, QueuedMessageSchema, ReturnedMessageSchema } from './items.js';
@@ -112,6 +113,8 @@ export const events = {
   'update.progress': UpdateStatusSchema,
   /** Protocol 11, local only: every waiting message and machine being started (as `away.list` without a machine). */
   'away.changed': z.object({ items: z.array(AwayItemSchema), states: z.array(AwayStateSchema) }),
+  /** Protocol 12: a chat's MCP servers changed (as `mcp.list`). */
+  'mcp.changed': McpStateSchema,
 } as const;
 
 export type EventName = keyof typeof events;

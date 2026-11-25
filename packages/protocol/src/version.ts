@@ -15,5 +15,6 @@
  * 9 — move a chat: `move.*`, the `move` capability, `movedTo` on `chat.open`.
  * 10 — update a machine: update.*, the update capability, update.progress.
  * 11 — a machine that's away: the away capability, messageId on chat.send, sessionId on chat.create; local copies.* and away.*
+ * 12 — MCP servers in the chat: mcp.*, chat.wake, mcp.changed, the mcp capability; mcp.add / mcp.remove behind the mcp-config capability.
  */
-export const PROTOCOL_VERSION = 11;
+export const PROTOCOL_VERSION = 12;

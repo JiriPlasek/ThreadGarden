@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import { REMOTE_MOCK_PORT, REMOTE_PAIRING_CODE } from './env';
-import { chatRow, markAllSeen, openApp, resetTabs, serviceCall } from './helpers';
+import { chatRow, markAllSeen, openApp, remoteCall, resetTabs, serviceCall } from './helpers';
 
 /**
  * Remote machines (v1.4) end to end: This PC (the mock service) pairs with a
@@ -27,6 +27,8 @@ test.beforeEach(async () => {
 });
 
 test.afterEach(async () => {
+  // The remote chat stays live with an open permission request otherwise.
+  await remoteCall('chat.end', { sessionId: REMOTE_CHAT });
   await forgetMachines();
   await resetTabs();
 });

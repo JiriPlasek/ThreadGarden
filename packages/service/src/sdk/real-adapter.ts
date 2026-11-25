@@ -23,6 +23,7 @@ import type {
   AgentSession,
   HistoryOptions,
   ImportOptions,
+  McpControls,
   ModelInfo,
   OneShotOptions,
   Options,
@@ -267,9 +268,22 @@ type QueueControls = {
   cancelAsyncMessage(uuid: string): Promise<boolean>;
 };
 
+/**
+ * `Query` methods SDK 0.3.314 has but does not declare: `mcpAuthenticate`,
+ * `mcpSubmitOAuthCallbackUrl` and `mcpClearAuth` send `mcp_authenticate`,
+ * `mcp_oauth_callback_url` and `mcp_clear_auth`, handled by Claude Code 2.1.318
+ * in SDK mode; recheck on every SDK update (docs/superpowers/specs/2026-11-22-mcp-servers-spike-results.md).
+ */
+type McpUndeclared = {
+  mcpAuthenticate(name: string, redirectUri?: string): Promise<unknown>;
+  mcpSubmitOAuthCallbackUrl(name: string, callbackUrl: string): Promise<unknown>;
+  mcpClearAuth(name: string): Promise<unknown>;
+};
+
 class RealSession implements AgentSession {
   private closed = false;
   readonly usage: (() => Promise<unknown>) | undefined;
+  readonly mcp: McpControls;
   private readonly queue: QueueControls;
 
   constructor(
@@ -278,6 +292,15 @@ class RealSession implements AgentSession {
   ) {
     this.usage = usageReader(q);
     this.queue = q as unknown as QueueControls;
+    const undeclared = q as unknown as McpUndeclared;
+    this.mcp = {
+      status: () => q.mcpServerStatus(),
+      reconnect: (name) => q.reconnectMcpServer(name),
+      toggle: (name, enabled) => q.toggleMcpServer(name, enabled),
+      authenticate: (name, redirectUri) => undeclared.mcpAuthenticate(name, redirectUri),
+      submitCallback: (name, url) => undeclared.mcpSubmitOAuthCallbackUrl(name, url),
+      clearAuth: (name) => undeclared.mcpClearAuth(name),
+    };
   }
 
   get messages(): AsyncIterable<SDKMessage> {

@@ -51,8 +51,8 @@ const sampleItems = [
 
 describe('protocol schemas', () => {
   it('exposes the protocol version', () => {
-    expect(PROTOCOL_VERSION).toBe(11);
-    expect([9, 10, 11, 12, 13].map(acceptsRemoteProtocol)).toEqual([
+    expect(PROTOCOL_VERSION).toBe(12);
+    expect([10, 11, 12, 13, 14].map(acceptsRemoteProtocol)).toEqual([
       false,
       true,
       true,
@@ -203,6 +203,14 @@ describe('protocol schemas', () => {
       'away.list',
       'away.cancel',
       'away.retry',
+      'mcp.list',
+      'mcp.approve',
+      'mcp.signIn',
+      'mcp.submitCallback',
+      'mcp.act',
+      'mcp.add',
+      'mcp.remove',
+      'chat.wake',
       'alerts.setActive',
       'phoneAccess.get',
       'phoneAccess.set',
@@ -241,6 +249,7 @@ describe('protocol schemas', () => {
         'power.changed',
         'update.progress',
         'away.changed',
+        'mcp.changed',
         // Let my phone connect
         'phoneAccess.changed',
       ].sort(),

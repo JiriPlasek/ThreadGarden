@@ -25,7 +25,7 @@ fn cases() -> Vec<(&'static str, Value)> {
     vec![
         (
             "hello",
-            json!({ "protocolVersion": 11, "client": "threadgarden-desktop" }),
+            json!({ "protocolVersion": 12, "client": "threadgarden-desktop" }),
         ),
         ("settings.get", json!({})),
         (

@@ -12,6 +12,7 @@ import {
   slashAt,
 } from '../../src/lib/components/composer/input';
 import { user } from '../chat/fixtures';
+import { renderChat as renderMcpChat } from '../chat/mcp-harness';
 import { LOCAL } from '../layout/harness';
 import { RpcFail } from '../service/fake-ws';
 import { CWD, fill, pushItems, pushStatus, renderChat, SID } from './helpers';
@@ -435,6 +436,41 @@ describe('composer', () => {
     await waitFor(() =>
       expect(screen.queryByRole('list', { name: /attached images/i })).toBeNull(),
     );
+  });
+});
+
+describe('/mcp', () => {
+  const field = () => screen.getByRole('textbox', { name: /message/i }) as HTMLDivElement;
+
+  it('/mcp opens the MCP dialog and is not sent', async () => {
+    const env = await renderMcpChat();
+    await userEvent.type(field(), '/mcp{Escape}{Enter}');
+    expect(await screen.findByText('MCP servers (this chat)')).toBeTruthy();
+    expect(field().textContent).toBe('');
+    expect(env.server.calls('chat.send')).toHaveLength(0);
+  });
+
+  it('/mcp is intercepted even when the SDK reports it', async () => {
+    const env = await renderMcpChat({
+      commands: [{ name: 'mcp', description: 'Manage MCP servers', argumentHint: '' }],
+    });
+    await userEvent.type(field(), '/mcp{Escape}{Enter}');
+    expect(await screen.findByText('MCP servers (this chat)')).toBeTruthy();
+    expect(env.server.calls('chat.send')).toHaveLength(0);
+  });
+
+  it('/mcp in a Codex chat says why', async () => {
+    const env = await renderMcpChat({ sessionId: 'codex-1' });
+    await userEvent.type(field(), '/mcp{Escape}{Enter}');
+    expect(await screen.findByText('MCP servers are for Claude chats.')).toBeTruthy();
+    expect(screen.queryByText('MCP servers (this chat)')).toBeNull();
+    expect(env.server.calls('chat.send')).toHaveLength(0);
+  });
+
+  it('/mcp on a machine without mcp says to update it', async () => {
+    await renderMcpChat({ capabilities: ['remote'] });
+    await userEvent.type(field(), '/mcp{Escape}{Enter}');
+    expect(await screen.findByText('Update This PC to manage MCP servers from here.')).toBeTruthy();
   });
 });
 

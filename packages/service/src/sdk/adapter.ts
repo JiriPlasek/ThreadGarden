@@ -12,6 +12,7 @@ import type {
   PermissionMode,
   SDKMessage,
   SDKSessionInfo,
+  McpServerStatus,
   SDKUserMessage,
   SessionMessage,
   SessionStore,
@@ -23,6 +24,7 @@ import type { ExternalSession } from '../external/poller.js';
 export type {
   AccountInfo,
   CanUseTool,
+  McpServerStatus,
   Options,
   PermissionMode,
   PermissionResult,
@@ -115,6 +117,19 @@ export type OneShotOptions = {
   sessionId: string;
 };
 
+/**
+ * Protocol 12: a Claude session's MCP servers. The auth methods pass sign-in
+ * links and callback URLs through; callers never store or log them.
+ */
+export interface McpControls {
+  status(): Promise<McpServerStatus[]>;
+  reconnect(name: string): Promise<void>;
+  toggle(name: string, enabled: boolean): Promise<void>;
+  authenticate(name: string, redirectUri?: string): Promise<unknown>;
+  submitCallback(name: string, callbackUrl: string): Promise<unknown>;
+  clearAuth(name: string): Promise<unknown>;
+}
+
 export interface AgentSession {
   /** Single-consumer stream of everything the SDK emits; ends when the session ends. */
   readonly messages: AsyncIterable<SDKMessage>;
@@ -147,6 +162,8 @@ export interface AgentSession {
    * leniently and fall back to the rate-limit events on any failure.
    */
   usage?: () => Promise<unknown>;
+  /** Claude sessions only (Codex has none). */
+  readonly mcp?: McpControls;
   close(): void;
 }
 

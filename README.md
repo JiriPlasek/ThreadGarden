@@ -32,6 +32,7 @@ It uses your own `claude` install and login, through the official Agent SDK. Not
 - **History:** every chat, by project, searchable; file them as Active, On hold or Archived. Chats started in a terminal show up too.
 - **Live chats in tabs:** code, diffs, todos and subagents rendered properly; permission prompts answered in the chat.
 - **Needs you and Running** across all projects, with a tray badge and notifications.
+- **MCP servers:** see a chat's servers (project, user and claude.ai), approve a project's `.mcp.json` server, sign in, reconnect and turn them off, and add and remove servers (through Claude Code's own CLI, for just you or for everyone on the project), from the chat's menu or `/mcp`.
 - **Activity panel:** see and stop subagents and background processes.
 - **Usage meter** per Claude account, and "send when the limit resets".
 - **Remote machines:** run chats on another computer from the same window. Start a project, clone a repo, or move a chat there with its whole conversation, and update it from Settings.

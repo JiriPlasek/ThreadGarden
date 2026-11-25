@@ -5,6 +5,8 @@ import path from 'node:path';
 import {
   AWAY_CAPABILITY,
   CAPABILITIES,
+  MCP_CAPABILITY,
+  MCP_CONFIG_CAPABILITY,
   POWER_CAPABILITY,
   PROTOCOL_VERSION,
   UPDATE_CAPABILITY,
@@ -54,6 +56,9 @@ import { AwayQueue } from './away/queue.js';
 import { registerAwayHandlers } from './server/handlers/away.js';
 import { registerCopyHandlers } from './server/handlers/copies.js';
 import { registerChatHandlers } from './server/handlers/chat.js';
+import { registerMcpHandlers } from './server/handlers/mcp.js';
+import { cliMcpConfig, type McpConfig } from './mcp/config.js';
+import { diskProjectFiles, type McpProjectFiles } from './mcp/project-files.js';
 import { isCodexSession } from './sdk/providers.js';
 import { busyOf, MoveLocks, registerMoveHandlers, type MoveGit } from './server/handlers/move.js';
 import { makeResumeChecker, registerExternalHandlers } from './server/handlers/external.js';
@@ -156,6 +161,10 @@ export type StartOptions = {
   moveMaxBytes?: number;
   /** The git a move reads (`move.check`, `move.target`); default the real git. The mock fakes it. */
   moveGit?: MoveGit;
+  /** What Threadgarden reads and writes of a project's MCP approvals (default: the real files). */
+  mcpFiles?: McpProjectFiles;
+  /** Adds and removes MCP servers (Claude Code's CLI). Default: the real CLI. */
+  mcpConfig?: McpConfig;
   /** Runs `git` and `gh` for New project and Clone (default: the real ones); tests inject a fake. */
   projectTools?: Tools;
   /**
@@ -362,10 +371,12 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         ? [
             ...CAPABILITIES,
             AWAY_CAPABILITY,
+            MCP_CAPABILITY,
+            MCP_CONFIG_CAPABILITY,
             ...(platform === 'linux' ? [POWER_CAPABILITY] : []),
             ...(canUpdate() ? [UPDATE_CAPABILITY] : []),
           ]
-        : [...CAPABILITIES, AWAY_CAPABILITY],
+        : [...CAPABILITIES, AWAY_CAPABILITY, MCP_CAPABILITY, MCP_CONFIG_CAPABILITY],
       // The platform stays linux, as its paths are; the app shows it as Windows (WSL).
       ...(wsl ? { host: 'wsl' as const } : {}),
     };
@@ -910,6 +921,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
           ...(project ? { projectName: project.displayName } : {}),
         };
       };
+      const mcpRef: { current?: { refresh(id: string): Promise<void> } } = {};
       const sessionHost = new SessionHost({
         adapter,
         registry: opened,
@@ -922,12 +934,14 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         now: clock,
         ...(opts.sessionTimers ? { timers: opts.sessionTimers } : {}),
         isPinned: (id) => opened.isSessionPinned(id),
+        isMoving: (id) => moveLocks.isLocked(id),
         getSettings: () => opened.getSettings(),
         getPermissionMode: (id) => opened.getPermissionMode(id),
         onPermissionMode: (id, mode) => opened.setPermissionMode(id, mode),
         canBypass: canBypassPermissions,
         describe: describeChat,
         onError,
+        onMcpChange: (id) => void mcpRef.current?.refresh(id),
         seqBase: seqBaseForEpoch(epoch),
         // v1.1 "Your turn": Threadgarden's own record of the turn end; lists show the chat unread.
         onTurnEnded: (id, at) => {
@@ -1132,6 +1146,22 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         now: clock,
         timers: opts.sessionTimers ?? realTimers,
         titles: chatTitles,
+      });
+      mcpRef.current = registerMcpHandlers(router, {
+        host: sessionHost,
+        files: opts.mcpFiles ?? diskProjectFiles,
+        config:
+          opts.mcpConfig ??
+          cliMcpConfig({
+            claude: async () => {
+              await whenLocated();
+              return claude.current ?? { detail: 'Claude Code has not been located yet.' };
+            },
+            env: sessionEnvOf,
+          }),
+        restart: (id) => sessionHost.restartWhenIdle(id),
+        emit: (e) => emitChat(e),
+        onError,
       });
       const projectTools = opts.projectTools ?? systemTools;
       maker = new ProjectMaker({

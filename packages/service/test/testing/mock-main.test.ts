@@ -280,6 +280,184 @@ describe('mock service', () => {
   }, 30_000);
 });
 
+describe('mock service: MCP servers in the chat (protocol 12)', () => {
+  type Listed = {
+    live: boolean;
+    waiting: string[];
+    servers: { name: string; status: string; error?: string; source: string }[];
+  };
+  const open = async (m: MockService, cwd: string) => {
+    mock = m;
+    const c = (client = await TestClient.connect(m.svc.port, m.svc.token));
+    const { sessionId } = await c.call<{ sessionId: string }>('chat.create', { cwd, text: 'hi' });
+    await c.waitFor(chatStatus(sessionId, 'idle'), 10_000);
+    const list = () => c.call<Listed>('mcp.list', { sessionId });
+    const statusOf = async (name: string) =>
+      (await list()).servers.find((s) => s.name === name)?.status;
+    return { c, sessionId, list, statusOf };
+  };
+  const start = (remote = false) =>
+    startMockService({
+      sessions: 2,
+      projects: 1,
+      bigSessionMessages: 0,
+      installSignalHandlers: false,
+      ...(remote ? { remote: { port: 0, pairingCode: 'TEST-TEST-TEST' } } : {}),
+    });
+
+  it('a proj-0 chat lists servers in every state', async () => {
+    const { list } = await open(await start(), '/work/proj-0');
+    const state = await list();
+    expect(state.live).toBe(true);
+    expect(
+      Object.fromEntries(state.servers.map((s) => [s.name, [s.status, s.source, s.error]])),
+    ).toEqual({
+      'mock-etoro': ['unapproved', 'project', undefined],
+      'mock-notion': ['needs-auth', 'claudeai', undefined],
+      'mock-oauth': ['needs-auth', 'user', undefined],
+      context7: ['failed', 'plugin', 'timeout'],
+      'mock-slow': ['pending', 'user', undefined],
+      github: ['connected', 'user', undefined],
+      'mock-off': ['disabled', 'local', undefined],
+    });
+    expect(state.waiting).toEqual(['mock-etoro']);
+  });
+
+  it('a chat elsewhere has no mock-etoro', async () => {
+    const { list } = await open(await start(), '/work/other');
+    expect((await list()).waiting).toEqual([]);
+  });
+
+  it('approve brings mock-etoro up', async () => {
+    const { c, sessionId, statusOf } = await open(await start(), '/work/proj-0');
+    await c.call('mcp.approve', { sessionId, name: 'mock-etoro' });
+    expect(await statusOf('mock-etoro')).toBe('pending');
+    await eventually(async () => (await statusOf('mock-etoro')) === 'connected', 5_000);
+  });
+
+  it('acts on servers: reconnect, turn off and on, clear sign-in; local sign-in connects after a reconnect', async () => {
+    const { c, sessionId, statusOf } = await open(await start(), '/work/proj-0');
+    const act = (name: string, action: string) => c.call('mcp.act', { sessionId, name, action });
+    await act('context7', 'reconnect');
+    expect(await statusOf('context7')).toBe('pending');
+    await eventually(async () => (await statusOf('context7')) === 'connected', 5_000);
+    await act('github', 'disable');
+    expect(await statusOf('github')).toBe('disabled');
+    await act('github', 'enable');
+    expect(await statusOf('github')).toBe('pending');
+
+    const { url } = await c.call<{ url: string }>('mcp.signIn', { sessionId, name: 'mock-oauth' });
+    expect(url).toBe(`http://127.0.0.1:${mock!.svc.port}/mock-oauth?server=mock-oauth`);
+    // The sign-in finishes by itself, but the server needs a reconnect to come up.
+    await new Promise((r) => setTimeout(r, 800));
+    expect(await statusOf('mock-oauth')).toBe('needs-auth');
+    await act('mock-oauth', 'reconnect');
+    expect(await statusOf('mock-oauth')).toBe('pending');
+    await eventually(async () => (await statusOf('mock-oauth')) === 'connected', 5_000);
+    // As Claude Code: forgetting the token leaves the live connection up until a reconnect.
+    await act('mock-oauth', 'clearAuth');
+    expect(await statusOf('mock-oauth')).toBe('connected');
+    await act('mock-oauth', 'reconnect');
+    expect(await statusOf('mock-oauth')).toBe('needs-auth');
+  });
+
+  it('the remote mock wants a pasted callback', async () => {
+    const { c, sessionId, statusOf } = await open(await start(true), REMOTE_PROJECT_PATH);
+    await c.call('mcp.signIn', { sessionId, name: 'mock-oauth' });
+    await new Promise((r) => setTimeout(r, 800));
+    expect(await statusOf('mock-oauth')).toBe('needs-auth');
+    await expect(
+      c.call('mcp.submitCallback', {
+        sessionId,
+        name: 'mock-oauth',
+        url: 'http://localhost:1/callback?state=x',
+      }),
+    ).rejects.toMatchObject({ message: expect.stringContaining('Missing authorization code') });
+    await c.call('mcp.submitCallback', {
+      sessionId,
+      name: 'mock-oauth',
+      url: 'http://localhost:1/callback?code=abc&state=x',
+    });
+    // The token is saved, but the server stays down until reconnected.
+    expect(await statusOf('mock-oauth')).toBe('needs-auth');
+    await c.call('mcp.act', { sessionId, name: 'mock-oauth', action: 'reconnect' });
+    await eventually(async () => (await statusOf('mock-oauth')) === 'connected', 5_000);
+  });
+
+  describe('adding and removing servers', () => {
+    const http = { type: 'http', url: 'https://example.com/mcp' };
+    const add = (c: TestClient, sessionId: string, name: string, scope = 'local') =>
+      c.call('mcp.add', { sessionId, scope, name, config: http });
+
+    it('adding a server lists it in this chat', async () => {
+      const { c, sessionId, list } = await open(await start(), '/work/other');
+      await add(c, sessionId, 'extra');
+      const added = (await list()).servers.find((s) => s.name === 'extra');
+      expect(added).toMatchObject({ status: 'needs-auth', source: 'local' });
+    });
+
+    it('a user server shows in every chat, a local one only in its folder', async () => {
+      const { c, sessionId } = await open(await start(), '/work/other');
+      await add(c, sessionId, 'mine-everywhere', 'user');
+      await add(c, sessionId, 'mine-here');
+      const second = await c.call<{ sessionId: string }>('chat.create', {
+        cwd: '/work/elsewhere',
+        text: 'hi',
+      });
+      await c.waitFor(chatStatus(second.sessionId, 'idle'), 10_000);
+      const names = (await c.call<Listed>('mcp.list', { sessionId: second.sessionId })).servers.map(
+        (s) => s.name,
+      );
+      expect(names).toContain('mine-everywhere');
+      expect(names).not.toContain('mine-here');
+    });
+
+    it("a taken name is refused in Claude Code's words", async () => {
+      const { c, sessionId } = await open(await start(), '/work/other');
+      await expect(add(c, sessionId, 'github', 'user')).rejects.toMatchObject({
+        message: expect.stringContaining('MCP server github already exists in user config'),
+      });
+      await expect(add(c, sessionId, 'mock-off')).rejects.toMatchObject({
+        message: expect.stringContaining('MCP server mock-off already exists in local config'),
+      });
+    });
+
+    it('removing mock-off takes it off the list; an unknown name is refused', async () => {
+      const { c, sessionId, statusOf } = await open(await start(), '/work/other');
+      await c.call('mcp.remove', { sessionId, scope: 'local', name: 'mock-off' });
+      expect(await statusOf('mock-off')).toBeUndefined();
+      await expect(
+        c.call('mcp.remove', { sessionId, scope: 'user', name: 'nope' }),
+      ).rejects.toMatchObject({
+        message: expect.stringContaining('No MCP server named "nope" in user scope'),
+      });
+      await add(c, sessionId, 'extra');
+      await c.call('mcp.remove', { sessionId, scope: 'local', name: 'extra' });
+      expect(await statusOf('extra')).toBeUndefined();
+    });
+
+    it('mock.mcpReset forgets added and removed servers', async () => {
+      const { c, sessionId, statusOf } = await open(await start(), '/work/other');
+      await add(c, sessionId, 'extra');
+      await c.call('mcp.remove', { sessionId, scope: 'user', name: 'github' });
+      expect(await statusOf('github')).toBeUndefined();
+      await c.call('mock.mcpReset', {});
+      expect(await statusOf('extra')).toBeUndefined();
+      expect(await statusOf('github')).toBe('connected');
+    });
+  });
+
+  it('mock.mcpReset forgets approvals', async () => {
+    const { c, sessionId, list, statusOf } = await open(await start(), '/work/proj-0');
+    await c.call('mcp.approve', { sessionId, name: 'mock-etoro' });
+    await c.call('mcp.act', { sessionId, name: 'github', action: 'disable' });
+    await c.call('mock.mcpReset', {});
+    expect(await statusOf('mock-etoro')).toBe('unapproved');
+    expect(await statusOf('github')).toBe('connected');
+    expect((await list()).waiting).toEqual(['mock-etoro']);
+  });
+});
+
 describe('mock service --remote (v1.4)', () => {
   it('is a headless "Ubuntu" with tg-cli on 127.0.0.1 that keeps its fixed code live', async () => {
     mock = await startMockService({

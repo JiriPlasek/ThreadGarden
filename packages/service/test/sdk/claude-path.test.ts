@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  claudeInvocation,
   findClaude,
   parseClaudeVersion,
   type FindClaudeOptions,
@@ -278,5 +279,18 @@ describe('parseClaudeVersion', () => {
 
   it('falls back to the first line when no version number is present', () => {
     expect(parseClaudeVersion('  dev build\nmore')).toBe('dev build');
+  });
+});
+
+describe('claudeInvocation', () => {
+  it('runs scripts with node and binaries directly', () => {
+    expect(claudeInvocation('/a/cli.js', ['mcp'])).toEqual({
+      cmd: process.execPath,
+      argv: ['/a/cli.js', 'mcp'],
+    });
+    expect(claudeInvocation('C:\\x\\claude.exe', ['mcp'])).toEqual({
+      cmd: 'C:\\x\\claude.exe',
+      argv: ['mcp'],
+    });
   });
 });

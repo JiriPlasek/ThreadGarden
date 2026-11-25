@@ -6,6 +6,7 @@
  */
 import { execFile } from 'node:child_process';
 import type { EventMsg } from '@threadgarden/protocol';
+import { claudeInvocation } from '../sdk/claude-path';
 
 export type ExternalSession = {
   /** The short id of a background session (`id`); `claude attach` takes it. */
@@ -77,10 +78,7 @@ export const makeClaudeRunner =
   (claudePath: string) =>
   (args: string[]): Promise<string> =>
     new Promise((resolve, reject) => {
-      // The SDK runs a .js/.mjs path with node; do the same here.
-      const script = /\.(js|mjs)$/i.test(claudePath);
-      const cmd = script ? process.execPath : claudePath;
-      const argv = script ? [claudePath, ...args] : args;
+      const { cmd, argv } = claudeInvocation(claudePath, args);
       execFile(
         cmd,
         argv,

@@ -699,6 +699,62 @@ describe('chat handlers', () => {
     expect(await ok('chat.models', {})).toEqual(models);
   });
 
+  describe('slash commands before a chat wakes', () => {
+    const list = [
+      { name: 'compact', description: 'Compact the chat', argumentHint: '' },
+      { name: 'review', description: 'Review a PR', argumentHint: '<pr>' },
+    ];
+    const restart = async (adapter: FakeAdapter) => {
+      await svc!.close();
+      svc = undefined;
+      svc = await startService({
+        dataDir: join(dir, 'data'),
+        claudeConfigDir: join(dir, 'claude'),
+        adapter,
+        claude: { path: '/bin/claude', version: '2.1.314' },
+        externalRun: async () => '[]',
+        sessionEnv: { PATH: '/usr/bin' },
+        installSignalHandlers: false,
+      });
+    };
+    const recordInDir = async () => {
+      const adapter = new FakeAdapter();
+      await start(adapter);
+      const { sessionId } = await ok<{ sessionId: string }>('chat.create', { cwd: dir, text: 'x' });
+      adapter.lastSession().commands = list;
+      await ok('chat.commands', { sessionId });
+    };
+
+    it('a paused chat in a known project gets the list after a restart', async () => {
+      await recordInDir();
+      const adapter = new FakeAdapter();
+      addHistory(adapter, 'h1', 1, dir);
+      await restart(adapter);
+      const got = await ok<{ name: string }[]>('chat.commands', { sessionId: 'h1' });
+      expect(got).toEqual(list);
+      expect(got.map((c) => c.name)).toContain('compact');
+    }, 15_000);
+
+    it('a project never seen falls back to the most recent list', async () => {
+      await recordInDir();
+      await restart(new FakeAdapter());
+      expect(await ok('chat.commands', { cwd: join(dir, 'elsewhere') })).toEqual(list);
+    }, 15_000);
+
+    it('Codex chats stay empty', async () => {
+      await recordInDir();
+      await restart(new FakeAdapter());
+      expect(
+        await ok('chat.commands', { sessionId: 'codex-00000000-0000-4000-8000-000000000001' }),
+      ).toEqual([]);
+    }, 15_000);
+
+    it('is empty when nothing was ever recorded', async () => {
+      await start(new FakeAdapter());
+      expect(await ok('chat.commands', { cwd: dir })).toEqual([]);
+    });
+  });
+
   describe("Claude's models in the picker", () => {
     const claudeRows = [
       {
@@ -1186,6 +1242,35 @@ describe('ids from a client that retries (a machine that is away)', () => {
       sessionId: S2,
     });
     expect(adapter.started).toHaveLength(1);
+  });
+
+  it('chat.wake resumes without sending', async () => {
+    const adapter = new FakeAdapter();
+    addHistory(adapter, 'h1', 1);
+    await start(adapter);
+    expect(await ok('chat.wake', { sessionId: 'h1' })).toEqual({});
+    expect(adapter.lastSession().options.resume).toBe('h1');
+    expect(adapter.lastSession().sent).toEqual([]);
+  });
+
+  it('chat.wake honours a blocked resume check', async () => {
+    const adapter = new FakeAdapter();
+    addHistory(adapter, 'held', 1);
+    await start(adapter, {
+      externalRun: async () =>
+        JSON.stringify([
+          {
+            pid: 7,
+            cwd: dir,
+            kind: 'interactive',
+            startedAt: 1,
+            sessionId: 'held',
+            status: 'busy',
+          },
+        ]),
+    });
+    expect(await code('chat.wake', { sessionId: 'held' })).toBe('RESUME_BLOCKED');
+    expect(adapter.started).toHaveLength(0);
   });
 
   it('the away capability is offered', async () => {

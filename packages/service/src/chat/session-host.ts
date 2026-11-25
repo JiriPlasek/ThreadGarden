@@ -14,6 +14,7 @@
  * failing session never escape the reclaim timer or `stopAll`; they are
  * reported through `onError` and the remaining sessions carry on.
  */
+import { resolve } from 'node:path';
 import type { ChatPermissionMode, ChatStatus, EventMsg, Settings } from '@threadgarden/protocol';
 import type { AgentAdapter, SessionStore } from '../sdk/adapter.js';
 import { isCodexSession } from '../sdk/providers.js';
@@ -33,6 +34,12 @@ import {
 export type { LiveRegistry } from './live-session.js';
 
 export const RECLAIM_INTERVAL_MS = 60_000;
+/**
+ * A reclaim tick restarts a chat (`restartWhenIdle`) only after this long
+ * without activity: Claude Code may have started a turn (on a background
+ * task's notification, say) that it has not reported yet.
+ */
+export const RESTART_QUIET_MS = 30_000;
 export const INTERRUPTED_TEXT =
   'Interrupted when the Threadgarden service stopped — send a message to resume';
 export const ROOT_BYPASS_NOTE =
@@ -49,6 +56,8 @@ export type SessionHostDeps = {
   timers?: Timers;
   /** Pinned chats are never reclaimed (Ruling R1). */
   isPinned: (sessionId: string) => boolean;
+  /** A chat being moved to another machine is not restarted until the move is over. */
+  isMoving?: (sessionId: string) => boolean;
   /** Reads the new-chat permission default on creation and idle minutes on each reclaim pass. */
   getSettings: () => Settings;
   /** The chat's remembered mode; none for one that never ran here since modes were remembered. */
@@ -91,12 +100,19 @@ export type SessionHostDeps = {
   sentImages?: LiveSessionDeps['sentImages'];
   /** Handed to every session (see `LiveSessionDeps.onReturned`). */
   onReturned?: LiveSessionDeps['onReturned'];
+  /** Handed to every session (see `LiveSessionDeps.onMcpChange`). */
+  onMcpChange?: LiveSessionDeps['onMcpChange'];
 };
+
+const folderKey = (cwd: string): string =>
+  process.platform === 'win32' ? resolve(cwd).toLowerCase() : resolve(cwd);
 
 export class SessionHost {
   private readonly sessions = new Map<string, LiveSession>();
   /** Last seq of chats ended (forgotten) in this service run, by session id. */
   private readonly seqFloor = new Map<string, number>();
+  /** Live chats whose process must restart once nothing is in progress (`restartWhenIdle`). */
+  private readonly restartDue = new Set<string>();
   private readonly timers: Timers;
   private readonly seqBase: number;
   private reclaimTimer: unknown = undefined;
@@ -115,6 +131,7 @@ export class SessionHost {
       } catch (err) {
         this.report(err, 'idle reclaim');
       }
+      for (const id of [...this.restartDue]) this.retryRestart(id, true);
     }, RECLAIM_INTERVAL_MS);
   }
 
@@ -191,7 +208,58 @@ export class SessionHost {
     );
     this.sessions.set(sessionId, s);
     this.seqFloor.delete(sessionId);
+    this.restartDue.delete(sessionId); // a new process reads the config afresh
     return s;
+  }
+
+  /**
+   * Restarts a Claude chat's process between turns (same session id, as after
+   * an idle reclaim, so its events, choices and permissions carry over), e.g.
+   * so it drops a removed MCP server. True when it restarted now. While a turn,
+   * a permission request, a queued message or a running task is in progress it
+   * returns false and the restart waits: retried when that chat's turn ends and
+   * on every reclaim tick (once the chat has been quiet for `RESTART_QUIET_MS`).
+   * It also waits while the chat is being moved. Forgotten when the chat stops
+   * being live. Pinned chats restart too (this is not a reclaim); a Codex chat
+   * never does. A chat moved here keeps its session store.
+   */
+  restartWhenIdle(sessionId: string): boolean {
+    return this.restartIfFree(sessionId, false);
+  }
+
+  private restartIfFree(sessionId: string, needQuiet: boolean): boolean {
+    const s = this.sessions.get(sessionId);
+    if (!s?.live || isCodexSession(sessionId)) {
+      this.restartDue.delete(sessionId);
+      return false;
+    }
+    const last = s.lastActivity;
+    // A queued message keeps the chat `working` until Claude has answered it.
+    const busy =
+      s.status !== 'idle' ||
+      s.pendingRequests().length > 0 ||
+      s.runningTasks > 0 ||
+      this.deps.isMoving?.(sessionId) === true ||
+      (needQuiet && last !== null && this.deps.now() - last < RESTART_QUIET_MS);
+    if (busy) {
+      this.restartDue.add(sessionId);
+      return false;
+    }
+    this.restartDue.delete(sessionId);
+    const sessionStore = s.sessionStore;
+    s.pause();
+    this.ensureLive(sessionId, s.cwd, sessionStore === undefined ? {} : { sessionStore });
+    return true;
+  }
+
+  /** A remembered restart's retry; a failure is reported, never thrown. */
+  private retryRestart(sessionId: string, needQuiet: boolean): void {
+    if (!this.restartDue.has(sessionId)) return;
+    try {
+      this.restartIfFree(sessionId, needQuiet);
+    } catch (err) {
+      this.report(err, `restart (session ${sessionId})`);
+    }
   }
 
   /** End session: closes the process and returns the chat to history. */
@@ -348,6 +416,14 @@ export class SessionHost {
     return undefined;
   }
 
+  /** The live Claude chats working in the folder `cwd` (case-insensitive on Windows). */
+  liveIn(cwd: string): LiveSession[] {
+    const key = folderKey(cwd);
+    return [...this.sessions.values()].filter(
+      (s) => s.live && !isCodexSession(s.sessionId) && folderKey(s.cwd) === key,
+    );
+  }
+
   liveCount(): number {
     let n = 0;
     for (const s of this.sessions.values()) if (s.live) n++;
@@ -356,6 +432,7 @@ export class SessionHost {
 
   private forget(s: LiveSession): void {
     this.sessions.delete(s.sessionId);
+    this.restartDue.delete(s.sessionId);
     this.seqFloor.set(s.sessionId, s.seq);
   }
 
@@ -396,6 +473,7 @@ export class SessionHost {
       onPermissionMode,
       sentImages,
       onReturned,
+      onMcpChange,
     } = this.deps;
     return {
       adapter,
@@ -408,7 +486,13 @@ export class SessionHost {
       timers: this.timers,
       ...(describe ? { describe } : {}),
       ...(onError ? { onError } : {}),
-      ...(onTurnEnded ? { onTurnEnded } : {}),
+      onTurnEnded: (id, at) => {
+        try {
+          onTurnEnded?.(id, at);
+        } finally {
+          this.retryRestart(id, false);
+        }
+      },
       ...(onActivity ? { onActivity } : {}),
       ...(onRunningTasks ? { onRunningTasks } : {}),
       ...(onRateLimit ? { onRateLimit } : {}),
@@ -419,6 +503,7 @@ export class SessionHost {
       ...(onPermissionMode ? { onPermissionMode } : {}),
       ...(sentImages ? { sentImages } : {}),
       ...(onReturned ? { onReturned } : {}),
+      ...(onMcpChange ? { onMcpChange } : {}),
       ...extra,
       log: extra.log ?? new EventLog(undefined, this.seqBase),
     };

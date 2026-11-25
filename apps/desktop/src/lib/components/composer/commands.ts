@@ -9,7 +9,7 @@
 import type { SlashCommand } from '#lib/state/interaction.svelte.js';
 
 /** The chat header pickers a command can open. */
-export type Control = 'model' | 'effort' | 'permissionMode';
+export type Control = 'model' | 'effort' | 'permissionMode' | 'mcp';
 
 export type MenuCommand = SlashCommand & {
   /** Opens a Threadgarden control instead of being sent. */
@@ -37,7 +37,16 @@ const mapped: MenuCommand[] = [
     description: 'Choose the permission mode (opens the permission mode picker)',
     control: 'permissionMode',
   },
+  {
+    name: 'mcp',
+    argumentHint: '',
+    description: 'Manage MCP servers (opens the MCP servers dialog)',
+    control: 'mcp',
+  },
 ];
+
+/** Commands Threadgarden handles itself even when the SDK reports them (`/mcp` is a terminal menu there). */
+const ALWAYS_LOCAL = ['mcp'];
 
 const terminalOnly: [name: string, reason: string][] = [
   [
@@ -77,20 +86,22 @@ export const LOCAL_COMMANDS: readonly MenuCommand[] = [
 
 /** The menu: what the SDK reports first, then table entries it does not report. */
 export const menuCommands = (reported: readonly SlashCommand[]): MenuCommand[] => {
-  const known = new Set(reported.map((c) => c.name));
-  return [...reported, ...LOCAL_COMMANDS.filter((c) => !known.has(c.name))];
+  const shown = reported.filter((c) => !ALWAYS_LOCAL.includes(c.name));
+  const known = new Set(shown.map((c) => c.name));
+  return [...shown, ...LOCAL_COMMANDS.filter((c) => !known.has(c.name))];
 };
 
 /**
  * How a message that starts with `/name` is handled locally: the table entry
- * when the SDK does not report `name`, else null (send it).
+ * when the SDK does not report `name` (or always, for `ALWAYS_LOCAL`), else null (send it).
  */
 export const localCommand = (
   text: string,
   reported: readonly SlashCommand[],
 ): MenuCommand | null => {
   const name = /^\/([^\s/]+)/.exec(text.trim())?.[1];
-  if (!name || reported.some((c) => c.name === name)) return null;
+  if (!name) return null;
+  if (!ALWAYS_LOCAL.includes(name) && reported.some((c) => c.name === name)) return null;
   return LOCAL_COMMANDS.find((c) => c.name === name) ?? null;
 };
 

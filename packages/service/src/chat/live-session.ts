@@ -54,6 +54,7 @@ import type {
   AgentAdapter,
   AgentSession,
   CanUseTool,
+  McpControls,
   Effort,
   PermissionMode,
   PermissionResult,
@@ -68,6 +69,7 @@ import type {
 import { startupFailureMessage, type StartupFailureMessage } from '../sdk/startup-failure.js';
 import { ServiceError } from '../server/router.js';
 import { isCodexModel } from '../sdk/providers.js';
+import { isMcpStatusMessage } from '../mcp/state.js';
 import { EventLog, type ChatEvent, type ChatEventDraft } from './event-log.js';
 import { Normalizer, deriveStatus } from './normalize.js';
 import { TaskTracker, runningCount, taskEnded, taskRunning } from './tasks.js';
@@ -186,6 +188,9 @@ export type LiveSessionDeps = {
    * emitted, so they are in the saved draft first. A throw is reported.
    */
   onReturned?: (sessionId: string, messages: ReturnedMessage[]) => void;
+  // ── MCP servers ──
+  /** A process started (`system/init`): its MCP servers may have changed. A throw is reported. */
+  onMcpChange?: (sessionId: string) => void;
 };
 
 export const defaultOnError = (err: unknown, context: string): void => {
@@ -455,6 +460,11 @@ export class LiveSession {
 
   get choices(): SessionChoices {
     return { ...this.chosen };
+  }
+
+  /** The store a chat moved here lives in; undefined for a local chat. */
+  get sessionStore(): SessionStore | undefined {
+    return this.deps.sessionStore;
   }
 
   /** The current process's tasks (subagents, background shells, …). */
@@ -743,6 +753,14 @@ export class LiveSession {
     return usage ? () => usage.call(session) : undefined;
   }
 
+  /** The running process's MCP controls. `NOT_LIVE` without a process, `MCP_UNSUPPORTED` without MCP. */
+  mcpControls(): McpControls {
+    const session = this.session;
+    if (!session) throw new ServiceError('NOT_LIVE', `Chat ${this.id} is not running`);
+    if (!session.mcp) throw new ServiceError('MCP_UNSUPPORTED', 'MCP servers are for Claude chats');
+    return session.mcp;
+  }
+
   /** Adds a line of Threadgarden's own to the chat (e.g. a scheduled message that went out late). */
   note(level: 'info' | 'warning' | 'error', text: string): void {
     this.pushItems([{ kind: 'system', id: `local:${randomUUID()}`, level, text }], false);
@@ -837,6 +855,7 @@ export class LiveSession {
       if (this.tracker.apply(m)) this.scheduleTasks();
     });
     this.guard('usage limits', () => this.noteLimits(m));
+    if (isMcpStatusMessage(m)) this.guard('onMcpChange', () => this.deps.onMcpChange?.(this.id));
     // Before the normalizer: a message the `result` lists as read goes before the result item.
     this.guard('message queue', () => this.noteQueue(m));
     try {
