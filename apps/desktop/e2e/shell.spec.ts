@@ -209,14 +209,36 @@ test('a command on a paired machine shows its output once, live', async ({ page 
   }
 });
 
+// On the paired machine: a chat made on This PC would stay in its history and change the
+// Active count every later spec's `openApp` waits for; forgetting Ubuntu drops this one.
 test('New chat sends ! as text', async ({ page }) => {
-  await openApp(page);
-  await page.getByRole('button', { name: 'New chat', exact: true }).click();
-  const dialog = page.getByRole('dialog', { name: 'New chat', exact: true });
-  await dialog.getByRole('textbox', { name: 'First message' }).fill('! ls');
-  await dialog.getByRole('textbox', { name: 'First message' }).press('Enter');
-  await expect(dialog).toBeHidden();
-  await expect(page.getByText('! ls', { exact: true }).first()).toBeVisible();
-  await expect(page.getByText(REPLY).first()).toBeVisible();
-  await expect(block(page)).toHaveCount(0);
+  await forgetMachines();
+  let sessionId: string | undefined;
+  try {
+    await openApp(page);
+    await pairUbuntu(page);
+    const places = page.getByRole('navigation', { name: 'Places' });
+    await places
+      .getByRole('group', { name: 'Ubuntu' })
+      .getByRole('button', { name: 'tg-cli' })
+      .click();
+    await page.getByRole('button', { name: 'New chat', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: 'New chat', exact: true });
+    await expect(
+      dialog.getByRole('combobox', { name: 'Machine' }).locator('option:checked'),
+    ).toHaveText(/^Ubuntu/);
+    await dialog.getByRole('textbox', { name: 'First message' }).fill('! ls');
+    await dialog.getByRole('textbox', { name: 'First message' }).press('Enter');
+    await expect(dialog).toBeHidden();
+    const key = await page.getByRole('tab', { selected: true }).getAttribute('data-chat-key');
+    sessionId = key?.slice(key.indexOf('/') + 1);
+    await expect(page.getByTitle('Runs on Ubuntu')).toBeVisible();
+    await expect(page.getByText('! ls', { exact: true }).first()).toBeVisible();
+    await expect(page.getByText(REPLY).first()).toBeVisible();
+    await expect(block(page)).toHaveCount(0);
+  } finally {
+    if (sessionId) await remoteCall('chat.end', { sessionId }).catch(() => undefined);
+    await markAllSeen(remoteCall);
+    await forgetMachines();
+  }
 });
