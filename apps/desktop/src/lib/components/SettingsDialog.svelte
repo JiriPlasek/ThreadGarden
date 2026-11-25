@@ -229,8 +229,9 @@
           {/each}
         </select>
         <p id="settings-permission-hint" class="text-muted-foreground text-xs">
-          Chats you start in this app begin in this mode, whichever machine runs them. Existing
-          chats keep their own mode when continued, even after a restart.
+          Chats you start in this app begin in this mode, whichever machine runs them. A chat keeps
+          its own mode when continued, even after a restart; one this PC has no mode for (from an
+          older version, or begun in the terminal) continues in this one.
         </p>
       </div>
       {#if !isPhone}

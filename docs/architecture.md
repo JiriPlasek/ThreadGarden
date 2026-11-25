@@ -1373,18 +1373,22 @@ no Claude Code, and the app contains no Node.
   switch to bypass. Root sessions omit this flag because the CLI refuses to start
   with it, and refuses bypass itself: on a root service a new chat asking for
   bypass (the saved default or an explicit choice) starts in `default`
-  instead, with a warning line in the chat saying why.
-  The default preference applies only to new chats. The `chat_permissions`
+  instead, with a warning line in the chat saying why, and a chat continued
+  there in bypass resumes in `default`.
+  The `chat_permissions`
   table records each chat's mode when its process starts, its picker changes,
   or the SDK reports a different mode in `system/init` or `system/status` (a
   repeated one is not written again). Resume, crash recovery, and history
   headers use that record; a fork inherits it. A chat's row goes when the chat
   is deleted (its transcript vanished) or moved away; Move to… does not carry
-  the mode over. No mode
-  is inferred for old chats without a record: they continue with Claude Code's
-  own settings until a mode is chosen or reported. Modes from before this
-  change cannot be recovered through the SDK's history API. Bypass is chosen
-  in a picker or inherited from a saved choice, and "always allow"
+  the mode over. A chat without a record (one from before modes were
+  recorded, begun in the terminal, or moved here) continues in the saved
+  default, and its header shows that mode until then; from its first start
+  here it has a record, so a later change of the default leaves it alone. Its
+  real earlier mode cannot be read: the SDK's history API drops the
+  transcript's `permissionMode`, and Threadgarden never reads transcripts
+  itself. Bypass is chosen in a picker or inherited from a saved choice
+  (including the saved default an unrecorded chat continues in), and "always allow"
   suggestions that would switch a session to bypass are filtered out.
 - **Capabilities.** The window gets only the Tauri permissions it uses: core
   defaults, notifications, the open-folder dialog, clipboard write, autostart

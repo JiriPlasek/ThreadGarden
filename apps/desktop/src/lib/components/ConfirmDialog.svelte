@@ -67,7 +67,11 @@
 </script>
 
 <AlertDialog.Root bind:open>
-  <AlertDialog.Content size="sm" class="gap-4 p-5" onCloseAutoFocus={closeAutoFocus}>
+  <AlertDialog.Content
+    size="sm"
+    class="gap-4 p-5 data-[size=sm]:max-w-sm"
+    onCloseAutoFocus={closeAutoFocus}
+  >
     <AlertDialog.Header>
       <AlertDialog.Title class="text-base">{title}</AlertDialog.Title>
       {#if description}
@@ -78,8 +82,11 @@
     {#if error}
       <p class="text-destructive text-sm" role="alert">{error}</p>
     {/if}
-    <AlertDialog.Footer>
-      <AlertDialog.Cancel size="sm" disabled={busy}>{cancelLabel}</AlertDialog.Cancel>
+    <!-- Keep the action as wide as its label; Cancel fills the remaining space. -->
+    <AlertDialog.Footer
+      class="flex-wrap group-data-[size=sm]/alert-dialog-content:flex sm:justify-between"
+    >
+      <AlertDialog.Cancel size="sm" class="flex-1" disabled={busy}>{cancelLabel}</AlertDialog.Cancel>
       <AlertDialog.Action
         size="sm"
         variant={destructive ? 'destructive' : 'default'}

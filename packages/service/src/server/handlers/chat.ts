@@ -430,13 +430,13 @@ export const registerChatHandlers = (router: Router, deps: ChatHandlerDeps): Cha
 
   /**
    * What the history says for the header, beneath whatever a process reports:
-   * the last reply (when, the cache's lifetime) and the context it left, with
+   * the mode the chat continues in, the last reply (when, the cache's
+   * lifetime) and the context it left, with
    * the window size a run of this chat (or of its model) last reported when
    * there is one that fits.
    */
   const historyHeader = (sessionId: string, last: LastReply | undefined): ChatHeaderInfo => {
-    const mode = db.getPermissionMode(sessionId);
-    const permissions = mode === undefined ? {} : { permissionMode: mode };
+    const permissions = { permissionMode: host.permissionModeOf(sessionId) };
     if (!last) return permissions;
     const max = db.contextWindow(sessionId, last.model);
     const used = last.contextTokens;
