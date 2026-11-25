@@ -1,13 +1,22 @@
 name: CI
 
 on:
+  # Once per commit: a branch is checked through its pull request, main on every push.
   push:
+    branches: [main]
   pull_request:
   # The release workflow runs these same checks before it builds anything.
   workflow_call:
 
+# A new push to a pull request cancels its older, now pointless run.
+concurrency:
+  group: ci-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   check:
+    # A release PR only changes version numbers; the tag's release run checks everything.
+    if: ${{ !startsWith(github.head_ref, 'chore/release-') }}
     strategy:
       fail-fast: false
       matrix:
@@ -92,6 +101,8 @@ jobs:
           path: dist-headless/*.zip*
 
   rust:
+    # A release PR only changes version numbers; the tag's release run checks everything.
+    if: ${{ !startsWith(github.head_ref, 'chore/release-') }}
     strategy:
       fail-fast: false
       matrix:
@@ -144,6 +155,8 @@ jobs:
   # Release bundles with the Node sidecar and the bundled service, then the UI's
   # end-to-end and performance specs (Playwright, Chromium) against the mock service.
   bundle:
+    # A release PR only changes version numbers; the tag's release run checks everything.
+    if: ${{ !startsWith(github.head_ref, 'chore/release-') }}
     strategy:
       fail-fast: false
       matrix:
@@ -209,6 +222,8 @@ jobs:
   # The Android app: the same UI and shell with the desktop-only parts left out,
   # as a debug APK for 64-bit ARM phones.
   android:
+    # A release PR only changes version numbers; the tag's release run checks everything.
+    if: ${{ !startsWith(github.head_ref, 'chore/release-') }}
     runs-on: ubuntu-22.04
     timeout-minutes: 60
     steps:
