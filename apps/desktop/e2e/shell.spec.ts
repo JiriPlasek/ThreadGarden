@@ -185,7 +185,8 @@ test('a flood stays responsive', async ({ page }) => {
   await composer(page).pressSequentially('still typing', { delay: 20 });
   await expect(composer(page)).toContainText('still typing');
   await expect(block(page)).toContainText('✓ exit 0 ·', { timeout: 45_000 });
-  await expect(block(page)).toContainText('output skipped here');
+  // Not checked here: the skipped-output note. It is drawn once, and a flood that runs past
+  // one second of the rate limit scrolls it off the screen (run.test.ts checks it).
 });
 
 test('a command on a paired machine shows its output once, live', async ({ page }) => {
