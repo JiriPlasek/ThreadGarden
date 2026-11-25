@@ -1,7 +1,9 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it } from 'vitest';
+import { PROTOCOL_VERSION, SHELL_CAPABILITY } from '@threadgarden/protocol';
+import { describe, expect, it, vi } from 'vitest';
 import ChatView from '../../src/lib/components/chat/ChatView.svelte';
+import NewChatDialog from '../../src/lib/components/NewChatDialog.svelte';
 import {
   fitImages,
   imageProblem,
@@ -13,11 +15,14 @@ import {
 } from '../../src/lib/components/composer/input';
 import { user } from '../chat/fixtures';
 import { renderChat as renderMcpChat } from '../chat/mcp-harness';
-import { LOCAL } from '../layout/harness';
+import { LOCAL, machineInfo, project, setup } from '../layout/harness';
 import { RpcFail } from '../service/fake-ws';
 import { CWD, fill, pushItems, pushStatus, renderChat, SID } from './helpers';
 
 type SendParams = { sessionId: string; text: string; images?: unknown[] };
+
+vi.mock('@xterm/xterm', () => import('../chat/fake-xterm'));
+vi.mock('@xterm/addon-fit', () => import('../chat/fake-xterm'));
 
 describe('composer', () => {
   const offerReply = (server: Parameters<typeof pushStatus>[0], seq = 2) =>
@@ -471,6 +476,138 @@ describe('/mcp', () => {
     await renderMcpChat({ capabilities: ['remote'] });
     await userEvent.type(field(), '/mcp{Escape}{Enter}');
     expect(await screen.findByText('Update This PC to manage MCP servers from here.')).toBeTruthy();
+  });
+});
+
+describe('! command mode', () => {
+  const field = () => screen.getByRole('textbox', { name: /message/i }) as HTMLDivElement;
+  const LABEL = "Runs in a terminal on This PC, in this chat's folder";
+  const shellChat = (sessionId?: string) =>
+    renderMcpChat({
+      ...(sessionId ? { sessionId } : {}),
+      capabilities: ['remote', SHELL_CAPABILITY],
+      configure: (s) => {
+        s.handlers['shell.start'] = (p) => ({
+          runId: 'r1',
+          sessionId: 's1',
+          command: (p as { command: string }).command,
+          cwd: '/work/alpha',
+          cols: 100,
+          rows: 24,
+          startedAt: Date.now(),
+          state: 'running',
+        });
+      },
+    });
+  const started = (server: Parameters<typeof pushStatus>[0]) =>
+    server.calls('shell.start').map((c) => (c.params as { command: string }).command);
+
+  it('a leading ! turns on command mode and sends the command, not a message', async () => {
+    const env = await shellChat();
+    await userEvent.type(field(), '  ');
+    expect(field().closest('[data-command-mode]')).toBeNull();
+    await userEvent.type(field(), '!');
+    const box = field().closest('[data-command-mode]') as HTMLElement;
+    expect(box).not.toBeNull();
+    expect(within(box).getByTitle(LABEL).textContent?.trim()).toBe('!');
+    await userEvent.type(field(), ' git status{Enter}');
+    await waitFor(() => expect(started(env.server)).toEqual(['git status']));
+    expect(env.server.calls('chat.send')).toHaveLength(0);
+    await waitFor(() => expect(field().textContent).toBe(''));
+    expect(field().closest('[data-command-mode]')).toBeNull();
+  });
+
+  it('images and image tags are left out; pasted text runs', async () => {
+    const env = await shellChat();
+    const pasted = Array.from({ length: 9 }, (_, i) => `line ${i + 1}`).join('\n');
+    await fill(field(), '! cat');
+    const png = new File([new Uint8Array([137, 80, 78, 71])], 'shot.png', { type: 'image/png' });
+    fireEvent.paste(field(), { clipboardData: { files: [png], items: [] } });
+    await waitFor(() => expect(field().textContent).toBe('! cat [Image #1]'));
+    fireEvent.paste(field(), {
+      clipboardData: {
+        files: [],
+        items: [],
+        getData: (type: string) => (type === 'text/plain' ? pasted : ''),
+      },
+    });
+    await waitFor(() => expect(field().textContent).toContain('[Pasted text #1 +9 lines]'));
+    await userEvent.keyboard('{Enter}');
+    await waitFor(() => expect(started(env.server)).toHaveLength(1));
+    expect(started(env.server)[0]).toBe(`cat  ${pasted}`);
+    expect(env.server.calls('shell.start')[0]!.params).not.toHaveProperty('images');
+    await waitFor(() =>
+      expect(screen.queryByRole('list', { name: /attached images/i })).toBeNull(),
+    );
+  });
+
+  it('while Claude works, the button is Send for a command and Queue message for a message', async () => {
+    const env = await shellChat();
+    pushStatus(env.server, 2, 'working');
+    await fill(field(), 'next step');
+    expect(await screen.findByRole('button', { name: 'Queue message' })).toBeTruthy();
+    await fill(field(), '! ls');
+    await waitFor(() => expect(field().closest('[data-command-mode]')).not.toBeNull());
+    expect(screen.getByRole('button', { name: 'Send' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Queue message' })).toBeNull();
+  });
+
+  it('! alone says Type a command after !', async () => {
+    const env = await shellChat();
+    await userEvent.type(field(), '!{Enter}');
+    expect(
+      (await screen.findByRole('status', { name: 'Command notice' })).textContent?.trim(),
+    ).toBe('Type a command after !');
+    expect(env.server.calls('shell.start')).toHaveLength(0);
+    expect(env.server.calls('chat.send')).toHaveLength(0);
+  });
+
+  it('without onCommand a leading ! is sent as text (Codex)', async () => {
+    const env = await shellChat('codex-1');
+    await userEvent.type(field(), '!');
+    expect(field().closest('[data-command-mode]')).toBeNull();
+    await userEvent.type(field(), ' ls{Enter}');
+    await waitFor(() => expect(env.server.calls('chat.send')).toHaveLength(1));
+    expect((env.server.calls('chat.send')[0]!.params as SendParams).text).toBe('! ls');
+    expect(env.server.calls('shell.start')).toHaveLength(0);
+  });
+
+  it('without onCommand a leading ! is sent as text (New chat)', async () => {
+    const { server, app, context } = await setup((s) => {
+      Object.assign(s.handlers, {
+        hello: () => ({
+          serviceVersion: '0.1.0',
+          protocolVersion: PROTOCOL_VERSION,
+          machine: machineInfo(LOCAL, 'my-host', ['remote', SHELL_CAPABILITY]),
+        }),
+        'projects.list': () => [project('p1', 'alpha')],
+        'chat.models': () => [],
+        'chat.commands': () => [],
+        'files.suggest': () => [],
+        'chat.create': () => ({ sessionId: 'new-1' }),
+      });
+    });
+    await app.places.refresh();
+    app.interaction.openNewChat('/work/alpha');
+    render(NewChatDialog, { context });
+    const dialog = await screen.findByRole('dialog', { name: /new chat/i });
+    const box = within(dialog).getByRole('textbox', { name: /message/i });
+    await userEvent.type(box, '! ls');
+    expect(box.closest('[data-command-mode]')).toBeNull();
+    await userEvent.keyboard('{Enter}');
+    await waitFor(() => expect(server.calls('chat.create')).toHaveLength(1));
+    expect(server.calls('chat.create')[0]!.params).toMatchObject({ text: '! ls' });
+    expect(server.calls('shell.start')).toHaveLength(0);
+  });
+
+  it('/ inside a command opens no slash menu', async () => {
+    await shellChat();
+    await userEvent.type(field(), '!/');
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.queryByRole('listbox')).toBeNull();
+    await fill(field(), '! /usr/bin/env');
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.queryByRole('listbox')).toBeNull();
   });
 });
 

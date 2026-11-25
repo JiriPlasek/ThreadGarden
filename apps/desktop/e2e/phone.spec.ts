@@ -1,6 +1,6 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { FAKE_PLUG, FAKE_SWITCH_PASSWORD, FAKE_SWITCH_PORT } from './env';
-import { markAllSeen, phoneCall, remoteCall } from './helpers';
+import { chatRow, markAllSeen, phoneCall, remoteCall } from './helpers';
 
 /**
  * The phone layout (phone plan, Task 12) at a phone's viewport with touch,
@@ -43,7 +43,8 @@ const openProject = async (page: Page): Promise<void> => {
 /** From the places: chat `sessionId` of tg-cli. */
 const openChat = async (page: Page, sessionId: string): Promise<void> => {
   await openProject(page);
-  await row(page, sessionId).tap();
+  // The list draws only the rows in view: scroll to it, as chats other specs made sit above.
+  await (await chatRow(page, sessionId)).tap();
   await expect(composer(page)).toBeVisible();
 };
 
@@ -519,4 +520,21 @@ test("the phone layout opens the MCP servers dialog from the chat's menu", async
   expect(box!.x + box!.width).toBeLessThanOrEqual(412);
   await page.keyboard.press('Escape');
   await expect(dialog).toBeHidden();
+});
+
+test('the phone layout runs a command and stops it with the button', async ({ page }) => {
+  await openPhone(page);
+  await openChat(page, 'session-15');
+  await send(page, 'Hello from the shell test');
+  await expect(page.getByText('This is the Threadgarden mock service answering.')).toBeVisible();
+  await send(page, '! sleep 60');
+  const block = page.locator('[data-shell-block]');
+  await expect(block).toBeVisible();
+  await expect(block).toContainText('Running ·');
+  // Fits the screen.
+  const box = await block.boundingBox();
+  expect(box!.x + box!.width).toBeLessThanOrEqual(412);
+  await block.getByRole('button', { name: 'Stop' }).tap();
+  await expect(block).toContainText('Stopped ·');
+  await expect(block.getByRole('button', { name: 'Stop' })).toHaveCount(0);
 });

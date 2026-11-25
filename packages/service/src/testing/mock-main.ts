@@ -117,6 +117,15 @@
  * is gone at once too, for `github` (user), `mock-off` (local) and `mock-etoro` (project) as well;
  * the chat's process restarts between turns and a new one reads the same list. `mock.mcpReset`
  * forgets every add and remove.
+ *
+ * `!` commands (protocol 13): both mocks run them in a fake terminal
+ * (`mock-pty.ts`) scripted by the command: `sudo …` asks for a password
+ * (never echoed), then `Do you want to continue? [Y/n]`, then draws a coloured
+ * progress bar for about 1.5 s (`n` aborts, exit 1); `sleep N` waits N s;
+ * `ignore-int` ignores Ctrl-C; `flood` writes 3 MB of numbered lines; `exit N`
+ * exits N; `ls` prints coloured names; anything else prints `mock: <command>`.
+ * The command's entries are appended without a turn, and the next reply
+ * begins `I can see the output of \`! <command>\`.`
  */
 import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -149,6 +158,7 @@ import { startService, type ServiceHandle } from '../main.js';
 import type { McpConfig } from '../mcp/config.js';
 import type { McpProjectFiles } from '../mcp/project-files.js';
 import { CREATE_IN_KEY } from '../projects/maker.js';
+import { mockPty } from './mock-pty.js';
 import { startFakeTasmota, type FakeDevice, type FakeTasmota } from './fake-tasmota.js';
 import type { MoveGit } from '../server/handlers/move.js';
 import { ServiceError } from '../server/router.js';
@@ -551,6 +561,8 @@ class ScriptedSession extends FakeSession {
   private readonly shells = new Map<string, string>();
   /** Running "agent" subagent tasks: task id → its stop signal. */
   private readonly agents = new Map<string, AbortController>();
+  /** The first `!` command appended since the last turn, which the next reply mentions. */
+  private seen: string | undefined;
   /** Messages sent that no turn has started yet. */
   private readonly waiting = new Set<string>();
 
@@ -602,6 +614,11 @@ class ScriptedSession extends FakeSession {
    */
   override send(m: SDKUserMessage): void {
     super.send(m);
+    if (m.shouldQuery === false) {
+      // An entry for the transcript (a `!` command's): no turn, no lifecycle; Claude sees it next turn.
+      this.seen ??= /<bash-input>([\s\S]*?)<\/bash-input>/.exec(textOf(m))?.[1];
+      return;
+    }
     const uuid = m.uuid;
     if (uuid !== undefined) {
       this.waiting.add(uuid);
@@ -722,6 +739,8 @@ class ScriptedSession extends FakeSession {
     }
     this.abort = new AbortController();
     const started = Date.now();
+    const seenNote = this.seen === undefined ? '' : `I can see the output of \`! ${this.seen}\`. `;
+    this.seen = undefined;
     // Threadgarden's first note in a moved chat gets the plain reply: it says "stop and ask".
     const lower = text.startsWith(THREADGARDEN_NOTE) ? '' : text.toLowerCase();
     if (lower.includes('limit')) this.adapter.reachLimit();
@@ -735,7 +754,7 @@ class ScriptedSession extends FakeSession {
     else if (lower.includes('plan')) await this.planTurn();
     else if (lower.includes('agent')) await this.agentTurn();
     else if (lower.includes('server')) await this.serverTurn();
-    else await this.say(SENTENCES.slice(0, 3).join(' '));
+    else await this.say(`${seenNote}${SENTENCES.slice(0, 3).join(' ')}`);
     const interrupted = this.abort.signal.aborted;
     this.out(
       msg({
@@ -1840,6 +1859,7 @@ export const startMockService = async (o: MockOptions = {}): Promise<MockService
       folderStat: async () => true,
       moveGit: mockMoveGit,
       mcpFiles,
+      shell: { pty: mockPty, line: (command) => ({ file: 'mock-sh', args: ['-c', command] }) },
       mcpConfig: adapter.mcpConfig,
       projectIconSearch: async (projectPath) => {
         const dir = iconDirs.get(projectPath.replace(/\\/g, '/'));

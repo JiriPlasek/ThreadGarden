@@ -50,7 +50,10 @@ flowchart TB
   because the Agent SDK, the only official programmatic interface to Claude
   Code, exists for TypeScript and Python only. Release builds run it as one
   esbuild bundle (`service.mjs`) on a Node.js runtime shipped as the Tauri
-  sidecar `threadgarden-node`.
+  sidecar `threadgarden-node`. The one native piece is the PTY module behind `!`
+  commands (`@lydell/node-pty`, prebuilt N-API binaries): esbuild leaves it
+  external and its files ship in `node_modules/` beside `service.mjs` (see
+  `!` commands under Live chats).
 - **Claude Code processes**: each live chat is one Agent SDK `query()` in
   streaming-input mode, which spawns the user's installed `claude`
   (`pathToClaudeCodeExecutable`; no fallback to the SDK's bundled binary) with
@@ -124,10 +127,10 @@ a burst of more than 10 uncaught exceptions in a minute ends the process.
 Shutdown runs every step even if one fails, and always releases the lock.
 
 **Versions.** `hello` exchanges the protocol version and the service version.
-The local service must speak exactly the app's protocol (12); any other
+The local service must speak exactly the app's protocol (13); any other
 version is incompatible: the UI shows a blocking screen that offers to
 restart the service. A paired machine's service is accepted one version
-either way (11–13, `REMOTE_PROTOCOL_RANGE`; see Versions across machines
+either way (12–14, `REMOTE_PROTOCOL_RANGE`; see Versions across machines
 under [Protocol](#protocol)). The same protocol with a different
 service version (an app update while the old service still runs) shows a thin
 "older version" bar instead; Threadgarden never restarts the service on its own,
@@ -220,6 +223,51 @@ by the end-to-end tests).
 A chat that isn't running offers **Wake the chat** (`chat.wake`), which goes
 through the same resume-safety check as sending. Codex chats have none of this.
 
+**`!` commands** (protocol 13; the design is
+`docs/superpowers/specs/2026-11-22-shell-commands-design.md`, with what the spike
+found in [the spike results](superpowers/specs/2026-11-22-shell-commands-spike-results.md)).
+In a Claude chat that has a session, a message that starts with `!` runs the
+rest as a shell command on the chat's machine, in the chat's folder, as the
+CLI's own `!` does. Each command is its own fresh pseudo-terminal
+(`shell/run.ts`, `@lydell/node-pty`), so `cd`, `export` and sudo's cache don't
+carry over. The command goes to the shell as one argument: on Linux and macOS
+the user's `$SHELL` when it is bash or zsh, else `bash`, run as `-lic`; on
+Windows Git Bash (`CLAUDE_CODE_GIT_BASH_PATH`, else found next to `git`), else
+`pwsh.exe` or `powershell.exe` with `-NoLogo -NoProfile -EncodedCommand`
+(`shell/shell-line.ts`). A chat has one command at a time (`SHELL_BUSY`); a Codex
+chat, or a chat with no session, answers `SHELL_UNSUPPORTED` and a leading `!`
+there (and in New chat) stays plain text. The window shows the command as a live
+terminal block (xterm, 24 rows, 5,000 lines of its own scrollback): keystrokes go
+to the process, so a sudo password or a `[Y/n]` is typed in the block. The service
+keeps the last 256 KB of output (`SHELL_SCROLLBACK_CHARS`) for a window that opens
+the chat later (`chat.open` carries the run, `shell.get` the scrollback), coalesces
+output into one `shell.output` event per 50 ms (at most 64 KB each) and caps it at
+512 KB/s: past that the excess is dropped and the screen gets a single
+"output skipped here: too fast to show" marker, so a flood never stalls the link or
+the window. Closing a tab or window doesn't stop a command; it redraws from the
+scrollback when the chat is opened again.
+
+When the command ends (by itself or by **Stop**), the service appends it to the
+chat without starting a turn, in the CLI's format: two user messages sent with
+`shouldQuery: false`, `<bash-input>CMD</bash-input>`, then
+`<bash-stdout>OUT</bash-stdout><bash-stderr></bash-stderr>` (tag-like text
+inside is escaped as the CLI does). `OUT` is the terminal's text with escape
+codes removed; past 30,000 characters only the end is kept, behind the note
+`Output too large (‹N› characters); only the last 30000 are kept.` (the CLI
+keeps the start in a file under `~/.claude`, which Threadgarden never writes
+to). Claude sees it with the next user message (during a turn, at its next
+step). Appending never changes the chat's status and never emits `chatFinished`:
+each such message makes the CLI send a `result` with `num_turns: 0`, which
+`LiveSession` ignores. Stop sends Ctrl-C, then kills the process tree after 3 s
+if it still runs. End session, Stop all work, Move to… (a running command is a
+busy reason, `command`), service shutdown and a crashed Claude process end a
+running command too; one ended that way is not appended ("Stopped when the
+session ended · not added to the chat"). A running `!` keeps its session from
+idle reclaim and counts as busy for the machine's idle shutdown (unlike
+background shells), and shows in **Running**. The PTY module loads at start; if
+it can't, the service omits the capability `shell` and the window doesn't offer
+`!` there ("Update ‹machine› to run ! commands here.").
+
 **Activity panel** (v1.1 §2, v1.3 §2). Each live session folds the SDK's
 `system/task_*` and `background_tasks_changed` messages into a task list
 (`chat/tasks.ts`), published as `chat.tasks`. An agent's model is on no task
@@ -264,26 +312,27 @@ service and the UI; the service validates every request.
   `chat.since`); **1001** when the local service stops. The UI also checks
   that the relayed `hello` names the paired machine's id: another id counts
   as a mismatch, like 4409, and the client stops.
-- **Versions across machines.** The protocol is 12 (v1.4 was 5; 6 added power
+- **Versions across machines.** The protocol is 13 (v1.4 was 5; 6 added power
   control, 7 projects, 8 the usage state's account, 9 moving a chat, 10
-  updating a machine, 11 a machine that's away, 12 MCP servers in the chat). The
-  desktop and its local service still need the exact version; a remote
-  service is accepted one version either way (11, 12 or 13 for a desktop on 12,
-  `REMOTE_PROTOCOL_RANGE`; the Rust shell keeps its own copy of the version in
-  `src-tauri/src/service.rs`). What a machine can do is read from the
-  capabilities in its `hello`, not from its version: the desktop offers power
-  control only with `power`, New project, Clone and Browse… only with
-  `projects`, a machine as a target of Move to… only with `move`, and a waiting message
-  for a machine only with `away`, and the MCP servers banner, dialog and
-  menu item only with `mcp`. A worker in WSL on a Windows PC also says
-  `host: 'wsl'` in its `machine` (an optional field, no new version; its
-  platform stays `linux`), and the desktop shows it as Windows (WSL). On an
-  older machine the New project and Clone tabs and Browse… show disabled with
-  "Update ‹machine› to use this", and Move to… lists it disabled with "Update
-  ‹machine› to move chats there"; power control without `power` isn't offered
-  at all. A method a service lacks still answers `METHOD_NOT_FOUND` (it
-  surfaces as any failed request). A machine outside that window shows as
-  needing attention ("Different Threadgarden version").
+  updating a machine, 11 a machine that's away, 12 MCP servers in the chat, 13
+  `!` commands in the chat). The desktop and its local service still need the
+  exact version; a remote service is accepted one version either way (12, 13
+  or 14 for a desktop on 13, `REMOTE_PROTOCOL_RANGE`; the Rust shell keeps its
+  own copy of the version in `src-tauri/src/service.rs`). What a machine can do
+  is read from the capabilities in its `hello`, not from its version: the
+  desktop offers power control only with `power`, New project, Clone and Browse…
+  only with `projects`, a machine as a target of Move to… only with `move`, and
+  a waiting message for a machine only with `away`, and the MCP servers banner,
+  dialog and menu item only with `mcp`, Add server and Remove only with
+  `mcp-config`, and `!` only with `shell`. A worker in
+  WSL on a Windows PC also says `host: 'wsl'` in its `machine` (an optional
+  field, no new version; its platform stays `linux`), and the desktop shows it
+  as Windows (WSL). On an older machine the New project and Clone tabs and
+  Browse… show disabled with "Update ‹machine› to use this", and Move to… lists
+  it disabled with "Update ‹machine› to move chats there"; power control without
+  `power` isn't offered at all. A method a service lacks still answers
+  `METHOD_NOT_FOUND` (it surfaces as any failed request). A machine outside that
+  window shows as needing attention ("Different Threadgarden version").
 - **Requests** `{id, method, params}` → `{id, result}` or `{id, error: {code,
   message}}`. Error codes the UI acts on include `GAP`, `RESUME_BLOCKED`,
   `CLAUDE_MISSING`, `NOT_LIVE`, `NOT_FOUND`, `FORK_FAILED` and
@@ -292,8 +341,9 @@ service and the UI; the service validates every request.
   `chat.older`, `chat.since`, `chat.create`, `chat.send`, `chat.respond`,
   `chat.fork`, `chat.end`, model/mode/effort controls, `chat.resumeCheck`),
   Threadgarden-side metadata, drafts, UI state, settings, `files.suggest`,
-  `work.stopAll`, `service.shutdown`, `system.status` and (v1.3) `analytics.get`. `chat.markSeen`
-  records that the user has seen a chat's latest turn ("Your turn", below).
+  `work.stopAll`, `service.shutdown`, `system.status` and (v1.3)
+  `analytics.get`. `chat.markSeen` records that the user has seen a chat's
+  latest turn ("Your turn", below).
   v1.3 (protocol 3) adds `usage.get` (the account's plan usage; `refresh`
   asks a running chat for a fresh reading) and `scheduled.create`, `.list`,
   `.get`, `.update`, `.cancel` and `.sendNow` (below).
@@ -313,7 +363,13 @@ service and the UI; the service validates every request.
   `MOVING`, `MOVED`, `BUSY`, `TOO_LARGE`, `EXPIRED` and `ALREADY_HERE`
   ([Moving a chat](#moving-a-chat)). Protocol 12 adds `mcp.list`, `.approve`,
   `.signIn`, `.submitCallback` and `.act`, `chat.wake`, the event `mcp.changed`
-  and the capability `mcp` ("MCP servers" under Lifecycle). It also adds `mcp.add` and `mcp.remove` under the runtime capability `mcp-config` (no protocol bump).
+  and the capability `mcp` ("MCP servers" under Lifecycle); it also adds
+  `mcp.add` and `mcp.remove` under the runtime capability `mcp-config` (no
+  protocol bump). Protocol 13 adds `shell.start`, `.input`, `.resize`, `.stop`
+  and `.get`, the events `shell.run` and `shell.output`, `shell` (the run) on
+  `chat.open`, `command` as a busy reason of `move.check`, the errors
+  `SHELL_UNSUPPORTED`, `SHELL_BUSY`, `SHELL_NOT_RUNNING` and `SHELL_FAILED`, and
+  the capability `shell` (`!` commands under Lifecycle).
 - **Local-only methods** (v1.4). Every request is dispatched with its
   origin, `local` (the loopback server) or `remote` (the TLS listener), and
   a method registered `localOnly` answers `FORBIDDEN` to a remote caller
@@ -1357,6 +1413,14 @@ no Claude Code, and the app contains no Node.
   no GitHub token is stored. A move ([Moving a chat](#moving-a-chat)) only
   reads git, and makes at most the chat's new folder, empty, when it is
   missing.
+- **`!` input is forwarded, never recorded.** `shell.input` data goes to the PTY
+  and nowhere else: not into an event, the database, the event log, the service
+  log, an error message, the scrollback or the transcript text, and never to
+  Claude. A sudo password typed in the block is not echoed by the terminal, so
+  it is not in the output either. Commands themselves are shown in the chat, so
+  don't put a secret in one. Paired devices may use `shell.*` (as they may
+  `chat.send`): a paired device already runs Claude Code, with its Bash tool,
+  on the machine.
 - **Moved chats** live in Threadgarden's own data dir (`threadgarden.db`) on
   the machine they moved to. On the way a transcript passes through the
   desktop: over loopback for This PC's service, over the pinned TLS link for
@@ -1658,6 +1722,27 @@ unless said otherwise:
   later as a task notification that started a new turn. Called before the
   command's `task_started` (the shell takes a few seconds to start on
   Windows), it moved nothing.
+
+`test/real/shell.real.test.ts` (the spike, checks C1 to C5) ran against Claude Code 2.1.318
+and 2.1.330 with SDK 0.3.314 on Windows 11 (Linux and macOS are for the hardware
+check and CI; the full results are in [the spike results](superpowers/specs/2026-11-22-shell-commands-spike-results.md)):
+
+- The CLI writes a `!` command as two user entries, `<bash-input>…</bash-input>`
+  and `<bash-stdout>…</bash-stdout><bash-stderr>…</bash-stderr>` (both tags
+  always), and escapes `<` and `>` in the output. Past 30,000 characters it keeps
+  the start and writes the rest to a file under its config dir; Threadgarden keeps
+  the end instead.
+- A message appended with `shouldQuery: false` starts no turn and reaches Claude
+  with the next user message (appended during a turn, it joins that turn's next
+  model call). It is not echoed on the stream, but each one brings
+  `command_lifecycle` frames, a `system` `init` and a `result` with `num_turns: 0`.
+- Claude Code's Bash tool uses Git Bash on Windows when it is installed (the
+  `CLAUDE_CODE_GIT_BASH_PATH` file must be `<Git>\bin\bash.exe`), else PowerShell;
+  on Unix the user's bash or zsh.
+- `@lydell/node-pty` 1.2.0-beta.18 runs under the bundled Node 22 with no rebuild
+  (N-API) on Windows x64 and Linux x64; Ctrl-C, resize and kill (the whole tree)
+  work. Its exit code can't tell Stop from a crash on Windows, so "stopped" comes
+  from the service's own state.
 
 `test/real/smoke.real.test.ts` covers the lower-level facts recorded under
 [Authentication](#authentication) (session id, no echo of sent messages,

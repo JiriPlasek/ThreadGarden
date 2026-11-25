@@ -16,5 +16,6 @@
  * 10 — update a machine: update.*, the update capability, update.progress.
  * 11 — a machine that's away: the away capability, messageId on chat.send, sessionId on chat.create; local copies.* and away.*
  * 12 — MCP servers in the chat: mcp.*, chat.wake, mcp.changed, the mcp capability; mcp.add / mcp.remove behind the mcp-config capability.
+ * 13 — ! commands: shell.start, .input, .resize, .stop, .get, the shell.run and shell.output events, shell on chat.open, 'command' as a move busy reason, the shell capability.
  */
-export const PROTOCOL_VERSION = 12;
+export const PROTOCOL_VERSION = 13;

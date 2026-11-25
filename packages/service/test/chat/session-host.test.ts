@@ -1,3 +1,4 @@
+import { WAKE_GRACE_MS } from '../../src/chat/schedule.js';
 import { describe, expect, it } from 'vitest';
 import {
   settingsDefaults,
@@ -14,6 +15,7 @@ import {
 } from '../../src/chat/session-host.js';
 import type { SessionStore } from '../../src/sdk/adapter.js';
 import { FakeAdapter } from '../../src/testing/fake-adapter.js';
+import { fakePtyFactory } from '../../src/testing/fake-pty.js';
 import {
   init,
   ManualTimers,
@@ -186,6 +188,78 @@ describe('SessionHost', () => {
     expect(host.reclaimIdle(timers.now() + 60 * MIN)).toBe(1);
     expect(fake.closed).toBe(true);
     expect(host.get(s.sessionId)?.status).toBe('paused');
+  });
+
+  it('reclaimIdle and restartWhenIdle spare a chat holding a /loop wake-up', async () => {
+    const ctx = setup();
+    const { host, timers } = ctx;
+    const { s, fake } = await idleChat(ctx);
+    const wake = (id: string, input: unknown, out: unknown) => {
+      fake.emit({
+        type: 'assistant',
+        message: {
+          role: 'assistant',
+          content: [{ type: 'tool_use', id, name: 'ScheduleWakeup', input }],
+        },
+        parent_tool_use_id: null,
+      } as never);
+      fake.emit({
+        type: 'user',
+        message: {
+          role: 'user',
+          content: [{ type: 'tool_result', tool_use_id: id, content: 'ok' }],
+        },
+        parent_tool_use_id: null,
+        tool_use_result: out,
+      } as never);
+    };
+    wake(
+      'w1',
+      { delaySeconds: 3600, prompt: '/loop check' },
+      { scheduledFor: timers.now() + 60 * MIN },
+    );
+    fake.emit(result('r-wake'));
+    await settle();
+    expect(s.status).toBe('idle');
+    expect(s.scheduled).toBe(true);
+    expect(host.list().find((c) => c.sessionId === s.sessionId)?.scheduled).toBe(true);
+
+    expect(host.reclaimIdle(timers.now() + 30 * MIN)).toBe(0);
+    expect(host.restartWhenIdle(s.sessionId)).toBe(false);
+    expect(fake.closed).toBe(false);
+
+    // The loop stops: the waiting restart runs when that turn ends.
+    wake('w2', { stop: true }, { stopped: true, cancelledWakeups: 1 });
+    await settle();
+    expect(s.scheduled).toBe(false);
+    expect(fake.closed).toBe(false);
+    fake.emit(result('r-stop'));
+    await settle();
+    expect(fake.closed).toBe(true);
+    expect(s.scheduled).toBe(false);
+  });
+
+  it('reclaimIdle closes a chat once its /loop wake-up is long past', async () => {
+    const ctx = setup();
+    const { host, timers } = ctx;
+    const { s, fake } = await idleChat(ctx);
+    fake.emit({
+      type: 'assistant',
+      message: {
+        role: 'assistant',
+        content: [
+          { type: 'tool_use', id: 'w1', name: 'ScheduleWakeup', input: { delaySeconds: 60 } },
+        ],
+      },
+      parent_tool_use_id: null,
+    } as never);
+    fake.emit(result('r-wake'));
+    await settle();
+    expect(s.scheduled).toBe(true);
+    timers.advance(60_000 + WAKE_GRACE_MS);
+    expect(s.scheduled).toBe(false);
+    expect(host.reclaimIdle(timers.now() + 60 * MIN)).toBe(1);
+    expect(fake.closed).toBe(true);
   });
 
   it('reclaimIdle never closes needsYou or pinned', async () => {
@@ -605,6 +679,105 @@ describe('SessionHost', () => {
       [s.sessionId, 1],
       [s.sessionId, 0],
     ]);
+  });
+});
+
+describe('SessionHost: ! commands', () => {
+  const SIZE = { cols: 80, rows: 24 };
+  const shellSetup = () => {
+    const pty = fakePtyFactory();
+    const ctx = setup({
+      shell: { pty: pty.factory, line: (c) => ({ file: 'sh', args: ['-c', c] }) },
+    });
+    return { ...ctx, pty };
+  };
+
+  it('reclaim spares a chat running a command', async () => {
+    const ctx = shellSetup();
+    const { host, timers } = ctx;
+    const { s, fake } = await idleChat(ctx);
+    s.startCommand('sleep 100', SIZE);
+    expect(host.reclaimIdle(timers.now() + 60 * MIN)).toBe(0);
+    expect(fake.closed).toBe(false);
+
+    // A long command: the idle wait counts from its end, not from before it ran.
+    timers.advance(60 * MIN);
+    ctx.pty.last().exit(0);
+    const wait = ctx.settings.idleReclaimMinutes * MIN;
+    expect(host.reclaimIdle(timers.now() + wait - 1)).toBe(0);
+    expect(fake.closed).toBe(false);
+    expect(host.reclaimIdle(timers.now() + wait)).toBe(1);
+    expect(fake.closed).toBe(true);
+  });
+
+  it('list counts a running command in runningTasks and runningAgents', async () => {
+    const ctx = shellSetup();
+    const { s } = await idleChat(ctx);
+    s.startCommand('sleep 100', SIZE);
+    expect(ctx.host.list()).toEqual([
+      expect.objectContaining({ sessionId: s.sessionId, runningTasks: 1, runningAgents: 1 }),
+    ]);
+    ctx.pty.last().exit(0);
+    expect(ctx.host.list()[0]).not.toHaveProperty('runningTasks');
+    expect(ctx.host.list()[0]).not.toHaveProperty('runningAgents');
+  });
+
+  it('stopAll stops commands', async () => {
+    const ctx = shellSetup();
+    const { s, fake } = await idleChat(ctx);
+    const run = s.startCommand('sleep 100', SIZE);
+    expect(ctx.host.stopAll()).toBe(1);
+    expect(ctx.pty.last().kills).toHaveLength(1);
+    expect(s.command()?.run).toMatchObject({ runId: run.runId, endReason: 'session' });
+    expect(fake.sent.filter((m) => m.shouldQuery === false)).toEqual([]);
+  });
+
+  it('restartWhenIdle waits for a running command, then for quiet after it', async () => {
+    const ctx = shellSetup();
+    ctx.host.start();
+    const { s, fake } = await idleChat(ctx);
+    s.startCommand('sleep 100', SIZE);
+    expect(ctx.host.restartWhenIdle(s.sessionId)).toBe(false);
+    ctx.timers.advance(MIN);
+    expect(fake.closed).toBe(false);
+
+    // The command ends 10 s before a tick; its entries were just appended.
+    ctx.timers.advance(MIN - 10_000);
+    ctx.pty.last().exit(0);
+    expect(fake.sent.filter((m) => m.shouldQuery === false)).toHaveLength(2);
+    ctx.timers.advance(10_000);
+    expect(fake.closed).toBe(false);
+    ctx.timers.advance(MIN);
+    expect(fake.closed).toBe(true);
+    expect(ctx.adapter.started).toHaveLength(2);
+    expect(ctx.adapter.lastSession().options.resume).toBe(s.sessionId);
+    ctx.host.dispose();
+  });
+
+  it('restartWhenIdle right after a command waits until its entries can be saved', async () => {
+    const ctx = shellSetup();
+    ctx.host.start();
+    const { s, fake } = await idleChat(ctx);
+    s.startCommand('echo hi', SIZE);
+    ctx.pty.last().exit(0);
+    expect(s.appending).toBe(true);
+    expect(ctx.host.restartWhenIdle(s.sessionId)).toBe(false);
+    expect(fake.closed).toBe(false);
+    // No answer ever comes: the tick restarts it after the quiet time.
+    ctx.timers.advance(MIN);
+    ctx.timers.advance(MIN);
+    expect(fake.closed).toBe(true);
+    ctx.host.dispose();
+  });
+
+  it('commandRun finds a run by id', async () => {
+    const ctx = shellSetup();
+    const { s } = await idleChat(ctx, '/a');
+    await idleChat(ctx, '/b');
+    const run = s.startCommand('sleep 100', SIZE);
+    expect(ctx.host.commandRun(run.runId)).toBe(s.commandRun(run.runId));
+    expect(ctx.host.commandRun(run.runId)?.info.runId).toBe(run.runId);
+    expect(ctx.host.commandRun('nope')).toBeUndefined();
   });
 });
 

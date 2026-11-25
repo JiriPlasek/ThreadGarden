@@ -13,6 +13,7 @@ import { SessionHost } from '../src/chat/session-host.js';
 import { startService, type ServiceHandle } from '../src/main.js';
 import type { ClaudeFound } from '../src/sdk/claude-path.js';
 import { generateCorpus } from '../src/testing/corpus.js';
+import { fakePtyFactory } from '../src/testing/fake-pty.js';
 
 let dir: string;
 beforeEach(async () => {
@@ -83,6 +84,7 @@ describe('startService', () => {
       claudeConfigDir: join(dir, 'claude-missing'),
       adapter,
       installSignalHandlers: false,
+      shell: { pty: fakePtyFactory().factory },
     });
     const hello = (await rpc(svc.port, svc.token, 'hello', {
       protocolVersion: PROTOCOL_VERSION,
@@ -91,7 +93,7 @@ describe('startService', () => {
     expect(hello.result.machine).toMatchObject({
       platform: process.platform,
       headless: false,
-      capabilities: ['remote', 'projects', 'move', 'away', 'mcp', 'mcp-config'],
+      capabilities: ['remote', 'projects', 'move', 'away', 'mcp', 'mcp-config', 'shell'],
     });
     const renamed = (await rpc(svc.port, svc.token, 'machine.rename', { name: ' Den ' })) as {
       result: { id: string; name: string };

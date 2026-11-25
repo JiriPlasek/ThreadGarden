@@ -210,20 +210,18 @@ export const chatRow = async (page: Page, sessionId: string): Promise<Locator> =
   const row = list.locator(`[role="option"][data-session-id="${sessionId}"]`);
   const box = list.getByRole('listbox');
   await expect(box).toBeVisible();
-  await expect
-    .poll(
-      async () => {
-        if ((await row.count()) > 0) return true;
-        await box.evaluate((el) => {
-          // Past the end: start over, as a row that arrives late lands above where we scrolled to.
-          if (el.scrollTop + el.clientHeight >= el.scrollHeight - 1) el.scrollTop = 0;
-          else el.scrollTop += el.clientHeight * 0.8;
-        });
-        return false;
-      },
-      { message: `chat list row ${sessionId}`, intervals: [50] },
-    )
-    .toBe(true);
-  await row.scrollIntoViewIfNeeded();
+  // Find and scroll in one retry: the list can redraw in between, and the row then
+  // leaves the drawn window again.
+  await expect(async () => {
+    if ((await row.count()) === 0) {
+      await box.evaluate((el) => {
+        // Past the end: start over, as a row that arrives late lands above where we scrolled to.
+        if (el.scrollTop + el.clientHeight >= el.scrollHeight - 1) el.scrollTop = 0;
+        else el.scrollTop += el.clientHeight * 0.8;
+      });
+      throw new Error(`chat list row ${sessionId} is not drawn`);
+    }
+    await row.scrollIntoViewIfNeeded({ timeout: 1_000 });
+  }).toPass({ intervals: [50], timeout: 45_000 });
   return row;
 };

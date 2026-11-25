@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { McpStateSchema } from './mcp.js';
+import { ShellRunSchema } from './shell.js';
 import { AwayItemSchema, AwayStateSchema } from './away.js';
 import { ChatHeaderInfoSchema, ChatStatusSchema, PromptSuggestionSchema } from './chat.js';
 import { ChatItemSchema, QueuedMessageSchema, ReturnedMessageSchema } from './items.js';
@@ -115,6 +116,15 @@ export const events = {
   'away.changed': z.object({ items: z.array(AwayItemSchema), states: z.array(AwayStateSchema) }),
   /** Protocol 12: a chat's MCP servers changed (as `mcp.list`). */
   'mcp.changed': McpStateSchema,
+  /** Protocol 13: a `!` command started, changed state or ended. */
+  'shell.run': ShellRunSchema,
+  /** Protocol 13: more of a command's output; `offset` is how many emitted characters came before `data`. */
+  'shell.output': z.object({
+    runId: z.string(),
+    sessionId: z.string(),
+    offset: z.number().int().nonnegative(),
+    data: z.string(),
+  }),
 } as const;
 
 export type EventName = keyof typeof events;

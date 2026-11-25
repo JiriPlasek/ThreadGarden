@@ -209,10 +209,17 @@ describe('move.check', () => {
 });
 
 describe('busyOf', () => {
-  const s = (o: { live?: boolean; status: string; tasks?: number; pending?: number }) => ({
+  const s = (o: {
+    live?: boolean;
+    status: string;
+    tasks?: number;
+    pending?: number;
+    command?: boolean;
+  }) => ({
     live: o.live ?? true,
     status: o.status as never,
-    runningTasks: o.tasks ?? 0,
+    runningTasks: (o.tasks ?? 0) + (o.command ? 1 : 0),
+    runningCommand: o.command ?? false,
     pendingRequests: () => new Array<unknown>(o.pending ?? 0).fill({}),
   });
   it('working is a turn, a request is a prompt, a task is subagents, idle is free', () => {
@@ -223,6 +230,12 @@ describe('busyOf', () => {
     expect(busyOf(s({ status: 'idle', tasks: 2 }))).toBe('subagents');
     expect(busyOf(s({ status: 'idle' }))).toBeNull();
     expect(busyOf(s({ live: false, status: 'paused' }))).toBeNull();
+  });
+  it("a running command makes a chat busy with 'command'", () => {
+    expect(busyOf(s({ status: 'idle', command: true }))).toBe('command');
+    expect(busyOf(s({ status: 'idle', command: true, tasks: 2 }))).toBe('command');
+    expect(busyOf(s({ status: 'working', command: true }))).toBe('turn');
+    expect(busyOf(s({ status: 'needsYou', command: true }))).toBe('prompt');
   });
 });
 

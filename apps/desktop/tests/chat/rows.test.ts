@@ -1,6 +1,6 @@
-import type { ChatItem } from '@threadgarden/protocol';
+import type { ChatItem, ShellRun } from '@threadgarden/protocol';
 import { describe, expect, it } from 'vitest';
-import { buildRows, quietTail } from '../../src/lib/components/chat/rows';
+import { buildRows, quietTail, withShell } from '../../src/lib/components/chat/rows';
 import { text, tool, unknownItem, user } from './fixtures';
 
 describe('buildRows', () => {
@@ -108,5 +108,61 @@ describe('quietTail', () => {
         text('c1', 'child', { parentToolUseId: 'tu-agent', streaming: true }),
       ]),
     ).toBe(true);
+  });
+});
+
+describe('withShell', () => {
+  const run = (over: Partial<ShellRun> = {}): ShellRun => ({
+    runId: 'r1',
+    sessionId: 's1',
+    command: 'ls',
+    cwd: '/home/me',
+    cols: 100,
+    rows: 24,
+    startedAt: 1,
+    state: 'running',
+    ...over,
+  });
+  const ids = (items: ChatItem[]) => items.map((i) => i.id);
+  const kinds = (rows: ReturnType<typeof withShell>) =>
+    rows.map((r) => (r.kind === 'item' ? r.item.id : r.kind));
+
+  it("a running command's block comes last", () => {
+    const items = [user('u1'), text('a1')];
+    const rows = withShell(buildRows(items), run(), ids(items));
+    expect(kinds(rows)).toEqual(['u1', 'a1', 'shell']);
+  });
+
+  it("an appended run's block follows its ! line and hides the output entry", () => {
+    // As appended: two entries, each with its own id; the output is an info line.
+    const output: ChatItem = { kind: 'system', id: 'e2', level: 'info', text: 'a.txt' };
+    const items = [user('u1'), user('e1', '<bash-input>ls</bash-input>'), output, text('a1')];
+    const rows = withShell(
+      buildRows(items),
+      run({ state: 'ended', entryId: 'e1', outputId: 'e2' }),
+      ids(items),
+    );
+    expect(kinds(rows)).toEqual(['u1', 'e1', 'shell', 'a1']);
+  });
+
+  it('without an outputId, the output line is the one-entry `<entryId>:out`', () => {
+    const items = [user('e1', '<bash-input>ls</bash-input>'), user('e1:out'), text('a1')];
+    const rows = withShell(buildRows(items), run({ state: 'ended', entryId: 'e1' }), ids(items));
+    expect(kinds(rows)).toEqual(['e1', 'shell', 'a1']);
+  });
+
+  it('an ended run that was not appended stays last', () => {
+    const items = [user('u1')];
+    const rows = withShell(
+      buildRows(items),
+      run({ state: 'ended', endReason: 'session' }),
+      ids(items),
+    );
+    expect(kinds(rows)).toEqual(['u1', 'shell']);
+  });
+
+  it('without a run, a ! line and its output render as plain rows', () => {
+    const rows = buildRows([user('e1', '<bash-input>ls</bash-input>'), user('e1:out')]);
+    expect(kinds(rows)).toEqual(['e1', 'e1:out']);
   });
 });

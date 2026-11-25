@@ -1,4 +1,4 @@
-import type { ChatItem, ChatStatus, ChatTask } from '@threadgarden/protocol';
+import type { ChatItem, ChatStatus, ChatTask, ShellRun } from '@threadgarden/protocol';
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -12,6 +12,9 @@ import { ACTIVITY_KEY } from '../../src/lib/state/settings.svelte';
 import { LOCAL, setup, summary } from '../layout/harness';
 import { RpcFail, type FakeServer } from '../service/fake-ws';
 import { manyItems, tool, user } from './fixtures';
+
+vi.mock('@xterm/xterm', () => import('./fake-xterm'));
+vi.mock('@xterm/addon-fit', () => import('./fake-xterm'));
 
 const SID = 's1';
 const NOW = 1_800_000_000_000;
@@ -764,6 +767,87 @@ describe('End session with running background work', () => {
     expect(dialog.textContent).toContain('Claude is still working');
     expect(dialog.textContent).toContain('1 background task ');
     expect(within(dialog).getByRole('listitem').textContent).toContain('npm run dev');
+  });
+
+  it('warns about a running command', async () => {
+    const run = (over: Partial<ShellRun> = {}): ShellRun => ({
+      runId: 'r1',
+      sessionId: SID,
+      command: 'sudo apt upgrade',
+      cwd: '/work',
+      cols: 100,
+      rows: 24,
+      startedAt: Date.now(),
+      state: 'running',
+      ...over,
+    });
+    const withRun = (status: ChatStatus, shellRun: ShellRun) => (s: FakeServer) => {
+      endHandler(s);
+      s.handlers['chat.open'] = () => ({
+        summary: summary(SID, { status, live: true }),
+        header: {},
+        items: [user('u1', 'upgrade it')],
+        hasMore: false,
+        seq: 1,
+        tasks: [],
+        shell: { run: shellRun, output: '', offset: 0 },
+      });
+    };
+    const { server, view } = await renderChat({
+      status: 'idle',
+      configure: withRun('idle', run()),
+    });
+    await userEvent.click(screen.getByRole('button', { name: 'End session' }));
+    let dialog = await screen.findByRole('alertdialog');
+    expect(server.calls('chat.end')).toHaveLength(0);
+    expect(dialog.textContent).toContain(
+      '`! sudo apt upgrade` is still running; ending the session stops it. The chat stays in your history and can be resumed.',
+    );
+    await userEvent.click(within(dialog).getByRole('button', { name: 'End anyway' }));
+    await waitFor(() => expect(server.calls('chat.end')).toHaveLength(1));
+    view.unmount();
+
+    // With a turn running too, the turn's warning follows.
+    await renderChat({ status: 'working', configure: withRun('working', run()) });
+    await userEvent.click(screen.getByRole('button', { name: 'End session' }));
+    dialog = await screen.findByRole('alertdialog');
+    expect(dialog.textContent).toContain(
+      '`! sudo apt upgrade` is still running; ending the session stops it. Claude is still working in this chat. Ending stops the current turn;',
+    );
+  });
+
+  it('an ended command does not ask', async () => {
+    const ended: ShellRun = {
+      runId: 'r1',
+      sessionId: SID,
+      command: 'ls',
+      cwd: '/work',
+      cols: 100,
+      rows: 24,
+      startedAt: 1,
+      endedAt: 2,
+      exitCode: 0,
+      endReason: 'exit',
+      state: 'ended',
+    };
+    const { server } = await renderChat({
+      status: 'idle',
+      configure: (s) => {
+        endHandler(s);
+        s.handlers['chat.open'] = () => ({
+          summary: summary(SID, { status: 'idle', live: true }),
+          header: {},
+          items: [user('u1', 'list')],
+          hasMore: false,
+          seq: 1,
+          tasks: [],
+          shell: { run: ended, output: '', offset: 0 },
+        });
+      },
+    });
+    await userEvent.click(screen.getByRole('button', { name: 'End session' }));
+    await waitFor(() => expect(server.calls('chat.end')).toHaveLength(1));
+    expect(screen.queryByRole('alertdialog')).toBeNull();
   });
 
   it('an idle chat whose tasks have all ended ends without asking', async () => {

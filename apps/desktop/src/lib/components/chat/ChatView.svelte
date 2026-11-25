@@ -1,6 +1,7 @@
 <script lang="ts">
   import {
     messagePreview,
+    SHELL_DEFAULT_SIZE,
     type AwayItem,
     type ImageRef,
     type ReturnedMessage,
@@ -24,7 +25,7 @@
   import { rowPx } from '#lib/interface-scale.js';
   import { ariaKeyShortcuts, formatCombos, shortcut } from '#lib/shortcuts.js';
   import { retryOldCopy } from '#lib/move/move-chat.svelte.js';
-  import { supportsMcp, supportsMcpConfig } from '#lib/projects.js';
+  import { supportsMcp, supportsMcpConfig, supportsShell } from '#lib/projects.js';
   import { copyText } from '#lib/native.js';
   import { RequestError } from '#lib/service/client.js';
   import type { ResumeCheck } from '#lib/state/chats.svelte.js';
@@ -81,6 +82,11 @@
    * until the machine makes it: "Starting ‹machine›…" with its first message
    * waiting. Once that message has gone out and the machine is connected, the
    * same tab reads the machine's own chat (its id was chosen on this device).
+   *
+   * A Claude chat runs `!` commands (the composer's command mode): on its
+   * machine, in its folder, behind the same resume-safety check as a message.
+   * The command shows as a live terminal block in the messages; the window
+   * that started it focuses it.
    */
   let { ref }: { ref: ChatRef } = $props();
 
@@ -389,6 +395,66 @@
 
   const submit = (text: string, images: ImageRef[]): Promise<boolean> =>
     withResumeCheck(() => deliver(text, images));
+
+  // ── ! commands ──────────────────────────────────────────────────────────
+
+  /** `!` runs commands in Claude chats this machine holds (not a moved-away copy, nor a first message). */
+  const commandsOn = $derived(!isCodexChat(sessionId) && !movedTo && !fromQueue);
+  const commandLabel = $derived(`Runs in a terminal on ${machineName}, in this chat's folder`);
+  /** A command is starting from here: its block takes focus when it appears. */
+  let starting = $state(false);
+  /** The run this window started; its block takes focus once (cleared when it has). */
+  let focusRun = $state<string | null>(null);
+
+  const runCommand = async (command: string): Promise<boolean> => {
+    if (machineAway) throw new Error(`${awayAs}, so the command can't run there.`);
+    if (!supportsShell(entry)) throw new Error(`Update ${machineName} to run ! commands here.`);
+    return withResumeCheck(async () => {
+      starting = true;
+      try {
+        const run = await chats.startCommand(sessionId, command, SHELL_DEFAULT_SIZE);
+        focusRun = run.runId;
+        blocked = null;
+        return true;
+      } catch (err) {
+        if (err instanceof RequestError && err.code === 'RESUME_BLOCKED') {
+          blocked = { reason: err.message, command: null, copied: false };
+          return false;
+        }
+        throw err;
+      } finally {
+        starting = false;
+      }
+    });
+  };
+
+  /** The chat's command as a terminal block (none while its machine is away). */
+  const shellBlock = $derived.by(() => {
+    const run = chat?.shell;
+    if (!chat || !run || machineAway) return undefined;
+    const runId = run.runId;
+    return {
+      run,
+      output: chat.shellOutput,
+      machineName,
+      home: entry?.info?.home ?? '',
+      autofocus: run.state !== 'ended' && (starting || focusRun === runId),
+      onInput: (data: string) => quietly(chats.commandInput(runId, data)),
+      onResize: (size: { cols: number; rows: number }) => quietly(chats.commandResize(runId, size)),
+      onStop: () => {
+        chats.commandStop(runId).catch((err: unknown) => {
+          sendError = err instanceof Error ? err.message : String(err);
+        });
+      },
+    };
+  });
+
+  /** The started block took focus: a block drawn again later (scrolled back to) doesn't take it. */
+  const onfocusin = (e: FocusEvent): void => {
+    if (focusRun && e.target instanceof Element && e.target.closest('[data-shell-block]')) {
+      focusRun = null;
+    }
+  };
 
   const copyResume = async (): Promise<void> => {
     if (!blocked) return;
@@ -797,7 +863,7 @@
 
 <!-- Esc anywhere in the chat stops a working turn; the controls inside handle their own keys. -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="flex min-h-0 flex-1 flex-col" bind:this={root} {onkeydown}>
+<div class="flex min-h-0 flex-1 flex-col" bind:this={root} {onkeydown} {onfocusin}>
   {#if chat}
     <ChatHeader
       {chat}
@@ -856,7 +922,7 @@
         {#if fromQueue}
           <!-- Its first message waits below, with what happens next. -->
           <div class="min-h-0 flex-1"></div>
-        {:else if chat.items.length === 0}
+        {:else if chat.items.length === 0 && !shellBlock}
           <div
             class="text-muted-foreground flex min-h-0 flex-1 items-center justify-center text-sm"
           >
@@ -879,6 +945,7 @@
             {working}
             memory={chat.view}
             stickRequests={chat.stickRequests}
+            shell={shellBlock}
           />
         {/if}
 
@@ -1174,6 +1241,8 @@
                 onInterrupt={interrupt}
                 onRecall={recallQueued}
                 {onControl}
+                onCommand={commandsOn ? runCommand : undefined}
+                {commandLabel}
                 onSchedule={machineAway || heldBack ? undefined : schedule}
                 {resetAt}
                 limited={refusal !== undefined}

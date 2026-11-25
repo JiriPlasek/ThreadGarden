@@ -133,6 +133,15 @@ jobs:
       - run: node scripts/fetch-node-sidecar.mjs --target ${{ matrix.target }}
       - name: The draft to upload to
         run: test -n "${{ needs.draft.outputs.release_id }}" || { echo "::error::No draft release id"; exit 1; }
+      # The service the bundle packages (the same build its beforeBuildCommand makes, which the
+      # Tauri resources copy as they are), with the PTY module beside it, under the bundled Node.
+      - name: PTY smoke under the sidecar Node
+        shell: bash
+        run: |
+          exe=""
+          if [ "$RUNNER_OS" = Windows ]; then exe=.exe; fi
+          pnpm --filter @threadgarden/service build
+          "apps/desktop/src-tauri/binaries/threadgarden-node-${{ matrix.target }}$exe" scripts/pty-smoke.mjs packages/service/dist
       # Signed builds with updater files, uploaded to the draft; the manifest is made later, once.
       - uses: tauri-apps/tauri-action@v0
         env:
@@ -158,6 +167,12 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm build:headless
+      - name: PTY smoke under the packaged Node
+        run: |
+          dir=$(mktemp -d)
+          tar -xzf "dist-headless/threadgarden-headless-$(node -p "require('./package.json').version")-linux-x64.tar.gz" -C "$dir"
+          pkg=$(echo "$dir"/threadgarden-headless-*)
+          "$pkg/bin/node" scripts/pty-smoke.mjs "$pkg/lib"
       # The Windows setup script readies a PC to run this package in WSL; it ships alongside.
       - name: Upload the headless package, also under a fixed name for the latest-release link, and the Windows setup script
         env:
@@ -271,6 +286,16 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm build:headless --platform windows
+      - name: PTY smoke under the packaged Node
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json | ConvertFrom-Json).version
+          $dir = Join-Path $env:RUNNER_TEMP 'pty-zip'
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          tar -xf "dist-headless/threadgarden-headless-$version-windows-x64.zip" -C $dir
+          $pkg = Join-Path $dir "threadgarden-headless-$version"
+          & (Join-Path $pkg 'bin\node.exe') scripts/pty-smoke.mjs (Join-Path $pkg 'lib')
+          if ($LASTEXITCODE -ne 0) { throw 'PTY smoke failed' }
       - name: Upload the native Windows worker and its fixed latest-release name
         shell: pwsh
         env:

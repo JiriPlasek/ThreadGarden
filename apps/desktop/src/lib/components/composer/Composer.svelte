@@ -29,10 +29,12 @@
   import { pasteLabel } from '@threadgarden/protocol';
   import {
     activeImages,
+    commandText,
     emptyAttachments,
     expandPastes,
     imageLabel,
     importMessage,
+    isCommand,
     longPaste,
     nextNumber,
     outgoing,
@@ -96,6 +98,11 @@
    * Queued messages Claude never read come back in front of what the box holds,
    * as in the terminal: those Stop cancelled (or the process ended with), and,
    * with `onRecall`, the last one Up takes back in an empty box to edit it.
+   *
+   * `!` commands: with `onCommand`, a box whose text starts with `!` is in
+   * command mode (tinted, a leading `!` chip, no slash menu) and sends the
+   * command (`commandText`) to `onCommand` instead of a message; its images are
+   * never sent. Without `onCommand` a leading `!` is text.
    */
   let {
     draftKey,
@@ -111,6 +118,8 @@
     onInterrupt,
     onRecall,
     onControl,
+    onCommand,
+    commandLabel,
     onSchedule,
     resetAt,
     limited = false,
@@ -143,6 +152,10 @@
     onRecall?: () => Promise<ReturnedMessage | null>;
     /** Opens a Threadgarden control for `/model`, `/effort`, `/permissions`; returns a notice when it cannot. */
     onControl?: (control: Control) => string | null;
+    /** Runs a `!` command; resolves true when it started (the box clears), throws to say why not. */
+    onCommand?: (command: string) => Promise<boolean>;
+    /** What command mode's `!` chip says on hover (where the command runs). */
+    commandLabel?: string;
     /** v1.3 B: schedules the message instead; resolves true when it was scheduled (the box clears). */
     onSchedule?: (text: string, images: ImageRef[], when: SendWhen) => Promise<boolean>;
     /** When the usage limit resets, if one refuses now and its reset is known. */
@@ -224,6 +237,8 @@
   let root = $state<HTMLDivElement | null>(null);
   /** Why the last command was not sent (terminal-only, or no matching control). */
   let notice = $state<string | null>(null);
+  /** The box holds a `!` command (only where commands can run). */
+  const commandMode = $derived(!!onCommand && !editing && isCommand(text));
   let picker = $state.raw<{ kind: 'mention' | 'slash'; token: Token } | null>(null);
   const visibleSuggestion = $derived(
     !text && images.length === 0 && !working && !sending && !disabled && !editing && !picker
@@ -333,7 +348,7 @@
     const selection = editor?.selection();
     const caret = selection?.start ?? text.length;
     if (selection && selection.end !== selection.start) return closePicker();
-    const slash = slashAt(text, caret);
+    const slash = commandMode ? null : slashAt(text, caret);
     const mention = slash ? null : mentionAt(text, caret);
     const prev = picker;
     if (slash) {
@@ -482,6 +497,10 @@
     if ((!value && images.length === 0) || sending || disabled) return;
     sending = true;
     try {
+      if (commandMode && onCommand) {
+        await runCommand(onCommand);
+        return;
+      }
       if (value.startsWith('/')) {
         const reported = commands ?? (await interaction.commands(commandScope).catch(() => []));
         commands = reported;
@@ -537,6 +556,36 @@
     } finally {
       sending = false;
     }
+  };
+
+  /** Sends the box's `!` command; the box clears once it started (images go with it, unsent). */
+  const runCommand = async (run: (command: string) => Promise<boolean>): Promise<void> => {
+    const command = commandText(text, attachments);
+    if (!command) {
+      notice = 'Type a command after !';
+      return;
+    }
+    const sentText = text;
+    let started: boolean;
+    try {
+      started = await run(command);
+    } catch (err) {
+      notice = err instanceof Error ? err.message : String(err);
+      return;
+    }
+    if (!started) return;
+    // Text typed while the command was starting stays in the box.
+    if (text === sentText) {
+      text = '';
+      attachments = emptyAttachments();
+      interaction.clearDraft(draftKey);
+    } else {
+      saveDraft();
+    }
+    imageError = null;
+    notice = null;
+    closePicker();
+    await tick();
   };
 
   const onkeydown = (e: KeyboardEvent): void => {
@@ -778,13 +827,14 @@
   );
 
   const hint = $derived(
-    working && text.trim() && !editing
+    working && text.trim() && !editing && !commandMode
       ? `${agentName} is working: this message is queued, and ${agentName} reads it ${agentName === 'Codex' ? 'when the current turn ends' : 'at its next step'}.`
       : null,
   );
   const empty = $derived(!text.trim() && images.length === 0);
+  // A command runs at once, even while a turn runs: it is never queued.
   const sendLabel = $derived(
-    editing ? 'Save scheduled message' : working ? 'Queue message' : 'Send',
+    editing ? 'Save scheduled message' : working && !commandMode ? 'Queue message' : 'Send',
   );
 </script>
 
@@ -792,9 +842,12 @@
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
   bind:this={root}
-  class="bg-background relative rounded-lg border shadow-xs {dragging
+  class="relative rounded-lg border shadow-xs {commandMode
+    ? 'border-pink-500/60 bg-pink-500/5'
+    : 'bg-background'} {dragging
     ? 'ring-2 ring-amber-500/50'
     : ''} focus-within:ring-ring/40 focus-within:ring-2"
+  data-command-mode={commandMode ? '' : undefined}
   {ondragover}
   ondragleave={() => (dragging = false)}
   {ondrop}
@@ -819,85 +872,93 @@
     onRemove={(i) => void removeImage(i)}
   />
 
-  <div class="relative grid">
-    {#if picker}
-      <div
-        class="bg-popover text-popover-foreground absolute right-2 left-2 z-20 rounded-md border shadow-md"
-        style:bottom="{anchorBottom}px"
+  <div class="flex items-start">
+    {#if commandMode}
+      <span
+        class="mt-2 ml-2 shrink-0 rounded bg-pink-500/15 px-1.5 font-mono text-sm leading-6 font-semibold text-pink-700 dark:text-pink-300"
+        title={commandLabel}>!</span
       >
-        {#if picker.kind === 'mention'}
-          <MentionPicker
-            id={listId}
-            items={files}
-            {active}
-            loading={filesLoading}
-            onPick={(i) => void pick(i)}
-            onHover={(i) => (active = i)}
+    {/if}
+    <div class="relative grid min-w-0 flex-1">
+      {#if picker}
+        <div
+          class="bg-popover text-popover-foreground absolute right-2 left-2 z-20 rounded-md border shadow-md"
+          style:bottom="{anchorBottom}px"
+        >
+          {#if picker.kind === 'mention'}
+            <MentionPicker
+              id={listId}
+              items={files}
+              {active}
+              loading={filesLoading}
+              onPick={(i) => void pick(i)}
+              onHover={(i) => (active = i)}
+            />
+          {:else}
+            <SlashMenu
+              id={listId}
+              items={commandItems}
+              {active}
+              loading={commands === null}
+              onPick={(i) => void pick(i)}
+              onHover={(i) => (active = i)}
+            />
+          {/if}
+          <!-- Keyboard hints; the phone has no keys to name. -->
+          {#if !isPhone}<PickerKeyHints />{/if}
+        </div>
+      {/if}
+      {#if visibleSuggestion}
+        <!-- The prediction shows where the text would be; the editor stays on top for typing. -->
+        <div
+          class="text-muted-foreground pointer-events-none col-start-1 row-start-1 max-h-60 overflow-hidden px-3 pt-2.5 pb-1 text-sm leading-5 wrap-anywhere whitespace-pre-wrap"
+          aria-hidden="true"
+        >
+          {visibleSuggestion.text}
+        </div>
+      {/if}
+      <div class="col-start-1 row-start-1 min-w-0">
+        {#if isPhone}
+          <!-- Android keyboards and chips in a contenteditable don't mix: tags stay text there. -->
+          <PlainEditor
+            bind:this={editor}
+            bind:element={editorElement as HTMLTextAreaElement | null}
+            {text}
+            {attachments}
+            {label}
+            placeholder={visibleSuggestion ? '' : placeholder}
+            describedby={visibleSuggestion ? `${uid}-suggestion` : undefined}
+            {disabled}
+            controls={picker ? listId : undefined}
+            {activeId}
+            onChange={oninput}
+            {onkeydown}
+            {onpaste}
+            {oncopy}
+            onCaret={updatePicker}
+            onblur={() => setTimeout(closePicker, 0)}
           />
         {:else}
-          <SlashMenu
-            id={listId}
-            items={commandItems}
-            {active}
-            loading={commands === null}
-            onPick={(i) => void pick(i)}
-            onHover={(i) => (active = i)}
+          <ChipEditor
+            bind:this={editor}
+            bind:element={editorElement as HTMLDivElement | null}
+            {text}
+            {attachments}
+            {label}
+            placeholder={visibleSuggestion ? '' : placeholder}
+            describedby={visibleSuggestion ? `${uid}-suggestion` : undefined}
+            {disabled}
+            controls={picker ? listId : undefined}
+            {activeId}
+            onChange={oninput}
+            {onkeydown}
+            {onpaste}
+            {oncopy}
+            onCaret={updatePicker}
+            onblur={() => setTimeout(closePicker, 0)}
           />
         {/if}
-        <!-- Keyboard hints; the phone has no keys to name. -->
-        {#if !isPhone}<PickerKeyHints />{/if}
       </div>
-    {/if}
-    {#if visibleSuggestion}
-      <!-- The prediction shows where the text would be; the editor stays on top for typing. -->
-      <div
-        class="text-muted-foreground pointer-events-none col-start-1 row-start-1 max-h-60 overflow-hidden px-3 pt-2.5 pb-1 text-sm leading-5 wrap-anywhere whitespace-pre-wrap"
-        aria-hidden="true"
-      >
-        {visibleSuggestion.text}
-      </div>
-    {/if}
-    <div class="col-start-1 row-start-1 min-w-0">
-      {#if isPhone}
-        <!-- Android keyboards and chips in a contenteditable don't mix: tags stay text there. -->
-        <PlainEditor
-          bind:this={editor}
-          bind:element={editorElement as HTMLTextAreaElement | null}
-          {text}
-          {attachments}
-          {label}
-          placeholder={visibleSuggestion ? '' : placeholder}
-          describedby={visibleSuggestion ? `${uid}-suggestion` : undefined}
-          {disabled}
-          controls={picker ? listId : undefined}
-          {activeId}
-          onChange={oninput}
-          {onkeydown}
-          {onpaste}
-          {oncopy}
-          onCaret={updatePicker}
-          onblur={() => setTimeout(closePicker, 0)}
-        />
-      {:else}
-        <ChipEditor
-          bind:this={editor}
-          bind:element={editorElement as HTMLDivElement | null}
-          {text}
-          {attachments}
-          {label}
-          placeholder={visibleSuggestion ? '' : placeholder}
-          describedby={visibleSuggestion ? `${uid}-suggestion` : undefined}
-          {disabled}
-          controls={picker ? listId : undefined}
-          {activeId}
-          onChange={oninput}
-          {onkeydown}
-          {onpaste}
-          {oncopy}
-          onCaret={updatePicker}
-          onblur={() => setTimeout(closePicker, 0)}
-        />
-      {/if}
     </div>
   </div>
 
@@ -979,7 +1040,7 @@
         {/snippet}
       </ActionTooltip>
     {/if}
-    {#if limited && onSchedule && resetAt !== undefined && !editing}
+    {#if limited && onSchedule && resetAt !== undefined && !editing && !commandMode}
       <button
         type="button"
         class="hover:bg-muted flex h-7 items-center gap-1 rounded-md border px-2 text-xs disabled:opacity-40"
@@ -1037,7 +1098,7 @@
           <DropdownMenu.Content align="end" side="top" class="min-w-44">
             <DropdownMenu.Item
               class="py-1 text-xs"
-              disabled={empty}
+              disabled={empty || commandMode}
               onSelect={() => (scheduleOpen = true)}
             >
               <CalendarClockIcon /> Schedule send…

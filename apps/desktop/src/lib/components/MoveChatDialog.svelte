@@ -26,7 +26,8 @@
    *
    * Stop the chat stops the turn (`chat.interrupt`) for a turn or a prompt;
    * background agents outlive an interrupt, so for them it ends the chat's
-   * process (`chat.end`, as End session does).
+   * process (`chat.end`, as End session does); a running `!` command is
+   * stopped on its own (`shell.stop`).
    */
   const app = useApp();
   const { interaction, machines, scopes, power } = app;
@@ -148,10 +149,27 @@
           ? 'Background agents are running in this chat; moving it would cut them off.'
           : busy === 'terminal'
             ? 'This chat is running in a terminal'
-            : null,
+            : busy === 'command'
+              ? 'A ! command is running in this chat; moving it stops the command.'
+              : null,
   );
-  /** Threadgarden can stop its own process of the chat, never a terminal's. */
-  const canStop = $derived(busy !== null && busy !== 'terminal');
+  /** The chat's running `!` command (known while the chat is open). */
+  const commandRun = $derived(
+    resident?.shell && resident.shell.state !== 'ended' ? resident.shell.runId : null,
+  );
+  /** Threadgarden can stop its own process of the chat, never a terminal's; a command it knows of. */
+  const canStop = $derived(
+    busy !== null && busy !== 'terminal' && (busy !== 'command' || commandRun !== null),
+  );
+  // A stopped command ends a moment after Stop: once it has, the checks run again.
+  let watchedRun: string | null = null;
+  $effect(() => {
+    const now = commandRun;
+    if (watchedRun !== null && now === null && untrack(() => busy) === 'command') {
+      untrack(recheck);
+    }
+    watchedRun = now;
+  });
 
   const inFlight = $derived(phase === 'starting' || phase === 'moving');
   /** The first note didn't send and nothing has sent it since (the chat's own Send again may have). */
@@ -210,7 +228,9 @@
     stopError = null;
     try {
       if (busy === 'subagents') await chats.end(r.sessionId);
-      else await chats.interrupt(r.sessionId);
+      else if (busy === 'command') {
+        if (commandRun) await chats.commandStop(commandRun);
+      } else await chats.interrupt(r.sessionId);
     } catch (e) {
       stopError = e instanceof Error ? e.message : String(e);
       return;

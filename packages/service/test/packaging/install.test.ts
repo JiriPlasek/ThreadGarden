@@ -475,6 +475,21 @@ describe.skipIf(process.platform === 'win32' || isRoot)('headless install.sh', (
     expect(await readlink(join(home, data, 'current'))).toMatch(/9\.9\.10$/);
   });
 
+  it('install keeps lib/node_modules beside service.mjs', async () => {
+    const pkg = join(release, 'lib', 'node_modules', '@lydell', 'node-pty-linux-x64');
+    await mkdir(join(pkg, 'prebuilds', 'linux-x64'), { recursive: true });
+    await writeFile(join(pkg, 'prebuilds', 'linux-x64', 'x.node'), 'binary');
+    expect((await install()).code).toBe(0);
+    const kept = join(home, data, '9.9.9', 'lib', 'node_modules');
+    expect(
+      await readFile(
+        join(kept, '@lydell', 'node-pty-linux-x64', 'prebuilds', 'linux-x64', 'x.node'),
+        'utf8',
+      ),
+    ).toBe('binary');
+    await stat(join(home, data, '9.9.9', 'lib', 'service.mjs'));
+  });
+
   it('re-running the installed copy keeps a working install', async () => {
     expect((await install()).code).toBe(0);
     const installed = join(home, data, 'current');

@@ -33,6 +33,13 @@ import {
   McpStateSchema,
 } from './mcp.js';
 import {
+  ShellRunSchema,
+  ShellSizeSchema,
+  ShellViewSchema,
+  SHELL_COMMAND_MAX,
+  SHELL_INPUT_MAX,
+} from './shell.js';
+import {
   DeviceSchema,
   DeviceTokenSchema,
   MachineAddressSchema,
@@ -253,6 +260,8 @@ export const methods = {
       queued: z.array(QueuedMessageSchema).optional(),
       /** Protocol 9: where the chat went when it was moved away; absent or null otherwise. */
       movedTo: MovePeerSchema.nullable().optional(),
+      /** Protocol 13: the chat's `!` command, running or the last one that ended; absent when none. */
+      shell: ShellViewSchema.optional(),
     }),
   ),
   'chat.older': def(
@@ -824,6 +833,20 @@ export const methods = {
   ),
   /** Starts the chat's Claude Code process (resumes it) without sending a message. */
   'chat.wake': def(sessionIdOnly, empty),
+  // ── ! commands (protocol 13) ───────────────────────────────────────────────
+  // Open to paired devices. Errors: `SHELL_ERRORS`, plus `NOT_FOUND` and `INVALID_PARAMS`.
+  'shell.start': def(
+    z
+      .object({ sessionId: z.string(), command: z.string().trim().min(1).max(SHELL_COMMAND_MAX) })
+      .merge(ShellSizeSchema),
+    ShellRunSchema,
+  ),
+  /** Keystrokes for the running command; goes to the PTY and nowhere else. */
+  'shell.input': def(z.object({ runId: z.string(), data: z.string().max(SHELL_INPUT_MAX) }), empty),
+  'shell.resize': def(z.object({ runId: z.string() }).merge(ShellSizeSchema), empty),
+  'shell.stop': def(z.object({ runId: z.string() }), empty),
+  /** The chat's command (running or the last one that ended) with its scrollback; null when none. */
+  'shell.get': def(sessionIdOnly, z.object({ view: ShellViewSchema.nullable() })),
   // ── the phone (no protocol bump: local to the phone's core only) ──────────
   /**
    * The chat on the phone's screen, which the core's alert links leave out;

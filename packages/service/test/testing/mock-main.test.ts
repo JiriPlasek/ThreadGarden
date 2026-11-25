@@ -992,3 +992,113 @@ describe('mock service MOCK_PHONE (phone plan, Task 11)', () => {
     }
   }, 30_000);
 });
+
+describe('mock service: ! commands', () => {
+  const start = (remote = false) =>
+    startMockService({
+      sessions: 2,
+      projects: 1,
+      bigSessionMessages: 0,
+      installSignalHandlers: false,
+      ...(remote ? { remote: { port: 0, pairingCode: 'TEST-TEST-TEST' } } : {}),
+    });
+
+  const open = async () => {
+    mock = await start();
+    const c = (client = await TestClient.connect(mock.svc.port, mock.svc.token));
+    const { sessionId } = await c.call<{ sessionId: string }>('chat.create', {
+      cwd: '/work',
+      text: 'hi',
+    });
+    await c.waitFor(chatStatus(sessionId, 'idle'), 10_000);
+    const run = (command: string) =>
+      c.call<{ runId: string }>('shell.start', { sessionId, command, cols: 80, rows: 24 });
+    const ended = (runId: string) =>
+      c.waitFor(
+        (e) =>
+          e.event === 'shell.run' &&
+          (e.data as { runId: string; state: string }).runId === runId &&
+          (e.data as { state: string }).state === 'ended',
+        10_000,
+      );
+    const output = (runId: string) =>
+      c.events
+        .filter((e) => e.event === 'shell.output' && (e.data as { runId: string }).runId === runId)
+        .map((e) => (e.data as { data: string }).data)
+        .join('');
+    return { c, sessionId, run, ended, output };
+  };
+
+  it('a ! command runs in the mock terminal and its output reaches the next reply', async () => {
+    const { c, sessionId, run, ended, output } = await open();
+    const { runId } = await run('ls');
+    await ended(runId);
+    expect(output(runId)).toContain('\u001b[34mdocs\u001b[0m');
+    await eventually(
+      async () =>
+        itemsOf(c.events, sessionId).some(
+          (i) => i.kind === 'system' && i.text.includes('package.json'),
+        ),
+      5_000,
+    );
+    // Appending starts no turn: still idle, and Claude has said nothing new.
+    expect(itemsOf(c.events, sessionId).filter((i) => i.kind === 'assistantText')).toHaveLength(1);
+    const before = c.events.length;
+    await c.call('chat.send', { sessionId, text: 'what happened?' });
+    await eventually(
+      async () =>
+        itemsOf(c.events, sessionId).filter((i) => i.kind === 'assistantText').length === 2,
+      10_000,
+    );
+    await c.waitFor(
+      (e) => c.events.indexOf(e) >= before && chatStatus(sessionId, 'idle')(e),
+      10_000,
+    );
+    const replies = itemsOf(c.events, sessionId).filter((i) => i.kind === 'assistantText');
+    expect((replies[1] as { markdown: string }).markdown).toMatch(
+      /^I can see the output of `! ls`\./,
+    );
+  }, 30_000);
+
+  it('sudo asks for a password and never shows it', async () => {
+    const { c, sessionId, run, ended, output } = await open();
+    const { runId } = await run('sudo apt upgrade');
+    await eventually(async () => output(runId).includes('[sudo] password for mock: '), 5_000);
+    await c.call('shell.input', { runId, data: 'hunter2-secret\r' });
+    await eventually(async () => output(runId).includes('Do you want to continue? [Y/n] '), 5_000);
+    expect(output(runId)).not.toContain('hunter2');
+    await c.call('shell.input', { runId, data: '\r' });
+    await ended(runId);
+    expect(output(runId)).toContain('100%');
+    expect(output(runId)).toContain('Done.');
+    expect(output(runId)).not.toContain('hunter2');
+    await eventually(
+      async () =>
+        itemsOf(c.events, sessionId).some((i) => i.kind === 'system' && i.text.includes('Done.')),
+      5_000,
+    );
+    expect(JSON.stringify(itemsOf(c.events, sessionId))).not.toContain('hunter2');
+    expect(JSON.stringify(c.events)).not.toContain('hunter2');
+  }, 30_000);
+
+  it('n aborts sudo with exit 1, and Ctrl-C ends sleep with 130', async () => {
+    const { c, run, ended, output } = await open();
+    const sudo = await run('sudo true');
+    // Type after each prompt, as a person does: the fake drops what comes before.
+    await eventually(async () => output(sudo.runId).includes('password for mock: '), 5_000);
+    await c.call('shell.input', { runId: sudo.runId, data: 'pw\r' });
+    await eventually(async () => output(sudo.runId).includes('[Y/n] '), 5_000);
+    await c.call('shell.input', { runId: sudo.runId, data: 'n\r' });
+    expect(await ended(sudo.runId)).toMatchObject({ data: { exitCode: 1 } });
+    const sleep = await run('sleep 30');
+    await c.call('shell.input', { runId: sleep.runId, data: '\u0003' });
+    expect(await ended(sleep.runId)).toMatchObject({ data: { exitCode: 130 } });
+  }, 30_000);
+
+  it('the remote mock offers shell', async () => {
+    mock = await start(true);
+    client = await TestClient.connect(mock.svc.port, mock.svc.token);
+    const hello = await client.call<{ machine: { capabilities: string[] } }>('hello', HELLO);
+    expect(hello.machine.capabilities).toContain('shell');
+  }, 30_000);
+});

@@ -9,13 +9,16 @@
  * `dist-headless/threadgarden-headless-<version>-linux-<arch>.tar.gz` plus a
  * `.sha256` file beside it. `--arch` defaults to x64; the Node download is the
  * only network access. Windows x64 writes a zip with install.ps1 and node.exe.
+ * Both carry the PTY module (the service's `!` commands) in `lib/node_modules/`,
+ * with the platform package of the target (`linux-<arch>`, `win32-x64`): the
+ * build must run where that package is installed (the Linux package on Linux).
  *
  * Old machines update themselves from what this builds: its names and layout are
  * frozen (`packages/protocol/src/update.ts`; `updater.test.ts` compares them).
  */
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { chmod, copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -55,11 +58,11 @@ const main = async () => {
   const stage = join(OUT, 'stage');
   const dir = join(stage, name);
 
-  run('pnpm', [
-    '--config.verify-deps-before-run=false',
-    '--filter',
-    '@threadgarden/service',
-    'build',
+  // Through node itself, not `pnpm run`: the target's flag must reach the script as is.
+  run(process.execPath, [
+    join(ROOT, 'packages', 'service', 'scripts', 'build.mjs'),
+    '--pty-target',
+    windows ? 'win32-x64' : `linux-${arch}`,
   ]);
 
   await rm(stage, { recursive: true, force: true });
@@ -80,6 +83,12 @@ const main = async () => {
   await copyFile(
     join(ROOT, 'packages', 'service', 'dist', 'service.mjs'),
     join(dir, 'lib', 'service.mjs'),
+  );
+  // The PTY module, where the bundle finds it: node_modules beside service.mjs.
+  await cp(
+    join(ROOT, 'packages', 'service', 'dist', 'node_modules'),
+    join(dir, 'lib', 'node_modules'),
+    { recursive: true, dereference: true },
   );
   const launcher = windows ? 'threadgarden.cmd' : 'threadgarden';
   const installer = windows ? 'install.ps1' : 'install.sh';

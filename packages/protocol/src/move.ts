@@ -47,7 +47,7 @@ export const GitStateSchema = z.discriminatedUnion('kind', [
 export type GitState = z.infer<typeof GitStateSchema>;
 
 /** What keeps a chat from moving now; `terminal`: a Claude Code process outside Threadgarden runs it. */
-export const MoveBusySchema = z.enum(['turn', 'prompt', 'subagents', 'terminal']);
+export const MoveBusySchema = z.enum(['turn', 'prompt', 'subagents', 'terminal', 'command']);
 export type MoveBusy = z.infer<typeof MoveBusySchema>;
 
 /** A machine as the moved chat names it. */

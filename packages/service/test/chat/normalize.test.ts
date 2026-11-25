@@ -1006,6 +1006,68 @@ describe('Normalizer: user messages the CLI writes itself', () => {
     ]);
   });
 
+  it('renders the two entries a ! command appends as the line and its output', () => {
+    // As `bashEntry` writes them (ENTRY_SHAPE 'two'), each its own message.
+    const items = run(new Normalizer(), [
+      special('a1', [{ type: 'text', text: '<bash-input>ls</bash-input>' }]),
+      special('a2', [
+        {
+          type: 'text',
+          text: '<bash-stdout>a.txt\nb.txt</bash-stdout><bash-stderr></bash-stderr>',
+        },
+      ]),
+    ]);
+    expect(items).toEqual([
+      expect.objectContaining({ kind: 'user', id: 'a1', text: '! ls' }),
+      { kind: 'system', id: 'a2', level: 'info', text: 'a.txt\nb.txt' },
+    ]);
+  });
+
+  it('renders a ! entry with its output in one message', () => {
+    const items = run(new Normalizer(), [
+      special('e1', [
+        { type: 'text', text: '<bash-input>ls</bash-input>' },
+        { type: 'text', text: '<bash-stdout>a.txt</bash-stdout><bash-stderr>oops</bash-stderr>' },
+      ]),
+    ]);
+    expect(items).toEqual([
+      expect.objectContaining({ kind: 'user', id: 'e1', text: '! ls' }),
+      { kind: 'system', id: 'e1:out', level: 'warning', text: 'a.txt\noops' },
+    ]);
+  });
+
+  it('output containing </bash-stdout> is kept whole', () => {
+    const items = run(new Normalizer(), [
+      // Escaped, as the CLI and `bashEntry` write it.
+      special(
+        'x1',
+        '<bash-stdout>a &lt;/bash-stdout&gt; b</bash-stdout><bash-stderr></bash-stderr>',
+      ),
+      // Unescaped: the match still runs to the last </bash-stdout>.
+      special('x2', '<bash-stdout>c </bash-stdout> d</bash-stdout><bash-stderr></bash-stderr>'),
+      special('x3', '<bash-input>echo </bash-input></bash-input>'),
+      special('x4', '<bash-input>p</bash-input>\n<bash-stdout>e </bash-stdout> f</bash-stdout>'),
+    ]);
+    expect(items).toEqual([
+      { kind: 'system', id: 'x1', level: 'info', text: 'a </bash-stdout> b' },
+      { kind: 'system', id: 'x2', level: 'info', text: 'c </bash-stdout> d' },
+      expect.objectContaining({ kind: 'user', id: 'x3', text: '! echo </bash-input>' }),
+      expect.objectContaining({ kind: 'user', id: 'x4', text: '! p' }),
+      { kind: 'system', id: 'x4:out', level: 'info', text: 'e </bash-stdout> f' },
+    ]);
+  });
+
+  it('an empty output gives only the ! line', () => {
+    const items = run(new Normalizer(), [
+      special(
+        'y1',
+        '<bash-input>true</bash-input><bash-stdout></bash-stdout><bash-stderr></bash-stderr>',
+      ),
+      special('y2', '<bash-stdout>\n</bash-stdout><bash-stderr></bash-stderr>'),
+    ]);
+    expect(items).toEqual([expect.objectContaining({ kind: 'user', id: 'y1', text: '! true' })]);
+  });
+
   it('leaves ordinary text that merely contains such tags alone', () => {
     const text = 'Why does <local-command-stdout>x</local-command-stdout> show up?';
     const items = run(new Normalizer(), [special('u1', text)]);

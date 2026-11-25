@@ -702,7 +702,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let alerts = for_tests(dir.path());
         assert!(matches!(
-            alerts.read("m1", r#"{"id":1,"result":{"protocolVersion":11}}"#),
+            alerts.read("m1", r#"{"id":1,"result":{"protocolVersion":13}}"#),
             Read::Hello(Ok(()))
         ));
         assert!(matches!(

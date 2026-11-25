@@ -13,7 +13,7 @@ use threadgarden_core::MAX_REQUEST_BYTES;
 use tokio_tungstenite::tungstenite::Message;
 
 fn hello_params() -> Value {
-    json!({ "protocolVersion": 12, "client": "threadgarden-desktop" })
+    json!({ "protocolVersion": 13, "client": "threadgarden-desktop" })
 }
 
 #[test]
@@ -43,7 +43,7 @@ fn refuses_a_socket_without_the_token() {
         // The same token as the subprotocol works.
         let mut ws = open(&core).await;
         let answer = call(&mut ws, 1, "hello", hello_params()).await;
-        assert_eq!(answer["result"]["protocolVersion"], 12);
+        assert_eq!(answer["result"]["protocolVersion"], 13);
     });
     core.stop();
 }
@@ -88,7 +88,7 @@ fn is_uuid(s: &str) -> bool {
 }
 
 #[test]
-fn hello_says_protocol_12_and_an_empty_non_headless_machine() {
+fn hello_says_protocol_13_and_an_empty_non_headless_machine() {
     let dir = tempfile::tempdir().unwrap();
     let first = core(dir.path());
     let hello = block_on(async {
@@ -96,7 +96,7 @@ fn hello_says_protocol_12_and_an_empty_non_headless_machine() {
         call(&mut ws, 1, "hello", hello_params()).await["result"].clone()
     });
     first.stop();
-    assert_eq!(hello["protocolVersion"], 12);
+    assert_eq!(hello["protocolVersion"], 13);
     assert_eq!(hello["serviceVersion"], env!("CARGO_PKG_VERSION"));
     let machine = &hello["machine"];
     let id = machine["id"].as_str().expect("an id").to_string();
@@ -367,7 +367,7 @@ fn an_unknown_method_gets_method_not_found() {
         let answer = call(&mut ws, 9, "uiState.get", json!({ "key": 5 })).await;
         assert_eq!(answer["error"]["code"], "INVALID_PARAMS");
         let answer = call(&mut ws, 10, "hello", hello_params()).await;
-        assert_eq!(answer["result"]["protocolVersion"], 12);
+        assert_eq!(answer["result"]["protocolVersion"], 13);
     });
     core.stop();
 }
@@ -522,7 +522,7 @@ fn sockets_that_never_authenticate_are_capped_at_8() {
     block_on(async {
         let mut ws = open(&core).await;
         let answer = call(&mut ws, 1, "hello", hello_params()).await;
-        assert_eq!(answer["result"]["protocolVersion"], 12);
+        assert_eq!(answer["result"]["protocolVersion"], 13);
     });
     core.stop();
 }

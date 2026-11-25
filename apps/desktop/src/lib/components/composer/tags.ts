@@ -84,6 +84,29 @@ export const expandPastes = (text: string, state: AttachmentsState): string => {
   return out + text.slice(start);
 };
 
+/** The box holds a `!` command: its text starts with `!` (after leading spaces). */
+export const isCommand = (text: string): boolean => /^\s*!/.test(text);
+
+/**
+ * The command of a `!` line: the text after the leading `!`, image tags left
+ * out (images are never sent with a command) and each paste tag replaced by
+ * its pasted text (a paste is text the user means to run), trimmed.
+ */
+export const commandText = (text: string, state: AttachmentsState): string => {
+  const body = text.replace(/^\s*!/, '');
+  let out = '';
+  let start = 0;
+  for (const tag of tagsIn(body)) {
+    const paste = tag.kind === 'paste' ? state.pastes[tag.number] : undefined;
+    if (tag.kind === 'paste' && (!paste || tag.label !== labelForPaste(tag.number, paste))) {
+      continue;
+    }
+    out += body.slice(start, tag.start) + (paste?.text ?? '');
+    start = tag.end;
+  }
+  return (out + body.slice(start)).trim();
+};
+
 const hasTag = (text: string) => {
   const tags = new Set(imageTagNumbers(text));
   return (image: ImageRef): image is ImageRef & { number: number } =>

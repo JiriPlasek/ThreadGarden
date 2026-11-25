@@ -57,7 +57,7 @@ impl Default for Behaviour {
             stall: false,
             stall_pairing: false,
             revoke_closes: false,
-            protocol: 11,
+            protocol: 13,
         }
     }
 }

@@ -224,19 +224,24 @@
   /** Background agents and processes that ending the session stops with the process. */
   const runningTasks = $derived(chat.tasks.filter(taskRunning));
   const busy = $derived(status === 'working' || status === 'needsYou');
+  /** A `!` command that ending the session stops. */
+  const command = $derived(
+    chat.shell && chat.shell.state !== 'ended' ? chat.shell.command : undefined,
+  );
   const endDescription = $derived(
     endSessionWarning({
       agentName: agent,
       busy,
       tasks: runningTasks.length,
       listed: true,
+      command,
     }) ?? undefined,
   );
   const endNow = async (): Promise<void> => {
     await chats.end(sessionId);
   };
   const end = (): void => {
-    if (busy || runningTasks.length > 0) {
+    if (busy || runningTasks.length > 0 || command !== undefined) {
       confirmEnd = true;
       return;
     }

@@ -18,6 +18,7 @@ import { resolve } from 'node:path';
 import type { ChatPermissionMode, ChatStatus, EventMsg, Settings } from '@threadgarden/protocol';
 import type { AgentAdapter, SessionStore } from '../sdk/adapter.js';
 import { isCodexSession } from '../sdk/providers.js';
+import type { PtyRun } from '../shell/run.js';
 import { EventLog, type ChatEvent } from './event-log.js';
 import {
   LiveSession,
@@ -102,6 +103,8 @@ export type SessionHostDeps = {
   onReturned?: LiveSessionDeps['onReturned'];
   /** Handed to every session (see `LiveSessionDeps.onMcpChange`). */
   onMcpChange?: LiveSessionDeps['onMcpChange'];
+  /** Handed to every session (see `LiveSessionDeps.shell`). */
+  shell?: LiveSessionDeps['shell'];
 };
 
 const folderKey = (cwd: string): string =>
@@ -135,8 +138,20 @@ export class SessionHost {
     }, RECLAIM_INTERVAL_MS);
   }
 
-  /** Stops the reclaim timer (sessions are left alone; see `stopAll`). */
+  /**
+   * Stops the reclaim timer and kills running `!` commands (never appended); the
+   * sessions themselves are left alone (see `stopAll`).
+   */
   dispose(): void {
+    for (const s of this.sessions.values()) {
+      const runId = s.command()?.run.runId;
+      if (runId === undefined) continue;
+      try {
+        s.commandRun(runId)?.kill();
+      } catch (err) {
+        this.report(err, `stop command (session ${s.sessionId})`);
+      }
+    }
     if (this.reclaimTimer === undefined) return;
     this.timers.clearInterval(this.reclaimTimer);
     this.reclaimTimer = undefined;
@@ -216,7 +231,7 @@ export class SessionHost {
    * Restarts a Claude chat's process between turns (same session id, as after
    * an idle reclaim, so its events, choices and permissions carry over), e.g.
    * so it drops a removed MCP server. True when it restarted now. While a turn,
-   * a permission request, a queued message or a running task is in progress it
+   * a permission request, a queued message, a running task or a `/loop` timer is in progress it
    * returns false and the restart waits: retried when that chat's turn ends and
    * on every reclaim tick (once the chat has been quiet for `RESTART_QUIET_MS`).
    * It also waits while the chat is being moved. Forgotten when the chat stops
@@ -234,13 +249,17 @@ export class SessionHost {
       return false;
     }
     const last = s.lastActivity;
+    // Entries Claude Code hasn't answered yet may not be saved: wait for quiet,
+    // so a lost answer can't hold the restart off for good.
+    const quiet = needQuiet || s.appending;
     // A queued message keeps the chat `working` until Claude has answered it.
     const busy =
       s.status !== 'idle' ||
       s.pendingRequests().length > 0 ||
       s.runningTasks > 0 ||
+      s.scheduled ||
       this.deps.isMoving?.(sessionId) === true ||
-      (needQuiet && last !== null && this.deps.now() - last < RESTART_QUIET_MS);
+      (quiet && last !== null && this.deps.now() - last < RESTART_QUIET_MS);
     if (busy) {
       this.restartDue.add(sessionId);
       return false;
@@ -295,8 +314,10 @@ export class SessionHost {
 
   /**
    * Closes live chats idle for at least `idleReclaimMinutes` (never pinned,
-   * never waiting on the user, never with running background tasks: closing
-   * the process would kill them, Ruling R29); they become `paused`. Returns
+   * never waiting on the user, never with running background tasks, a
+   * running `!` command or a `/loop` timer: closing the process would kill
+   * them, Ruling R29);
+   * they become `paused`. Returns
    * how many. A failure for one session is reported and the pass continues.
    */
   reclaimIdle(now: number): number {
@@ -309,7 +330,7 @@ export class SessionHost {
         if (!s.live || s.status !== 'idle' || s.idleSince === null) continue;
         if (now - s.idleSince < limit) continue;
         if (s.pendingRequests().length > 0 || this.deps.isPinned(id)) continue;
-        if (s.runningTasks > 0) continue;
+        if (s.runningTasks > 0 || s.scheduled) continue;
         s.pause();
         count++;
       } catch (err) {
@@ -366,12 +387,15 @@ export class SessionHost {
     runningTasks?: number;
     /** `runningTasks` without background shells. */
     runningAgents?: number;
+    /** The process holds a `/loop` wake-up or a scheduled prompt. */
+    scheduled?: true;
   }[] {
     return [...this.sessions.values()].map((s) => {
       const waitingFor = s.waitingFor();
       const lastActivity = s.lastActivity;
       const runningTasks = s.live ? s.runningTasks : 0;
       const runningAgents = s.live ? s.runningAgents : 0;
+      const scheduled = s.live && s.scheduled;
       return {
         sessionId: s.sessionId,
         cwd: s.cwd,
@@ -381,6 +405,7 @@ export class SessionHost {
         ...(lastActivity === null ? {} : { lastActivity }),
         ...(runningTasks > 0 ? { runningTasks } : {}),
         ...(runningAgents > 0 ? { runningAgents } : {}),
+        ...(scheduled ? { scheduled: true as const } : {}),
       };
     });
   }
@@ -422,6 +447,15 @@ export class SessionHost {
     return [...this.sessions.values()].filter(
       (s) => s.live && !isCodexSession(s.sessionId) && folderKey(s.cwd) === key,
     );
+  }
+
+  /** The `!` run with id `runId`, in whichever chat holds it. */
+  commandRun(runId: string): PtyRun | undefined {
+    for (const s of this.sessions.values()) {
+      const run = s.commandRun(runId);
+      if (run) return run;
+    }
+    return undefined;
   }
 
   liveCount(): number {
@@ -474,6 +508,7 @@ export class SessionHost {
       sentImages,
       onReturned,
       onMcpChange,
+      shell,
     } = this.deps;
     return {
       adapter,
@@ -504,6 +539,7 @@ export class SessionHost {
       ...(sentImages ? { sentImages } : {}),
       ...(onReturned ? { onReturned } : {}),
       ...(onMcpChange ? { onMcpChange } : {}),
+      ...(shell ? { shell } : {}),
       ...extra,
       log: extra.log ?? new EventLog(undefined, this.seqBase),
     };

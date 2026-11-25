@@ -9,6 +9,8 @@ export type IdleMonitorOptions = {
     status: ChatStatus;
     /** Running background agents; background shells (dev servers, watchers) do not count. */
     runningAgents?: number;
+    /** The chat's process holds a `/loop` wake-up or a scheduled prompt. */
+    scheduled?: boolean;
     lastActivity?: number;
   }[];
   /** Same fields as the external poller's sessions (see `externalStatus`). */
@@ -20,7 +22,8 @@ export type IdleMonitorOptions = {
 
 /**
  * Tracks how long a headless machine has had nothing to do (spec §10). Busy is a live
- * chat in a turn, any chat with running agents, or an external session at work; a chat
+ * chat in a turn, any chat with running agents, a live chat holding a `/loop` timer, or an
+ * external session at work; a chat
  * waiting on the owner is idle unless it has running agents. Idle never starts before
  * the newest chat activity or the end of a keep awake.
  */
@@ -43,6 +46,7 @@ export class IdleMonitor {
       sessions.some(
         (s) =>
           (s.runningAgents ?? 0) > 0 ||
+          (s.live && s.scheduled === true) ||
           (s.live && s.status !== 'needsYou' && IN_TURN.has(s.status)),
       ) || this.o.external().some((e) => e.status === 'busy' || e.state === 'working');
     if (this.busy) {
