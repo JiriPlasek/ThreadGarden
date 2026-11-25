@@ -651,6 +651,28 @@ describe('SessionHost: ! commands', () => {
     expect(fake.sent.filter((m) => m.shouldQuery === false)).toEqual([]);
   });
 
+  it('restartWhenIdle waits for a running command, then for quiet after it', async () => {
+    const ctx = shellSetup();
+    ctx.host.start();
+    const { s, fake } = await idleChat(ctx);
+    s.startCommand('sleep 100', SIZE);
+    expect(ctx.host.restartWhenIdle(s.sessionId)).toBe(false);
+    ctx.timers.advance(MIN);
+    expect(fake.closed).toBe(false);
+
+    // The command ends 10 s before a tick; its entries were just appended.
+    ctx.timers.advance(MIN - 10_000);
+    ctx.pty.last().exit(0);
+    expect(fake.sent.filter((m) => m.shouldQuery === false)).toHaveLength(2);
+    ctx.timers.advance(10_000);
+    expect(fake.closed).toBe(false);
+    ctx.timers.advance(MIN);
+    expect(fake.closed).toBe(true);
+    expect(ctx.adapter.started).toHaveLength(2);
+    expect(ctx.adapter.lastSession().options.resume).toBe(s.sessionId);
+    ctx.host.dispose();
+  });
+
   it('commandRun finds a run by id', async () => {
     const ctx = shellSetup();
     const { s } = await idleChat(ctx, '/a');
