@@ -567,7 +567,12 @@ test('the phone layout runs a command and stops it with the button', async ({ pa
   // Fits the screen.
   const box = await block.boundingBox();
   expect(box!.x + box!.width).toBeLessThanOrEqual(412);
-  await block.getByRole('button', { name: 'Stop' }).tap();
+  // Tapped until it takes: a tap on the button while the chat still scrolls can miss it.
+  const stop = block.getByRole('button', { name: 'Stop' });
+  await expect(async () => {
+    if (await stop.isEnabled().catch(() => false)) await stop.tap({ timeout: 2_000 });
+    await expect(block).toContainText(/Stopping…|Stopped ·/, { timeout: 1_000 });
+  }).toPass({ timeout: 15_000 });
   await expect(block).toContainText('Stopped ·');
   await expect(block.getByRole('button', { name: 'Stop' })).toHaveCount(0);
 });

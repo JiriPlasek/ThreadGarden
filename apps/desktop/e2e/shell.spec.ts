@@ -130,11 +130,23 @@ test('the next message carries the output to Claude', async ({ page }) => {
   await expect(page.getByText(/I can see the output of/)).toBeVisible();
 });
 
+/**
+ * Clicks Stop until the block says Stopping… or Stopped: the chat can still be scrolling
+ * as output arrives, and a click that lands beside the moving button does nothing.
+ */
+const stop = async (page: Page): Promise<void> => {
+  const button = block(page).getByRole('button', { name: 'Stop' });
+  await expect(async () => {
+    if (await button.isEnabled().catch(() => false)) await button.click({ timeout: 2_000 });
+    await expect(block(page)).toContainText(/Stopping…|Stopped ·/, { timeout: 1_000 });
+  }).toPass({ timeout: 15_000 });
+};
+
 test('Stop ends a sleeping command', async ({ page }) => {
   await openLiveChat(page, CHATS[2]!);
   await run(page, 'sleep 60');
   await expect(block(page)).toContainText('Running ·');
-  await block(page).getByRole('button', { name: 'Stop' }).click();
+  await stop(page);
   await expect(block(page)).toContainText('Stopped ·');
   await expect(block(page).getByRole('button', { name: 'Stop' })).toHaveCount(0);
 });
@@ -144,7 +156,7 @@ test('Stop kills a command that ignores Ctrl-C after the grace period', async ({
   await run(page, 'ignore-int');
   await expect(block(page)).toContainText('Ctrl-C does nothing here');
   const started = Date.now();
-  await block(page).getByRole('button', { name: 'Stop' }).click();
+  await stop(page);
   await expect(block(page)).toContainText('Stopped ·', { timeout: 20_000 });
   // It was asked politely first: not killed at once.
   expect(Date.now() - started).toBeGreaterThan(1_000);
