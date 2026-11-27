@@ -465,7 +465,8 @@ describe.skipIf(!REAL)(
       });
       await sleep(1_000);
       report('L1 messages so far', procSummary(p));
-      expect(r.error, r.error === undefined ? '' : scrubText(r.error)).toBeUndefined();
+      // Booleans only: a failing assertion prints its received value, which must never be raw SDK text.
+      expect(r.error === undefined, scrubText(r.error ?? '')).toBe(true);
       expect(link).toBeDefined();
     });
 
@@ -548,7 +549,10 @@ describe.skipIf(!REAL)(
       report('L2 messages (L1/L2 process)', procSummary(p));
       report('L2c messages', procSummary(q));
       q.session.close();
-      expect(wrong.error ?? wait.error, 'a wrong code must not succeed').toBeDefined();
+      expect(
+        wrong.error !== undefined || wait.error !== undefined,
+        'a wrong code must not succeed',
+      ).toBe(true);
     });
 
     it('L3 no login, and a dead login', async () => {
@@ -642,17 +646,22 @@ describe.skipIf(!REAL)(
           `[threadgarden-real] L4 the sign-in link is in ${LINK_FILE}. Open it, approve, and save what claude.ai shows into ${CODE_FILE} (waiting up to 10 minutes).`,
         );
         const deadline = Date.now() + 10 * 60_000;
+        // A wrong code ends the flow, so a half-written file must not be submitted: the
+        // content counts only once two consecutive polls read the same non-empty text.
         let pasted = '';
+        let previous = '';
         while (Date.now() < deadline) {
-          if (existsSync(CODE_FILE)) {
-            pasted = readFileSync(CODE_FILE, 'utf8').trim();
-            if (pasted) break;
+          const now = existsSync(CODE_FILE) ? readFileSync(CODE_FILE, 'utf8').trim() : '';
+          if (now !== '' && now === previous) {
+            pasted = now;
+            break;
           }
+          previous = now;
           await sleep(1_000);
         }
         rmSync(CODE_FILE, { force: true });
         rmSync(LINK_FILE, { force: true });
-        expect(pasted, 'no code arrived in 10 minutes').not.toBe('');
+        expect(pasted !== '', 'no code arrived in 10 minutes').toBe(true);
         remember(pasted);
         const hash = pasted.indexOf('#');
         const code = hash >= 0 ? pasted.slice(0, hash) : pasted;
@@ -703,7 +712,7 @@ describe.skipIf(!REAL)(
           accountSummary((await attempt('c', () => c.ctl.accountInfo())).ok as AccountInfo),
         );
         c.session.close();
-        expect(done.error, done.error === undefined ? '' : scrubText(done.error)).toBeUndefined();
+        expect(done.error === undefined, scrubText(done.error ?? '')).toBe(true);
       } finally {
         rmSync(SPIKE_DIR, { recursive: true, force: true });
         a.session.close();
