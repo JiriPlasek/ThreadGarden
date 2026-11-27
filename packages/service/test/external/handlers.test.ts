@@ -168,14 +168,29 @@ describe('external.stop', () => {
   const stopSetup = (
     agents: unknown[] = AGENTS,
     stopFails = false,
-    end: { fails?: boolean; staysListed?: boolean } = {},
+    end: {
+      fails?: boolean;
+      staysListed?: boolean;
+      backgroundStaysListed?: boolean;
+      backgroundDisappears?: boolean;
+      claudeUnavailableAfterStop?: boolean;
+    } = {},
   ) => {
     let listed = agents;
+    let stopped = false;
     const run = vi.fn(async (args: string[]) => {
       if (args[0] === 'stop') {
+        stopped = true;
         if (stopFails) throw new Error('claude stop exited with code 1');
+        if (end.backgroundStaysListed) return "couldn't confirm the session was stopped";
+        listed = listed.flatMap((entry) => {
+          const e = entry as { id?: string };
+          if (e.id !== args[1]) return [entry];
+          return end.backgroundDisappears ? [] : [{ ...e, state: 'stopped' }];
+        });
         return '';
       }
+      if (stopped && end.claudeUnavailableAfterStop) throw new Error('Claude unavailable');
       return JSON.stringify(listed);
     });
     // Ending a process takes it off `claude agents`, as Claude Code's registry does.
@@ -187,6 +202,7 @@ describe('external.stop', () => {
       run,
       () => new Set(),
       () => {},
+      { codex: async () => [], codexEnabled: () => true },
     );
     const router = new Router();
     registerExternalHandlers(router, {
@@ -213,6 +229,24 @@ describe('external.stop', () => {
     const t = stopSetup();
     expect(await t.stop('bg')).toEqual({ ok: {} });
     expect(t.run).toHaveBeenCalledWith(['stop', 'abc12345']);
+  });
+
+  it('does not report success when claude stop exits zero but the background session remains blocked', async () => {
+    const t = stopSetup(AGENTS, false, { backgroundStaysListed: true });
+    expect(await t.stop('bg')).toMatchObject({
+      code: 'STOP_PENDING',
+      message: expect.stringMatching(/background session.*not been confirmed/),
+    });
+  });
+
+  it('does not confirm a Claude stop from a healthy Codex list when Claude becomes unavailable', async () => {
+    const t = stopSetup(AGENTS, false, { claudeUnavailableAfterStop: true });
+    expect(await t.stop('bg')).toMatchObject({ code: 'STOP_PENDING' });
+  });
+
+  it('accepts a background session disappearing after stop', async () => {
+    const t = stopSetup(AGENTS, false, { backgroundDisappears: true });
+    expect(await t.stop('bg')).toEqual({ ok: {} });
   });
 
   it('ends a session another process holds (a terminal, an editor) by its pid', async () => {

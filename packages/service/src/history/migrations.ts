@@ -357,6 +357,14 @@ const steps: string[] = [
     mode TEXT NOT NULL
   );
   `,
+  // A manual archive of a PID-less external session survives unchanged registry reports.
+  `
+  CREATE TABLE IF NOT EXISTS external_archives (
+    session_id TEXT PRIMARY KEY,
+    state TEXT NOT NULL,
+    activity_at INTEGER NOT NULL
+  );
+  `,
 ];
 
 /** Runs the steps not run yet; `upTo` stops early (tests build older schemas with it). */

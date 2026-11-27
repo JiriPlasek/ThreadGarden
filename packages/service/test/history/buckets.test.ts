@@ -8,6 +8,7 @@ import { join } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { describe, expect, it } from 'vitest';
 import type { ChatStatus, EventMsg } from '@threadgarden/protocol';
+import { checkResume } from '../../src/external/resume-safety.js';
 import type { ExternalSession } from '../../src/external/poller.js';
 import { Buckets } from '../../src/history/buckets.js';
 import { Catalog, type LiveChat } from '../../src/history/catalog.js';
@@ -522,6 +523,88 @@ describe('buckets: auto-unarchive', () => {
     t.events.length = 0;
     t.buckets.unarchiveRunning([ext('session-1', '/work/proj-1', { status: 'busy' })]);
     expect(t.events).toEqual([]); // nothing left to bring back
+  });
+
+  it.each(['blocked', 'working'])(
+    'archives an external chat without a pid (%s) and keeps it hidden across polls',
+    async (state) => {
+      const t = await setup();
+      const stale = ext('session-5', '/work/proj-2', {
+        kind: 'background',
+        shortId: 'old123',
+        pid: undefined,
+        state,
+      });
+      t.setExternals([stale]);
+      expect(await t.setBucket(['session-5'], 'archived')).toEqual({ updated: 1, skipped: [] });
+      expect(
+        checkResume({
+          sessionId: 'session-5',
+          external: [stale],
+          lastModified: BASE,
+          now: BASE + 100 * DAY,
+        }).status,
+      ).toBe('blocked');
+      const restarted = new Buckets({ db: t.db, catalog: t.catalog, emit: () => {} });
+      for (const buckets of [t.buckets, restarted]) buckets.unarchiveRunning([stale]);
+      expect(t.catalog.summary('session-5')?.bucket).toBe('archived');
+      expect(await t.ids({ kind: 'active' })).not.toContain('session-5');
+      expect(await t.ids({ kind: 'needsYou' })).not.toContain('session-5');
+      expect(t.catalog.counts().needsYou).toBe(0);
+      expect(await t.ids({ kind: 'running' })).not.toContain('session-5');
+      expect(t.catalog.counts().running).toBe(0);
+    },
+  );
+
+  it('remembers an archived external record after reopening the database', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'threadgarden-external-archive-'));
+    const file = join(dir, 'threadgarden.db');
+    let db = openDb(file);
+    try {
+      const t = await setup(12, 3, db);
+      const stale = ext('session-5', '/work/proj-2', {
+        kind: 'background',
+        pid: undefined,
+        shortId: 'old123',
+        state: 'blocked',
+      });
+      t.setExternals([stale]);
+      expect(await t.setBucket(['session-5'], 'archived')).toEqual({ updated: 1, skipped: [] });
+      db.close();
+      db = openDb(file);
+      const catalog = new Catalog({ db, externals: () => [stale], ...opts });
+      new Buckets({ db, catalog, emit: () => {} }).unarchiveRunning([stale]);
+      expect(catalog.summary('session-5')?.bucket).toBe('archived');
+    } finally {
+      db.close();
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('brings an archived pid-less session back when its reported state or history advances', async () => {
+    const t = await setup();
+    const stale = ext('session-5', '/work/proj-2', {
+      kind: 'background',
+      shortId: 'old123',
+      pid: undefined,
+      state: 'blocked',
+    });
+    t.setExternals([stale]);
+    expect(await t.setBucket(['session-5'], 'archived')).toEqual({ updated: 1, skipped: [] });
+    t.buckets.unarchiveRunning([{ ...stale, state: 'working' }]);
+    expect(t.catalog.summary('session-5')?.bucket).toBe('active');
+    expect(await t.setBucket(['session-5'], 'archived')).toEqual({ updated: 1, skipped: [] });
+    t.db.upsertSession(
+      {
+        sessionId: 'session-5',
+        lastModified: BASE + 1000 * DAY,
+        summary: 'new activity',
+        cwd: stale.cwd,
+      },
+      'proj-2',
+    );
+    t.buckets.unarchiveRunning([stale]);
+    expect(t.catalog.summary('session-5')?.bucket).toBe('active');
   });
 
   it('unarchive returns the chats that came back', async () => {

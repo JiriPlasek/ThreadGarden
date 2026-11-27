@@ -49,6 +49,8 @@ export type ThreadgardenTitles = {
   generatedTitle: string | null;
 };
 
+export type ExternalArchive = { state: string; activityAt: number };
+
 /** v1.2: a chat's bucket (Threadgarden's own metadata). */
 export type BucketState = {
   bucket: Bucket;
@@ -791,6 +793,7 @@ export class Db implements LiveRegistry {
     bucket: Bucket,
     hold: { until?: number | undefined; note?: string | undefined } = {},
     seenAt?: number,
+    externalArchives: ReadonlyMap<string, ExternalArchive> = new Map(),
   ): void {
     if (sessionIds.length === 0) return;
     const onHold = bucket === 'onHold';
@@ -798,8 +801,27 @@ export class Db implements LiveRegistry {
     const until = onHold ? (hold.until ?? null) : null;
     this.inTransaction(() => {
       this.setBucketRows(sessionIds, bucket, until, note);
+      if (bucket === 'archived' && externalArchives.size) {
+        const save = this.raw.prepare(
+          'INSERT INTO external_archives (session_id, state, activity_at) VALUES (?, ?, ?)',
+        );
+        for (const id of sessionIds) {
+          const archived = externalArchives.get(id);
+          if (archived) save.run(id, archived.state, archived.activityAt);
+        }
+      }
       if (seenAt !== undefined) for (const id of sessionIds) this.markSeen(id, seenAt);
     });
+  }
+
+  /** The external state deliberately archived, only while the chat remains archived. */
+  externalArchiveOf(sessionId: string): ExternalArchive | undefined {
+    const row = this.raw
+      .prepare(
+        "SELECT e.state, e.activity_at FROM external_archives e JOIN chat_buckets b USING (session_id) WHERE e.session_id = ? AND b.bucket = 'archived'",
+      )
+      .get(sessionId);
+    return row ? { state: row.state as string, activityAt: row.activity_at as number } : undefined;
   }
 
   /** Archived chats among `sessionIds` become active; returns those, in the given order. */
@@ -933,7 +955,11 @@ export class Db implements LiveRegistry {
        ON CONFLICT(session_id) DO UPDATE SET bucket = excluded.bucket,
          hold_until = excluded.hold_until, hold_note = excluded.hold_note, back_at = NULL`,
     );
-    for (const id of sessionIds) upsert.run(id, bucket, until, note);
+    const clearArchive = this.raw.prepare('DELETE FROM external_archives WHERE session_id = ?');
+    for (const id of sessionIds) {
+      upsert.run(id, bucket, until, note);
+      clearArchive.run(id);
+    }
   }
 
   /** Runs `fn` in one transaction (rolled back if it throws). */

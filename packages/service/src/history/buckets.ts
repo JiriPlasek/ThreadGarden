@@ -4,11 +4,11 @@
  * run again, and ending holds whose time ran out. Buckets are Threadgarden's own
  * metadata (`threadgarden.db`), never written into Claude Code's data.
  */
-import type { Bucket, ChatStatus, EventMsg } from '@threadgarden/protocol';
+import type { Bucket, ChatStatus, EventMsg, ExternalInfo } from '@threadgarden/protocol';
 import type { ExternalSession } from '../external/poller.js';
 import { externalStatus } from '../external/resume-safety.js';
 import { isActiveNow, type Catalog } from './catalog.js';
-import type { Db } from './db.js';
+import type { Db, ExternalArchive } from './db.js';
 
 const DAY_MS = 86_400_000;
 
@@ -27,6 +27,10 @@ export type SetBucketResult = {
 /** An external session in these states runs: it brings an archived chat back. */
 const RUNNING: ReadonlySet<ChatStatus> = new Set(['working', 'needsYou']);
 
+/** Only meaningful runtime changes revive a deliberately archived external record. */
+const externalState = (e: ExternalInfo): string =>
+  JSON.stringify([e.kind, e.shortId, e.pid, e.state, e.status, e.waitingFor]);
+
 export class Buckets {
   private readonly db: Db;
   private readonly catalog: Catalog;
@@ -43,7 +47,7 @@ export class Buckets {
   /**
    * `chat.setBucket`: moves the known chats (one transaction). Archiving is
    * refused for a chat Threadgarden runs (`LIVE`: the UI asks to end it first) or
-   * one working or waiting elsewhere (`RUNNING`: it would come right back).
+   * one with a known process working or waiting elsewhere (`RUNNING`).
    * A hold whose time has already passed ends at once. Archiving also marks
    * the chats seen (Ruling R32), so they leave Needs you unless they wait on
    * the user.
@@ -57,17 +61,32 @@ export class Buckets {
     const summaries = new Map(this.catalog.summaries(ids).map((s) => [s.sessionId, s]));
     const skipped: SetBucketResult['skipped'] = [];
     const moved: string[] = [];
+    const externalArchives = new Map<string, ExternalArchive>();
     for (const id of ids) {
       const s = summaries.get(id);
       let reason: string | undefined;
       if (!s) reason = 'NOT_FOUND';
       else if (bucket === 'archived' && s.live) reason = 'LIVE';
-      else if (bucket === 'archived' && s.external && RUNNING.has(s.status)) reason = 'RUNNING';
+      else if (bucket === 'archived' && s.external?.pid !== undefined && RUNNING.has(s.status))
+        reason = 'RUNNING';
       if (reason) skipped.push({ sessionId: id, reason });
-      else moved.push(id);
+      else {
+        moved.push(id);
+        if (bucket === 'archived' && s?.external && s.external.pid === undefined)
+          externalArchives.set(id, {
+            state: externalState(s.external),
+            activityAt: s.lastActivity,
+          });
+      }
     }
     if (moved.length > 0) {
-      this.db.setBucket(moved, bucket, hold, bucket === 'archived' ? this.now() : undefined);
+      this.db.setBucket(
+        moved,
+        bucket,
+        hold,
+        bucket === 'archived' ? this.now() : undefined,
+        externalArchives,
+      );
       this.changed(moved, bucket);
       if (bucket === 'onHold' && hold.until !== undefined) this.sweepHolds();
     }
@@ -113,9 +132,16 @@ export class Buckets {
 
   /** Auto-unarchive (§3): external sessions that work or wait on the user. */
   unarchiveRunning(externals: readonly ExternalSession[]): void {
-    const ids = externals.flatMap((e) =>
-      e.sessionId !== undefined && RUNNING.has(externalStatus(e)) ? [e.sessionId] : [],
-    );
+    const ids = externals.flatMap((e) => {
+      if (e.sessionId === undefined || !RUNNING.has(externalStatus(e))) return [];
+      if (e.pid === undefined) {
+        const archived = this.db.externalArchiveOf(e.sessionId);
+        const activity = Math.max(e.startedAt, this.db.getSession(e.sessionId)?.lastModified ?? 0);
+        if (archived && archived.state === externalState(e) && activity <= archived.activityAt)
+          return [];
+      }
+      return [e.sessionId];
+    });
     this.unarchive(ids);
   }
 

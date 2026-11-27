@@ -142,6 +142,9 @@ const BUSY: ReadonlySet<ChatStatus> = new Set(['needsYou', 'working', 'unknown']
 /** Unread chats → when their last turn ended (`Db.unreadTurns`). */
 type Turns = Map<string, number>;
 
+const isArchivedExternal = (s: ChatSummary): boolean =>
+  s.bucket === 'archived' && s.external !== null && s.external.pid === undefined;
+
 const isUnread = (s: ChatSummary, turns: Turns): boolean =>
   turns.has(s.sessionId) && !BUSY.has(s.status);
 
@@ -198,7 +201,8 @@ export const isActiveNow = (s: ChatSummary): boolean =>
  * chat, or (Ruling R29) a live Threadgarden chat with running background tasks even
  * while its turn is idle (e.g. its dev server still runs).
  */
-const isRunning = (s: ChatSummary): boolean => s.status === 'working' || (s.runningTasks ?? 0) > 0;
+const isRunning = (s: ChatSummary): boolean =>
+  !isArchivedExternal(s) && (s.status === 'working' || (s.runningTasks ?? 0) > 0);
 
 const PREVIEW_MAX = 140;
 const previewOf = (r: SessionRow): string =>
@@ -561,12 +565,13 @@ export class Catalog {
    * The Needs you place (v1.1): chats waiting on the user (display order),
    * then unread chats and (v1.2) chats back from hold, most recent turn end
    * or return first. Such chats the host and the poller do not hold come from
-   * the index; unknown ids are left out. Every bucket counts.
+   * the index; unknown ids are left out. Deliberately archived PID-less external
+   * records stay hidden; otherwise every bucket counts.
    */
   private needsYouList(overlay: Map<string, Entry>, turns: Turns): ChatSummary[] {
     const waiting = [...overlay.values()]
       .map((e) => e.summary)
-      .filter((s) => s.status === 'needsYou')
+      .filter((s) => s.status === 'needsYou' && !isArchivedExternal(s))
       .sort(compareChats);
     const backs = this.db.backFromHold();
     if (turns.size === 0 && backs.size === 0) return waiting;
@@ -597,7 +602,7 @@ export class Catalog {
       .filter((s) => {
         switch (place.kind) {
           case 'needsYou':
-            return s.status === 'needsYou';
+            return s.status === 'needsYou' && !isArchivedExternal(s);
           case 'running':
             return isRunning(s);
           default:
