@@ -64,6 +64,7 @@ import type {
   AgentAdapter,
   AgentSession,
   CanUseTool,
+  LoginControls,
   McpControls,
   Effort,
   PermissionMode,
@@ -893,6 +894,17 @@ export class LiveSession {
     return session.mcp;
   }
 
+  /**
+   * Protocol 14: the running process's sign-in controls and its account reading,
+   * for a sign-in run on this chat's process; undefined without a process or controls.
+   */
+  loginProcess(): { login: LoginControls; accountInfo(): Promise<AccountInfo> } | undefined {
+    const session = this.session;
+    const login = session?.login;
+    if (!session || !login) return undefined;
+    return { login, accountInfo: () => session.accountInfo() };
+  }
+
   /** Adds a line of Threadgarden's own to the chat (e.g. a scheduled message that went out late). */
   note(level: 'info' | 'warning' | 'error', text: string): void {
     this.pushItems([{ kind: 'system', id: `local:${randomUUID()}`, level, text }], false);
@@ -1078,9 +1090,7 @@ export class LiveSession {
     });
     const text = `Claude Code isn't signed in on ${machine}, or its sign-in expired.`;
     return {
-      items: [
-        { kind: 'system', id: `local:${randomUUID()}`, level: 'error', text, signIn: true },
-      ],
+      items: [{ kind: 'system', id: `local:${randomUUID()}`, level: 'error', text, signIn: true }],
       replace: false,
     };
   }

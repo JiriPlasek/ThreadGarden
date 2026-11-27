@@ -9,6 +9,7 @@ import {
 import { MAX_SEQ_EPOCH, nextSeqEpoch, seqBaseForEpoch } from '../../src/chat/event-log.js';
 import {
   RESTART_QUIET_MS,
+  RESTARTED_AFTER_SIGN_IN_NOTE,
   ROOT_BYPASS_NOTE,
   SessionHost,
   type SessionHostDeps,
@@ -1017,5 +1018,165 @@ describe('SessionHost.liveIn', () => {
       const w = ctx.host.create('C:\\Win\\P', { text: 'w' });
       expect(ctx.host.liveIn('c:\\win\\p\\').map((s) => s.sessionId)).toEqual([w.sessionId]);
     }
+  });
+});
+
+describe('SessionHost.restartAfterSignIn', () => {
+  const wake = (fake: ReturnType<FakeAdapter['lastSession']>, id: string, at: number) => {
+    fake.emit({
+      type: 'assistant',
+      message: {
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool_use',
+            id,
+            name: 'ScheduleWakeup',
+            input: { delaySeconds: 3600, prompt: '/loop check' },
+          },
+        ],
+      },
+      parent_tool_use_id: null,
+    } as never);
+    fake.emit({
+      type: 'user',
+      message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: 'ok' }] },
+      parent_tool_use_id: null,
+      tool_use_result: { scheduledFor: at },
+    } as never);
+  };
+  /** A turn Claude Code refuses because it is not signed in (spike L3). */
+  const failOnLogin = async (
+    s: { send(m: { text: string }): void },
+    fake: ReturnType<FakeAdapter['lastSession']>,
+    n: string,
+  ) => {
+    s.send({ text: 'go' });
+    fake.emit({
+      type: 'assistant',
+      uuid: `a-${n}`,
+      session_id: 's',
+      parent_tool_use_id: null,
+      error: 'authentication_failed',
+      message: {
+        id: `msg_${n}`,
+        role: 'assistant',
+        content: [{ type: 'text', text: 'Not logged in · Please run /login' }],
+      },
+    } as never);
+    fake.emit(result(`r-${n}`, { is_error: true, result: 'Not logged in · Please run /login' }));
+    await settle();
+  };
+  const notes = (ctx: ReturnType<typeof setup>, id: string) =>
+    ctx.host
+      .get(id)!
+      .snapshot(100)
+      .items.filter((i: ChatItem) => i.kind === 'system')
+      .map((i) => (i as { text: string }).text);
+
+  it('restartAfterSignIn waits for a turn but not for a /loop in a chat that failed on login', async () => {
+    const ctx = setup();
+    // A chat whose last turn failed on login, holding a /loop wake-up and a background task.
+    const { s: failed, fake: failedFake } = await idleChat(ctx, '/a');
+    wake(failedFake, 'w1', ctx.timers.now() + 60 * MIN);
+    failedFake.emit(result('r-wake'));
+    failedFake.emit(started('b1', { task_type: 'local_bash', is_backgrounded: true }));
+    await settle();
+    await failOnLogin(failed, failedFake, 'f');
+    ctx.timers.advance(33);
+    expect(failed.failedOnLogin).toBe(true);
+    expect(failed.scheduled).toBe(true);
+    expect(failed.runningTasks).toBe(1);
+    expect(failed.status).toBe('idle');
+    // A chat that works, holding a /loop wake-up.
+    const { s: looping, fake: loopingFake } = await idleChat(ctx, '/b');
+    wake(loopingFake, 'w2', ctx.timers.now() + 60 * MIN);
+    loopingFake.emit(result('r-wake2'));
+    await settle();
+    expect(looping.scheduled).toBe(true);
+    // A chat with nothing going on.
+    const { s: quiet, fake: quietFake } = await idleChat(ctx, '/c');
+
+    ctx.host.restartAfterSignIn();
+
+    expect(failedFake.closed).toBe(true);
+    const again = ctx.host.get(failed.sessionId)!;
+    expect(again.live).toBe(true);
+    expect(again.failedOnLogin).toBe(false);
+    expect(notes(ctx, failed.sessionId)).toContain(RESTARTED_AFTER_SIGN_IN_NOTE);
+    expect(RESTARTED_AFTER_SIGN_IN_NOTE).toBe(
+      'Restarted after signing in. Start /loop again if you need it.',
+    );
+    expect(quietFake.closed).toBe(true);
+    expect(notes(ctx, quiet.sessionId)).not.toContain(RESTARTED_AFTER_SIGN_IN_NOTE);
+    // The working chat's /loop is kept: its restart waits as usual.
+    expect(loopingFake.closed).toBe(false);
+    expect(ctx.host.get(looping.sessionId)).toBe(looping);
+  });
+
+  it('restartAfterSignIn never restarts a chat that failed on login while a request is open', async () => {
+    const ctx = setup();
+    const { s, fake } = await idleChat(ctx);
+    await failOnLogin(s, fake, 'f');
+    expect(s.failedOnLogin).toBe(true);
+    s.send({ text: 'again' });
+    const pending = fake.requestPermission('Bash', { command: 'x' }, { requestId: 'p1' });
+    await settle();
+    expect(s.status).toBe('needsYou');
+    ctx.host.restartAfterSignIn();
+    expect(fake.closed).toBe(false);
+    s.respond('p1', { decision: 'deny' });
+    await pending;
+    fake.emit(result('r-again'));
+    await settle();
+    expect(fake.closed).toBe(true);
+    expect(ctx.host.get(s.sessionId)!.live).toBe(true);
+  });
+
+  it('a sign-in during a turn restarts that chat only after it', async () => {
+    const ctx = setup();
+    const { s: failed, fake: failedFake } = await idleChat(ctx, '/a');
+    await failOnLogin(failed, failedFake, 'f');
+    // Sent again before the sign-in finished: a turn is running.
+    failed.send({ text: 'retry' });
+    const working = ctx.host.create('/b', { text: 'long task' });
+    const workingFake = ctx.adapter.lastSession();
+    expect(failed.status).toBe('working');
+    expect(working.status).toBe('working');
+
+    ctx.host.restartAfterSignIn();
+    expect(failedFake.closed).toBe(false);
+    expect(workingFake.closed).toBe(false);
+
+    failedFake.emit(result('r-retry'));
+    await settle();
+    expect(failedFake.closed).toBe(true);
+    expect(ctx.host.get(failed.sessionId)!.live).toBe(true);
+    expect(workingFake.closed).toBe(false);
+
+    workingFake.emit(result('r-long'));
+    await settle();
+    expect(workingFake.closed).toBe(true);
+    expect(ctx.adapter.lastSession().options.resume).toBe(working.sessionId);
+  });
+
+  it('restartAfterSignIn leaves Codex chats alone', async () => {
+    const ctx = setup();
+    const codex = ctx.host.create('/p', { text: 'hi' }, { model: 'codex:gpt-5.5' });
+    const fake = ctx.adapter.lastSession();
+    fake.emit(result('r1'));
+    await settle();
+    expect(codex.sessionId.startsWith('codex-')).toBe(true);
+    ctx.host.restartAfterSignIn();
+    expect(fake.closed).toBe(false);
+  });
+
+  it('liveClaude lists the live Claude chats only', async () => {
+    const ctx = setup();
+    const { s } = await idleChat(ctx, '/a');
+    ctx.host.create('/p', { text: 'hi' }, { model: 'codex:gpt-5.5' });
+    const { s: paused } = await idleChat(ctx, '/b');
+    paused.pause();
+    expect(ctx.host.liveClaude().map((x) => x.sessionId)).toEqual([s.sessionId]);
   });
 });

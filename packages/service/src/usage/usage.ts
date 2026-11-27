@@ -292,6 +292,11 @@ export class UsageTracker {
     };
   }
 
+  /** The account this machine's chats last reported (stored), undefined until one has. */
+  storedAccount(): UsageAccount | undefined {
+    return this.account.account ? { ...this.account.account } : undefined;
+  }
+
   /**
    * When the limit that refuses requests now resets: the latest reset among
    * the rejected windows whose reset is still ahead. Undefined when no window
