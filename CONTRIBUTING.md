@@ -49,6 +49,7 @@ so it must stay where it is.
 - CI (`.github/workflows/ci.yml`) must pass on Windows, macOS and Linux: lint, type-check, unit and component tests, performance budgets, Rust fmt/clippy/tests, the release bundle build and the Playwright specs. A failure on any OS blocks the merge.
 - Most contributors can test only one OS by hand. Write OS-specific code with all three branches, and say in the pull request what you tried by hand.
 - Do not commit personal paths, user names, tokens or machine details, including in test fixtures and logs pasted into docs.
+- Claude Code users: the skills in `.claude/skills/` (`/ci-triage` for failed CI runs, `/release` for cutting a release) follow `docs/ci-flakes.md` and `docs/releasing.md`.
 
 ## Local setup
 
