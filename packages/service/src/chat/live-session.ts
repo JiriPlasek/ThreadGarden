@@ -896,13 +896,17 @@ export class LiveSession {
 
   /**
    * Protocol 14: the running process's sign-in controls and its account reading,
-   * for a sign-in run on this chat's process; undefined without a process or controls.
+   * for a sign-in run on this chat's process; undefined without a process or
+   * controls. `ended` settles when that process is gone (paused, restarted, ended
+   * or crashed): an instance runs one process, a restart makes a new instance.
    */
-  loginProcess(): { login: LoginControls; accountInfo(): Promise<AccountInfo> } | undefined {
+  loginProcess():
+    | { login: LoginControls; accountInfo(): Promise<AccountInfo>; ended: Promise<void> }
+    | undefined {
     const session = this.session;
     const login = session?.login;
     if (!session || !login) return undefined;
-    return { login, accountInfo: () => session.accountInfo() };
+    return { login, accountInfo: () => session.accountInfo(), ended: this.ended };
   }
 
   /** Adds a line of Threadgarden's own to the chat (e.g. a scheduled message that went out late). */

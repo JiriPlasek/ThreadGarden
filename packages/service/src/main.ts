@@ -23,7 +23,7 @@ import pkg from '../package.json' with { type: 'json' };
 import { nextSeqEpoch, seqBaseForEpoch } from './chat/event-log.js';
 import { realTimers, type Timers } from './chat/live-session.js';
 import { SessionHost } from './chat/session-host.js';
-import { ClaudeLogin, removeTranscript } from './claude-login/login.js';
+import { ClaudeLogin, envRefusal, removeTranscript } from './claude-login/login.js';
 import { RoutingSettingsCheck, routingSettingsPaths } from './chat/title-routing.js';
 import { ChatTitles } from './chat/titles.js';
 import { resolveClaudeConfigDir } from './config.js';
@@ -1108,6 +1108,8 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         liveClaude: () => sessionHost.liveClaude(),
         startHelper: startLoginHelper,
         restartAfterSignIn: () => sessionHost.restartAfterSignIn(),
+        // Threadgarden's API key setting, or a key or a provider in the chats' environment.
+        refusal: () => envRefusal(sessionEnvOf()),
         emit: (state) => broadcastRef.fn({ event: 'claude.account', data: state }),
         ...(opts.sessionTimers ? { timers: opts.sessionTimers } : {}),
         onError,

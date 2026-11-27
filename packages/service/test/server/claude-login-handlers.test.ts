@@ -164,12 +164,32 @@ describe('claude.*', () => {
     expect(adapter.started).toHaveLength(1);
   });
 
+  it("a named chat's restart ends the sign-in on its process", async () => {
+    const adapter = new LoginAdapter();
+    const c = await start(adapter);
+    const { sessionId, fake } = await liveChat(c, adapter);
+    await c.call('claude.signIn', { sessionId });
+    expect(svc!.host!.restartWhenIdle(sessionId)).toBe(true);
+    expect(fake.closed).toBe(true);
+    await eventually(async () =>
+      expect((await c.call<ClaudeAccount>('claude.account', {})).signingIn).toBe(false),
+    );
+    await expect(c.call('claude.signInCode', { code: CODE })).rejects.toMatchObject({
+      code: CLAUDE_LOGIN_ERRORS.failed,
+      message: 'The chat restarted during the sign-in. Start again.',
+    });
+    expect(fake.loginCalls.map((x) => x.op)).toEqual(['start']);
+  });
+
   it('claude.signInCode signs in and restarts the live chats', async () => {
     const adapter = new LoginAdapter();
     const c = await start(adapter);
     const { sessionId, fake } = await liveChat(c, adapter);
     await c.call('claude.signIn', {});
+    // From Settings: a helper, even with a chat live.
     const helper = adapter.lastSession();
+    expect(helper).not.toBe(fake);
+    expect(fake.loginCalls).toEqual([]);
     helper.accountAfterLogin = {
       tokenSource: 'claude.ai',
       email: 'new@example.com',
@@ -224,6 +244,36 @@ describe('claude.*', () => {
     expect(helper.closed).toBe(true);
     expect((await c.call<ClaudeAccount>('claude.account', {})).signingIn).toBe(false);
     expect(accountEvents(c).map((s) => s.signingIn)).toEqual([true, false]);
+  });
+
+  it('an API key setting refuses sign-in', async () => {
+    const adapter = new LoginAdapter();
+    const c = await start(adapter);
+    await c.call('auth.setApiKey', { key: 'sk-ant-secret-key' });
+    const err = await c.raw('claude.signIn', {});
+    expect(err.error?.code).toBe(CLAUDE_LOGIN_ERRORS.unsupported);
+    expect(err.error?.message).not.toContain('sk-ant');
+    expect(adapter.started).toHaveLength(0);
+    await c.call('auth.setApiKey', { key: null });
+    expect(await c.call('claude.signIn', {})).toEqual({ url: LINK });
+  });
+
+  it('a cloud provider in the environment refuses sign-in', async () => {
+    const adapter = new LoginAdapter();
+    svc = await startService({
+      dataDir: join(dir, 'data'),
+      claudeConfigDir: join(dir, 'claude'),
+      adapter,
+      claude: { path: '/bin/claude', version: '2.1.330' },
+      externalRun: async () => '[]',
+      sessionEnv: { PATH: '/usr/bin', CLAUDE_CODE_USE_BEDROCK: '1' },
+      installSignalHandlers: false,
+      logger,
+    });
+    client = await TestClient.connect(svc.port, svc.token);
+    await expect(client.call('claude.signIn', {})).rejects.toMatchObject({
+      code: CLAUDE_LOGIN_ERRORS.unsupported,
+    });
   });
 
   it('an API-key machine and a Codex chat answer LOGIN_UNSUPPORTED', async () => {

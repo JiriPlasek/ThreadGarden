@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   ClaudeLogin,
   SIGN_IN_TIMEOUT_MS,
+  envRefusal,
   removeTranscript,
   type ClaudeLoginDeps,
   type LoginChat,
@@ -32,9 +33,15 @@ const fakeSession = (): FakeSession => {
   return s;
 };
 
+/** What `LiveSession.loginProcess` hands out for a chat run by `s`. */
+const processOf = (s: FakeSession) => ({
+  login: s.login,
+  accountInfo: () => s.accountInfo(),
+});
+
 const chat = (sessionId: string, s: FakeSession): LoginChat => ({
   sessionId,
-  loginProcess: () => s,
+  loginProcess: () => processOf(s),
 });
 
 const setup = (over: Partial<ClaudeLoginDeps> = {}) => {
@@ -109,17 +116,137 @@ describe('ClaudeLogin', () => {
     expect(own.closed).toBe(false);
   });
 
-  it('start without a chat uses a live Claude chat when there is one, else a helper', async () => {
+  it('a Settings sign-in uses a helper even when a chat is live', async () => {
     const ctx = setup();
-    expect(await ctx.login.start()).toEqual({ url: LINK });
-    expect(ctx.helpers).toHaveLength(1);
-    await ctx.login.cancel();
-
     const own = fakeSession();
     ctx.chats.push(chat('chat-1', own));
-    await ctx.login.start();
-    expect(own.loginCalls).toEqual([{ op: 'start' }]);
+    expect(await ctx.login.start()).toEqual({ url: LINK });
     expect(ctx.helpers).toHaveLength(1);
+    expect(ctx.helpers[0]!.loginCalls).toEqual([{ op: 'start' }]);
+    expect(own.loginCalls).toEqual([]);
+  });
+
+  it('the named chat restarting ends the sign-in', async () => {
+    const ctx = setup();
+    const own = fakeSession();
+    let gone: () => void = () => {};
+    const ended = new Promise<void>((r) => (gone = r));
+    ctx.chats.push({
+      sessionId: 'chat-1',
+      loginProcess: () => ({ login: own.login, accountInfo: () => own.accountInfo(), ended }),
+    });
+    await ctx.login.start('chat-1');
+    expect(ctx.login.state().signingIn).toBe(true);
+    gone();
+    await settle();
+    expect(ctx.login.state().signingIn).toBe(false);
+    expect(ctx.emitted.at(-1)?.signingIn).toBe(false);
+    expect(await rejection(ctx.login.submit(CODE))).toEqual(
+      expect.objectContaining({
+        code: CLAUDE_LOGIN_ERRORS.failed,
+        message: 'The chat restarted during the sign-in. Start again.',
+      }),
+    );
+    expect(own.loginCalls.map((c) => c.op)).toEqual(['start']);
+    // Told once: after that, nothing is in progress.
+    expect(await rejection(ctx.login.submit(CODE))).toMatchObject({
+      code: CLAUDE_LOGIN_ERRORS.notStarted,
+    });
+  });
+
+  it('a code for a named chat whose process changed fails before it is sent', async () => {
+    const ctx = setup();
+    const first = fakeSession();
+    const second = fakeSession();
+    let current = first;
+    ctx.chats.push({ sessionId: 'chat-1', loginProcess: () => processOf(current) });
+    await ctx.login.start('chat-1');
+    current = second; // restarted, its old process's end not seen yet
+    expect(await rejection(ctx.login.submit(CODE))).toMatchObject({
+      code: CLAUDE_LOGIN_ERRORS.failed,
+      message: 'The chat restarted during the sign-in. Start again.',
+    });
+    expect(first.loginCalls.map((c) => c.op)).toEqual(['start']);
+    expect(second.loginCalls).toEqual([]);
+    expect(ctx.login.state().signingIn).toBe(false);
+  });
+
+  it('a code before the link answers LOGIN_NOT_STARTED and leaves the sign-in going', async () => {
+    const ctx = setup();
+    let release: (v: unknown) => void = () => {};
+    const slow = fakeSession();
+    (slow as { login: LoginControls }).login = {
+      ...slow.login,
+      start: () => new Promise((r) => (release = r)),
+    };
+    ctx.chats.push(chat('slow', slow));
+    const started = ctx.login.start('slow');
+    await settle();
+    expect(await rejection(ctx.login.submit(CODE))).toMatchObject({
+      code: CLAUDE_LOGIN_ERRORS.notStarted,
+    });
+    expect(ctx.login.state().signingIn).toBe(true);
+    release({ manualUrl: LINK });
+    expect(await started).toEqual({ url: LINK });
+    expect(slow.loginCalls).toEqual([]); // the overridden start records nothing; no submit
+    await ctx.login.submit(CODE);
+    expect(slow.loginCalls.map((c) => c.op)).toEqual(['wait', 'submit']);
+  });
+
+  it('a second code while one is being checked gets that check’s answer and is not sent', async () => {
+    const ctx = setup();
+    await ctx.login.start();
+    const helper = ctx.helpers[0]!;
+    let finish: (v: unknown) => void = () => {};
+    const wait = helper.login.wait;
+    (helper as { login: LoginControls }).login = {
+      ...helper.login,
+      wait: async () => {
+        await new Promise((r) => (finish = r));
+        return wait();
+      },
+    };
+    const first = ctx.login.submit(CODE);
+    await settle();
+    const second = ctx.login.submit('another-code');
+    finish(undefined);
+    const [a, b] = await Promise.all([first, second]);
+    expect(a).toEqual(b);
+    expect(helper.loginCalls.filter((c) => c.op === 'submit')).toEqual([
+      { op: 'submit', arg: { code: CODE, state: STATE } },
+    ]);
+    expect(ctx.restarts()).toBe(1);
+  });
+
+  it('a late success of a replaced sign-in restarts nothing and leaves the new one', async () => {
+    const ctx = setup();
+    await ctx.login.start();
+    const old = ctx.helpers[0]!;
+    let answer: (v: unknown) => void = () => {};
+    old.accountInfo = () => new Promise((r) => (answer = r as never));
+    const submitted = ctx.login.submit(CODE);
+    await settle();
+    await ctx.login.start(); // replaces it while its account is being read
+    answer({ email: 'new@example.com', tokenSource: 'claude.ai' });
+    expect(await rejection(submitted)).toMatchObject({
+      code: CLAUDE_LOGIN_ERRORS.failed,
+      message: 'A newer sign-in replaced this one.',
+    });
+    expect(ctx.restarts()).toBe(0);
+    expect(ctx.login.state().signingIn).toBe(true);
+    expect(ctx.helpers[1]!.closed).toBe(false);
+  });
+
+  it('an API key setting refuses sign-in', async () => {
+    const ctx = setup({
+      refusal: () => 'This machine uses an API key, so it has no Claude sign-in.',
+    });
+    expect(await rejection(ctx.login.start())).toMatchObject({
+      code: CLAUDE_LOGIN_ERRORS.unsupported,
+      message: 'This machine uses an API key, so it has no Claude sign-in.',
+    });
+    expect(ctx.helpers).toHaveLength(0);
+    expect(ctx.emitted).toEqual([]);
   });
 
   it('a second start cancels the first', async () => {
@@ -258,6 +385,11 @@ describe('ClaudeLogin', () => {
     expect(ctx.helpers[0]!.closed).toBe(true);
     expect(ctx.login.state().signingIn).toBe(false);
     expect(ctx.emitted.at(-1)?.signingIn).toBe(false);
+    // The next code is told why, once.
+    expect(await rejection(ctx.login.submit(CODE))).toMatchObject({
+      code: CLAUDE_LOGIN_ERRORS.failed,
+      message: 'The sign-in timed out. Sign in again to get a new link.',
+    });
     expect(await rejection(ctx.login.submit(CODE))).toMatchObject({
       code: CLAUDE_LOGIN_ERRORS.notStarted,
     });
@@ -269,6 +401,9 @@ describe('ClaudeLogin', () => {
     ctx.helpers[0]!.end();
     await settle();
     expect(ctx.login.state().signingIn).toBe(false);
+    expect(await rejection(ctx.login.submit(CODE))).toMatchObject({
+      code: CLAUDE_LOGIN_ERRORS.failed,
+    });
   });
 
   it('success emits the new account, clears expired, and restarts', async () => {
@@ -423,6 +558,21 @@ describe('ClaudeLogin', () => {
     ctx.login.dispose();
     expect(ctx.helpers[0]!.closed).toBe(true);
     expect(ctx.timers.pending).toBe(0);
+  });
+});
+
+describe('envRefusal', () => {
+  it('refuses an API key or a cloud provider in the environment, and nothing else', () => {
+    expect(envRefusal({ PATH: '/usr/bin' })).toBeUndefined();
+    expect(envRefusal({ ANTHROPIC_API_KEY: '' })).toBeUndefined();
+    expect(envRefusal({ ANTHROPIC_API_KEY: 'sk-ant-x' })).toMatch(/API key/);
+    expect(envRefusal({ anthropic_api_key: 'sk-ant-x' })).toMatch(/API key/);
+    expect(envRefusal({ CLAUDE_CODE_USE_BEDROCK: '1' })).toMatch(/cloud provider/);
+    expect(envRefusal({ CLAUDE_CODE_USE_VERTEX: 'true' })).toMatch(/cloud provider/);
+    expect(envRefusal({ CLAUDE_CODE_USE_BEDROCK: '0' })).toBeUndefined();
+    expect(envRefusal({ CLAUDE_CODE_USE_VERTEX: 'false' })).toBeUndefined();
+    // Never the key itself.
+    expect(envRefusal({ ANTHROPIC_API_KEY: 'sk-ant-x' })).not.toContain('sk-ant');
   });
 });
 
