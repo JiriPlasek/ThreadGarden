@@ -2,6 +2,21 @@
 
 The owner approved the approach on 2026-11-27. This change ships in 0.12.1.
 
+## Amended by the owner (2026-11-27, after the build)
+
+- **No Settings section.**
+  - The **Claude accounts** section in Settings is removed.
+  - Signing in is only `/login` in a Claude chat, or **Sign in to Claude** under a turn that failed on login.
+  - Either one opens the same dialog for that chat's machine: Claude Code's own link, then paste the code. It's the same procedure as running `claude` in a terminal on a machine that isn't logged in.
+- **`/logout`** in a Claude chat logs Claude Code out on that chat's machine. It runs Claude Code's own `claude auth logout` there, after a confirmation.
+- **Switching account** is `/logout`, then `/login`. There is no separate Switch account.
+- Everything else in this design stands:
+  - the failure line;
+  - the restart after a sign-in;
+  - secrets never logged;
+  - the API-key refusal;
+  - the `claude-login` capability.
+
 ## Why
 
 On 2026-11-25, after kumbal updated to 0.12.0, every turn there failed at once with "Failed to authenticate: OAuth session expired and could not be refreshed". Claude Code's own login on that machine had expired. The only fix was to SSH into kumbal, run `claude` and type `/login`. Threadgarden is meant to make the machines usable without a terminal, from the desktop and from the phone. The owner also wants to choose which Claude account a machine uses.

@@ -318,3 +318,88 @@ Every check runs with `CLAUDE_CONFIG_DIR` set to a fresh temp folder, so Claude 
   - check that a chat failing on login shows the button;
   - try `/login` on the phone.
 - [ ] **Step 5: Commit** `test(e2e): signing in to Claude`, then open the PR and run the 0.12.1 release (version bump PR, tag).
+
+---
+
+## Amendment (owner, 2026-11-27): no Settings section, add `/logout`
+
+These two tasks follow Tasks 1–8, which are already built. The owner removed the Settings section, and switching account is now `/logout` then `/login`.
+
+### Task 9: `claude.signOut` in the service and the mock
+
+**Files:**
+- Modify:
+  - `packages/protocol/src/methods.ts` (protocol 14 isn't released, so no version bump);
+  - `packages/protocol/test/claude-login.test.ts`;
+  - `apps/desktop/src-tauri/core/src/methods.rs` and the core fixtures (`REFUSED`);
+  - `packages/service/src/claude-login/login.ts`;
+  - `packages/service/src/server/handlers/claude-login.ts`;
+  - `packages/service/src/main.ts`;
+  - `packages/service/src/testing/mock-main.ts`.
+- Test:
+  - `packages/service/test/claude-login/login.test.ts`;
+  - `packages/service/test/server/claude-login-handlers.test.ts`;
+  - `packages/service/test/testing/mock-main.test.ts`.
+
+**Interfaces:**
+- Produces:
+  - Method `claude.signOut {} → {}` (not `localOnly`).
+  - `ClaudeLogin.signOut(): Promise<void>`. In order, it:
+    1. refuses `LOGIN_UNSUPPORTED` on an API-key or provider machine (the same `refusal` predicate as a sign-in);
+    2. cancels an open sign-in;
+    3. runs Claude Code's `claude auth logout` on this machine through the same CLI runner `packages/service/src/mcp/config.ts` uses (the resolved `claude` path, the stripped env, a 30 s timeout, never in a shell);
+    4. on success, sets the account to `null`, `expired: false`, publishes `claude.account`, and calls `restartAfterSignIn()` so live chats drop the old login;
+    5. on failure, answers `LOGIN_FAILED` with Claude Code's stderr, trimmed and scrubbed.
+  - The mock's `claude.signOut` sets its account to null and publishes, and `mock.claudeLoginReset` restores it.
+
+- [ ] **Step 1: Write the failing tests:**
+  - `signOut runs claude auth logout and clears the account`;
+  - `signOut cancels an open sign-in`;
+  - `signOut restarts the live chats`;
+  - `an API-key machine refuses signOut`;
+  - `a failing logout answers LOGIN_FAILED with Claude Code's words`;
+  - the handler test for `claude.signOut`;
+  - the mock test `the mock signs out and signs back in with MOCK-CODE`;
+  - the protocol test `claude.signOut is listed`.
+- [ ] **Step 2: Run** them. Expect FAIL.
+- [ ] **Step 3: Implement.** Add `claude.signOut` to the core's `REFUSED` and regenerate its fixtures.
+- [ ] **Step 4: Run** the protocol, service and core tests, typecheck and lint. Expect PASS.
+- [ ] **Step 5: Commit** `feat(service): /logout signs Claude Code out on a machine`.
+
+### Task 10: Settings section out, `/logout` in the chat
+
+**Files:**
+- Delete: `apps/desktop/src/lib/components/ClaudeAccountsSettings.svelte` and its tests.
+- Modify:
+  - `SettingsDialog.svelte`;
+  - `apps/desktop/src/lib/components/composer/commands.ts` (`logout` in `ALWAYS_LOCAL`, Claude-only, a `logout` control);
+  - `ChatView.svelte`;
+  - `apps/desktop/src/lib/state/claude-accounts.svelte.ts` (keep only what the dialog and sign-out use);
+  - `apps/desktop/e2e/claude-login.spec.ts`;
+  - `apps/desktop/e2e/phone.spec.ts`;
+  - `README.md`;
+  - `docs/architecture.md`.
+- Create: `apps/desktop/src/lib/components/ClaudeSignOutDialog.svelte` (or a confirm built from the existing confirmation dialog component).
+
+**Copy, fixed:**
+- Confirmation:
+  - Title: `Sign out of Claude on ‹machine›?`
+  - Body: `Chats on ‹machine› can't answer until you sign in again with /login.`
+  - Buttons: `Cancel`, `Sign out`.
+- After success, a notice in the chat: `Signed out of Claude on ‹machine›. Type /login to sign in again.`
+- An error shows Claude Code's words.
+- An API-key machine: `‹machine› uses an API key, so there's nothing to sign out of.`
+
+- [ ] **Step 1: Write the failing tests:**
+  - `/logout is intercepted for a Claude chat and not for a Codex chat`;
+  - `/logout asks first and signs out the chat's machine`;
+  - `Cancel signs nothing out`;
+  - the e2e `"/logout then /login switches the account on a paired machine"`, which replaces the Settings e2e;
+  - the phone e2e `signs in a paired machine from the phone`, reworked to go through `/login` in a chat instead of Settings.
+- [ ] **Step 2: Run** them. Expect FAIL.
+- [ ] **Step 3: Implement.**
+  - Remove the Settings section and any copy or test that only it used.
+  - The README feature line becomes: sign in with `/login`, sign out with `/logout` (switching account is both). Drop the "Terminal-only commands like `/config` or `/logout`" limitation's `/logout`, so it reads `/config`.
+  - `architecture.md` describes `/login`, `/logout` and `claude.signOut`.
+- [ ] **Step 4: Run** the desktop suite, typecheck, lint, then the full e2e locally on shifted ports. Expect PASS.
+- [ ] **Step 5: Commit** `feat(desktop): /logout, and sign-in only from the chat`.
