@@ -285,41 +285,52 @@ and sends the event `claude.account` when that changes. It never starts Claude
 just to answer. A turn that fails on login (`authentication_failed` on the
 assistant message) marks the sign-in expired and shows "Claude Code isn't
 signed in on ‹machine›, or its sign-in expired." with **Sign in to Claude** under
-it. A turn that works clears it.
+it. A turn that works clears it. A chat whose process reports an API key or a
+cloud provider shows Claude Code's own error instead (a bad key isn't a missing
+sign-in).
 
 The sign-in uses the SDK's undeclared login controls (`claudeAuthenticate`,
 `claudeOAuthCallback`, `claudeOAuthWaitForCompletion`; `ClaudeLogin` in
 `claude-login/login.ts`). `claude.signIn` starts it and answers the manual link,
 which works from any device. The owner approves on claude.ai and pastes the code
 it shows: `claude.signInCode` hands it over and answers the new account.
-`claude.signInCancel` ends it. It runs on the chat's own process when the dialog
-came from a live chat; otherwise on a short-lived helper
+`claude.signInCancel` ends it. Every sign-in runs on a short-lived helper
 process in the home folder that gets no prompt, denies every tool, stays out of
 the chat lists and is closed when the sign-in ends (success, failure, cancel, a
-newer start, or 10 minutes). One sign-in per machine at a time: a new start
+newer start, or 10 minutes). The chat's id in `claude.signIn` only says which
+chat asked: a chat's own process could be reclaimed or restarted in the middle
+of a sign-in. One sign-in per machine at a time: a new start
 replaces the old one. A wrong code ends the sign-in in Claude Code itself, so
 the error is `LOGIN_FAILED` with Claude Code's words and the dialog offers
 **Start again**. A machine on an API key or a cloud provider (Threadgarden's API
 key setting, or a key or provider in the chats' environment) answers
-`LOGIN_UNSUPPORTED`. Threadgarden never writes Claude Code's login files:
-Claude Code's own sign-in does.
+`LOGIN_UNSUPPORTED`, and the dialog offers no **Start again**; `/login` in a chat
+whose header reports an API key says "‹machine› uses an API key, so there's no
+Claude sign-in." without asking the machine. The API-key-only build
+(`THREADGARDEN_API_KEY_ONLY`) doesn't advertise `claude-login`, and its service
+answers `claude.signIn` and `claude.signOut` with `LOGIN_UNSUPPORTED`.
+Threadgarden never writes Claude Code's login files: Claude Code's own sign-in
+does.
 
 `claude.signOut` ends a sign-in still open, runs Claude Code's own
 `claude auth logout` on the machine, publishes `claude.account` with no account
-and restarts the live Claude chats there (as after a sign-in), so they drop the
-old login. A failure is `LOGIN_FAILED` in Claude Code's words, shown in the
+and restarts every live Claude chat there, so none keeps the old login. A failure is `LOGIN_FAILED` in Claude Code's words, shown in the
 confirmation. A machine on an API key or a cloud provider answers
 `LOGIN_UNSUPPORTED`; for an API key the chat says "‹machine› uses an API key, so
 there's nothing to sign out of." (without asking, when the chat's header already
 reports an API key).
 
 After a sign-in or a sign-out, running Claude Code processes keep the old login,
-so every live Claude chat on that machine restarts between turns (`restartAfterSignIn`, the
-restart MCP removals use: it waits for the turn, open requests, queued messages,
-running tasks, a `!` command and a `/loop` timer). A chat whose last turn failed
-on login can do nothing useful, so it restarts without waiting for tasks or a
-`/loop` timer, and says so if a loop was dropped. A sign-in that was replaced or
-cancelled restarts nothing. Codex chats are never touched.
+so every live Claude chat on that machine restarts between turns
+(`restartAfterLoginChange`, the restart MCP removals use: it waits for the turn,
+open requests, queued messages, running tasks, a `!` command and a `/loop`
+timer). A sign-out restarts them all even if running processes turn out to pick
+up a new login (`OTHERS_PICK_UP`, which only narrows the restart after a
+sign-in). A chat whose last turn failed on login can do nothing useful, so it
+restarts without waiting for tasks or a `/loop` timer, and says so if a loop was
+dropped ("Restarted after signing in. Start /loop again if you need it.", or
+"signing out"). A sign-in that was replaced or cancelled restarts nothing.
+Codex chats are never touched.
 
 The code, the links and the sign-in's `state` are never logged, and never put in
 an event, an error or the database: errors are scrubbed of them (and of any
@@ -1889,7 +1900,8 @@ Decisions made during the build that change behaviour described in the design:
   release also the old `PAHUB_API_KEY_ONLY=1`, with a deprecation note) at build time
   (Vite `define` in the UI, esbuild `define` in the service bundle) hides the
   inherit option; the service refuses to start or resume a chat without an
-  API key (`API_KEY_REQUIRED`).
+  API key (`API_KEY_REQUIRED`), and offers no Claude sign-in (no `claude-login`;
+  `claude.signIn` and `claude.signOut` answer `LOGIN_UNSUPPORTED`).
 - **Restored tabs** are not all loaded at launch: the active tab's chat is
   opened, the others show a title and status from `sessions.summaries` and
   load their history when first shown (a full transcript read each).
