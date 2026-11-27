@@ -19,7 +19,7 @@ The owner approved the approach on 2026-11-27. This change ships in 0.12.1.
 
 ## Why
 
-On 2026-11-25, after kumbal updated to 0.12.0, every turn there failed at once with "Failed to authenticate: OAuth session expired and could not be refreshed". Claude Code's own login on that machine had expired. The only fix was to SSH into kumbal, run `claude` and type `/login`. Threadgarden is meant to make the machines usable without a terminal, from the desktop and from the phone. The owner also wants to choose which Claude account a machine uses.
+On 2026-11-25, after wobble updated to 0.12.0, every turn there failed at once with "Failed to authenticate: OAuth session expired and could not be refreshed". Claude Code's own login on that machine had expired. The only fix was to SSH into wobble, run `claude` and type `/login`. Threadgarden is meant to make the machines usable without a terminal, from the desktop and from the phone. The owner also wants to choose which Claude account a machine uses.
 
 ## Goals
 
@@ -56,10 +56,10 @@ On 2026-11-25, after kumbal updated to 0.12.0, every turn there failed at once w
 ```
 Settings → Claude accounts
   This PC     you@example.com · Max        [Switch account]
-  kumbal      Not signed in                [Sign in]
+  wobble      Not signed in                [Sign in]
   Win worker  Uses an API key
 
-Sign in to Claude (kumbal)
+Sign in to Claude (wobble)
   1. Open this link and approve:  https://claude.ai/oauth/authorize?…  [Copy] [Open]
   2. Paste the code claude.ai shows you:  [______________]
                                               [Cancel] [Sign in]

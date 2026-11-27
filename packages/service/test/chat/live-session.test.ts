@@ -37,7 +37,7 @@ const setup = (over: Partial<LiveSessionOptions> = {}) => {
     registry,
     claudePath: '/bin/claude',
     env: { FOO: 'bar' },
-    machineName: () => 'Kumbal',
+    machineName: () => 'Wobble',
     emit: (e) => {
       events.push(e);
       if (e.event === 'chat.items') itemEmitTimes.push(timers.now());
@@ -1967,7 +1967,7 @@ describe('LiveSession login failure', () => {
     const errors = systemErrors(events);
     expect(errors).toHaveLength(1);
     expect(errors[0]).toMatchObject({
-      text: "Claude Code isn't signed in on Kumbal, or its sign-in expired.",
+      text: "Claude Code isn't signed in on Wobble, or its sign-in expired.",
       signIn: true,
     });
     expect(JSON.stringify(itemsOf(events))).not.toContain('Please run /login');
