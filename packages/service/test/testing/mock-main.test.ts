@@ -1102,3 +1102,101 @@ describe('mock service: ! commands', () => {
     expect(hello.machine.capabilities).toContain('shell');
   }, 30_000);
 });
+
+describe('mock service: signing in to Claude (protocol 14)', () => {
+  const start = (remote: boolean) =>
+    startMockService({
+      sessions: remote ? 20 : 2,
+      projects: 1,
+      bigSessionMessages: 0,
+      installSignalHandlers: false,
+      ...(remote ? { remote: { port: 0, pairingCode: 'TEST-TEST-TEST' } } : {}),
+    });
+  const connect = async (remote: boolean) => {
+    mock = await start(remote);
+    return (client = await TestClient.connect(mock.svc.port, mock.svc.token));
+  };
+  type Account = {
+    account: { email?: string; plan?: string } | null;
+    expired: boolean;
+    signingIn: boolean;
+  };
+
+  it('the mock signs in with MOCK-CODE and refuses another', async () => {
+    const c = await connect(false);
+    const hello = await c.call<{ machine: { capabilities: string[] } }>('hello', HELLO);
+    expect(hello.machine.capabilities).toContain('claude-login');
+    expect(await c.call('claude.account', {})).toEqual({
+      account: { kind: 'login', email: 'mock@example.com', plan: 'max' },
+      expired: false,
+      signingIn: false,
+    });
+    expect(await c.call('claude.signIn', {})).toEqual({
+      url: 'https://claude.ai/oauth/authorize?mock=1',
+    });
+    expect((await c.call<Account>('claude.account', {})).signingIn).toBe(true);
+
+    // A wrong code ends the sign-in.
+    await expect(c.call('claude.signInCode', { code: 'nope' })).rejects.toMatchObject({
+      code: 'LOGIN_FAILED',
+      message: 'Invalid code',
+    });
+    expect((await c.call<Account>('claude.account', {})).signingIn).toBe(false);
+
+    await c.call('claude.signIn', {});
+    await c.call('claude.signInCancel', {});
+    expect((await c.call<Account>('claude.account', {})).signingIn).toBe(false);
+
+    await c.call('claude.signIn', {});
+    const done = await c.call<{ account: unknown }>('claude.signInCode', { code: 'MOCK-CODE' });
+    expect(done.account).toEqual({ kind: 'login', email: 'other@example.com', plan: 'pro' });
+    expect(c.events.filter((e) => e.event === 'claude.account').at(-1)?.data).toEqual({
+      account: { kind: 'login', email: 'other@example.com', plan: 'pro' },
+      expired: false,
+      signingIn: false,
+    });
+
+    // The test reset puts the start back.
+    await mock!.svc.router.dispatch(
+      { id: 1, method: 'mock.claudeLoginReset', params: {} },
+      { clientId: 'test', origin: 'local' },
+    );
+    expect((await c.call<Account>('claude.account', {})).account?.email).toBe('mock@example.com');
+  }, 30_000);
+
+  it('the remote mock starts expired and session-19 fails on login', async () => {
+    const c = await connect(true);
+    expect(await c.call<Account>('claude.account', {})).toMatchObject({
+      account: { email: 'mock@example.com' },
+      expired: true,
+      signingIn: false,
+    });
+    const sessionId = 'session-19';
+    const lines = () =>
+      itemsOf(c.events, sessionId).filter(
+        (i) => i.kind === 'system' && (i as { signIn?: boolean }).signIn === true,
+      );
+    await c.call('chat.open', { sessionId, tail: 50 });
+    await c.call('chat.send', { sessionId, text: 'hello?' });
+    await eventually(async () => lines().length === 1, 10_000);
+    expect(lines()[0]).toMatchObject({
+      level: 'error',
+      text: `Claude Code isn't signed in on ${REMOTE_MACHINE_NAME}, or its sign-in expired.`,
+      signIn: true,
+    });
+
+    await c.call('claude.signIn', {});
+    await c.call('claude.signInCode', { code: 'MOCK-CODE' });
+    await c.call('chat.send', { sessionId, text: 'and now?' });
+    await eventually(
+      async () =>
+        itemsOf(c.events, sessionId).some(
+          (i) =>
+            i.kind === 'assistantText' &&
+            (i as { markdown: string }).markdown.includes('Threadgarden mock service'),
+        ),
+      10_000,
+    );
+    expect(lines()).toHaveLength(1);
+  }, 30_000);
+});
