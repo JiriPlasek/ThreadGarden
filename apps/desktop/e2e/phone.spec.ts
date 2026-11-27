@@ -523,17 +523,13 @@ test("the phone layout opens the MCP servers dialog from the chat's menu", async
 });
 
 test('signs in a paired machine from the phone', async ({ page }) => {
-  // Ubuntu's mock starts with its sign-in expired (claude-login.spec.ts covers the rest).
+  // Ubuntu's mock starts with its sign-in expired (claude-login.spec.ts covers the rest);
+  // session-2 is its chat that fails on login, opened here without sending.
   await remoteCall('mock.claudeLoginReset', {});
   try {
     await openPhone(page);
-    await page.getByRole('button', { name: 'Settings' }).tap();
-    const settings = page.getByRole('dialog', { name: 'Settings' });
-    // The phone's own core runs no Claude: only the paired machine is listed.
-    await expect(settings.getByRole('group', { name: 'Claude account on This PC' })).toHaveCount(0);
-    const row = settings.getByRole('group', { name: `Claude account on ${MACHINE}` });
-    await expect(row).toContainText('Sign-in expired');
-    await row.getByRole('button', { name: 'Sign in' }).tap();
+    await openChat(page, 'session-2');
+    await send(page, '/login');
 
     const dialog = page.getByRole('dialog', { name: `Sign in to Claude (${MACHINE})` });
     await expect(dialog.getByTestId('claude-sign-in-link')).toHaveText(
@@ -546,9 +542,16 @@ test('signs in a paired machine from the phone', async ({ page }) => {
     await dialog.getByRole('button', { name: 'Sign in', exact: true }).tap();
     await expect(dialog.getByRole('status')).toHaveText('Signed in as other@example.com.');
     await expect(dialog).toBeHidden();
-    await expect(row).toContainText('other@example.com · Pro');
+    await expect
+      .poll(
+        async () =>
+          (await remoteCall<{ account: { email?: string } | null }>('claude.account', {})).account
+            ?.email,
+      )
+      .toBe('other@example.com');
   } finally {
     await remoteCall('mock.claudeLoginReset', {});
+    await remoteCall('chat.end', { sessionId: 'session-2' }).catch(() => undefined);
   }
 });
 

@@ -9,7 +9,7 @@
 import type { SlashCommand } from '#lib/state/interaction.svelte.js';
 
 /** The chat header pickers a command can open. */
-export type Control = 'model' | 'effort' | 'permissionMode' | 'mcp' | 'login';
+export type Control = 'model' | 'effort' | 'permissionMode' | 'mcp' | 'login' | 'logout';
 
 export type MenuCommand = SlashCommand & {
   /** Opens a Threadgarden control instead of being sent. */
@@ -52,20 +52,26 @@ const mapped: MenuCommand[] = [
     control: 'login',
     claudeOnly: true,
   },
+  {
+    name: 'logout',
+    argumentHint: '',
+    description: 'Sign out of Claude (on this machine, after asking)',
+    control: 'logout',
+    claudeOnly: true,
+  },
 ];
 
 /**
  * Commands Threadgarden handles itself even when the SDK reports them (`/mcp`
- * is a terminal menu there, `/login` a terminal flow).
+ * is a terminal menu there, `/login` and `/logout` terminal flows).
  */
-const ALWAYS_LOCAL = ['mcp', 'login'];
+const ALWAYS_LOCAL = ['mcp', 'login', 'logout'];
 
 const terminalOnly: [name: string, reason: string][] = [
   [
     'config',
     "Claude Code's terminal settings screen; edit settings.json, or Threadgarden's own settings",
   ],
-  ['logout', 'Sign out by running `claude` in a terminal'],
   ['doctor', 'Run `claude doctor` in a terminal'],
   ['vim', 'Editor modes belong to the terminal prompt'],
   ['terminal-setup', 'Configures terminal keybindings; not needed in Threadgarden'],

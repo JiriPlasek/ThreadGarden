@@ -49,7 +49,7 @@ export type AppState = {
   machines: MachinesState;
   /** Updating paired machines: the latest release, who is behind it, each update's stage and outcome. */
   machineUpdates: MachineUpdatesState;
-  /** Each machine's Claude account and its sign-in (Settings → Claude accounts). */
+  /** Signing a machine in to Claude and out of it (`/login`, `/logout`). */
   claudeAccounts: ClaudeAccounts;
   /** Power control of paired machines: plug readings, power status, Off / Starting… / Shutting down. */
   power: PowerState;

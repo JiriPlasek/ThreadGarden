@@ -271,16 +271,21 @@ it can't, the service omits the capability `shell` and the window doesn't offer
 **Signing in to Claude** (protocol 14; the design is
 `docs/superpowers/specs/2026-11-27-claude-sign-in-design.md`, with what the spike
 found in [the spike results](superpowers/specs/2026-11-27-claude-sign-in-spike-results.md)).
-Settings → Claude accounts shows each machine's Claude account, with **Sign in**
-or **Switch account**; the phone lists its paired machines only. A machine with
-the capability `claude-login` answers `claude.account` (the account its chats
-last reported, read from usage's stored account, and whether its sign-in has
-expired or is in progress) and sends the event `claude.account` when that
-changes. It never starts Claude just to answer. A turn that fails on login
-(`authentication_failed` on the assistant message) marks the sign-in expired
-and shows "Claude Code isn't signed in on ‹machine›, or its sign-in expired."
-with **Sign in to Claude** under it; `/login` in a Claude chat opens the same
-dialog. A turn that works clears it.
+Signing in and out happens only from a Claude chat, for that chat's machine, on
+the desktop and on the phone. `/login` (or **Sign in to Claude** under a turn
+that failed on login) opens the sign-in dialog: Claude Code's own link, then the
+pasted code, as running `claude` in a terminal on a machine that isn't logged
+in. `/logout` asks first ("Sign out of Claude on ‹machine›?") and then signs
+Claude Code out there. Switching account is `/logout`, then `/login`. Both
+commands are Threadgarden's own in Claude chats even when the SDK reports them;
+a Codex chat sends them as text. A machine with the capability `claude-login`
+answers `claude.account` (the account its chats last reported, read from
+usage's stored account, and whether its sign-in has expired or is in progress)
+and sends the event `claude.account` when that changes. It never starts Claude
+just to answer. A turn that fails on login (`authentication_failed` on the
+assistant message) marks the sign-in expired and shows "Claude Code isn't
+signed in on ‹machine›, or its sign-in expired." with **Sign in to Claude** under
+it. A turn that works clears it.
 
 The sign-in uses the SDK's undeclared login controls (`claudeAuthenticate`,
 `claudeOAuthCallback`, `claudeOAuthWaitForCompletion`; `ClaudeLogin` in
@@ -288,7 +293,7 @@ The sign-in uses the SDK's undeclared login controls (`claudeAuthenticate`,
 which works from any device. The owner approves on claude.ai and pastes the code
 it shows: `claude.signInCode` hands it over and answers the new account.
 `claude.signInCancel` ends it. It runs on the chat's own process when the dialog
-came from a live chat; otherwise (always from Settings) on a short-lived helper
+came from a live chat; otherwise on a short-lived helper
 process in the home folder that gets no prompt, denies every tool, stays out of
 the chat lists and is closed when the sign-in ends (success, failure, cancel, a
 newer start, or 10 minutes). One sign-in per machine at a time: a new start
@@ -296,12 +301,20 @@ replaces the old one. A wrong code ends the sign-in in Claude Code itself, so
 the error is `LOGIN_FAILED` with Claude Code's words and the dialog offers
 **Start again**. A machine on an API key or a cloud provider (Threadgarden's API
 key setting, or a key or provider in the chats' environment) answers
-`LOGIN_UNSUPPORTED`; a row whose chats report an API key says "Uses an API key"
-and offers no sign-in. Threadgarden never writes Claude Code's login files:
+`LOGIN_UNSUPPORTED`. Threadgarden never writes Claude Code's login files:
 Claude Code's own sign-in does.
 
-After a sign-in, running Claude Code processes keep the old login, so every live
-Claude chat on that machine restarts between turns (`restartAfterSignIn`, the
+`claude.signOut` ends a sign-in still open, runs Claude Code's own
+`claude auth logout` on the machine, publishes `claude.account` with no account
+and restarts the live Claude chats there (as after a sign-in), so they drop the
+old login. A failure is `LOGIN_FAILED` in Claude Code's words, shown in the
+confirmation. A machine on an API key or a cloud provider answers
+`LOGIN_UNSUPPORTED`; for an API key the chat says "‹machine› uses an API key, so
+there's nothing to sign out of." (without asking, when the chat's header already
+reports an API key).
+
+After a sign-in or a sign-out, running Claude Code processes keep the old login,
+so every live Claude chat on that machine restarts between turns (`restartAfterSignIn`, the
 restart MCP removals use: it waits for the turn, open requests, queued messages,
 running tasks, a `!` command and a `/loop` timer). A chat whose last turn failed
 on login can do nothing useful, so it restarts without waiting for tasks or a
@@ -313,8 +326,9 @@ an event, an error or the database: errors are scrubbed of them (and of any
 address or long token) before they leave the service, and the window keeps them
 only in the open dialog. The `claude.*` methods aren't local only: a paired
 desktop or phone signs a machine in through the relay. The phone's own core
-refuses them (it runs no Claude). An older machine without `claude-login` shows
-its row with "Update this machine to sign in from here." and no buttons.
+refuses them (it runs no Claude). On an older machine without `claude-login`,
+`/login` and `/logout` say "Update ‹machine› to sign in from here." (or "to sign
+out").
 
 **Activity panel** (v1.1 §2, v1.3 §2). Each live session folds the SDK's
 `system/task_*` and `background_tasks_changed` messages into a task list
@@ -372,8 +386,8 @@ service and the UI; the service validates every request.
   only with `projects`, a machine as a target of Move to… only with `move`, and
   a waiting message for a machine only with `away`, and the MCP servers banner,
   dialog and menu item only with `mcp`, Add server and Remove only with
-  `mcp-config`, `!` only with `shell`, and Sign in and `/login` only with
-  `claude-login`. A worker in
+  `mcp-config`, `!` only with `shell`, and Sign in, `/login` and `/logout` only
+  with `claude-login`. A worker in
   WSL on a Windows PC also says `host: 'wsl'` in its `machine` (an optional
   field, no new version; its platform stays `linux`), and the desktop shows it
   as Windows (WSL). On an older machine the New project and Clone tabs and
@@ -419,8 +433,8 @@ service and the UI; the service validates every request.
   `chat.open`, `command` as a busy reason of `move.check`, the errors
   `SHELL_UNSUPPORTED`, `SHELL_BUSY`, `SHELL_NOT_RUNNING` and `SHELL_FAILED`, and
   the capability `shell` (`!` commands under Lifecycle). Protocol 14 adds
-  `claude.account`, `.signIn`, `.signInCode` and `.signInCancel`, the event
-  `claude.account`, `signIn` on a system item, the errors `LOGIN_FAILED`,
+  `claude.account`, `.signIn`, `.signInCode`, `.signInCancel` and `.signOut`,
+  the event `claude.account`, `signIn` on a system item, the errors `LOGIN_FAILED`,
   `LOGIN_NOT_STARTED` and `LOGIN_UNSUPPORTED`, and the capability
   `claude-login` ("Signing in to Claude" under Lifecycle).
 - **Local-only methods** (v1.4). Every request is dispatched with its

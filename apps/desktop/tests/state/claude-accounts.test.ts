@@ -1,22 +1,18 @@
 import { CLAUDE_LOGIN_CAPABILITY, CLAUDE_LOGIN_ERRORS } from '@threadgarden/protocol';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { RequestError } from '../../src/lib/service/client';
 import { ClaudeAccounts } from '../../src/lib/state/claude-accounts.svelte';
-import { LOCAL, M1, setupTwoMachines } from '../layout/harness';
+import { M1, setupTwoMachines } from '../layout/harness';
 import { RpcFail } from '../service/fake-ws';
 
-const MAX = { kind: 'login', email: 'you@example.com', plan: 'max' } as const;
 const PRO = { kind: 'login', email: 'other@example.com', plan: 'pro' } as const;
 const LINK = 'https://claude.ai/oauth/authorize?code=true&state=abc';
 
 const start = () =>
   setupTwoMachines({
     m1Capabilities: ['remote', CLAUDE_LOGIN_CAPABILITY],
-    configure: (s) => {
-      s.handlers['claude.account'] = () => ({ account: MAX, expired: false, signingIn: false });
-    },
     configureRemote: (s) => {
-      s.handlers['claude.account'] = () => ({ account: MAX, expired: true, signingIn: false });
+      s.handlers['claude.signOut'] = () => ({});
       s.handlers['claude.signIn'] = () => ({ url: LINK });
       s.handlers['claude.signInCode'] = (p) => {
         if ((p as { code: string }).code !== 'GOOD') {
@@ -29,27 +25,6 @@ const start = () =>
   });
 
 describe('ClaudeAccounts', () => {
-  it("reads each machine's account by its id", async () => {
-    const env = await start();
-    const accounts = new ClaudeAccounts(env.app.machines);
-    expect(accounts.get(LOCAL)).toBeUndefined();
-    await accounts.refresh(LOCAL);
-    await accounts.refresh(M1);
-    expect(accounts.get(LOCAL)).toEqual({ account: MAX, expired: false, signingIn: false });
-    expect(accounts.get(M1)?.expired).toBe(true);
-  });
-
-  it("follows the machine's claude.account events once asked", async () => {
-    const env = await start();
-    const accounts = new ClaudeAccounts(env.app.machines);
-    await accounts.refresh(M1);
-    env.remote.push('claude.account', { account: PRO, expired: false, signingIn: false });
-    await vi.waitFor(() => expect(accounts.get(M1)?.account?.email).toBe('other@example.com'));
-    expect(accounts.get(M1)?.expired).toBe(false);
-    // Another machine's event is not this one's.
-    expect(accounts.get(LOCAL)).toBeUndefined();
-  });
-
   it("signIn answers the link and runs on the chat's process when given one", async () => {
     const env = await start();
     const accounts = new ClaudeAccounts(env.app.machines);
@@ -66,8 +41,6 @@ describe('ClaudeAccounts', () => {
     const accounts = new ClaudeAccounts(env.app.machines);
     expect(await accounts.submit(M1, 'GOOD')).toEqual(PRO);
     expect(env.remote.calls('claude.signInCode').map((c) => c.params)).toEqual([{ code: 'GOOD' }]);
-    // The row reads the account again.
-    await vi.waitFor(() => expect(env.remote.calls('claude.account').length).toBeGreaterThan(0));
   });
 
   it("a refused code rejects with Claude Code's words", async () => {
@@ -87,9 +60,26 @@ describe('ClaudeAccounts', () => {
     expect(env.server.calls('claude.signInCancel')).toHaveLength(0);
   });
 
+  it('signOut signs that machine out', async () => {
+    const env = await start();
+    const accounts = new ClaudeAccounts(env.app.machines);
+    await accounts.signOut(M1);
+    expect(env.remote.calls('claude.signOut').map((c) => c.params)).toEqual([{}]);
+    expect(env.server.calls('claude.signOut')).toHaveLength(0);
+  });
+
+  it("a refused sign-out rejects with the machine's words", async () => {
+    const env = await start();
+    env.remote.handlers['claude.signOut'] = () => {
+      throw new RpcFail(CLAUDE_LOGIN_ERRORS.failed, 'Not logged in');
+    };
+    const accounts = new ClaudeAccounts(env.app.machines);
+    await expect(accounts.signOut(M1)).rejects.toThrow('Not logged in');
+  });
+
   it('an unknown machine rejects', async () => {
     const env = await start();
     const accounts = new ClaudeAccounts(env.app.machines);
-    await expect(accounts.refresh('nope')).rejects.toThrow();
+    await expect(accounts.signOut('nope')).rejects.toThrow();
   });
 });

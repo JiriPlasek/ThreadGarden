@@ -1,5 +1,6 @@
 <script lang="ts">
   import {
+    CLAUDE_LOGIN_ERRORS,
     messagePreview,
     SHELL_DEFAULT_SIZE,
     type AwayItem,
@@ -839,6 +840,36 @@
     if (!signInOn) signInOpen = false;
   });
 
+  // ── Sign out of Claude (/logout) ────────────────────────────────────────
+
+  /** The /logout confirmation is open. */
+  let signOutOpen = $state(false);
+  $effect(() => {
+    if (!signInOn) signOutOpen = false;
+  });
+  const apiKeyNotice = (name: string): string =>
+    `${name} uses an API key, so there's nothing to sign out of.`;
+
+  /** Signs the chat's machine out; a failure stays in the confirmation, in Claude Code's words. */
+  const signOutNow = async (): Promise<void> => {
+    const name = machineName;
+    try {
+      await app.claudeAccounts.signOut(scope.machineId);
+    } catch (err) {
+      // The machine refuses because of its API key: nothing to sign out of, not a failure.
+      if (
+        err instanceof RequestError &&
+        err.code === CLAUDE_LOGIN_ERRORS.unsupported &&
+        /\bAPI key\b/.test(err.message)
+      ) {
+        composer?.say(apiKeyNotice(name));
+        return;
+      }
+      throw err;
+    }
+    composer?.say(`Signed out of Claude on ${name}. Type /login to sign in again.`);
+  };
+
   // ── /model, /effort, /permissions (ruling R25) ──────────────────────────
 
   const CONTROL_LABELS = {
@@ -861,6 +892,14 @@
       if (!supportsClaudeLogin(entry)) return `Update ${machineName} to sign in from here.`;
       if (readOnly) return `Signing in to Claude needs ${machineName} connected.`;
       signInOpen = true;
+      return null;
+    }
+    if (control === 'logout') {
+      if (isCodexChat(sessionId)) return 'Signing out of Claude is for Claude chats.';
+      if (!supportsClaudeLogin(entry)) return `Update ${machineName} to sign out from here.`;
+      if (readOnly) return `Signing out of Claude needs ${machineName} connected.`;
+      if (chat?.header.auth?.kind === 'apiKey') return apiKeyNotice(machineName);
+      signOutOpen = true;
       return null;
     }
     const label = CONTROL_LABELS[control];
@@ -1321,6 +1360,14 @@
     machineId={scope.machineId}
     {machineName}
     sessionId={signInSession}
+  />
+  <ConfirmDialog
+    bind:open={signOutOpen}
+    title={`Sign out of Claude on ${machineName}?`}
+    description={`Chats on ${machineName} can't answer until you sign in again with /login.`}
+    confirmLabel="Sign out"
+    destructive
+    onConfirm={signOutNow}
   />
 {/if}
 

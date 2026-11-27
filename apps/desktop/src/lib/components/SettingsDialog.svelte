@@ -20,7 +20,6 @@
   import { IDLE_MINUTES_MAX } from '#lib/state/settings.svelte.js';
   import AppearancePreview from './AppearancePreview.svelte';
   import BypassPermissionsDialog from './BypassPermissionsDialog.svelte';
-  import ClaudeAccountsSettings from './ClaudeAccountsSettings.svelte';
   import MachinesSettings from './MachinesSettings.svelte';
   import PhoneSettings from './phone/PhoneSettings.svelte';
   import UpdatesSettings from './UpdatesSettings.svelte';
@@ -487,8 +486,6 @@
       onStartAtSignIn={() => (form.startOnLogin = true)}
       startOnLogin={form.startOnLogin}
     />
-
-    <ClaudeAccountsSettings />
 
     {#if isPhone}
       <PhoneSettings />

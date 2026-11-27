@@ -522,6 +522,117 @@ describe('/login', () => {
   });
 });
 
+describe('/logout', () => {
+  const field = () => screen.getByRole('textbox', { name: /message/i }) as HTMLDivElement;
+  const ASK = 'Sign out of Claude on This PC?';
+  const logoutChat = (o: { sessionId?: string; apiKey?: boolean; signOut?: () => unknown } = {}) =>
+    renderMcpChat({
+      ...(o.sessionId ? { sessionId: o.sessionId } : {}),
+      capabilities: ['remote', CLAUDE_LOGIN_CAPABILITY],
+      // The SDK reports /logout too: Threadgarden's own sign-out wins.
+      commands: [{ name: 'logout', description: 'Sign out', argumentHint: '' }],
+      configure: (s) => {
+        s.handlers['claude.signOut'] = o.signOut ?? (() => ({}));
+        if (o.apiKey) {
+          const open = s.handlers['chat.open']!;
+          s.handlers['chat.open'] = (p) => ({
+            ...(open(p) as object),
+            header: { auth: { kind: 'apiKey', label: 'API key' } },
+          });
+        }
+      },
+    });
+
+  it('/logout is intercepted for a Claude chat and not for a Codex chat', async () => {
+    const claude = await logoutChat();
+    await userEvent.type(field(), '/logout{Escape}{Enter}');
+    expect(await screen.findByRole('alertdialog', { name: ASK })).toBeTruthy();
+    expect(field().textContent).toBe('');
+    expect(claude.server.calls('chat.send')).toHaveLength(0);
+    cleanup();
+
+    const codex = await logoutChat({ sessionId: 'codex-1' });
+    await userEvent.type(field(), '/logout{Escape}{Enter}');
+    await waitFor(() => expect(codex.server.calls('chat.send')).toHaveLength(1));
+    expect(codex.server.calls('chat.send')[0]!.params).toMatchObject({ text: '/logout' });
+    expect(screen.queryByRole('alertdialog', { name: /Sign out of Claude/ })).toBeNull();
+    expect(codex.server.calls('claude.signOut')).toHaveLength(0);
+  });
+
+  it("/logout asks first and signs out the chat's machine", async () => {
+    const env = await logoutChat();
+    await userEvent.type(field(), '/logout{Escape}{Enter}');
+    const ask = within(await screen.findByRole('alertdialog', { name: ASK }));
+    expect(
+      ask.getByText("Chats on This PC can't answer until you sign in again with /login."),
+    ).toBeTruthy();
+    expect(env.server.calls('claude.signOut')).toHaveLength(0);
+    await userEvent.click(ask.getByRole('button', { name: 'Sign out' }));
+    await waitFor(() => expect(env.server.calls('claude.signOut')).toHaveLength(1));
+    await waitFor(() => expect(screen.queryByRole('alertdialog', { name: ASK })).toBeNull());
+    expect(screen.getByRole('status', { name: /command notice/i }).textContent?.trim()).toBe(
+      'Signed out of Claude on This PC. Type /login to sign in again.',
+    );
+  });
+
+  it('Cancel signs nothing out', async () => {
+    const env = await logoutChat();
+    await userEvent.type(field(), '/logout{Escape}{Enter}');
+    const ask = within(await screen.findByRole('alertdialog', { name: ASK }));
+    await userEvent.click(ask.getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog', { name: ASK })).toBeNull());
+    expect(env.server.calls('claude.signOut')).toHaveLength(0);
+    expect(screen.queryByRole('status', { name: /command notice/i })).toBeNull();
+  });
+
+  it("a failed sign-out shows Claude Code's words in the dialog", async () => {
+    await logoutChat({
+      signOut: () => {
+        throw new RpcFail('LOGIN_FAILED', 'Not logged in');
+      },
+    });
+    await userEvent.type(field(), '/logout{Escape}{Enter}');
+    const ask = within(await screen.findByRole('alertdialog', { name: ASK }));
+    await userEvent.click(ask.getByRole('button', { name: 'Sign out' }));
+    expect((await ask.findByRole('alert')).textContent).toBe('Not logged in');
+  });
+
+  it("an API-key machine says there's nothing to sign out of", async () => {
+    const env = await logoutChat({ apiKey: true });
+    await userEvent.type(field(), '/logout{Escape}{Enter}');
+    expect(
+      await screen.findByText("This PC uses an API key, so there's nothing to sign out of."),
+    ).toBeTruthy();
+    expect(screen.queryByRole('alertdialog', { name: ASK })).toBeNull();
+    expect(env.server.calls('claude.signOut')).toHaveLength(0);
+  });
+
+  it('a machine that refuses for its API key says the same, after asking', async () => {
+    await logoutChat({
+      signOut: () => {
+        throw new RpcFail(
+          'LOGIN_UNSUPPORTED',
+          'This machine uses an API key, so it has no Claude sign-in.',
+        );
+      },
+    });
+    await userEvent.type(field(), '/logout{Escape}{Enter}');
+    const ask = within(await screen.findByRole('alertdialog', { name: ASK }));
+    await userEvent.click(ask.getByRole('button', { name: 'Sign out' }));
+    await waitFor(() => expect(screen.queryByRole('alertdialog', { name: ASK })).toBeNull());
+    expect(screen.getByRole('status', { name: /command notice/i }).textContent?.trim()).toBe(
+      "This PC uses an API key, so there's nothing to sign out of.",
+    );
+  });
+
+  it('/logout on a machine without claude-login says to update it', async () => {
+    await renderMcpChat();
+    await userEvent.type(field(), '/logout{Escape}{Enter}');
+    expect(await screen.findByText('Update This PC to sign out from here.')).toBeTruthy();
+    expect(screen.queryByRole('alertdialog', { name: /Sign out of Claude/ })).toBeNull();
+  });
+});
+
 describe('! command mode', () => {
   const field = () => screen.getByRole('textbox', { name: /message/i }) as HTMLDivElement;
   const LABEL = "Runs in a terminal on This PC, in this chat's folder";

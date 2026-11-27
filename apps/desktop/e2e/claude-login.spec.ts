@@ -104,14 +104,54 @@ const signInWithCode = async (dialog: Locator): Promise<void> => {
   await expect(dialog).toBeHidden();
 };
 
-test("Settings shows This PC's account and switches it with the mock code", async ({ page }) => {
-  await openApp(page);
-  const settings = await openSettings(page);
-  const row = settings.getByRole('group', { name: 'Claude account on This PC' });
-  await expect(row).toContainText('mock@example.com · Max');
+/** The account a mock says it is signed in as (null: signed out). */
+const ubuntuAccount = async (): Promise<string | null> =>
+  (await remoteCall<{ account: { email?: string } | null }>('claude.account', {})).account?.email ??
+  null;
 
-  await row.getByRole('button', { name: 'Switch account' }).click();
-  const dialog = signInDialog(page, 'This PC');
+/** From Ubuntu's tg-cli (This PC has a session-2 too): its chat `REMOTE_CHAT`. */
+const openUbuntuChat = async (page: Page): Promise<void> => {
+  await page
+    .getByRole('navigation', { name: 'Places' })
+    .getByRole('group', { name: MACHINE })
+    .getByRole('button', { name: 'tg-cli' })
+    .click();
+  await (await chatRow(page, REMOTE_CHAT)).click();
+  await expect(page.getByTitle(`Runs on ${MACHINE}`)).toBeVisible();
+};
+
+test('/logout then /login switches the account on a paired machine', async ({ page }) => {
+  await remoteCall('chat.end', { sessionId: REMOTE_CHAT });
+  await openApp(page);
+  await pairUbuntu(page);
+  await openUbuntuChat(page);
+  expect(await ubuntuAccount()).toBe('mock@example.com');
+
+  // /logout asks first; Cancel signs nothing out.
+  await composer(page).fill('/logout');
+  await composer(page).press('Enter');
+  const ask = page.getByRole('alertdialog', { name: `Sign out of Claude on ${MACHINE}?` });
+  await expect(ask).toContainText(
+    `Chats on ${MACHINE} can't answer until you sign in again with /login.`,
+  );
+  await ask.getByRole('button', { name: 'Cancel' }).click();
+  await expect(ask).toBeHidden();
+  expect(await ubuntuAccount()).toBe('mock@example.com');
+
+  await composer(page).fill('/logout');
+  await composer(page).press('Enter');
+  await ask.getByRole('button', { name: 'Sign out' }).click();
+  await expect(ask).toBeHidden();
+  await expect(page.getByRole('status', { name: 'Command notice' })).toHaveText(
+    `Signed out of Claude on ${MACHINE}. Type /login to sign in again.`,
+  );
+  await expect.poll(ubuntuAccount).toBeNull();
+  // Not sent to Claude: nothing new in the chat.
+  await expect(page.getByText('/logout', { exact: true })).toHaveCount(0);
+
+  await composer(page).fill('/login');
+  await composer(page).press('Enter');
+  const dialog = signInDialog(page, MACHINE);
   await expect(dialog.getByTestId('claude-sign-in-link')).toHaveText(LINK);
   // A wrong code ends that sign-in (as Claude Code's does): the dialog offers a fresh one.
   await dialog.getByLabel('Paste the code claude.ai shows you').fill('NOT-THE-CODE');
@@ -119,9 +159,7 @@ test("Settings shows This PC's account and switches it with the mock code", asyn
   await expect(dialog.getByRole('alert')).toHaveText('Invalid code');
   await dialog.getByRole('button', { name: 'Start again' }).click();
   await signInWithCode(dialog);
-
-  await expect(row).toContainText('other@example.com · Pro');
-  await expect(row.getByRole('button', { name: 'Switch account' })).toBeVisible();
+  await expect.poll(ubuntuAccount).toBe('other@example.com');
   // The code never stays on the page.
   expect(await page.content()).not.toContain(CODE);
 });
@@ -132,21 +170,7 @@ test("a paired machine's expired chat offers Sign in to Claude, and signing in l
   await remoteCall('chat.end', { sessionId: REMOTE_CHAT });
   await openApp(page);
   await pairUbuntu(page);
-  // Settings already knows it expired (the machine said so when it came on).
-  const before = await openSettings(page);
-  const ubuntuRow = before.getByRole('group', { name: `Claude account on ${MACHINE}` });
-  await expect(ubuntuRow).toContainText('Sign-in expired');
-  await expect(ubuntuRow.getByRole('button', { name: 'Sign in' })).toBeVisible();
-  await page.keyboard.press('Escape');
-  await expect(before).toBeHidden();
-  // From Ubuntu's tg-cli: This PC has a session-2 too.
-  await page
-    .getByRole('navigation', { name: 'Places' })
-    .getByRole('group', { name: MACHINE })
-    .getByRole('button', { name: 'tg-cli' })
-    .click();
-  await (await chatRow(page, REMOTE_CHAT)).click();
-  await expect(page.getByTitle(`Runs on ${MACHINE}`)).toBeVisible();
+  await openUbuntuChat(page);
 
   await send(page, 'Hello from the sign-in test');
   await expect(
@@ -155,13 +179,7 @@ test("a paired machine's expired chat offers Sign in to Claude, and signing in l
   await page.getByRole('button', { name: 'Sign in to Claude' }).click();
   await signInWithCode(signInDialog(page, MACHINE));
 
-  // Settings says so too.
-  const settings = await openSettings(page);
-  await expect(settings.getByRole('group', { name: `Claude account on ${MACHINE}` })).toContainText(
-    'other@example.com · Pro',
-  );
-  await page.keyboard.press('Escape');
-  await expect(settings).toBeHidden();
+  await expect.poll(ubuntuAccount).toBe('other@example.com');
 
   await send(page, 'Hello again from the sign-in test');
   await expect(page.getByText(REPLY).first()).toBeVisible();

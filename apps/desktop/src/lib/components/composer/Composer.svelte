@@ -412,6 +412,11 @@
     updatePicker();
   };
 
+  /** Shows `text` as the command notice (a control that finished later, e.g. `/logout`). */
+  export const say = (text: string): void => {
+    notice = text;
+  };
+
   /** What the box holds now (kept while a scheduled message is edited in it). */
   export const current = (): { text: string; images: ImageRef[] } => outgoing(text, attachments);
 

@@ -51,7 +51,7 @@ export const supportsMcp = (m: MachineEntry | undefined): boolean =>
 export const supportsMcpConfig = (m: MachineEntry | undefined): boolean =>
   !!m?.info?.capabilities.includes(MCP_CONFIG_CAPABILITY);
 
-/** The machine's service can sign in to Claude (Settings → Claude accounts, `/login`). */
+/** The machine's service can sign in to Claude and out of it (`/login`, `/logout`). */
 export const supportsClaudeLogin = (m: MachineEntry | undefined): boolean =>
   !!m?.info?.capabilities.includes(CLAUDE_LOGIN_CAPABILITY);
 

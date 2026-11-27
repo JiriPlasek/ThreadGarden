@@ -497,7 +497,8 @@
   /** `/model` and `/permissions` in the first message open this dialog's pickers (R25). */
   const onControl = (control: Control): string | null => {
     if (control === 'mcp') return 'MCP servers can be managed once the chat has started.';
-    if (control === 'login') return 'Sign in to Claude from Settings → Claude accounts.';
+    if (control === 'login') return 'Type /login in the chat once it has started.';
+    if (control === 'logout') return 'Type /logout in the chat once it has started.';
     if (control === 'effort') {
       return 'Effort can be chosen in the chat header once the chat has started.';
     }
