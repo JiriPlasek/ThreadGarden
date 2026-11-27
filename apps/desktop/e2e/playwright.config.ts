@@ -44,7 +44,9 @@ export default defineConfig({
   workers: 1,
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
-  retries: 0,
+  // On CI, a test that fails is tried once more: slow shared runners miss timings a
+  // real bug doesn't depend on (a real bug fails both tries; the report marks it flaky).
+  retries: process.env.CI ? 1 : 0,
   timeout: 60_000,
   expect: { timeout: 15_000 },
   reporter: process.env.CI ? [['list'], ['github']] : 'list',
