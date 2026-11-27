@@ -93,6 +93,7 @@ export type SessionHostDeps = {
   onAccount?: LiveSessionDeps['onAccount'];
   /** Handed to every session (see `LiveSessionDeps.onLimitError`). */
   onLimitError?: LiveSessionDeps['onLimitError'];
+  onAssistantMessage?: LiveSessionDeps['onAssistantMessage'];
   /** Handed to every session (see `LiveSessionDeps.onTurnResult`). */
   onTurnResult?: LiveSessionDeps['onTurnResult'];
   /** Handed to every session (see `LiveSessionDeps.onContextWindow`). */
@@ -502,6 +503,7 @@ export class SessionHost {
       onRateLimit,
       onAccount,
       onLimitError,
+      onAssistantMessage,
       onTurnResult,
       onContextWindow,
       onPermissionMode,
@@ -533,6 +535,7 @@ export class SessionHost {
       ...(onRateLimit ? { onRateLimit } : {}),
       ...(onAccount ? { onAccount } : {}),
       ...(onLimitError ? { onLimitError } : {}),
+      ...(onAssistantMessage ? { onAssistantMessage } : {}),
       ...(onTurnResult ? { onTurnResult } : {}),
       ...(onContextWindow ? { onContextWindow } : {}),
       ...(onPermissionMode ? { onPermissionMode } : {}),

@@ -282,6 +282,95 @@ describe('UsageTracker', () => {
     expect(emitted.at(-1)?.refused).toEqual([]);
   });
 
+  it('clears an old refusal as soon as a real response arrives, even without the refused turn result', () => {
+    const t = tracker();
+    t.noteRefusal('a');
+    t.noteRefusal('b');
+    t.observeReply('a', {
+      type: 'assistant',
+      message: { model: 'claude', content: [{ type: 'text', text: 'We can continue.' }] },
+    });
+    expect(t.isRefused('a')).toBe(false);
+    expect(t.isRefused('b')).toBe(true);
+    expect(t.turnEnded('a')).toBe(false);
+    t.noteRefusal('a');
+    expect(t.isRefused('a')).toBe(true);
+  });
+
+  it('keeps refusal for user activity, synthetic errors and subagent output', () => {
+    const t = tracker();
+    t.noteRefusal('a');
+    const message = { model: 'claude', content: [{ type: 'text', text: 'text' }] };
+    for (const m of [
+      { type: 'user', message },
+      { type: 'assistant', error: 'rate_limit', message },
+      { type: 'assistant', message: { ...message, model: '<synthetic>' } },
+      { type: 'assistant', parent_tool_use_id: 'agent', message },
+      { type: 'assistant', isSidechain: true, message },
+    ])
+      t.observeReply('a', m);
+    expect(t.isRefused('a')).toBe(true);
+  });
+
+  it('clears as soon as the API starts a real streaming response', () => {
+    const t = tracker();
+    t.noteRefusal('a');
+    const response = {
+      type: 'stream_event',
+      event: { type: 'message_start', message: { model: 'claude' } },
+    };
+    t.observeReply('a', { ...response, parent_tool_use_id: 'agent' });
+    expect(t.isRefused('a')).toBe(true);
+    t.observeReply('a', response);
+    expect(t.isRefused('a')).toBe(false);
+  });
+
+  it('recovers from newer timestamped history but not older or undated replies or a newer limit', () => {
+    const t = tracker();
+    const reply = (timestamp?: string) => ({
+      type: 'assistant',
+      timestamp,
+      message: { model: 'claude', content: [{ type: 'text', text: 'ok' }] },
+    });
+    t.noteRefusal('a');
+    t.observeHistory('a', [reply(new Date(T0 - 1).toISOString()), reply()]);
+    expect(t.isRefused('a')).toBe(true);
+    const fresh = reply(new Date(T0 + 1).toISOString());
+    t.observeHistory('a', [
+      fresh,
+      { ...reply(new Date(T0 + 2).toISOString()), error: 'rate_limit' },
+    ]);
+    expect(t.isRefused('a')).toBe(true);
+    // The SDK keeps the synthetic model but drops the original top-level error flag.
+    t.observeHistory('a', [
+      fresh,
+      {
+        ...reply(new Date(T0 + 2).toISOString()),
+        message: { model: '<synthetic>', content: [{ type: 'text', text: 'Usage limit reached' }] },
+      },
+    ]);
+    expect(t.isRefused('a')).toBe(true);
+    t.observeHistory('a', [fresh]);
+    expect(t.isRefused('a')).toBe(false);
+    expect(t.turnEnded('a')).toBe(false);
+  });
+
+  it('does not use a reply between two refusals as evidence that the latest refusal recovered', () => {
+    const t = tracker();
+    t.noteRefusal('a');
+    now = T0 + 100;
+    t.noteRefusal('a');
+    t.observeHistory('a', [
+      {
+        type: 'assistant',
+        timestamp: new Date(T0 + 50).toISOString(),
+        message: { content: [{ type: 'text', text: 'old response' }] },
+      },
+    ]);
+    expect(t.isRefused('a')).toBe(true);
+    expect(t.state().refused[0]?.at).toBe(T0 + 100);
+  });
+
   it('a reset that has passed no longer limits', () => {
     const t = tracker();
     t.observeEvent('a', { status: 'rejected', rateLimitType: 'five_hour', resetsAt: T0 + 60_000 });

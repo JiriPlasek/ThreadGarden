@@ -179,6 +179,8 @@ export type LiveSessionDeps = {
   onAccount?: (info: AccountInfo, sessionId?: string) => void;
   /** An assistant message carried the API error `rate_limit` (the turn was refused). */
   onLimitError?: (sessionId: string) => void;
+  /** Assistant output, including streaming response starts, for reconciling a previous API refusal. */
+  onAssistantMessage?: (sessionId: string, message: unknown) => void;
   /** A `result` arrived (every turn end, before `onTurnEnded`). A throw is reported. */
   onTurnResult?: (sessionId: string) => void;
   /**
@@ -1036,7 +1038,10 @@ export class LiveSession {
     const x: unknown = m;
     if (!isRec(x)) return;
     if (x.type === 'rate_limit_event') this.deps.onRateLimit?.(this.id, x.rate_limit_info);
-    else if (x.type === 'assistant' && x.error === 'rate_limit') this.deps.onLimitError?.(this.id);
+    else if (x.type === 'assistant' || x.type === 'stream_event') {
+      if (x.error === 'rate_limit') this.deps.onLimitError?.(this.id);
+      this.deps.onAssistantMessage?.(this.id, m);
+    }
   }
 
   /** Maps a startup-failure result to an explained error line; true when `m` was one. */

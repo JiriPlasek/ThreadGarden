@@ -54,6 +54,8 @@ export const extractText = (messages: SessionMessage[]): string =>
   messages.map(textOf).filter(Boolean).join('\n');
 
 export type IndexerOptions = {
+  /** Observes an existing SDK history read; never triggers an additional read. */
+  onHistoryRead?: (sessionId: string, messages: readonly SessionMessage[]) => void;
   platform?: NodeJS.Platform;
   gitCommonDir?: GitCommonDir;
   maxTextChars?: number;
@@ -86,6 +88,7 @@ export class Indexer {
   private readonly platform: NodeJS.Platform;
   private readonly gitCommonDir: GitCommonDir;
   private readonly maxText: number;
+  private readonly onHistoryRead: NonNullable<IndexerOptions['onHistoryRead']>;
   private readonly onError: NonNullable<IndexerOptions['onError']>;
   private readonly deferWhile: (sessionId: string) => boolean;
   private readonly historyOf: (sessionId: string) => HistoryOptions;
@@ -110,6 +113,7 @@ export class Indexer {
     this.platform = options.platform ?? process.platform;
     this.gitCommonDir = options.gitCommonDir ?? defaultGitCommonDir;
     this.maxText = options.maxTextChars ?? MAX_TEXT_CHARS;
+    this.onHistoryRead = options.onHistoryRead ?? (() => {});
     this.onError = options.onError ?? (() => {});
     this.deferWhile = options.deferWhile ?? (() => false);
     this.historyOf = options.historyOf ?? ((): HistoryOptions => ({}));
@@ -230,6 +234,7 @@ export class Indexer {
     const row = this.db.getSession(sessionId);
     if (!row) return;
     const messages = await this.adapter.getSessionMessages(sessionId, this.historyOf(sessionId));
+    this.onHistoryRead(sessionId, messages);
     const stats = new StatsCollector(row.createdAt ?? row.lastModified);
     for (let start = 0; start < messages.length; start += SLICE) {
       this.check();
@@ -390,6 +395,7 @@ export class Indexer {
     const parts: string[] = [];
     let total = 0;
     const messages = await this.adapter.getSessionMessages(id, this.historyOf(id));
+    this.onHistoryRead(id, messages);
     // v1.3 analytics: statistics come from the same walk, no second read.
     const stats = new StatsCollector(info.createdAt ?? info.lastModified);
     for (let start = 0; start < messages.length; start += SLICE) {

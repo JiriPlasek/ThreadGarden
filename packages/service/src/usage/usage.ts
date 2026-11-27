@@ -30,6 +30,42 @@ const num = (v: unknown): number | undefined =>
   typeof v === 'number' && Number.isFinite(v) ? v : undefined;
 const str = (v: unknown): string | undefined => (typeof v === 'string' && v ? v : undefined);
 const bool = (v: unknown): boolean | undefined => (typeof v === 'boolean' ? v : undefined);
+const mainAssistant = (m: unknown): m is Rec =>
+  isRec(m) &&
+  m.type === 'assistant' &&
+  !m.parent_tool_use_id &&
+  !m.parent_agent_id &&
+  m.isSidechain !== true;
+const successfulReply = (m: unknown): boolean => {
+  if (
+    isRec(m) &&
+    m.type === 'stream_event' &&
+    !m.parent_tool_use_id &&
+    !m.parent_agent_id &&
+    m.isSidechain !== true &&
+    isRec(m.event) &&
+    m.event.type === 'message_start' &&
+    isRec(m.event.message)
+  ) {
+    const model = m.event.message.model;
+    return typeof model === 'string' && model !== '' && !model.startsWith('<');
+  }
+  if (!mainAssistant(m) || m.error || m.isSynthetic === true || !isRec(m.message)) return false;
+  const message = m.message;
+  if (typeof message.model === 'string' && message.model.startsWith('<')) return false;
+  return (
+    Array.isArray(message.content) &&
+    message.content.some(
+      (block: unknown) =>
+        isRec(block) &&
+        ((block.type === 'text' && typeof block.text === 'string' && block.text.trim() !== '') ||
+          (block.type === 'thinking' &&
+            typeof block.thinking === 'string' &&
+            block.thinking.trim() !== '') ||
+          (block.type === 'tool_use' && typeof block.name === 'string')),
+    )
+  );
+};
 const errorText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
 /** Below this a number is taken as seconds since the epoch (it is the year 5138 in seconds). */
@@ -381,6 +417,47 @@ export class UsageTracker {
     if (this.markRefused(sessionId, this.deps.now())) this.publish();
   }
 
+  /** A real main-thread response proves this chat can use the API again, even before its result. */
+  observeReply(sessionId: string, message: unknown): void {
+    if (this.refused.has(sessionId) && successfulReply(message)) this.recovered(sessionId);
+  }
+
+  /** Reconcile chats continued outside Threadgarden using history the app already reads. */
+  observeHistory(sessionId: string, messages: readonly unknown[]): void {
+    const refusal = this.refused.get(sessionId);
+    if (!refusal) return;
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const message = messages[i];
+      if (!mainAssistant(message)) continue;
+      // A later limit error still wins over an earlier successful reply in the same history.
+      if (message.error === 'rate_limit') return;
+      // SDK history omits error flags. A synthetic reply may be a newer quota error,
+      // so don't look past it for recovery evidence from an earlier successful request.
+      if (
+        isRec(message.message) &&
+        typeof message.message.model === 'string' &&
+        message.message.model.startsWith('<')
+      )
+        return;
+      if (!successfulReply(message)) continue;
+      const at =
+        typeof message.timestamp === 'number'
+          ? message.timestamp
+          : typeof message.timestamp === 'string'
+            ? Date.parse(message.timestamp)
+            : NaN;
+      if (Number.isFinite(at) && at > refusal.at) {
+        this.recovered(sessionId);
+        return;
+      }
+    }
+  }
+
+  private recovered(sessionId: string): void {
+    this.refusedThisTurn.delete(sessionId);
+    if (this.refused.delete(sessionId)) this.publish();
+  }
+
   /**
    * A turn of `sessionId` ended (its `result`); true when a usage limit
    * refused it. A turn that went through clears the chat's limit notice.
@@ -492,7 +569,7 @@ export class UsageTracker {
   private markRefused(sessionId: string, now: number): boolean {
     this.refusedThisTurn.add(sessionId);
     const known = this.refused.get(sessionId);
-    if (known) return false;
+    if (known?.at === now) return false;
     this.refused.set(sessionId, { sessionId, at: now });
     return true;
   }

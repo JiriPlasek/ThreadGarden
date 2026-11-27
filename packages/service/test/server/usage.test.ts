@@ -196,6 +196,85 @@ describe('usage and scheduled sends (service)', () => {
     );
   });
 
+  it('clears the alert on a successful response after resuming a process whose refused turn never ended', async () => {
+    const adapter = new FakeAdapter();
+    addHistory(adapter, 'h1');
+    await start(adapter);
+    await ok('chat.send', { sessionId: 'h1', text: 'go' });
+    adapter.lastSession().emit(refusedReply());
+    await settle();
+    expect((await ok<UsageState>('usage.get', {})).refused).toHaveLength(1);
+    await ok('chat.end', { sessionId: 'h1' });
+    await ok('chat.send', { sessionId: 'h1', text: 'continue with my other account' });
+    adapter
+      .lastSession()
+      .emit(
+        sdk({
+          type: 'assistant',
+          uuid: 'recovered',
+          parent_tool_use_id: null,
+          message: {
+            id: 'recovered',
+            model: 'claude',
+            role: 'assistant',
+            content: [{ type: 'text', text: 'Continuing now.' }],
+          },
+        }),
+      );
+    await settle();
+    expect((await ok<UsageState>('usage.get', {})).refused).toEqual([]);
+  });
+
+  it('clears the alert when an already-read external history contains a later successful response', async () => {
+    const adapter = new FakeAdapter();
+    addHistory(adapter, 'h1');
+    await start(adapter);
+    svc!.usage!.noteRefusal('h1');
+    const afterRefusal = Date.now() + 1000;
+    adapter.sessions
+      .get('h1')!
+      .messages.push({
+        type: 'assistant',
+        uuid: 'external-reply',
+        session_id: 'h1',
+        parent_tool_use_id: null,
+        timestamp: new Date(afterRefusal).toISOString(),
+        message: {
+          id: 'external-reply',
+          role: 'assistant',
+          model: 'claude',
+          content: [{ type: 'text', text: 'Continued from the CLI.' }],
+        },
+      } as unknown as SessionMessage);
+    await ok('chat.open', { sessionId: 'h1', tail: 100 });
+    expect((await ok<UsageState>('usage.get', {})).refused).toEqual([]);
+  });
+
+  it('recovers through reindexing an externally continued chat without opening it', async () => {
+    const adapter = new FakeAdapter();
+    addHistory(adapter, 'h1');
+    await start(adapter);
+    await ok('chat.send', { sessionId: 'h1', text: 'go' });
+    adapter.lastSession().emit(refusedReply());
+    await settle();
+    const session = adapter.sessions.get('h1')!;
+    session.info.lastModified = Date.now() + 1000;
+    session.messages.push({
+      type: 'assistant',
+      uuid: 'external',
+      session_id: 'h1',
+      parent_tool_use_id: null,
+      timestamp: new Date(session.info.lastModified).toISOString(),
+      message: {
+        role: 'assistant',
+        model: 'claude',
+        content: [{ type: 'text', text: 'Continued externally.' }],
+      },
+    } as unknown as SessionMessage);
+    await ok('chat.end', { sessionId: 'h1' });
+    expect((await ok<UsageState>('usage.get', {})).refused).toEqual([]);
+  });
+
   it('a scheduled send the limit refuses waits for the new reset', async () => {
     const adapter = new FakeAdapter();
     addHistory(adapter, 'h1');
