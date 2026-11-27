@@ -276,7 +276,7 @@
 
   const commandItems = $derived<MenuCommand[]>(
     picker?.kind === 'slash'
-      ? filterCommands(menuCommands(commands ?? []), picker.token.query)
+      ? filterCommands(menuCommands(commands ?? [], agentName === 'Claude'), picker.token.query)
       : [],
   );
   const optionCount = $derived(
@@ -504,7 +504,7 @@
       if (value.startsWith('/')) {
         const reported = commands ?? (await interaction.commands(commandScope).catch(() => []));
         commands = reported;
-        const local = localCommand(value, reported);
+        const local = localCommand(value, reported, agentName === 'Claude');
         if (local?.unavailable) {
           notice = unavailableNotice(local);
           return;

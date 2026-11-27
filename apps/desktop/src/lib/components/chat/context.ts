@@ -20,6 +20,8 @@ export type ChatActions = {
   requestsDocked?: boolean;
   /** The chat's task started by the tool call `toolUseId` (a subagent's), if it has one. */
   taskOf?: (toolUseId: string) => ChatTask | undefined;
+  /** Opens the sign-in for the chat's machine; undefined where it can't sign in from here. */
+  signIn?: () => void;
 };
 
 const KEY = Symbol('threadgarden.chat-actions');

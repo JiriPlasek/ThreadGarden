@@ -25,7 +25,12 @@
   import { rowPx } from '#lib/interface-scale.js';
   import { ariaKeyShortcuts, formatCombos, shortcut } from '#lib/shortcuts.js';
   import { retryOldCopy } from '#lib/move/move-chat.svelte.js';
-  import { supportsMcp, supportsMcpConfig, supportsShell } from '#lib/projects.js';
+  import {
+    supportsClaudeLogin,
+    supportsMcp,
+    supportsMcpConfig,
+    supportsShell,
+  } from '#lib/projects.js';
   import { copyText } from '#lib/native.js';
   import { RequestError } from '#lib/service/client.js';
   import type { ResumeCheck } from '#lib/state/chats.svelte.js';
@@ -40,6 +45,7 @@
   import ActivityPanel from './ActivityPanel.svelte';
   import { cacheExpiresAt, cacheWarning } from './cache-warning';
   import ChatHeader from './ChatHeader.svelte';
+  import ClaudeSignInDialog from '#lib/components/ClaudeSignInDialog.svelte';
   import McpServersDialog from './McpServersDialog.svelte';
   import { setChatActions, type RequestActions } from './context';
   import { END_OTHER_DESCRIPTION, END_OTHER_TITLE } from './end-other';
@@ -822,6 +828,17 @@
     if (blocked) mcpOpen = false;
   };
 
+  // ── Sign in to Claude (the sign-in line, /login) ────────────────────────
+
+  /** A Claude chat on a machine that signs in from here, and is run from here. */
+  const signInOn = $derived(!isCodexChat(sessionId) && supportsClaudeLogin(entry) && !readOnly);
+  let signInOpen = $state(false);
+  /** The chat's own process signs in while it runs; else the machine starts one for it. */
+  const signInSession = $derived(chat?.ownedLive ? sessionId : undefined);
+  $effect(() => {
+    if (!signInOn) signInOpen = false;
+  });
+
   // ── /model, /effort, /permissions (ruling R25) ──────────────────────────
 
   const CONTROL_LABELS = {
@@ -837,6 +854,13 @@
       if (!supportsMcp(entry)) return `Update ${machineName} to manage MCP servers from here.`;
       if (readOnly) return `MCP servers can't be managed while ${machineName} is away.`;
       mcpOpen = true;
+      return null;
+    }
+    if (control === 'login') {
+      if (isCodexChat(sessionId)) return 'Signing in to Claude is for Claude chats.';
+      if (!supportsClaudeLogin(entry)) return `Update ${machineName} to sign in from here.`;
+      if (readOnly) return `Signing in to Claude needs ${machineName} connected.`;
+      signInOpen = true;
       return null;
     }
     const label = CONTROL_LABELS[control];
@@ -939,6 +963,7 @@
             loadingOlder={chat.loadingOlder}
             onLoadOlder={() => void chats.loadOlder(sessionId)}
             onFork={readOnly || isCodexChat(sessionId) ? undefined : fork}
+            onSignIn={signInOn ? () => (signInOpen = true) : undefined}
             requests={readOnly ? undefined : requests}
             requestsDocked={!readOnly}
             tasks={machineAway ? [] : chat.tasks}
@@ -1287,6 +1312,15 @@
     remote={!entry?.local}
     {machineName}
     onWake={wakeChat}
+  />
+{/if}
+
+{#if signInOn}
+  <ClaudeSignInDialog
+    bind:open={signInOpen}
+    machineId={scope.machineId}
+    {machineName}
+    sessionId={signInSession}
   />
 {/if}
 

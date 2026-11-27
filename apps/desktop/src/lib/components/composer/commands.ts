@@ -9,13 +9,15 @@
 import type { SlashCommand } from '#lib/state/interaction.svelte.js';
 
 /** The chat header pickers a command can open. */
-export type Control = 'model' | 'effort' | 'permissionMode' | 'mcp';
+export type Control = 'model' | 'effort' | 'permissionMode' | 'mcp' | 'login';
 
 export type MenuCommand = SlashCommand & {
   /** Opens a Threadgarden control instead of being sent. */
   control?: Control;
   /** Not available in Threadgarden; the reason shown. */
   unavailable?: string;
+  /** Threadgarden's own only in Claude chats: elsewhere it is neither listed nor intercepted. */
+  claudeOnly?: true;
 };
 
 const mapped: MenuCommand[] = [
@@ -43,17 +45,26 @@ const mapped: MenuCommand[] = [
     description: 'Manage MCP servers (opens the MCP servers dialog)',
     control: 'mcp',
   },
+  {
+    name: 'login',
+    argumentHint: '',
+    description: 'Sign in to Claude (opens the sign-in for this machine)',
+    control: 'login',
+    claudeOnly: true,
+  },
 ];
 
-/** Commands Threadgarden handles itself even when the SDK reports them (`/mcp` is a terminal menu there). */
-const ALWAYS_LOCAL = ['mcp'];
+/**
+ * Commands Threadgarden handles itself even when the SDK reports them (`/mcp`
+ * is a terminal menu there, `/login` a terminal flow).
+ */
+const ALWAYS_LOCAL = ['mcp', 'login'];
 
 const terminalOnly: [name: string, reason: string][] = [
   [
     'config',
     "Claude Code's terminal settings screen; edit settings.json, or Threadgarden's own settings",
   ],
-  ['login', 'Sign in by running `claude` in a terminal; Threadgarden uses that sign-in'],
   ['logout', 'Sign out by running `claude` in a terminal'],
   ['doctor', 'Run `claude doctor` in a terminal'],
   ['vim', 'Editor modes belong to the terminal prompt'],
@@ -84,11 +95,22 @@ export const LOCAL_COMMANDS: readonly MenuCommand[] = [
   })),
 ];
 
-/** The menu: what the SDK reports first, then table entries it does not report. */
-export const menuCommands = (reported: readonly SlashCommand[]): MenuCommand[] => {
-  const shown = reported.filter((c) => !ALWAYS_LOCAL.includes(c.name));
+/** The table for a chat: without the Claude-only entries outside Claude chats. */
+const tableFor = (claude: boolean): readonly MenuCommand[] =>
+  claude ? LOCAL_COMMANDS : LOCAL_COMMANDS.filter((c) => !c.claudeOnly);
+
+/** Whether Threadgarden takes `name` over from the SDK in this chat. */
+const alwaysLocal = (name: string, claude: boolean): boolean =>
+  ALWAYS_LOCAL.includes(name) && tableFor(claude).some((c) => c.name === name);
+
+/**
+ * The menu: what the SDK reports first, then table entries it does not report.
+ * `claude`: a Claude chat (false: Codex, which has no Claude-only entries).
+ */
+export const menuCommands = (reported: readonly SlashCommand[], claude = true): MenuCommand[] => {
+  const shown = reported.filter((c) => !alwaysLocal(c.name, claude));
   const known = new Set(shown.map((c) => c.name));
-  return [...shown, ...LOCAL_COMMANDS.filter((c) => !known.has(c.name))];
+  return [...shown, ...tableFor(claude).filter((c) => !known.has(c.name))];
 };
 
 /**
@@ -98,11 +120,12 @@ export const menuCommands = (reported: readonly SlashCommand[]): MenuCommand[] =
 export const localCommand = (
   text: string,
   reported: readonly SlashCommand[],
+  claude = true,
 ): MenuCommand | null => {
   const name = /^\/([^\s/]+)/.exec(text.trim())?.[1];
   if (!name) return null;
-  if (!ALWAYS_LOCAL.includes(name) && reported.some((c) => c.name === name)) return null;
-  return LOCAL_COMMANDS.find((c) => c.name === name) ?? null;
+  if (!alwaysLocal(name, claude) && reported.some((c) => c.name === name)) return null;
+  return tableFor(claude).find((c) => c.name === name) ?? null;
 };
 
 export const unavailableNotice = (c: MenuCommand): string =>

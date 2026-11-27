@@ -3,6 +3,7 @@
  * calls on one machine's client, so components and tests need not know the wire shape.
  */
 import {
+  CLAUDE_LOGIN_CAPABILITY,
   MCP_CAPABILITY,
   MCP_CONFIG_CAPABILITY,
   MOVE_CAPABILITY,
@@ -49,6 +50,10 @@ export const supportsMcp = (m: MachineEntry | undefined): boolean =>
 /** The machine's service can add and remove MCP servers (not only list them). */
 export const supportsMcpConfig = (m: MachineEntry | undefined): boolean =>
   !!m?.info?.capabilities.includes(MCP_CONFIG_CAPABILITY);
+
+/** The machine's service can sign in to Claude (Settings → Claude accounts, `/login`). */
+export const supportsClaudeLogin = (m: MachineEntry | undefined): boolean =>
+  !!m?.info?.capabilities.includes(CLAUDE_LOGIN_CAPABILITY);
 
 /** The machine's service can run `!` commands in a chat. */
 export const supportsShell = (m: MachineEntry | undefined): boolean =>

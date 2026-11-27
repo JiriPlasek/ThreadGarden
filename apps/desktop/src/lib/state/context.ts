@@ -8,6 +8,7 @@ import { analytics, type AnalyticsState } from './analytics.svelte';
 import { away, type AwayState } from './away.svelte';
 import { buckets, type BucketsState } from './buckets.svelte';
 import { chats, type ChatsState } from './chats.svelte';
+import { claudeAccounts, type ClaudeAccounts } from './claude-accounts.svelte';
 import { connection, type ConnectionState } from './connection.svelte';
 import { interaction, type InteractionState } from './interaction.svelte';
 import { lifecycle, type LifecycleState } from './lifecycle.svelte';
@@ -48,6 +49,8 @@ export type AppState = {
   machines: MachinesState;
   /** Updating paired machines: the latest release, who is behind it, each update's stage and outcome. */
   machineUpdates: MachineUpdatesState;
+  /** Each machine's Claude account and its sign-in (Settings → Claude accounts). */
+  claudeAccounts: ClaudeAccounts;
   /** Power control of paired machines: plug readings, power status, Off / Starting… / Shutting down. */
   power: PowerState;
   /** Messages written for machines that are away, waiting on this device. */
@@ -79,6 +82,7 @@ const singletons: AppState = {
   updates,
   machines,
   machineUpdates,
+  claudeAccounts,
   power,
   away,
   scopes,
