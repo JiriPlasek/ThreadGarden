@@ -19,6 +19,7 @@ import type {
   CanUseTool,
   HistoryOptions,
   ImportOptions,
+  LoginControls,
   McpControls,
   McpServerStatus,
   ModelInfo,
@@ -128,6 +129,38 @@ export class FakeSession implements AgentSession {
     },
   };
 
+  /** Protocol 14: every login control call, in order. */
+  readonly loginCalls: { op: string; arg?: unknown }[] = [];
+  /** What `login.start()` resolves with. */
+  loginStart: unknown = {};
+  /** What `login.wait()` resolves with. */
+  loginWaitResult: unknown = {};
+  /** When set, every login control call rejects with it (after recording). */
+  loginError: Error | undefined;
+  /** When set, a successful `login.wait()` makes `accountInfo()` answer this. */
+  accountAfterLogin: AccountInfo | undefined;
+  private loggedIn = false;
+  readonly login: LoginControls = {
+    start: async () => {
+      this.recordLogin('start');
+      return this.loginStart;
+    },
+    submit: async (code, state) => {
+      this.recordLogin('submit', { code, state });
+      return {};
+    },
+    wait: async () => {
+      this.recordLogin('wait');
+      this.loggedIn = true;
+      return this.loginWaitResult;
+    },
+  };
+
+  private recordLogin(op: string, arg?: unknown): void {
+    this.loginCalls.push(arg === undefined ? { op } : { op, arg });
+    if (this.loginError) throw this.loginError;
+  }
+
   private recordMcp(op: string, name: string, arg?: unknown): void {
     this.mcpCalls.push(arg === undefined ? { op, name } : { op, name, arg });
     if (this.mcpError) throw this.mcpError;
@@ -217,7 +250,7 @@ export class FakeSession implements AgentSession {
   }
 
   async accountInfo(): Promise<AccountInfo> {
-    return this.account;
+    return this.loggedIn && this.accountAfterLogin ? this.accountAfterLogin : this.account;
   }
 
   close(): void {

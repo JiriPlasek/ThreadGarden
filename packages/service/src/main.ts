@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import os from 'node:os';
@@ -6,6 +6,7 @@ import path from 'node:path';
 import {
   AWAY_CAPABILITY,
   CAPABILITIES,
+  CLAUDE_LOGIN_CAPABILITY,
   MCP_CAPABILITY,
   MCP_CONFIG_CAPABILITY,
   POWER_CAPABILITY,
@@ -22,6 +23,7 @@ import pkg from '../package.json' with { type: 'json' };
 import { nextSeqEpoch, seqBaseForEpoch } from './chat/event-log.js';
 import { realTimers, type Timers } from './chat/live-session.js';
 import { SessionHost } from './chat/session-host.js';
+import { ClaudeLogin, envRefusal, removeTranscript } from './claude-login/login.js';
 import { RoutingSettingsCheck, routingSettingsPaths } from './chat/title-routing.js';
 import { ChatTitles } from './chat/titles.js';
 import { resolveClaudeConfigDir } from './config.js';
@@ -45,7 +47,7 @@ import { createLogger, type Logger } from './logger.js';
 import { serialRunner } from './serial.js';
 import { DB_FILE, migrateDataDir } from './migrate-data-dir.js';
 import { ChatStore } from './move/store.js';
-import type { AgentAdapter } from './sdk/adapter.js';
+import type { AgentAdapter, AgentSession } from './sdk/adapter.js';
 import type { ClaudeFound, ClaudeProblem } from './sdk/claude-path.js';
 import {
   buildSessionEnv,
@@ -58,8 +60,9 @@ import { AwayQueue } from './away/queue.js';
 import { registerAwayHandlers } from './server/handlers/away.js';
 import { registerCopyHandlers } from './server/handlers/copies.js';
 import { registerChatHandlers } from './server/handlers/chat.js';
+import { registerClaudeLoginHandlers } from './server/handlers/claude-login.js';
 import { registerMcpHandlers } from './server/handlers/mcp.js';
-import { cliMcpConfig, type McpConfig } from './mcp/config.js';
+import { claudeCliRunner, cliMcpConfig, type McpConfig } from './mcp/config.js';
 import { registerShellHandlers } from './server/handlers/shell.js';
 import { loadPty, type PtyFactory } from './shell/pty.js';
 import { shellLine, type ShellLine } from './shell/shell-line.js';
@@ -111,6 +114,11 @@ export const LATE_NOTE =
   'This scheduled message went out late: Threadgarden was not running when it was due.';
 /** UI-state key (`threadgarden.db`) of the last chat seq epoch (see `nextSeqEpoch`). */
 const SEQ_EPOCH_KEY = 'service:seqEpoch';
+/**
+ * How long a closed sign-in process's id stays Threadgarden's own (`claude agents`
+ * may still list it while it exits) before its leftovers are cleaned up.
+ */
+const LOGIN_HELPER_LINGER_MS = 5_000;
 
 type ClaudeStatus = ClaudeFound | ClaudeProblem;
 const errorText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
@@ -176,6 +184,8 @@ export type StartOptions = {
   shell?: { pty: PtyFactory | null; line?: (command: string) => ShellLine };
   /** Adds and removes MCP servers (Claude Code's CLI). Default: the real CLI. */
   mcpConfig?: McpConfig;
+  /** Test seam: replaces running `claude auth logout`. */
+  claudeLogout?: () => Promise<void>;
   /** Runs `git` and `gh` for New project and Clone (default: the real ones); tests inject a fake. */
   projectTools?: Tools;
   /**
@@ -329,6 +339,10 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   // `!` commands need a PTY; without one (or `shell.pty: null`) the machine doesn't offer them.
   const pty = opts.shell ? opts.shell.pty : ((await loadPty(log)) ?? null);
   const shellCapability = pty ? [SHELL_CAPABILITY] : [];
+  // Signing in to Claude needs a Claude adapter (the chats' runtime). The
+  // API-key-only build never offers a claude.ai sign-in.
+  const claudeLoginCapability =
+    opts.adapter && opts.apiKeyOnly !== true ? [CLAUDE_LOGIN_CAPABILITY] : [];
   const platform = (opts.platform ?? process.platform) as MachineInfo['platform'];
   if (headless && !opts.adapter) throw new Error('A headless service needs history (an adapter)');
   /** A worker in WSL: only a headless machine is ever one. */
@@ -403,6 +417,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
             AWAY_CAPABILITY,
             MCP_CAPABILITY,
             MCP_CONFIG_CAPABILITY,
+            ...claudeLoginCapability,
             ...shellCapability,
             ...(platform === 'linux' ? [POWER_CAPABILITY] : []),
             ...(canUpdate() ? [UPDATE_CAPABILITY] : []),
@@ -412,6 +427,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
             AWAY_CAPABILITY,
             MCP_CAPABILITY,
             MCP_CONFIG_CAPABILITY,
+            ...claudeLoginCapability,
             ...shellCapability,
           ],
       // The platform stays linux, as its paths are; the app shows it as Windows (WSL).
@@ -434,6 +450,8 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   /** v1.2: runs once the catalog exists (the poller is created before it). */
   const bucketsRef: { onExternals: () => void } = { onExternals: () => {} };
   const claude: { current: ClaudeStatus | undefined } = { current: opts.claude };
+  /** Session ids of the processes running a Claude sign-in: Threadgarden's own, not external chats. */
+  const loginHelperIds = new Set<string>();
   /** Threadgarden's optional API key (§5.5): in memory only, never logged or stored. */
   let apiKey: string | null = null;
   /**
@@ -863,6 +881,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
           new Set([
             ...(live()?.list() ?? []).filter((c) => c.live).map((c) => c.sessionId),
             ...(titles?.runningIds() ?? []),
+            ...loginHelperIds,
           ]),
         (e) => {
           // v1.2: archived chats running elsewhere return to Active first.
@@ -912,18 +931,23 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       const projectOrderRef: { current?: ProjectOrderNotifier } = {};
       /** v1.2 C1: set once the catalog exists (after the session host). */
       const titlesRef: { current?: ChatTitles } = {};
+      /** Protocol 14: set once the session host exists. */
+      const loginRef: { current?: ClaudeLogin } = {};
       // v1.3 B: the account's plan usage, from every session's rate-limit events.
       const usageTracker = new UsageTracker({
         raw: opened.raw,
         now: clock,
-        emit: (state) =>
+        emit: (state) => {
           broadcastRef.fn({
             event: 'usage.changed',
             data: {
               ...state,
               ...(adapter.requireCodex ? { providers: { codex: codexUsageTracker.state() } } : {}),
             },
-          }),
+          });
+          // Its stored account is the machine's Claude account (sent only when it changed).
+          loginRef.current?.publish();
+        },
         timers: opts.sessionTimers ?? realTimers,
         onError,
       });
@@ -988,6 +1012,11 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         describe: describeChat,
         onError,
         onMcpChange: (id) => void mcpRef.current?.refresh(id),
+        machineName: () => machineOf(opened).name,
+        // Protocol 14: a turn failing on login marks this machine's sign-in expired.
+        onLogin: (id, ok) => {
+          if (!isCodexSession(id)) loginRef.current?.noteLogin(ok);
+        },
         ...(pty ? { shell: { pty, line: shellLineOf } } : {}),
         seqBase: seqBaseForEpoch(epoch),
         // v1.1 "Your turn": Threadgarden's own record of the turn end; lists show the chat unread.
@@ -1033,6 +1062,79 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         },
       });
       host = sessionHost;
+      /**
+       * Protocol 14: the short-lived Claude process every sign-in runs on (a
+       * chat's own may be reclaimed or restarted meanwhile). It gets no prompt
+       * and lives outside the session host and the registry; its id stays
+       * Threadgarden's own (left out of external chats) until a little after it
+       * closed, when any transcript it left is deleted.
+       */
+      const startLoginHelper = async (): Promise<AgentSession> => {
+        await whenLocated();
+        const found = claude.current;
+        if (!found || !('path' in found)) {
+          throw new Error('Claude Code is not available on this machine.');
+        }
+        const id = randomUUID();
+        loginHelperIds.add(id);
+        let session: AgentSession;
+        try {
+          session = adapter.start({
+            cwd: os.homedir(),
+            sessionId: id,
+            env: sessionEnvOf(),
+            claudePath: found.path,
+            permissionMode: 'default',
+            canUseTool: async () => ({
+              behavior: 'deny',
+              message: 'This process only signs in to Claude.',
+            }),
+          });
+        } catch (err) {
+          loginHelperIds.delete(id);
+          throw err;
+        }
+        const close = session.close.bind(session);
+        let closed = false;
+        session.close = () => {
+          close();
+          if (closed) return;
+          closed = true;
+          setTimeout(() => {
+            loginHelperIds.delete(id);
+            void removeTranscript(path.join(claudeDir, 'projects'), id);
+          }, LOGIN_HELPER_LINGER_MS).unref();
+        };
+        return session;
+      };
+      const runLogout = (): Promise<void> => {
+        const run = claudeCliRunner({
+          claude: async () => {
+            await whenLocated();
+            return claude.current ?? { detail: 'Claude Code has not been located yet.' };
+          },
+          env: sessionEnvOf,
+        });
+        return run(os.homedir(), ['auth', 'logout']);
+      };
+      const claudeLogin = new ClaudeLogin({
+        account: () => usageTracker.storedAccount() ?? null,
+        noteAccount: (account) => usageTracker.noteAccount(account),
+        startHelper: startLoginHelper,
+        restartChats: (after) => sessionHost.restartAfterLoginChange(after),
+        logout: opts.claudeLogout ?? (() => runLogout()),
+        forgetAccount: () => usageTracker.forgetAccount(),
+        // The API-key-only build; Threadgarden's API key setting, or a key or a
+        // provider in the chats' environment.
+        refusal: () =>
+          opts.apiKeyOnly === true
+            ? 'This build of Threadgarden uses an API key only, so it has no Claude sign-in.'
+            : envRefusal(sessionEnvOf()),
+        emit: (state) => broadcastRef.fn({ event: 'claude.account', data: state }),
+        ...(opts.sessionTimers ? { timers: opts.sessionTimers } : {}),
+        onError,
+      });
+      loginRef.current = claudeLogin;
       // v1.3 B: the meter keeps up by itself, from a running chat's usage reading.
       usageTracker.autoRefresh(() => sessionHost.usageReader());
       codexUsageTracker.autoRefresh(() => sessionHost.usageReader('codex'));
@@ -1274,6 +1376,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       });
       scheduled = scheduledSends;
       scheduledRef.current = scheduledSends;
+      registerClaudeLoginHandlers(router, { login: claudeLogin });
       registerUsageHandlers(router, {
         usage: usageTracker,
         scheduled: scheduledSends,
@@ -1306,6 +1409,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       watcher = {
         close: () => {
           claudeWatcher?.close();
+          claudeLogin.dispose();
           clearInterval(codexTimer);
           codexUsageTracker.dispose();
           adapter.dispose?.();

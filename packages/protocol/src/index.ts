@@ -16,5 +16,6 @@ export * from './update.js';
 export * from './away.js';
 export * from './mcp.js';
 export * from './shell.js';
+export * from './claude-login.js';
 export * from './methods.js';
 export * from './envelope.js';

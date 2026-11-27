@@ -40,7 +40,7 @@
     "work.stopAll"
   ],
   "maxRequestBytes": 33554432,
-  "protocolVersion": 13,
+  "protocolVersion": 14,
   "refused": [
     "analytics.get",
     "auth.setApiKey",
@@ -67,6 +67,11 @@
     "chat.stopTask",
     "chat.wake",
     "chat.withdraw",
+    "claude.account",
+    "claude.signIn",
+    "claude.signInCancel",
+    "claude.signInCode",
+    "claude.signOut",
     "copies.saveChat",
     "copies.saveLists",
     "devices.list",

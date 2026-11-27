@@ -17,10 +17,10 @@ async fn the_core_starts_inside_a_tokio_runtime() {
         &mut ws,
         1,
         "hello",
-        json!({ "protocolVersion": 13, "client": "threadgarden-desktop" }),
+        json!({ "protocolVersion": 14, "client": "threadgarden-desktop" }),
     )
     .await;
-    assert_eq!(answer["result"]["protocolVersion"], 13);
+    assert_eq!(answer["result"]["protocolVersion"], 14);
     core.stop();
     assert!(core.is_stopped());
 }

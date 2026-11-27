@@ -58,6 +58,7 @@
     loadingOlder = false,
     onLoadOlder,
     onFork,
+    onSignIn,
     onWithdraw,
     requests,
     requestsDocked = false,
@@ -77,6 +78,8 @@
     loadingOlder?: boolean;
     onLoadOlder?: () => void;
     onFork?: (itemId: string) => void;
+    /** Opens the sign-in for the chat's machine (the sign-in line's button). */
+    onSignIn?: () => void;
     /** Removes a queued message before Claude reads it (by its id). */
     onWithdraw?: (messageId: string) => void;
     /** Answers permission requests, questions and plans (cards are read-only without it). */
@@ -113,6 +116,9 @@
     },
     get fork() {
       return onFork;
+    },
+    get signIn() {
+      return onSignIn;
     },
     get requests() {
       return requests;

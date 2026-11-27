@@ -31,6 +31,12 @@ const fakeQuery = (messages: SDKMessage[]) => {
       ok: true,
     })),
     mcpClearAuth: vi.fn<(name: string) => Promise<unknown>>(async () => ({})),
+    claudeAuthenticate: vi.fn<(loginWithClaudeAi: boolean) => Promise<unknown>>(async () => ({
+      manualUrl: 'http://m',
+      automaticUrl: 'http://a',
+    })),
+    claudeOAuthCallback: vi.fn<(code: string, state: string) => Promise<unknown>>(async () => ({})),
+    claudeOAuthWaitForCompletion: vi.fn<() => Promise<unknown>>(async () => ({ done: true })),
     close: vi.fn(),
   });
 };
@@ -124,6 +130,20 @@ describe('RealAdapter.start', () => {
     ]);
     await expect(s.supportedModels()).resolves.toEqual([]);
     await expect(s.accountInfo()).resolves.toEqual({ apiProvider: 'firstParty' });
+  });
+
+  it('forwards login controls to the query', async () => {
+    const { q, adapter } = setup();
+    const s = adapter.start({ cwd: '/p' } as never);
+    await expect(s.login!.start()).resolves.toEqual({
+      manualUrl: 'http://m',
+      automaticUrl: 'http://a',
+    });
+    expect(q.claudeAuthenticate).toHaveBeenCalledWith(true);
+    await s.login!.submit('c', 's');
+    expect(q.claudeOAuthCallback).toHaveBeenCalledWith('c', 's');
+    await expect(s.login!.wait()).resolves.toEqual({ done: true });
+    expect(q.claudeOAuthWaitForCompletion).toHaveBeenCalledWith();
   });
 
   it('forwards MCP controls to the query', async () => {

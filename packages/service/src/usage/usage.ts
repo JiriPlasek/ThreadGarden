@@ -292,6 +292,11 @@ export class UsageTracker {
     };
   }
 
+  /** The account this machine's chats last reported (stored), undefined until one has. */
+  storedAccount(): UsageAccount | undefined {
+    return this.account.account ? { ...this.account.account } : undefined;
+  }
+
   /**
    * When the limit that refuses requests now resets: the latest reset among
    * the rejected windows whose reset is still ahead. Undefined when no window
@@ -344,6 +349,17 @@ export class UsageTracker {
       ...(windowsOf ? { windowsOf } : {}),
       account: { ...base, ...(plan ? { plan } : {}) },
     };
+    this.store(ACCOUNT_KEY, this.account);
+    this.publish();
+  }
+
+  /**
+   * Signed out: no account any more. The windows were that account's, so they
+   * go too; the next session to report one starts fresh.
+   */
+  forgetAccount(): void {
+    this.dropWindows();
+    this.account = {};
     this.store(ACCOUNT_KEY, this.account);
     this.publish();
   }

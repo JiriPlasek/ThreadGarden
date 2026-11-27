@@ -17,10 +17,10 @@ import {
 const uuid = '0b0e6d8e-6f43-4f6c-9b0e-2f5b1f0a9c11';
 
 describe('protocol 11', () => {
-  it('PROTOCOL_VERSION is 13 and the remote range is 12..14', () => {
-    expect(PROTOCOL_VERSION).toBe(13);
-    expect(REMOTE_PROTOCOL_RANGE).toEqual({ min: 12, max: 14 });
-    expect([11, 12, 13, 14, 15].map(acceptsRemoteProtocol)).toEqual([
+  it('PROTOCOL_VERSION is 14 and the remote range is 13..15', () => {
+    expect(PROTOCOL_VERSION).toBe(14);
+    expect(REMOTE_PROTOCOL_RANGE).toEqual({ min: 13, max: 15 });
+    expect([12, 13, 14, 15, 16].map(acceptsRemoteProtocol)).toEqual([
       false,
       true,
       true,

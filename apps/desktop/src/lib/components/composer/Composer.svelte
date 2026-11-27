@@ -276,7 +276,7 @@
 
   const commandItems = $derived<MenuCommand[]>(
     picker?.kind === 'slash'
-      ? filterCommands(menuCommands(commands ?? []), picker.token.query)
+      ? filterCommands(menuCommands(commands ?? [], agentName === 'Claude'), picker.token.query)
       : [],
   );
   const optionCount = $derived(
@@ -412,6 +412,11 @@
     updatePicker();
   };
 
+  /** Shows `text` as the command notice (a control that finished later, e.g. `/logout`). */
+  export const say = (text: string): void => {
+    notice = text;
+  };
+
   /** What the box holds now (kept while a scheduled message is edited in it). */
   export const current = (): { text: string; images: ImageRef[] } => outgoing(text, attachments);
 
@@ -504,7 +509,7 @@
       if (value.startsWith('/')) {
         const reported = commands ?? (await interaction.commands(commandScope).catch(() => []));
         commands = reported;
-        const local = localCommand(value, reported);
+        const local = localCommand(value, reported, agentName === 'Claude');
         if (local?.unavailable) {
           notice = unavailableNotice(local);
           return;

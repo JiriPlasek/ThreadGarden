@@ -16,6 +16,7 @@
  */
 import { resolve } from 'node:path';
 import type { ChatPermissionMode, ChatStatus, EventMsg, Settings } from '@threadgarden/protocol';
+import { OTHERS_PICK_UP, type LoginChange } from '../claude-login/login.js';
 import type { AgentAdapter, SessionStore } from '../sdk/adapter.js';
 import { isCodexSession } from '../sdk/providers.js';
 import type { PtyRun } from '../shell/run.js';
@@ -45,6 +46,17 @@ export const INTERRUPTED_TEXT =
   'Interrupted when the Threadgarden service stopped — send a message to resume';
 export const ROOT_BYPASS_NOTE =
   'Started in Ask before acting instead of Bypass permissions: Threadgarden runs as root on this machine, and Claude Code refuses Bypass permissions as root.';
+
+/** The line a chat gets when a restart after a sign-in dropped its `/loop` timer. */
+export const RESTARTED_AFTER_SIGN_IN_NOTE =
+  'Restarted after signing in. Start /loop again if you need it.';
+/** The same after a sign-out (`/logout`). */
+export const RESTARTED_AFTER_SIGN_OUT_NOTE =
+  'Restarted after signing out. Start /loop again if you need it.';
+const RESTARTED_NOTE: Record<LoginChange, string> = {
+  signIn: RESTARTED_AFTER_SIGN_IN_NOTE,
+  signOut: RESTARTED_AFTER_SIGN_OUT_NOTE,
+};
 
 export type SessionHostDeps = {
   adapter: AgentAdapter;
@@ -103,6 +115,10 @@ export type SessionHostDeps = {
   onReturned?: LiveSessionDeps['onReturned'];
   /** Handed to every session (see `LiveSessionDeps.onMcpChange`). */
   onMcpChange?: LiveSessionDeps['onMcpChange'];
+  /** Handed to every session (see `LiveSessionDeps.machineName`). */
+  machineName?: LiveSessionDeps['machineName'];
+  /** Handed to every session (see `LiveSessionDeps.onLogin`). */
+  onLogin?: LiveSessionDeps['onLogin'];
   /** Handed to every session (see `LiveSessionDeps.shell`). */
   shell?: LiveSessionDeps['shell'];
 };
@@ -116,6 +132,13 @@ export class SessionHost {
   private readonly seqFloor = new Map<string, number>();
   /** Live chats whose process must restart once nothing is in progress (`restartWhenIdle`). */
   private readonly restartDue = new Set<string>();
+  /**
+   * Chats among `restartDue` that failed on login when a sign-in or a sign-out
+   * finished (with which one): they can do nothing useful, so their restart does
+   * not wait for running tasks or a `/loop` timer (still never mid-turn or with
+   * an open request).
+   */
+  private readonly restartAfterLogin = new Map<string, LoginChange>();
   private readonly timers: Timers;
   private readonly seqBase: number;
   private reclaimTimer: unknown = undefined;
@@ -223,7 +246,7 @@ export class SessionHost {
     );
     this.sessions.set(sessionId, s);
     this.seqFloor.delete(sessionId);
-    this.restartDue.delete(sessionId); // a new process reads the config afresh
+    this.dropRestart(sessionId); // a new process reads the config afresh
     return s;
   }
 
@@ -242,13 +265,36 @@ export class SessionHost {
     return this.restartIfFree(sessionId, false);
   }
 
+  /**
+   * After a sign-in or a sign-out: every live Claude chat restarts between turns,
+   * so its new process reads the new login, or none (`restartWhenIdle`). A chat
+   * whose last turn failed on login restarts without waiting for running tasks
+   * or a `/loop` timer; one whose timer is dropped that way says so. After a
+   * sign-in with `OTHERS_PICK_UP`, only those chats restart; a sign-out restarts
+   * them all regardless.
+   */
+  restartAfterLoginChange(change: LoginChange): void {
+    for (const s of [...this.sessions.values()]) {
+      if (!s.live || isCodexSession(s.sessionId)) continue;
+      if (change === 'signIn' && OTHERS_PICK_UP && !s.failedOnLogin) continue;
+      if (s.failedOnLogin) this.restartAfterLogin.set(s.sessionId, change);
+      try {
+        this.restartIfFree(s.sessionId, false);
+      } catch (err) {
+        const after = change === 'signIn' ? 'signing in' : 'signing out';
+        this.report(err, `restart after ${after} (session ${s.sessionId})`);
+      }
+    }
+  }
+
   private restartIfFree(sessionId: string, needQuiet: boolean): boolean {
     const s = this.sessions.get(sessionId);
     if (!s?.live || isCodexSession(sessionId)) {
-      this.restartDue.delete(sessionId);
+      this.dropRestart(sessionId);
       return false;
     }
     const last = s.lastActivity;
+    const afterLogin = this.restartAfterLogin.get(sessionId);
     // Entries Claude Code hasn't answered yet may not be saved: wait for quiet,
     // so a lost answer can't hold the restart off for good.
     const quiet = needQuiet || s.appending;
@@ -256,19 +302,29 @@ export class SessionHost {
     const busy =
       s.status !== 'idle' ||
       s.pendingRequests().length > 0 ||
-      s.runningTasks > 0 ||
-      s.scheduled ||
+      (afterLogin === undefined && (s.runningTasks > 0 || s.scheduled)) ||
       this.deps.isMoving?.(sessionId) === true ||
       (quiet && last !== null && this.deps.now() - last < RESTART_QUIET_MS);
     if (busy) {
       this.restartDue.add(sessionId);
       return false;
     }
-    this.restartDue.delete(sessionId);
+    this.dropRestart(sessionId);
+    const loopDropped = afterLogin !== undefined && s.scheduled;
     const sessionStore = s.sessionStore;
     s.pause();
-    this.ensureLive(sessionId, s.cwd, sessionStore === undefined ? {} : { sessionStore });
+    const again = this.ensureLive(
+      sessionId,
+      s.cwd,
+      sessionStore === undefined ? {} : { sessionStore },
+    );
+    if (loopDropped) again.note('warning', RESTARTED_NOTE[afterLogin]);
     return true;
+  }
+
+  private dropRestart(sessionId: string): void {
+    this.restartDue.delete(sessionId);
+    this.restartAfterLogin.delete(sessionId);
   }
 
   /** A remembered restart's retry; a failure is reported, never thrown. */
@@ -466,7 +522,7 @@ export class SessionHost {
 
   private forget(s: LiveSession): void {
     this.sessions.delete(s.sessionId);
-    this.restartDue.delete(s.sessionId);
+    this.dropRestart(s.sessionId);
     this.seqFloor.set(s.sessionId, s.seq);
   }
 
@@ -508,6 +564,8 @@ export class SessionHost {
       sentImages,
       onReturned,
       onMcpChange,
+      machineName,
+      onLogin,
       shell,
     } = this.deps;
     return {
@@ -539,6 +597,8 @@ export class SessionHost {
       ...(sentImages ? { sentImages } : {}),
       ...(onReturned ? { onReturned } : {}),
       ...(onMcpChange ? { onMcpChange } : {}),
+      ...(machineName ? { machineName } : {}),
+      ...(onLogin ? { onLogin } : {}),
       ...(shell ? { shell } : {}),
       ...extra,
       log: extra.log ?? new EventLog(undefined, this.seqBase),

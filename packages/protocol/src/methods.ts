@@ -32,6 +32,7 @@ import {
   McpServerConfigSchema,
   McpStateSchema,
 } from './mcp.js';
+import { ClaudeAccountSchema } from './claude-login.js';
 import {
   ShellRunSchema,
   ShellSizeSchema,
@@ -66,7 +67,7 @@ import {
 } from './projects.js';
 import { ChatTaskSchema } from './tasks.js';
 import { UpdateStartResultSchema, UpdateStatusSchema } from './update.js';
-import { ScheduledSendSchema, UsageStateSchema } from './usage.js';
+import { ScheduledSendSchema, UsageAccountSchema, UsageStateSchema } from './usage.js';
 
 const empty = z.object({});
 const sessionIdOnly = z.object({ sessionId: z.string() });
@@ -847,6 +848,18 @@ export const methods = {
   'shell.stop': def(z.object({ runId: z.string() }), empty),
   /** The chat's command (running or the last one that ended) with its scrollback; null when none. */
   'shell.get': def(sessionIdOnly, z.object({ view: ShellViewSchema.nullable() })),
+  // ── sign in to Claude (protocol 14) ────────────────────────────────────────
+  // Behind the `claude-login` capability. Errors: `CLAUDE_LOGIN_ERRORS`.
+  'claude.account': def(empty, ClaudeAccountSchema),
+  /** Starts a sign-in; `sessionId` runs it on that chat's process. */
+  'claude.signIn': def(z.object({ sessionId: z.string().optional() }), z.object({ url: z.string() })),
+  'claude.signInCode': def(
+    z.object({ code: z.string().min(1).max(4096) }),
+    z.object({ account: UsageAccountSchema.nullable() }),
+  ),
+  'claude.signInCancel': def(empty, empty),
+  /** Claude Code's `/logout`: signs it out on the machine (and ends a sign-in in progress). */
+  'claude.signOut': def(empty, empty),
   // ── the phone (no protocol bump: local to the phone's core only) ──────────
   /**
    * The chat on the phone's screen, which the core's alert links leave out;

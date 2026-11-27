@@ -3,13 +3,19 @@
   import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
   import InfoIcon from '@lucide/svelte/icons/info';
   import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
+  import { Button } from '#lib/components/ui/button/index.js';
+  import { chatActions } from '../context';
 
   /**
    * A system message (info / warning / error); long text is clamped until
    * expanded. An item with `detail` (Ruling R27: a notification or hand-back
    * the CLI injected as a user turn) shows its short label, the full text on demand.
+   * A chat that failed because Claude Code isn't signed in (`signIn`) offers
+   * Sign in to Claude under its line, where the chat's machine can sign in from here.
    */
   let { item }: { item: Extract<ChatItem, { kind: 'system' }> } = $props();
+
+  const actions = chatActions();
 
   const LONG = 600;
   let expanded = $state(false);
@@ -59,6 +65,13 @@
           {item.detail}
         </div>
       {/if}
+    {/if}
+    {#if item.signIn && actions.signIn}
+      <div class="mt-1.5">
+        <Button size="sm" variant="outline" onclick={() => actions.signIn?.()}
+          >Sign in to Claude</Button
+        >
+      </div>
     {/if}
   </div>
 </div>
