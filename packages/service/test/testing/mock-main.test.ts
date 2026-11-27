@@ -1164,19 +1164,25 @@ describe('mock service: signing in to Claude (protocol 14)', () => {
     expect((await c.call<Account>('claude.account', {})).account?.email).toBe('mock@example.com');
   }, 30_000);
 
-  it('the remote mock starts expired and session-19 fails on login', async () => {
+  it('the remote mock starts expired and session-2 fails on login', async () => {
     const c = await connect(true);
     expect(await c.call<Account>('claude.account', {})).toMatchObject({
       account: { email: 'mock@example.com' },
       expired: true,
       signingIn: false,
     });
-    const sessionId = 'session-19';
+    const sessionId = 'session-2';
     const lines = () =>
       itemsOf(c.events, sessionId).filter(
         (i) => i.kind === 'system' && (i as { signIn?: boolean }).signIn === true,
       );
-    await c.call('chat.open', { sessionId, tail: 50 });
+    // Indexed newest first: an older chat may not be known for a moment.
+    await eventually(async () =>
+      c.call('chat.open', { sessionId, tail: 50 }).then(
+        () => true,
+        () => false,
+      ),
+    );
     await c.call('chat.send', { sessionId, text: 'hello?' });
     await eventually(async () => lines().length === 1, 10_000);
     expect(lines()[0]).toMatchObject({

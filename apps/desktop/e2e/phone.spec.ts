@@ -522,6 +522,36 @@ test("the phone layout opens the MCP servers dialog from the chat's menu", async
   await expect(dialog).toBeHidden();
 });
 
+test('signs in a paired machine from the phone', async ({ page }) => {
+  // Ubuntu's mock starts with its sign-in expired (claude-login.spec.ts covers the rest).
+  await remoteCall('mock.claudeLoginReset', {});
+  try {
+    await openPhone(page);
+    await page.getByRole('button', { name: 'Settings' }).tap();
+    const settings = page.getByRole('dialog', { name: 'Settings' });
+    // The phone's own core runs no Claude: only the paired machine is listed.
+    await expect(settings.getByRole('group', { name: 'Claude account on This PC' })).toHaveCount(0);
+    const row = settings.getByRole('group', { name: `Claude account on ${MACHINE}` });
+    await expect(row).toContainText('Sign-in expired');
+    await row.getByRole('button', { name: 'Sign in' }).tap();
+
+    const dialog = page.getByRole('dialog', { name: `Sign in to Claude (${MACHINE})` });
+    await expect(dialog.getByTestId('claude-sign-in-link')).toHaveText(
+      'https://claude.ai/oauth/authorize?mock=1',
+    );
+    // Fits the screen.
+    const box = await dialog.boundingBox();
+    expect(box!.x + box!.width).toBeLessThanOrEqual(412);
+    await dialog.getByLabel('Paste the code claude.ai shows you').fill('MOCK-CODE');
+    await dialog.getByRole('button', { name: 'Sign in', exact: true }).tap();
+    await expect(dialog.getByRole('status')).toHaveText('Signed in as other@example.com.');
+    await expect(dialog).toBeHidden();
+    await expect(row).toContainText('other@example.com · Pro');
+  } finally {
+    await remoteCall('mock.claudeLoginReset', {});
+  }
+});
+
 test('the phone layout runs a command and stops it with the button', async ({ page }) => {
   await openPhone(page);
   await openChat(page, 'session-15');

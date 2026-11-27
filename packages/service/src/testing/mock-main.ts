@@ -1181,8 +1181,12 @@ class ScriptedSession extends FakeSession {
   }
 }
 
-/** The chat whose next turn fails on login while the remote mock's sign-in is expired. */
-const LOGIN_FAILING_CHAT = 'session-19';
+/**
+ * The chat whose next turn fails on login while the remote mock's sign-in is expired:
+ * one no other end-to-end spec chats on (several chat on the remote's `session-19`, and
+ * a turn here would leave them a fresh transcript and a reply to trip over).
+ */
+const LOGIN_FAILING_CHAT = 'session-2';
 /** The fake sign-in link, and the one code the fake sign-in accepts. */
 const MOCK_SIGN_IN_URL = 'https://claude.ai/oauth/authorize?mock=1';
 const MOCK_SIGN_IN_CODE = 'MOCK-CODE';
@@ -1191,7 +1195,7 @@ const MOCK_OTHER_ACCOUNT = { kind: 'login', email: 'other@example.com', plan: 'p
 
 /**
  * The mock's fake Claude sign-in (protocol 14), in memory: `MOCK-CODE` signs in as
- * `other@example.com`; the remote mock starts expired (its `session-19` fails on login).
+ * `other@example.com`; the remote mock starts expired (its `session-2` fails on login).
  * `mock.claudeLoginReset` puts it back to its start.
  */
 class MockClaudeLogin {

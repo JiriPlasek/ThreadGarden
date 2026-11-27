@@ -128,7 +128,8 @@ test("a 40-character unbroken machine name doesn't widen Settings or overflow th
   const settings = page.getByRole('dialog', { name: 'Settings' });
   await settings.getByRole('group', { name: MACHINE }).getByLabel('Name').fill(name);
   await settings.getByRole('button', { name: `Save ${MACHINE}` }).click();
-  const card = settings.getByRole('group', { name });
+  // Exact: the Claude accounts row is named after the machine too.
+  const card = settings.getByRole('group', { name, exact: true });
   await expect(card).toBeVisible();
   const widthBefore = (await settings.boundingBox())!.width;
 
