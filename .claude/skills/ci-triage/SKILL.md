@@ -6,7 +6,7 @@ description: Use when a CI run on a branch or pull request has failed and you mu
 # CI triage
 
 Decide per failure: known flake, cancelled runner, or real. Rerunning needs no
-approval; anything that changes the repo does.
+approval; anything that changes the repo does. Run `gh` as the repo maintainer.
 
 ## Checklist
 
