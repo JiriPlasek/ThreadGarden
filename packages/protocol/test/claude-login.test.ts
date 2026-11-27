@@ -10,7 +10,7 @@ import {
   methods,
 } from '../src/index.js';
 
-const CLAUDE_METHODS = ['claude.account', 'claude.signIn', 'claude.signInCode', 'claude.signInCancel'] as const;
+const CLAUDE_METHODS = ['claude.account', 'claude.signIn', 'claude.signInCode', 'claude.signInCancel', 'claude.signOut'] as const;
 
 describe('protocol 14', () => {
   it('PROTOCOL_VERSION is 14 and the remote range is 13..15', () => {

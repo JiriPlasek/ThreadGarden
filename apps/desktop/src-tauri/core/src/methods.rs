@@ -439,6 +439,7 @@ pub const REFUSED: &[&str] = &[
     "claude.signIn",
     "claude.signInCode",
     "claude.signInCancel",
+    "claude.signOut",
     // The desktop's plug setup dialog (finding and naming a plug): the phone takes typed details.
     "power.probe",
     "power.pairPlug",

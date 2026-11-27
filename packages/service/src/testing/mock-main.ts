@@ -1241,6 +1241,10 @@ class MockClaudeLogin {
     this.set({ signingIn: false });
   }
 
+  signOut(): void {
+    this.set({ account: null, expired: false, signingIn: false });
+  }
+
   reset(): void {
     this.state = this.start();
     this.tell();
@@ -1744,6 +1748,9 @@ const addMockMethods = (
         return { id: req.id, result: login.get() };
       case 'claude.signIn':
         return { id: req.id, result: login.signIn() };
+      case 'claude.signOut':
+        login.signOut();
+        return { id: req.id, result: {} };
       case 'claude.signInCancel':
         login.cancel();
         return { id: req.id, result: {} };

@@ -23,6 +23,10 @@ export const registerClaudeLoginHandlers = (router: Router, deps: { login: Claud
   router.register('claude.account', async () => login.state());
   router.register('claude.signIn', (p) => contained(() => login.start(p.sessionId)));
   router.register('claude.signInCode', (p) => contained(() => login.submit(p.code)));
+  router.register('claude.signOut', async () => {
+    await contained(() => login.signOut());
+    return {};
+  });
   router.register('claude.signInCancel', async () => {
     await contained(() => login.cancel());
     return {};

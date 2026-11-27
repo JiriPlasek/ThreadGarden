@@ -220,6 +220,7 @@ describe('protocol schemas', () => {
       'claude.signIn',
       'claude.signInCode',
       'claude.signInCancel',
+      'claude.signOut',
       'alerts.setActive',
       'phoneAccess.get',
       'phoneAccess.set',

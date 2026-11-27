@@ -62,7 +62,7 @@ import { registerCopyHandlers } from './server/handlers/copies.js';
 import { registerChatHandlers } from './server/handlers/chat.js';
 import { registerClaudeLoginHandlers } from './server/handlers/claude-login.js';
 import { registerMcpHandlers } from './server/handlers/mcp.js';
-import { cliMcpConfig, type McpConfig } from './mcp/config.js';
+import { claudeCliRunner, cliMcpConfig, type McpConfig } from './mcp/config.js';
 import { registerShellHandlers } from './server/handlers/shell.js';
 import { loadPty, type PtyFactory } from './shell/pty.js';
 import { shellLine, type ShellLine } from './shell/shell-line.js';
@@ -184,6 +184,8 @@ export type StartOptions = {
   shell?: { pty: PtyFactory | null; line?: (command: string) => ShellLine };
   /** Adds and removes MCP servers (Claude Code's CLI). Default: the real CLI. */
   mcpConfig?: McpConfig;
+  /** Test seam: replaces running `claude auth logout`. */
+  claudeLogout?: () => Promise<void>;
   /** Runs `git` and `gh` for New project and Clone (default: the real ones); tests inject a fake. */
   projectTools?: Tools;
   /**
@@ -1102,12 +1104,24 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         };
         return session;
       };
+      const runLogout = (): Promise<void> => {
+        const run = claudeCliRunner({
+          claude: async () => {
+            await whenLocated();
+            return claude.current ?? { detail: 'Claude Code has not been located yet.' };
+          },
+          env: sessionEnvOf,
+        });
+        return run(os.homedir(), ['auth', 'logout']);
+      };
       const claudeLogin = new ClaudeLogin({
         account: () => usageTracker.storedAccount() ?? null,
         noteAccount: (account) => usageTracker.noteAccount(account),
         liveClaude: () => sessionHost.liveClaude(),
         startHelper: startLoginHelper,
         restartAfterSignIn: () => sessionHost.restartAfterSignIn(),
+        logout: opts.claudeLogout ?? (() => runLogout()),
+        forgetAccount: () => usageTracker.forgetAccount(),
         // Threadgarden's API key setting, or a key or a provider in the chats' environment.
         refusal: () => envRefusal(sessionEnvOf()),
         emit: (state) => broadcastRef.fn({ event: 'claude.account', data: state }),

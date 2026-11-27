@@ -71,6 +71,7 @@
     "claude.signIn",
     "claude.signInCancel",
     "claude.signInCode",
+    "claude.signOut",
     "copies.saveChat",
     "copies.saveLists",
     "devices.list",

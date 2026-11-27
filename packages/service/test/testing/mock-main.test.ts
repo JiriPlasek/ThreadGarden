@@ -1122,7 +1122,7 @@ describe('mock service: signing in to Claude (protocol 14)', () => {
     signingIn: boolean;
   };
 
-  it('the mock signs in with MOCK-CODE and refuses another', async () => {
+  it('the mock signs out and signs back in with MOCK-CODE; and signs in with MOCK-CODE and refuses another', async () => {
     const c = await connect(false);
     const hello = await c.call<{ machine: { capabilities: string[] } }>('hello', HELLO);
     expect(hello.machine.capabilities).toContain('claude-login');
@@ -1155,6 +1155,19 @@ describe('mock service: signing in to Claude (protocol 14)', () => {
       expired: false,
       signingIn: false,
     });
+
+    // /logout signs out; signing in again with MOCK-CODE works.
+    await c.call('claude.signOut', {});
+    expect(c.events.filter((e) => e.event === 'claude.account').at(-1)?.data).toEqual({
+      account: null,
+      expired: false,
+      signingIn: false,
+    });
+    await c.call('claude.signIn', {});
+    expect(
+      (await c.call<{ account: unknown }>('claude.signInCode', { code: 'MOCK-CODE' })).account,
+    ).toEqual({ kind: 'login', email: 'other@example.com', plan: 'pro' });
+    await c.call('claude.signOut', {});
 
     // The test reset puts the start back.
     await mock!.svc.router.dispatch(

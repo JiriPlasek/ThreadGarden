@@ -353,6 +353,17 @@ export class UsageTracker {
     this.publish();
   }
 
+  /**
+   * Signed out: no account any more. The windows were that account's, so they
+   * go too; the next session to report one starts fresh.
+   */
+  forgetAccount(): void {
+    this.dropWindows();
+    this.account = {};
+    this.store(ACCOUNT_KEY, this.account);
+    this.publish();
+  }
+
   /** Forgets every window, stored ones too, and the plan facts read for the old account. */
   private dropWindows(): void {
     this.windows.clear();

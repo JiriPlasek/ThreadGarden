@@ -51,6 +51,9 @@ const setup = (over: Partial<ClaudeLoginDeps> = {}) => {
   const noted: UsageAccount[] = [];
   const reports: string[] = [];
   let restarts = 0;
+  const logouts: string[] = [];
+  const forgot: string[] = [];
+  let logoutFails: string | undefined;
   let stored: UsageAccount | null = { kind: 'login', email: 'old@example.com', plan: 'pro' };
   const chats: LoginChat[] = [];
   const login = new ClaudeLogin({
@@ -66,6 +69,14 @@ const setup = (over: Partial<ClaudeLoginDeps> = {}) => {
       return s;
     },
     restartAfterSignIn: () => void restarts++,
+    forgetAccount: () => {
+      forgot.push('forgot');
+      stored = null;
+    },
+    logout: async () => {
+      logouts.push('claude auth logout');
+      if (logoutFails !== undefined) throw new Error(logoutFails);
+    },
     emit: (s) => emitted.push(s),
     timers,
     onError: (err, context) =>
@@ -83,6 +94,9 @@ const setup = (over: Partial<ClaudeLoginDeps> = {}) => {
     reports,
     chats,
     restarts: () => restarts,
+    logouts,
+    forgot,
+    failLogout: (m: string) => (logoutFails = m),
     setStored: (a: UsageAccount | null) => (stored = a),
   };
 };
@@ -235,6 +249,55 @@ describe('ClaudeLogin', () => {
     expect(ctx.restarts()).toBe(0);
     expect(ctx.login.state().signingIn).toBe(true);
     expect(ctx.helpers[1]!.closed).toBe(false);
+  });
+
+  it('signOut runs claude auth logout and clears the account', async () => {
+    const ctx = setup();
+    await ctx.login.signOut();
+    expect(ctx.logouts).toHaveLength(1);
+    expect(ctx.forgot).toHaveLength(1);
+    expect(ctx.login.state()).toEqual({ account: null, expired: false, signingIn: false });
+    expect(ctx.emitted.at(-1)).toEqual({ account: null, expired: false, signingIn: false });
+  });
+
+  it('signOut cancels an open sign-in', async () => {
+    const ctx = setup();
+    await ctx.login.start();
+    const helper = ctx.helpers[0]!;
+    await ctx.login.signOut();
+    expect(helper.closed).toBe(true);
+    expect(ctx.login.state().signingIn).toBe(false);
+    expect(ctx.logouts).toHaveLength(1);
+  });
+
+  it('signOut restarts the live chats', async () => {
+    const ctx = setup();
+    await ctx.login.signOut();
+    expect(ctx.restarts()).toBe(1);
+  });
+
+  it('an API-key machine refuses signOut', async () => {
+    const ctx = setup({
+      refusal: () => 'This machine uses an API key, so it has no Claude sign-in.',
+    });
+    expect(await rejection(ctx.login.signOut())).toMatchObject({
+      code: CLAUDE_LOGIN_ERRORS.unsupported,
+    });
+    expect(ctx.logouts).toHaveLength(0);
+    expect(ctx.forgot).toHaveLength(0);
+    expect(ctx.restarts()).toBe(0);
+  });
+
+  it("a failing logout answers LOGIN_FAILED with Claude Code's words", async () => {
+    const ctx = setup();
+    ctx.failLogout('  Could not reach https://claude.ai/x?state=abc: no network  ');
+    expect(await rejection(ctx.login.signOut())).toEqual(
+      expect.objectContaining({
+        code: CLAUDE_LOGIN_ERRORS.failed,
+        message: 'Could not reach (link) no network',
+      }),
+    );
+    expect(ctx.restarts()).toBe(0);
   });
 
   it('an API key setting refuses sign-in', async () => {

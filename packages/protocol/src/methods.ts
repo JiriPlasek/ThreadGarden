@@ -858,6 +858,8 @@ export const methods = {
     z.object({ account: UsageAccountSchema.nullable() }),
   ),
   'claude.signInCancel': def(empty, empty),
+  /** Claude Code's `/logout`: signs it out on the machine (and ends a sign-in in progress). */
+  'claude.signOut': def(empty, empty),
   // ── the phone (no protocol bump: local to the phone's core only) ──────────
   /**
    * The chat on the phone's screen, which the core's alert links leave out;

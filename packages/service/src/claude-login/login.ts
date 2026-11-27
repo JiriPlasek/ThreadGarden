@@ -73,6 +73,10 @@ export type ClaudeLoginDeps = {
   startHelper: () => Promise<AgentSession>;
   /** `SessionHost.restartAfterSignIn`. */
   restartAfterSignIn: () => void;
+  /** Runs Claude Code's `claude auth logout` on this machine; rejects with its words. */
+  logout: () => Promise<void>;
+  /** Usage forgets the stored account (and its windows) after a logout. */
+  forgetAccount: () => void;
   /**
    * Why this machine has no Claude sign-in although usage hasn't said so (an API
    * key setting, a key or a provider in the chats' environment: `envRefusal`);
@@ -318,6 +322,39 @@ export class ClaudeLogin {
     if (!flow) return;
     this.endFlow(flow, ENDED.cancelled);
     this.publish();
+  }
+
+  /**
+   * `/logout`: ends a sign-in in progress, runs `claude auth logout` on this
+   * machine, forgets the account and restarts the live Claude chats so they
+   * drop the old login. A machine on an API key or a provider has no sign-in to end.
+   */
+  async signOut(): Promise<void> {
+    const account = this.deps.account();
+    if (account?.kind === 'apiKey' || account?.kind === 'provider') {
+      throw new ServiceError(
+        CLAUDE_LOGIN_ERRORS.unsupported,
+        account.kind === 'apiKey'
+          ? 'This machine uses an API key, so it has no Claude sign-in.'
+          : `This machine uses ${account.provider ?? 'a cloud provider'}, so it has no Claude sign-in.`,
+      );
+    }
+    const refusal = this.deps.refusal?.();
+    if (refusal) throw new ServiceError(CLAUDE_LOGIN_ERRORS.unsupported, refusal);
+    await this.cancel();
+    try {
+      await this.deps.logout();
+    } catch (err) {
+      throw this.failure(err, []);
+    }
+    this.deps.forgetAccount();
+    this.expired = false;
+    this.publish();
+    try {
+      this.deps.restartAfterSignIn();
+    } catch (err) {
+      this.report(err, 'restart after signing out');
+    }
   }
 
   /** At shutdown: ends a sign-in in progress and its timer. */

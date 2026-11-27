@@ -57,7 +57,7 @@ class LoginAdapter extends FakeAdapter {
   }
 }
 
-const start = async (adapter: FakeAdapter) => {
+const start = async (adapter: FakeAdapter, extra: { claudeLogout?: () => Promise<void> } = {}) => {
   svc = await startService({
     dataDir: join(dir, 'data'),
     claudeConfigDir: join(dir, 'claude'),
@@ -67,6 +67,7 @@ const start = async (adapter: FakeAdapter) => {
     sessionEnv: { PATH: '/usr/bin' },
     installSignalHandlers: false,
     logger,
+    ...extra,
   });
   client = await TestClient.connect(svc.port, svc.token);
   return client;
@@ -244,6 +245,38 @@ describe('claude.*', () => {
     expect(helper.closed).toBe(true);
     expect((await c.call<ClaudeAccount>('claude.account', {})).signingIn).toBe(false);
     expect(accountEvents(c).map((s) => s.signingIn)).toEqual([true, false]);
+  });
+
+  it('claude.signOut runs the logout, clears the account and restarts nothing else', async () => {
+    const adapter = new LoginAdapter();
+    const logouts: number[] = [];
+    const c = await start(adapter, { claudeLogout: async () => void logouts.push(1) });
+    await c.call('claude.signIn', {});
+    const helper = adapter.lastSession();
+    expect(await c.call('claude.signOut', {})).toEqual({});
+    expect(logouts).toEqual([1]);
+    expect(helper.closed).toBe(true);
+    expect(await c.call<ClaudeAccount>('claude.account', {})).toEqual({
+      account: null,
+      expired: false,
+      signingIn: false,
+    });
+  });
+
+  it('claude.signOut answers LOGIN_FAILED with the CLI words, and LOGIN_UNSUPPORTED on an API key', async () => {
+    const adapter = new LoginAdapter();
+    const c = await start(adapter, {
+      claudeLogout: async () => {
+        throw new Error('not logged in');
+      },
+    });
+    const err = await c.raw('claude.signOut', {});
+    expect(err.error?.code).toBe(CLAUDE_LOGIN_ERRORS.failed);
+    expect(err.error?.message).toBe('not logged in');
+    await c.call('auth.setApiKey', { key: 'sk-ant-secret-key' });
+    const refused = await c.raw('claude.signOut', {});
+    expect(refused.error?.code).toBe(CLAUDE_LOGIN_ERRORS.unsupported);
+    expect(refused.error?.message).not.toContain('sk-ant');
   });
 
   it('an API key setting refuses sign-in', async () => {
