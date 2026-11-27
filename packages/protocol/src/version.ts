@@ -17,5 +17,6 @@
  * 11 — a machine that's away: the away capability, messageId on chat.send, sessionId on chat.create; local copies.* and away.*
  * 12 — MCP servers in the chat: mcp.*, chat.wake, mcp.changed, the mcp capability; mcp.add / mcp.remove behind the mcp-config capability.
  * 13 — ! commands: shell.start, .input, .resize, .stop, .get, the shell.run and shell.output events, shell on chat.open, 'command' as a move busy reason, the shell capability.
+ * 14 — Sign in to Claude: claude.account, claude.signIn, claude.signInCode, claude.signInCancel, the claude.account event, the claude-login capability.
  */
-export const PROTOCOL_VERSION = 13;
+export const PROTOCOL_VERSION = 14;
