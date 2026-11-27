@@ -31,7 +31,7 @@
   }: {
     machineId: string;
     machineName: string;
-    /** The chat whose process signs in (a chat's sign-in line or `/login`). */
+    /** The chat that asked (a chat's sign-in line or `/login`); the machine signs in on a helper process. */
     sessionId?: string;
     open?: boolean;
   } = $props();
@@ -46,6 +46,8 @@
   /** Who it signed in as (null: the machine didn't say). */
   let signedInAs = $state<string | null>(null);
   let copied = $state(false);
+  /** The machine has no Claude sign-in (an API key, a provider): starting again can't help. */
+  let unsupported = $state(false);
 
   /** A sign-in may be open on the machine: closing cancels it. */
   let live = false;
@@ -64,6 +66,7 @@
     url = null;
     code = '';
     error = null;
+    unsupported = false;
     live = true;
     try {
       const link = await claudeAccounts.signIn(machineId, sessionId);
@@ -77,6 +80,7 @@
     } catch (err) {
       if (mine !== generation) return;
       live = false;
+      unsupported = err instanceof RequestError && err.code === CLAUDE_LOGIN_ERRORS.unsupported;
       error = words(err);
       phase = 'failed';
     }
@@ -96,6 +100,7 @@
     error = null;
     signedInAs = null;
     copied = false;
+    unsupported = false;
   };
 
   let wasOpen = false;
@@ -210,7 +215,9 @@
       <Dialog.Footer class="flex-row justify-end gap-2">
         <Button variant="outline" size="sm" onclick={() => (open = false)}>Cancel</Button>
         {#if phase === 'failed'}
-          <Button size="sm" onclick={() => void begin()}>Start again</Button>
+          {#if !unsupported}
+            <Button size="sm" onclick={() => void begin()}>Start again</Button>
+          {/if}
         {:else}
           <Button size="sm" disabled={phase !== 'ready' || code.trim() === ''} onclick={submit}
             >Sign in</Button

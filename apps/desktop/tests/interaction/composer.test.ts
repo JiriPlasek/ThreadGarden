@@ -485,17 +485,39 @@ describe('/mcp', () => {
 
 describe('/login', () => {
   const field = () => screen.getByRole('textbox', { name: /message/i }) as HTMLDivElement;
-  const loginChat = (sessionId?: string) =>
+  const loginChat = (sessionId?: string, o: { apiKey?: boolean; capabilities?: string[] } = {}) =>
     renderMcpChat({
       ...(sessionId ? { sessionId } : {}),
-      capabilities: ['remote', CLAUDE_LOGIN_CAPABILITY],
+      capabilities: o.capabilities ?? ['remote', CLAUDE_LOGIN_CAPABILITY],
       // The SDK reports /login too: Threadgarden's own sign-in wins.
       commands: [{ name: 'login', description: 'Sign in', argumentHint: '' }],
       configure: (s) => {
         s.handlers['claude.signIn'] = () => ({ url: 'https://claude.ai/oauth/authorize?x' });
         s.handlers['claude.signInCancel'] = () => ({});
+        if (o.apiKey) {
+          const open = s.handlers['chat.open']!;
+          s.handlers['chat.open'] = (p) => ({
+            ...(open(p) as object),
+            header: { auth: { kind: 'apiKey', label: 'API key' } },
+          });
+        }
       },
     });
+
+  it("/login on a machine that uses an API key says there's no Claude sign-in", async () => {
+    // With the sign-in offered, and without it (the API-key-only build).
+    for (const capabilities of [['remote', CLAUDE_LOGIN_CAPABILITY], ['remote']]) {
+      const env = await loginChat(undefined, { apiKey: true, capabilities });
+      await userEvent.type(field(), '/login{Escape}{Enter}');
+      expect(
+        await screen.findByText("This PC uses an API key, so there's no Claude sign-in."),
+      ).toBeTruthy();
+      expect(screen.queryByRole('dialog', { name: /Sign in to Claude/ })).toBeNull();
+      expect(env.server.calls('claude.signIn')).toHaveLength(0);
+      expect(env.server.calls('chat.send')).toHaveLength(0);
+      cleanup();
+    }
+  });
 
   it('/login is intercepted for a Claude chat and not for a Codex chat', async () => {
     const claude = await loginChat();

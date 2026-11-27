@@ -131,13 +131,14 @@ describe('Sign in to Claude', () => {
     );
   });
 
-  it("a link that can't be had says why and offers Start again", async () => {
+  /** The dialog for a machine whose `claude.signIn` fails with `code`. */
+  const failingStart = async (code: string, message: string) => {
     const env = await setupTwoMachines({
       m1Capabilities: ['remote', CLAUDE_LOGIN_CAPABILITY],
       configureRemote: (s) => {
         signInHandlers(s);
         s.handlers['claude.signIn'] = () => {
-          throw new RpcFail(CLAUDE_LOGIN_ERRORS.unsupported, 'This machine uses an API key.');
+          throw new RpcFail(code, message);
         };
       },
     });
@@ -145,9 +146,26 @@ describe('Sign in to Claude', () => {
       props: { machineId: M1, machineName: 'Ubuntu PC', open: true },
       context: env.context,
     });
-    const dialog = within(await screen.findByRole('dialog', { name: /Sign in to Claude/ }));
-    expect((await dialog.findByRole('alert')).textContent).toBe('This machine uses an API key.');
+    return within(await screen.findByRole('dialog', { name: /Sign in to Claude/ }));
+  };
+
+  it("a link that can't be had says why and offers Start again", async () => {
+    const dialog = await failingStart(CLAUDE_LOGIN_ERRORS.failed, 'Claude Code stopped.');
+    expect((await dialog.findByRole('alert')).textContent).toBe('Claude Code stopped.');
     expect(dialog.getByRole('button', { name: 'Start again' })).toBeTruthy();
+  });
+
+  it('a machine with no Claude sign-in says why and offers no Start again', async () => {
+    const dialog = await failingStart(
+      CLAUDE_LOGIN_ERRORS.unsupported,
+      'This machine uses an API key, so it has no Claude sign-in.',
+    );
+    expect((await dialog.findByRole('alert')).textContent).toBe(
+      'This machine uses an API key, so it has no Claude sign-in.',
+    );
+    expect(dialog.queryByRole('button', { name: 'Start again' })).toBeNull();
+    expect(dialog.queryByRole('button', { name: 'Sign in' })).toBeNull();
+    expect(dialog.getByRole('button', { name: 'Cancel' })).toBeTruthy();
   });
 });
 

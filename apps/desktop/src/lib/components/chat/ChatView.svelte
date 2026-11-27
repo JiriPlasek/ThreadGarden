@@ -834,7 +834,7 @@
   /** A Claude chat on a machine that signs in from here, and is run from here. */
   const signInOn = $derived(!isCodexChat(sessionId) && supportsClaudeLogin(entry) && !readOnly);
   let signInOpen = $state(false);
-  /** The chat's own process signs in while it runs; else the machine starts one for it. */
+  /** Which chat asked, while it runs here (the machine signs in on a helper process either way). */
   const signInSession = $derived(chat?.ownedLive ? sessionId : undefined);
   $effect(() => {
     if (!signInOn) signInOpen = false;
@@ -849,6 +849,9 @@
   });
   const apiKeyNotice = (name: string): string =>
     `${name} uses an API key, so there's nothing to sign out of.`;
+  /** `/login` in a chat whose header says the machine uses an API key. */
+  const apiKeySignInNotice = (name: string): string =>
+    `${name} uses an API key, so there's no Claude sign-in.`;
 
   /** Signs the chat's machine out; a failure stays in the confirmation, in Claude Code's words. */
   const signOutNow = async (): Promise<void> => {
@@ -889,6 +892,8 @@
     }
     if (control === 'login') {
       if (isCodexChat(sessionId)) return 'Signing in to Claude is for Claude chats.';
+      // Also on a machine that offers no sign-in at all (the API-key-only build).
+      if (chat?.header.auth?.kind === 'apiKey') return apiKeySignInNotice(machineName);
       if (!supportsClaudeLogin(entry)) return `Update ${machineName} to sign in from here.`;
       if (readOnly) return `Signing in to Claude needs ${machineName} connected.`;
       signInOpen = true;
@@ -896,9 +901,9 @@
     }
     if (control === 'logout') {
       if (isCodexChat(sessionId)) return 'Signing out of Claude is for Claude chats.';
+      if (chat?.header.auth?.kind === 'apiKey') return apiKeyNotice(machineName);
       if (!supportsClaudeLogin(entry)) return `Update ${machineName} to sign out from here.`;
       if (readOnly) return `Signing out of Claude needs ${machineName} connected.`;
-      if (chat?.header.auth?.kind === 'apiKey') return apiKeyNotice(machineName);
       signOutOpen = true;
       return null;
     }
