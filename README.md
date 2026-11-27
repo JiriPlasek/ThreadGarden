@@ -34,6 +34,7 @@ It uses your own `claude` install and login, through the official Agent SDK. Not
 - **Needs you and Running** across all projects, with a tray badge and notifications.
 - **MCP servers:** see a chat's servers (project, user and claude.ai), approve a project's `.mcp.json` server, sign in, reconnect and turn them off, and add and remove servers (through Claude Code's own CLI, for just you or for everyone on the project), from the chat's menu or `/mcp`.
 - **`!` commands:** start a message with `!` to run a shell command on the chat's machine, in the chat's folder, in a live terminal block in the chat (passwords and `[Y/n]` work, **Stop** ends it). Claude sees the output with your next message, as with the CLI's own `!`.
+- **Sign in to Claude:** sign a chat's machine in with `/login` (or the button under a turn whose sign-in expired), and out with `/logout`; switching account is both. Open the link anywhere (the phone too) and paste back the code claude.ai shows.
 - **Activity panel:** see and stop subagents and background processes.
 - **Usage meter** per Claude account, and "send when the limit resets".
 - **Remote machines:** run chats on another computer from the same window. Start a project, clone a repo, or move a chat there with its whole conversation, and update it from Settings.
@@ -147,12 +148,12 @@ The app only talks to localhost, your paired machines, GitHub (for updates) and 
 
 ## Login and terms
 
-There's no Threadgarden account; it uses whatever Claude Code uses, except that the desktop ignores an `ANTHROPIC_API_KEY` left in your environment (set a key in Settings instead), so chats don't quietly bill the API. Anthropic's Agent SDK docs say third-party products shouldn't offer claude.ai login unless approved, and point to API keys instead. Whether your setup is fine is between you and Anthropic's terms, so give them a read (this isn't legal advice). For an API-key-only build, set `THREADGARDEN_API_KEY_ONLY=1`. More in [docs/architecture.md](docs/architecture.md#authentication).
+There's no Threadgarden account; it uses whatever Claude Code uses, except that the desktop ignores an `ANTHROPIC_API_KEY` left in your environment (set a key in Settings instead), so chats don't quietly bill the API. `/login` in a chat runs Claude Code's own sign-in on that chat's machine, the same as running `claude` in a terminal there; Threadgarden never sees or stores the login. Anthropic's Agent SDK docs say third-party products shouldn't offer claude.ai login unless approved, and point to API keys instead. Whether your setup is fine is between you and Anthropic's terms, so give them a read (this isn't legal advice). For an API-key-only build, which offers no Claude sign-in, set `THREADGARDEN_API_KEY_ONLY=1`. More in [docs/architecture.md](docs/architecture.md#authentication).
 
 ## Known limitations
 
 - Tabs only: no split view or embedded terminal.
-- Terminal-only commands like `/config` or `/login` don't work.
+- Terminal-only commands like `/config` don't work.
 - Chats running in another terminal are shown, not driven.
 - After Claude Code compacts a chat, history starts at the compaction.
 - Clicking a notification brings the window forward, but doesn't open the chat.

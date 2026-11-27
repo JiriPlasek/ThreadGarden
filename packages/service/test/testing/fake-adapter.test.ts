@@ -126,6 +126,26 @@ describe('FakeAdapter sessions', () => {
     expect(session.mcpCalls).toHaveLength(8);
   });
 
+  it('records login calls and rejects with loginError', async () => {
+    const session = new FakeAdapter().start(options());
+    session.loginStart = { manualUrl: 'http://m', automaticUrl: 'http://a' };
+    session.loginWaitResult = { done: true };
+    session.accountAfterLogin = { email: 'a@b.c' };
+    await expect(session.login!.start()).resolves.toEqual(session.loginStart);
+    await session.login!.submit('c', 's');
+    await expect(session.accountInfo()).resolves.toEqual({});
+    await expect(session.login!.wait()).resolves.toEqual({ done: true });
+    await expect(session.accountInfo()).resolves.toEqual({ email: 'a@b.c' });
+    expect(session.loginCalls).toEqual([
+      { op: 'start' },
+      { op: 'submit', arg: { code: 'c', state: 's' } },
+      { op: 'wait' },
+    ]);
+    session.loginError = new Error('boom');
+    await expect(session.login!.start()).rejects.toThrow('boom');
+    expect(session.loginCalls).toHaveLength(4);
+  });
+
   it('requestPermission invokes the canUseTool given at start', async () => {
     const canUseTool = vi.fn<CanUseTool>(async () => ({ behavior: 'deny', message: 'no' }));
     const session = new FakeAdapter().start(options(canUseTool));

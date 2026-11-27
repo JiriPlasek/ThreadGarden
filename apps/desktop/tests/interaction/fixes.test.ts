@@ -44,13 +44,13 @@ describe('terminal-only slash commands (ruling R25)', () => {
     expect(composer().textContent).toBe('/con');
 
     await userEvent.clear(composer());
-    await userEvent.type(composer(), '/login{Escape}{Enter}');
+    await userEvent.type(composer(), '/doctor{Escape}{Enter}');
     await new Promise((r) => setTimeout(r, 20));
     expect(server.calls('chat.send')).toHaveLength(0);
     expect(screen.getByRole('status', { name: /command notice/i }).textContent).toMatch(
-      /\/login is unavailable in Threadgarden/i,
+      /\/doctor is unavailable in Threadgarden/i,
     );
-    expect(composer().textContent).toBe('/login');
+    expect(composer().textContent).toBe('/doctor');
   });
 
   it('/model opens the model picker instead of sending', async () => {

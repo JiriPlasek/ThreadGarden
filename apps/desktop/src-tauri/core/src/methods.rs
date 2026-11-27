@@ -434,6 +434,12 @@ pub const REFUSED: &[&str] = &[
     "shell.resize",
     "shell.stop",
     "shell.get",
+    // Signing in to Claude happens on a machine's own Claude Code: the phone's own core has none.
+    "claude.account",
+    "claude.signIn",
+    "claude.signInCode",
+    "claude.signInCancel",
+    "claude.signOut",
     // The desktop's plug setup dialog (finding and naming a plug): the phone takes typed details.
     "power.probe",
     "power.pairPlug",

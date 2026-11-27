@@ -13,10 +13,10 @@ const peer = { machineId: 'm', name: 'wobbletron' };
 const entry = { type: 'user', uuid: 'u', anything: { nested: [1, 2] } };
 
 describe('protocol 9', () => {
-  it('is protocol 13 and accepts remotes at 12 to 14', () => {
-    expect(PROTOCOL_VERSION).toBe(13);
-    expect(REMOTE_PROTOCOL_RANGE).toEqual({ min: 12, max: 14 });
-    expect([11, 12, 13, 14, 15].map(acceptsRemoteProtocol)).toEqual([false, true, true, true, false]);
+  it('is protocol 14 and accepts remotes at 13 to 15', () => {
+    expect(PROTOCOL_VERSION).toBe(14);
+    expect(REMOTE_PROTOCOL_RANGE).toEqual({ min: 13, max: 15 });
+    expect([12, 13, 14, 15, 16].map(acceptsRemoteProtocol)).toEqual([false, true, true, true, false]);
   });
 
   it('has the move capability and error codes', () => {

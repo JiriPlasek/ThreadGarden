@@ -85,7 +85,7 @@ import { PtyRun, type ShellRunEnd } from '../shell/run.js';
 import type { ShellLine } from '../shell/shell-line.js';
 import { ECHOES, bashEntry } from '../shell/terminal-text.js';
 import { EventLog, type ChatEvent, type ChatEventDraft } from './event-log.js';
-import { Normalizer, deriveStatus } from './normalize.js';
+import { Normalizer, deriveStatus, type PushResult } from './normalize.js';
 import { ScheduleTracker } from './schedule.js';
 import { TaskTracker, runningCount, taskEnded, taskRunning } from './tasks.js';
 
@@ -207,10 +207,28 @@ export type LiveSessionDeps = {
   // ── MCP servers ──
   /** A process started (`system/init`): its MCP servers may have changed. A throw is reported. */
   onMcpChange?: (sessionId: string) => void;
+  // ── signing in to Claude ──
+  /** This machine's own name (default "this machine"), for the "isn't signed in on ‹machine›" line. */
+  machineName?: () => string;
+  /**
+   * A turn failed because Claude Code is not signed in (`false`), or the first
+   * turn that worked after such a failure ran (`true`). A throw is reported.
+   */
+  onLogin?: (sessionId: string, ok: boolean) => void;
   // ── ! commands ──
   /** The PTY and the shell line `!` commands run with; without it a chat has none. */
   shell?: { pty: PtyFactory; line: (command: string) => ShellLine };
 };
+
+/**
+ * A turn Claude Code refused because it is not signed in, or its sign-in is dead
+ * (spike L3): an assistant message with `error: 'authentication_failed'`. The
+ * English text differs ("Not logged in", "Failed to authenticate: …") and is not read.
+ */
+export function isLoginFailure(m: SDKMessage): boolean {
+  const x: unknown = m;
+  return isRec(x) && x.type === 'assistant' && x.error === 'authentication_failed';
+}
 
 export const defaultOnError = (err: unknown, context: string): void => {
   console.error(`Threadgarden: ${context}:`, err);
@@ -300,6 +318,15 @@ export const authLabel = (info: AccountInfo): NonNullable<ChatHeaderInfo['auth']
   return { kind: 'other', label: 'Unknown' };
 };
 
+/**
+ * Whether a process on this account runs on a claude.ai sign-in: no API key
+ * (the header's auth is not `apiKey`) and Anthropic's own API, not a cloud provider.
+ */
+const onClaudeSignIn = (info: AccountInfo): boolean => {
+  const provider = str(info.apiProvider);
+  return authLabel(info).kind !== 'apiKey' && (!provider || provider === 'firstParty');
+};
+
 const isRec = (v: unknown): v is Rec => typeof v === 'object' && v !== null && !Array.isArray(v);
 const str = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined);
 const num = (v: unknown): number | undefined =>
@@ -359,6 +386,12 @@ export class LiveSession {
   private firstText: string | undefined;
   private contextUsed: number | undefined;
   private startupFailureValue: StartupFailure | undefined;
+  private failedOnLoginValue = false;
+  /**
+   * False once the process's account says it uses an API key or a cloud provider:
+   * its `authentication_failed` (a bad key, say) is not a missing sign-in.
+   */
+  private onSignIn = true;
   /** The process whose account info was requested (once per process, after init). */
   private authAskedOf: AgentSession | null = null;
   private ended: Promise<void> = Promise.resolve();
@@ -479,6 +512,11 @@ export class LiveSession {
   /** The event log, so a resumed instance continues its sequence numbers. */
   get eventLog(): EventLog {
     return this.log;
+  }
+
+  /** True from a turn that failed on login until the next turn that works. */
+  get failedOnLogin(): boolean {
+    return this.failedOnLoginValue;
   }
 
   /** Set when the last process refused to start (a result with `startup_failure_reason`). */
@@ -978,14 +1016,20 @@ export class LiveSession {
       this.updateHeader(m);
       this.requestAuth(m);
       this.noteSuggestion(m);
-      const r = this.normalizer.push(m);
+      // A login failure shows the sign-in line instead of the raw error text; on
+      // an API key or a provider it is Claude Code's own error.
+      const r =
+        this.onSignIn && isLoginFailure(m) ? this.noteLoginFailure() : this.normalizer.push(m);
       this.syncLastReply();
       if (r.items.length > 0) this.pushItems(r.items, r.replace);
       if (this.noteStartupFailure(m)) {
         this.setStatus('failed');
       } else {
         this.setStatus(this.nextStatus(m));
-        if ((m as { type?: unknown }).type === 'result') this.resultArrived();
+        if ((m as { type?: unknown }).type === 'result') {
+          this.noteLoginRecovered(m);
+          this.resultArrived();
+        }
       }
     } catch (err) {
       // Defensive: one odd message must not take the chat down.
@@ -1037,6 +1081,31 @@ export class LiveSession {
     if (!isRec(x)) return;
     if (x.type === 'rate_limit_event') this.deps.onRateLimit?.(this.id, x.rate_limit_info);
     else if (x.type === 'assistant' && x.error === 'rate_limit') this.deps.onLimitError?.(this.id);
+  }
+
+  /** The sign-in line for a login failure; the raw error is not shown. */
+  private noteLoginFailure(): PushResult {
+    const first = !this.failedOnLoginValue;
+    this.failedOnLoginValue = true;
+    if (first) this.guard('onLogin', () => this.deps.onLogin?.(this.id, false));
+    let machine = 'this machine';
+    this.guard('machineName', () => {
+      machine = this.deps.machineName?.() ?? machine;
+    });
+    const text = `Claude Code isn't signed in on ${machine}, or its sign-in expired.`;
+    return {
+      items: [{ kind: 'system', id: `local:${randomUUID()}`, level: 'error', text, signIn: true }],
+      replace: false,
+    };
+  }
+
+  /** A turn that worked after a login failure: signed in again. */
+  private noteLoginRecovered(m: SDKMessage): void {
+    if (!this.failedOnLoginValue) return;
+    const x: unknown = m;
+    if (!isRec(x) || x.is_error === true || str(x.subtype)?.startsWith('error')) return;
+    this.failedOnLoginValue = false;
+    this.guard('onLogin', () => this.deps.onLogin?.(this.id, true));
   }
 
   /** Maps a startup-failure result to an explained error line; true when `m` was one. */
@@ -1176,6 +1245,7 @@ export class LiveSession {
     asked.then(
       (info) => {
         if (this.session !== session) return;
+        this.onSignIn = onClaudeSignIn(info);
         this.setAuth(authLabel(info));
         try {
           this.deps.onAccount?.(info, this.id);

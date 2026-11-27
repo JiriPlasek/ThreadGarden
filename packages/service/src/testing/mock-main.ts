@@ -134,9 +134,12 @@ import { tmpdir } from 'node:os';
 import { join, posix } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
+  CLAUDE_LOGIN_CAPABILITY,
+  CLAUDE_LOGIN_ERRORS,
   UPDATE_ERRORS,
   UpdateFailureSchema,
   VERSION_PATTERN,
+  type ClaudeAccount,
   type GitState,
   type McpScope,
   type McpServerConfig,
@@ -743,6 +746,10 @@ class ScriptedSession extends FakeSession {
     this.seen = undefined;
     // Threadgarden's first note in a moved chat gets the plain reply: it says "stop and ask".
     const lower = text.startsWith(THREADGARDEN_NOTE) ? '' : text.toLowerCase();
+    if (this.id === LOGIN_FAILING_CHAT && this.adapter.login.expired) {
+      await this.loginFailedTurn(started);
+      return;
+    }
     if (lower.includes('limit')) this.adapter.reachLimit();
     if (this.adapter.limited()) {
       await this.refusedTurn(started);
@@ -782,6 +789,41 @@ class ScriptedSession extends FakeSession {
         }),
       );
     }
+  }
+
+  /** A turn Claude Code refuses because its sign-in expired; the real login-failure path takes it from here. */
+  private async loginFailedTurn(started: number): Promise<void> {
+    await sleep(DELTA_MS * 3);
+    const message = {
+      id: `msg_${randomUUID()}`,
+      role: 'assistant',
+      content: [{ type: 'text', text: 'Not logged in · Please run /login' }],
+    };
+    this.out(
+      msg({
+        type: 'assistant',
+        uuid: randomUUID(),
+        session_id: this.id,
+        parent_tool_use_id: null,
+        error: 'authentication_failed',
+        message,
+      }),
+    );
+    this.out(
+      msg({
+        type: 'result',
+        subtype: 'success',
+        uuid: randomUUID(),
+        session_id: this.id,
+        is_error: true,
+        duration_ms: Date.now() - started,
+        total_cost_usd: 0,
+        usage: {},
+        modelUsage: {},
+        num_turns: 1,
+        result: message.content[0]!.text,
+      }),
+    );
   }
 
   /** A turn the usage limit refuses, as the CLI reports one. */
@@ -1139,6 +1181,85 @@ class ScriptedSession extends FakeSession {
   }
 }
 
+/**
+ * The chat whose next turn fails on login while the remote mock's sign-in is expired:
+ * one no other end-to-end spec chats on (several chat on the remote's `session-19`, and
+ * a turn here would leave them a fresh transcript and a reply to trip over).
+ */
+const LOGIN_FAILING_CHAT = 'session-2';
+/** The fake sign-in link, and the one code the fake sign-in accepts. */
+const MOCK_SIGN_IN_URL = 'https://claude.ai/oauth/authorize?mock=1';
+const MOCK_SIGN_IN_CODE = 'MOCK-CODE';
+const MOCK_START_ACCOUNT = { kind: 'login', email: 'mock@example.com', plan: 'max' } as const;
+const MOCK_OTHER_ACCOUNT = { kind: 'login', email: 'other@example.com', plan: 'pro' } as const;
+
+/**
+ * The mock's fake Claude sign-in (protocol 14), in memory: `MOCK-CODE` signs in as
+ * `other@example.com`; the remote mock starts expired (its `session-2` fails on login).
+ * `mock.claudeLoginReset` puts it back to its start.
+ */
+class MockClaudeLogin {
+  private state: ClaudeAccount;
+  private svc: ServiceHandle | undefined;
+
+  constructor(private readonly startExpired: boolean) {
+    this.state = this.start();
+  }
+
+  private start(): ClaudeAccount {
+    return { account: { ...MOCK_START_ACCOUNT }, expired: this.startExpired, signingIn: false };
+  }
+
+  attach(svc: ServiceHandle): void {
+    this.svc = svc;
+  }
+
+  get expired(): boolean {
+    return this.state.expired;
+  }
+
+  get(): ClaudeAccount {
+    return { ...this.state };
+  }
+
+  signIn(): { url: string } {
+    this.set({ signingIn: true });
+    return { url: MOCK_SIGN_IN_URL };
+  }
+
+  /** The signed-in account; a wrong code ends the sign-in (as the real one does) and throws. */
+  signInCode(code: string): { account: ClaudeAccount['account'] } {
+    if (code.trim() !== MOCK_SIGN_IN_CODE) {
+      this.set({ signingIn: false });
+      throw new Error('Invalid code');
+    }
+    this.set({ account: { ...MOCK_OTHER_ACCOUNT }, expired: false, signingIn: false });
+    return { account: this.state.account };
+  }
+
+  cancel(): void {
+    this.set({ signingIn: false });
+  }
+
+  signOut(): void {
+    this.set({ account: null, expired: false, signingIn: false });
+  }
+
+  reset(): void {
+    this.state = this.start();
+    this.tell();
+  }
+
+  private set(patch: Partial<ClaudeAccount>): void {
+    this.state = { ...this.state, ...patch };
+    this.tell();
+  }
+
+  private tell(): void {
+    this.svc?.broadcast({ event: 'claude.account', data: this.get() });
+  }
+}
+
 /** FakeAdapter whose sessions follow the script and leave a history behind. */
 class ScriptedAdapter extends FakeAdapter {
   /** The mock account's 5-hour window (v1.3 B): used fraction and reset time. */
@@ -1159,7 +1280,11 @@ class ScriptedAdapter extends FakeAdapter {
     readonly remote = false,
   ) {
     super();
+    this.login = new MockClaudeLogin(remote);
   }
+
+  /** The fake Claude sign-in; the remote mock's starts expired. */
+  readonly login: MockClaudeLogin;
 
   /** `mock.mcpReset`: every chat's fake servers back to the start. */
   resetMcp(): void {
@@ -1399,6 +1524,8 @@ export const MOCK_FORGET_MOVES = 'mock.forgetMoves';
 
 /** MCP servers in the chat (protocol 12): every chat's servers and the approvals back to the start. */
 export const MOCK_MCP_RESET = 'mock.mcpReset';
+/** Local callers only: the fake Claude sign-in back to its start (the remote mock: expired). */
+export const MOCK_CLAUDE_LOGIN_RESET = 'mock.claudeLoginReset';
 
 /** A machine that's away (see the file comment): the remote mock goes off, and comes back. */
 export const MOCK_GO_AWAY = 'mock.goAway';
@@ -1611,11 +1738,54 @@ const addMockMethods = (
   updater: MockUpdater,
   presence: MockPresence | undefined,
   resetMcp: () => void,
+  login: MockClaudeLogin,
 ): void => {
   const dispatch = svc.router.dispatch.bind(svc.router);
   svc.router.dispatch = async (req, ctx) => {
+    // The fake sign-in answers every caller, as the real one will.
+    switch (req.method) {
+      case 'claude.account':
+        return { id: req.id, result: login.get() };
+      case 'claude.signIn':
+        return { id: req.id, result: login.signIn() };
+      case 'claude.signOut':
+        login.signOut();
+        return { id: req.id, result: {} };
+      case 'claude.signInCancel':
+        login.cancel();
+        return { id: req.id, result: {} };
+      case 'claude.signInCode': {
+        const code = (req.params as { code?: unknown } | undefined)?.code;
+        if (typeof code !== 'string' || code === '') return invalid(req.id, 'Missing code');
+        try {
+          return { id: req.id, result: login.signInCode(code) };
+        } catch (err) {
+          return {
+            id: req.id,
+            error: {
+              code: CLAUDE_LOGIN_ERRORS.failed,
+              message: err instanceof Error ? err.message : String(err),
+            },
+          };
+        }
+      }
+      case 'hello': {
+        const res = await dispatch(req, ctx);
+        const machine =
+          'result' in res
+            ? (res.result as { machine?: { capabilities?: string[] } }).machine
+            : undefined;
+        if (machine?.capabilities && !machine.capabilities.includes(CLAUDE_LOGIN_CAPABILITY)) {
+          machine.capabilities = [...machine.capabilities, CLAUDE_LOGIN_CAPABILITY];
+        }
+        return res;
+      }
+    }
     if (ctx.origin !== 'local') return dispatch(req, ctx);
     switch (req.method) {
+      case MOCK_CLAUDE_LOGIN_RESET:
+        login.reset();
+        return { id: req.id, result: {} };
       case MOCK_GO_AWAY:
         if (!presence) return dispatch(req, ctx);
         presence.goAway();
@@ -1890,10 +2060,17 @@ export const startMockService = async (o: MockOptions = {}): Promise<MockService
     updater.attach(svc);
     presence?.attach(svc);
     adapter.port = svc.port;
-    addMockMethods(svc, updater, presence, () => {
-      mcpFiles.reset();
-      adapter.resetMcp();
-    });
+    adapter.login.attach(svc);
+    addMockMethods(
+      svc,
+      updater,
+      presence,
+      () => {
+        mcpFiles.reset();
+        adapter.resetMcp();
+      },
+      adapter.login,
+    );
     const ownDispatch = phone ? answerLikeThePhone(svc) : undefined;
     if (remote) {
       // The real service retries a listener that failed to start; a test mock must say so at once.

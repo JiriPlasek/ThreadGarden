@@ -14,6 +14,7 @@ import { AnalyticsState } from '../../src/lib/state/analytics.svelte';
 import { AwayState } from '../../src/lib/state/away.svelte';
 import { BucketsState } from '../../src/lib/state/buckets.svelte';
 import { ChatsState } from '../../src/lib/state/chats.svelte';
+import { ClaudeAccounts } from '../../src/lib/state/claude-accounts.svelte';
 import { ConnectionState } from '../../src/lib/state/connection.svelte';
 import { InteractionState } from '../../src/lib/state/interaction.svelte';
 import { LifecycleState } from '../../src/lib/state/lifecycle.svelte';
@@ -192,6 +193,7 @@ const wire = (
     updates: new UpdatesState(),
     machines,
     machineUpdates: new MachineUpdatesState(),
+    claudeAccounts: new ClaudeAccounts(machines),
     power: new PowerState(),
     away: new AwayState(),
     scopes,

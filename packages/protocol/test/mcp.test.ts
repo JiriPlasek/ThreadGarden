@@ -13,9 +13,9 @@ import {
 } from '../src/index.js';
 
 describe('protocol 12', () => {
-  it('PROTOCOL_VERSION is 13 and the remote range is 12..14', () => {
-    expect(PROTOCOL_VERSION).toBe(13);
-    expect(REMOTE_PROTOCOL_RANGE).toEqual({ min: 12, max: 14 });
+  it('PROTOCOL_VERSION is 14 and the remote range is 13..15', () => {
+    expect(PROTOCOL_VERSION).toBe(14);
+    expect(REMOTE_PROTOCOL_RANGE).toEqual({ min: 13, max: 15 });
   });
 
   it("MCP_CAPABILITY is 'mcp' and not in CAPABILITIES", () => {

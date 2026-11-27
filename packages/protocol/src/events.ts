@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { ClaudeAccountSchema } from './claude-login.js';
 import { McpStateSchema } from './mcp.js';
 import { ShellRunSchema } from './shell.js';
 import { AwayItemSchema, AwayStateSchema } from './away.js';
@@ -125,6 +126,8 @@ export const events = {
     offset: z.number().int().nonnegative(),
     data: z.string(),
   }),
+  /** Protocol 14: the Claude account or its sign-in changed (as `claude.account`). */
+  'claude.account': ClaudeAccountSchema,
 } as const;
 
 export type EventName = keyof typeof events;

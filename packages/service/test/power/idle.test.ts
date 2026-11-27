@@ -391,6 +391,7 @@ describe('power on a service', () => {
       'away',
       'mcp',
       'mcp-config',
+      'claude-login',
       'power',
     ]);
     await h.close();
@@ -403,6 +404,7 @@ describe('power on a service', () => {
       'away',
       'mcp',
       'mcp-config',
+      'claude-login',
     ]);
     await d.close();
   });
@@ -422,6 +424,7 @@ describe('power on a service', () => {
         'away',
         'mcp',
         'mcp-config',
+        'claude-login',
       ]);
       const power = await svc.router.dispatch(
         { id: 2, method: 'power.status', params: {} },

@@ -62,12 +62,20 @@ const childEnv = (env: Record<string, string | undefined>): NodeJS.ProcessEnv =>
   return out;
 };
 
-export const cliMcpConfig = (deps: {
+export type ClaudeCliDeps = {
   claude: () => Promise<{ path: string } | { detail: string }>;
   env: () => Record<string, string | undefined>;
   timeoutMs?: number;
-}): McpConfig => {
-  const run = async (cwd: string, args: string[], stdin?: string): Promise<void> => {
+};
+
+/**
+ * Runs the `claude` CLI with `args` (resolved path, env without CLAUDECODE and
+ * CLAUDE_CODE_*, no shell, a timeout): resolves on exit 0, else rejects with
+ * the CLI's own words.
+ */
+export const claudeCliRunner =
+  (deps: ClaudeCliDeps) =>
+  async (cwd: string, args: string[], stdin?: string): Promise<void> => {
     const found = await deps.claude();
     if (!('path' in found)) throw new ServiceError('CLAUDE_MISSING', found.detail);
     const { cmd, argv } = claudeInvocation(found.path, args);
@@ -98,7 +106,9 @@ export const cliMcpConfig = (deps: {
       child.on('close', (code) =>
         finish(() => {
           if (code === 0) return resolve();
-          reject(new Error(clean(err) || clean(out) || `claude mcp exited with ${code}`));
+          reject(
+            new Error(clean(err) || clean(out) || `claude ${args[0] ?? ''} exited with ${code}`),
+          );
         }),
       );
       // A child that exits before reading stdin must not crash the service.
@@ -106,6 +116,9 @@ export const cliMcpConfig = (deps: {
       child.stdin.end(stdin);
     });
   };
+
+export const cliMcpConfig = (deps: ClaudeCliDeps): McpConfig => {
+  const run = claudeCliRunner(deps);
   return {
     add: ({ cwd, scope, name, config }) =>
       run(cwd, addJsonArgs(name, scope), JSON.stringify(config)),
