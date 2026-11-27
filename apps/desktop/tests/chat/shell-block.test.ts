@@ -128,7 +128,7 @@ const mount = (over: Partial<Parameters<typeof render<typeof ShellBlock>>[1]> = 
   const props = {
     run: run(),
     output,
-    machineName: 'kumbal',
+    machineName: 'wobble',
     home: '/home/me',
     onInput: vi.fn(),
     onResize: vi.fn(),
@@ -167,7 +167,7 @@ beforeEach(() => {
 describe('ShellBlock', () => {
   it('shows the title with ~ for home', () => {
     mount();
-    expect(screen.getByText('! npm test · kumbal · ~/app')).toBeTruthy();
+    expect(screen.getByText('! npm test · wobble · ~/app')).toBeTruthy();
   });
 
   it('Stop calls onStop and then shows Stopping…', async () => {
@@ -226,7 +226,7 @@ describe('ShellBlock', () => {
       const block = {
         run: run(),
         output,
-        machineName: 'kumbal',
+        machineName: 'wobble',
         home: '/home/me',
         onInput: vi.fn(),
         onResize: vi.fn(),
@@ -262,7 +262,7 @@ describe('ShellBlock', () => {
       const block = {
         run: run(),
         output,
-        machineName: 'kumbal',
+        machineName: 'wobble',
         home: '/home/me',
         autofocus: false,
         onInput: vi.fn(),

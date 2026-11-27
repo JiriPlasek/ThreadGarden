@@ -56,7 +56,7 @@
 2. **A secret in an error.** An SDK error that quotes the code or the link goes back to the caller only, and never into the log. Task 5 test `never logs the code or the link`.
 3. **The dialog closes mid-way** (Cancel, Escape, the phone's Back). The sign-in is cancelled and its short-lived process closed. A later **Sign in** starts fresh. Task 5 test `cancel closes the helper process`; Task 7 test `Back on the phone cancels the sign-in`.
 4. **A switch during a running turn.** Nothing is interrupted. That chat restarts after its turn, and other chats restart as they become free. Task 5 test `a sign-in during a turn restarts that chat only after it`.
-5. **The phone's sign-in goes through the relay to kumbal.** The link opens in the phone's browser and the code is typed on the phone. The machine's name in the dialog is the paired machine's. Task 8 phone e2e `signs in a paired machine from the phone`.
+5. **The phone's sign-in goes through the relay to wobble.** The link opens in the phone's browser and the code is typed on the phone. The machine's name in the dialog is the paired machine's. Task 8 phone e2e `signs in a paired machine from the phone`.
 
 ---
 
@@ -313,7 +313,7 @@ Every check runs with `CLAUDE_CONFIG_DIR` set to a fresh temp folder, so Claude 
 - [ ] **Step 2: Run** the full e2e locally on shifted ports. Expect PASS.
 - [ ] **Step 3: Docs.** One README feature line and an architecture section (the methods, the helper process, the restart rule).
 - [ ] **Step 4: Hardware check with the owner:**
-  - sign in kumbal from Settings;
+  - sign in wobble from Settings;
   - switch This PC's account and back;
   - check that a chat failing on login shows the button;
   - try `/login` on the phone.

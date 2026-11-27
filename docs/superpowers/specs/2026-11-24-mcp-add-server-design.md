@@ -14,7 +14,7 @@ the owner for now: anyone can publish there, so it needs a trust story first. It
 - **Add server** in the MCP servers dialog: name, type (URL over http, or a command over stdio with arguments),
   optional headers (http) or environment variables (stdio), and who uses it.
 - **Remove** a server from its **⋯** menu, after a confirmation.
-- Both act on the chat's machine (This PC, kumbal, a Windows worker), from the desktop and the phone.
+- Both act on the chat's machine (This PC, wobble, a Windows worker), from the desktop and the phone.
 
 ## Non-goals
 

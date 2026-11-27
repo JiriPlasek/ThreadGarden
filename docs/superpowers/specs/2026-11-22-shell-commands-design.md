@@ -5,7 +5,7 @@ Designed with the owner on 2026-11-22; the builder check's questions are answere
 
 ## Why
 
-The owner runs chats on a headless Ubuntu PC (kumbal) and keeps having to SSH in for things a chat can't do.
+The owner runs chats on a headless Ubuntu PC (wobble) and keeps having to SSH in for things a chat can't do.
 Claude Code's CLI has `!` (bash mode): you run a command yourself and its output lands in the conversation, so you
 can say "fix that". Claude itself suggests `!`, but Threadgarden has no such mode. Commands on a headless box often
 ask questions (`sudo`'s password, apt's `[Y/n]`, `gh auth login`, git credentials), so a plain run isn't enough:
@@ -59,8 +59,8 @@ the owner wants a real terminal.
 
 ```
  You  ! sudo apt upgrade
- ┌ ! sudo apt upgrade · kumbal · ~/projects/etoro_analysis ─────── [Stop] ┐
- │ [sudo] password for kumbal-machine:                                    │
+ ┌ ! sudo apt upgrade · wobble · ~/projects/etoro_analysis ─────── [Stop] ┐
+ │ [sudo] password for wobbletron:                                    │
  │ Reading package lists... Done                                          │
  │ Do you want to continue? [Y/n] █                                       │
  └─────────────────────────────────────────────────────────────────────────┘
@@ -94,7 +94,7 @@ the owner wants a real terminal.
   The live terminal rendering is only for the run itself.
 - **Lifecycle.** A running `!` command keeps the session from idle reclaim, like a running background task. *Builder's
   call, settled in review:* unlike background shells (which deliberately don't keep a machine awake), a running `!`
-  counts as busy for the machine's idle shutdown, so kumbal never powers off while `sudo apt upgrade` waits at
+  counts as busy for the machine's idle shutdown, so wobble never powers off while `sudo apt upgrade` waits at
   `[Y/n]`; it shows in **Running** and counts there, so a forgotten one is easy to see and stop. End
   session, Stop all work, Move to… and shutting the service down end it (Move to… and End session warn that a
   command is running). A command still running when the service stops is not appended.

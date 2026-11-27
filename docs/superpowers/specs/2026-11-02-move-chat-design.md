@@ -4,9 +4,9 @@ Date: 2026-11-02. Owner: Jiří Plášek. The last item of remote machines plan 
 
 ## 1. Why
 
-The owner works with chats on two machines: This PC (Windows) and the Ubuntu PC (`kumbal-machine`, headless). They have not needed a move yet, but expect it to be useful to switch the machine a chat runs on now and then. For example, a long task is handed over to the Ubuntu PC so This PC can be turned off, or a chat is brought back to This PC to carry on there.
+The owner works with chats on two machines: This PC (Windows) and the Ubuntu PC (`wobbletron`, headless). They have not needed a move yet, but expect it to be useful to switch the machine a chat runs on now and then. For example, a long task is handed over to the Ubuntu PC so This PC can be turned off, or a chat is brought back to This PC to carry on there.
 
-**Success:** from a chat, the owner picks **Move to… → kumbal-machine**. The chat carries on there with its whole conversation, so Claude remembers everything. Nothing left on the old machine is lost without the owner knowing.
+**Success:** from a chat, the owner picks **Move to… → wobbletron**. The chat carries on there with its whole conversation, so Claude remembers everything. Nothing left on the old machine is lost without the owner knowing.
 
 ## 2. Decisions (owner)
 
@@ -37,7 +37,7 @@ The owner works with chats on two machines: This PC (Windows) and the Ubuntu PC 
    - **Cancel.**
 
    A folder that isn't a git repo has nothing to check here, but its files can't come along either. The dialog says so: "This folder isn't a git repo; its files stay on This PC". It then offers Move anyway and Cancel. *(designer's call)*
-3. **The target machine is on.** If it is Off, the move turns it on (as sending a message does today) and carries on when it connects. The dialog shows "Starting kumbal-machine…". If it is Unreachable or doesn't come up, the move fails with nothing changed.
+3. **The target machine is on.** If it is Off, the move turns it on (as sending a message does today) and carries on when it connects. The dialog shows "Starting wobbletron…". If it is Unreachable or doesn't come up, the move fails with nothing changed.
 
 **Reading the git state is read-only** (`git status`, `git rev-list`, and so on, on the source machine through its service). This is the only git Threadgarden runs for a move.
 
@@ -49,7 +49,7 @@ The owner works with chats on two machines: This PC (Windows) and the Ubuntu PC 
 - If the target has several folders of that repo (a clone and its worktrees), it prefers the one that has the chat's branch checked out. Next comes a clean one with no live chat. *(designer's call)*
 - **The chat's branch** is the branch checked out in the chat's folder on the source at the time of the move. Check 2 inspects that branch. *(designer's call)*
 - The dialog shows the chosen folder and lets the owner change it with the same Browse… as New chat.
-- **A folder in use** *(designer's call)*: the matching folder may be on another branch while other chats use it (on This PC it is the owner's own working copy). In that case the dialog says so, for example "kumbal-machine's threadgarden is on `main`; 1 chat is running there". It suggests picking another folder or moving anyway. The first note then tells Claude to stop and ask instead of switching branches under another chat. Claude never makes a worktree on its own for a move: the chat's folder is fixed when it resumes, so a worktree made later would leave the chat pointing at the wrong place. If the owner wants a worktree, they make it first (in any chat) and pick it with Browse….
+- **A folder in use** *(designer's call)*: the matching folder may be on another branch while other chats use it (on This PC it is the owner's own working copy). In that case the dialog says so, for example "wobbletron's threadgarden is on `main`; 1 chat is running there". It suggests picking another folder or moving anyway. The first note then tells Claude to stop and ask instead of switching branches under another chat. Claude never makes a worktree on its own for a move: the chat's folder is fixed when it resumes, so a worktree made later would leave the chat pointing at the wrong place. If the owner wants a worktree, they make it first (in any chat) and pick it with Browse….
 
 **Claude's first note.** As soon as the chat has resumed on the target, Threadgarden sends one message in it, shown in the chat as sent by Threadgarden, and Claude acts on it straight away. *(designer's call: the repo is then ready by the time the owner looks again; it uses one turn of the target machine's limits.)* It says:
 - the chat was moved from ‹source› to ‹target›, and the folder it now works in;
@@ -93,7 +93,7 @@ The exact wording is the builder's, but it must carry these facts.
 
 ## 6. The old copy and failures
 
-- **The old copy stays on the source machine,** read-only and hidden from its lists. Threadgarden keeps its own record that it moved and where to; Claude Code's files are untouched. Opening it, for example from an old link or search, shows it read-only with "Moved to kumbal-machine" and a link to the chat there. *(designer's call, from the old design §13)*
+- **The old copy stays on the source machine,** read-only and hidden from its lists. Threadgarden keeps its own record that it moved and where to; Claude Code's files are untouched. Opening it, for example from an old link or search, shows it read-only with "Moved to wobbletron" and a link to the chat there. *(designer's call, from the old design §13)*
 - **Moving back to a machine that holds the old copy** *(designer's call)*: the return gives **one chat**. The returning chat takes over the old copy, which stops being "moved", and the machine that had it until now keeps its own read-only copy instead. If the spike shows Claude Code can't resume cleanly next to the old transcript, the return makes a separate chat. The old copy then stays hidden, and the owner is told before confirming.
 - **A move that fails** at any step before the target has resumed leaves the chat where it was, unchanged and usable, with the reason shown in the dialog. Once the target has resumed, the move counts as done: if the first note then fails to send, the chat on the target says so and the owner can retry it. *(designer's call)*
 - **No automatic moves.** A move happens only when the owner asks for it.

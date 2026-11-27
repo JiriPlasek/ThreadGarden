@@ -3,7 +3,7 @@ import { isThreadgardenNote, moveNote } from '../../src/lib/move/note';
 
 const base = {
   from: 'This PC',
-  to: 'kumbal-machine',
+  to: 'wobbletron',
   folder: '/home/k/code/threadgarden',
   origin: 'git@github.com:acme/threadgarden.git',
   branch: 'fix/usage',
@@ -14,7 +14,7 @@ const base = {
 describe('moveNote', () => {
   it('first line names both machines', () => {
     expect(moveNote(base).split('\n')[0]).toBe(
-      '[Threadgarden] This chat moved from This PC to kumbal-machine.',
+      '[Threadgarden] This chat moved from This PC to wobbletron.',
     );
   });
 

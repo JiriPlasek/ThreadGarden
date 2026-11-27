@@ -84,7 +84,7 @@ const setup = (
   sync.init({
     local: local.api,
     scopes: { observe: (cb: typeof attach) => ((attach = cb), () => {}) } as never,
-    machines: { get: () => ({ info: { name: 'kumbal' } }) } as never,
+    machines: { get: () => ({ info: { name: 'wobble' } }) } as never,
     debounceMs: 2000,
   });
   attach({ machineId: 'm1', api: remote.api } as MachineScope);
@@ -100,7 +100,7 @@ describe('CopySync', () => {
     remote.open();
     await vi.advanceTimersByTimeAsync(0);
     const lists = local.calls.find((c) => c.method === 'copies.saveLists')!;
-    expect(lists.params).toMatchObject({ machineId: 'm1', info: { name: 'kumbal' } });
+    expect(lists.params).toMatchObject({ machineId: 'm1', info: { name: 'wobble' } });
     expect(lists.params.chats).toHaveLength(2);
     expect(remote.calls.find((c) => c.method === 'sessions.list')!.params.place).toEqual({
       kind: 'project',

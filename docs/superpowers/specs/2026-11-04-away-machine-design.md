@@ -6,11 +6,11 @@ This is part A of plan 3. Part B, a Windows machine as a worker, has its own des
 
 ## Why
 
-The owner's Ubuntu PC (`kumbal-machine`) is switched off most of the time by idle shutdown and the smart plug. Today an Off machine's group in the places column shows only its heading, its state and **Turn on**, plus "Its chats appear once it's on". Nothing can be typed for it.
+The owner's Ubuntu PC (`wobbletron`) is switched off most of the time by idle shutdown and the smart plug. Today an Off machine's group in the places column shows only its heading, its state and **Turn on**, plus "Its chats appear once it's on". Nothing can be typed for it.
 
 The owner wants this: "I would like to open some chat and type there - that would trigger the PC to turn on and then the message would send, and for this I need to see the chats while its off." Typically from the laptop away from home, through the owner's own VPN.
 
-**Success:** with kumbal off, the owner opens one of its chats, sees the last few messages, types a reply and presses send. Kumbal turns on, and a couple of minutes later the message has gone out and Claude is working. Nothing typed is ever lost.
+**Success:** with wobble off, the owner opens one of its chats, sees the last few messages, types a reply and presses send. Wobble turns on, and a couple of minutes later the message has gone out and Claude is working. Nothing typed is ever lost.
 
 ## Goals (owner)
 

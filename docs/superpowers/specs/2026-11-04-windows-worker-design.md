@@ -6,11 +6,11 @@ Status: agreed with the owner in brainstorming. The approach comes from a spike 
 
 ## Why
 
-Today only an Ubuntu PC can be a worker (the "headless" machine that runs chats). The owner wants a Windows PC to work the same way: "same as kumbal, the power control optional, and connect to the PC, so threadgarden could use its claude". It fits their wish that the setup is easy to replicate for others: many people have a spare Windows PC rather than a Linux one.
+Today only an Ubuntu PC can be a worker (the "headless" machine that runs chats). The owner wants a Windows PC to work the same way: "same as wobble, the power control optional, and connect to the PC, so threadgarden could use its claude". It fits their wish that the setup is easy to replicate for others: many people have a spare Windows PC rather than a Linux one.
 
 **Success:**
 - Someone with a spare Windows 11 PC runs one setup script and the usual pairing.
-- From then on the PC behaves like kumbal: its chats in its own group, power control if they have a plug, idle shutdown, and updates from Settings.
+- From then on the PC behaves like wobble: its chats in its own group, power control if they have a plug, idle shutdown, and updates from Settings.
 
 ## The approach (decided, from the spike)
 

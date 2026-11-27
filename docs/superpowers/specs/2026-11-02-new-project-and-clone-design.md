@@ -4,7 +4,7 @@ Date: 2026-11-02. Owner: Jiří Plášek. Part of remote machines plan 2 (the fi
 
 ## 1. Why
 
-During the 0.4.0 hardware test the owner wanted to start a brand-new project on the Ubuntu PC (`kumbal-machine`). New chat on a remote machine offers only that machine's projects and its Home folder. **Choose folder…** is the native picker, which works on This PC only. So there was no way to browse, type a path or create anything. The owner had to start a chat in Home and ask Claude to make the project folder, then start another chat there.
+During the 0.4.0 hardware test the owner wanted to start a brand-new project on the Ubuntu PC (`wobbletron`). New chat on a remote machine offers only that machine's projects and its Home folder. **Choose folder…** is the native picker, which works on This PC only. So there was no way to browse, type a path or create anything. The owner had to start a chat in Home and ask Claude to make the project folder, then start another chat there.
 
 Success: from the desktop, without SSH, the owner can do any of these on any machine and land in a chat:
 - start in any existing folder;
@@ -69,7 +69,7 @@ Success: from the desktop, without SSH, the owner can do any of these on any mac
 - **Branch:** the repo's default branch. Other branches are Claude's job in the chat (or plan 2's worktrees later).
 - **Already there:** if `<Create in>/<repo name>` already exists and is a clone of the same repo, the tab offers **Start there** instead of cloning again. If it exists and is anything else, the tab stops and says so.
 - **Progress:** cloning can take a while. The dialog shows "Cloning owner/name…" and Cancel. On success the chat starts in the clone with the first message. A failed or cancelled clone removes the partial folder, which Threadgarden made. If the clone succeeds but the chat doesn't start, the clone is kept and **Start there** is offered, as in §4.
-- **`gh` not ready on that machine:** this covers `gh` missing, not signed in, or unable to read its keyring (seen during the Ubuntu setup). The tab shows no list. It says what is wrong and what to run there, for example "Run `gh auth login` on kumbal-machine (over SSH)". New project's GitHub tick is disabled with the same reason; the rest of New project still works.
+- **`gh` not ready on that machine:** this covers `gh` missing, not signed in, or unable to read its keyring (seen during the Ubuntu setup). The tab shows no list. It says what is wrong and what to run there, for example "Run `gh auth login` on wobbletron (over SSH)". New project's GitHub tick is disabled with the same reason; the rest of New project still works.
 - **This PC:** the same tab, using This PC's `gh`. Without `gh` it says so, as above.
 
 ## 6. The folder browser
@@ -105,7 +105,7 @@ All of them run on the chosen machine's service: locally for This PC, through th
 **GitHub** goes through the machine's own `gh`, so it acts as whatever account is signed in there. Threadgarden stores no GitHub token. How the repo list is fetched (`gh api` with pagination, `gh repo list`) is *(builder's call)*. It must include organization and collaborator repos.
 
 **Protocol:** this is version 7.
-- A desktop on 7 still talks to a machine on 6 (the remote range is 5 to 7). There, **Browse…** on another machine and the **New project** and **Clone** tabs are disabled with "Update kumbal-machine to use this". Updating stays a manual step until plan 3.
+- A desktop on 7 still talks to a machine on 6 (the remote range is 5 to 7). There, **Browse…** on another machine and the **New project** and **Clone** tabs are disabled with "Update wobbletron to use this". Updating stays a manual step until plan 3.
 - The capability that marks support is *(builder's call)*: the base design names it `remoteProjects`.
 
 **Writes on This PC:** New project and Clone create new folders and run `git init` or `git clone` in them. Those are new writes on This PC, alongside the ones the base design allows. architecture.md's note on git access is updated to say so. Threadgarden still never changes a folder it did not create.

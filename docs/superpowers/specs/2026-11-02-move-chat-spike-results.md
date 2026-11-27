@@ -12,8 +12,8 @@ Date: 2026-11-03. This covers the spike from `docs/superpowers/plans/2026-11-02-
 
 | Check (spec §5) | Result | Evidence |
 |---|---|---|
-| A Windows chat resumes on Linux, in a different folder | **pass** | On kumbal-machine, in `~/threadgarden/projects/tg-move-spike`, Claude named ORNN-FORGE and the subagent's files. A second resume quoted the first resumed turn. |
-| Which `projectKey` the store must answer | **recorded** | The SDK asks for the *target* folder's key (`-home-kumbal-machine-threadgarden-projects-tg-move-spike`; on This PC `C--tmp-tg-move-spike-b`). A store keyed by session ID and subpath answers any key. |
+| A Windows chat resumes on Linux, in a different folder | **pass** | On wobbletron, in `~/threadgarden/projects/tg-move-spike`, Claude named ORNN-FORGE and the subagent's files. A second resume quoted the first resumed turn. |
+| Which `projectKey` the store must answer | **recorded** | The SDK asks for the *target* folder's key (`-home-wobbletron-threadgarden-projects-tg-move-spike`; on This PC `C--tmp-tg-move-spike-b`). A store keyed by session ID and subpath answers any key. |
 | Subagent transcripts come along | **pass** | `listSubkeys` was called on every resume, and `subagents/agent-a77f16a12e91bd53c` (26 entries) was loaded each time. |
 | The session keeps its ID | **pass** | `2230e968-…` throughout, on both machines and on the way back. No re-keying is needed. |
 | The resumed session appears in `listSessions` on the target | **only through the store** (see the finding) | Local `listSessions(target folder)` = 0. With `sessionStore`: 1 session, with the new turns (13 messages on Linux). |

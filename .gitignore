@@ -16,4 +16,5 @@ test-results/
 playwright-report/
 
 # Local Claude Code state (agent worktrees, settings)
-.claude/
+.claude/*
+!.claude/skills/

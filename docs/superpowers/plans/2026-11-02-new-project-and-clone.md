@@ -580,7 +580,7 @@ export const projectsApi = (api: Api) => ({
 ## After the build
 
 **Manual acceptance with the owner**, after the release and a manual Ubuntu update to protocol 7:
-1. On kumbal-machine, Browse… to a folder outside the projects folder, and start a chat there.
+1. On wobbletron, Browse… to a folder outside the projects folder, and start a chat there.
 2. New project `tg-smoke` with the GitHub tick: a private repo appears on GitHub. The chat starts, and Claude's first push lands there.
 3. Clone a private repo from the account. Cancel one clone halfway; nothing is left behind.
 4. On This PC, with Active selected, a notification arrives from another tab's chat. Coming back and clicking that tab keeps Active.

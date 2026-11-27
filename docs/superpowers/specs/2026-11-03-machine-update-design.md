@@ -4,7 +4,7 @@ Date: 2026-11-03. Status: agreed with the owner in brainstorming; awaiting their
 
 ## Why
 
-The Ubuntu PC (`kumbal-machine`) runs the headless Threadgarden service. Today every release means the owner opens SSH and pastes:
+The Ubuntu PC (`wobbletron`) runs the headless Threadgarden service. Today every release means the owner opens SSH and pastes:
 1. download `threadgarden-headless-linux-x64.tar.gz` and its `.sha256` from the latest GitHub release;
 2. `sha256sum -c`;
 3. `tar -xzf`;
@@ -12,7 +12,7 @@ The Ubuntu PC (`kumbal-machine`) runs the headless Threadgarden service. Today e
 
 The desktop updates itself, but the machine doesn't. The owner also can't see which version a machine runs anywhere in the app ("now I cant see it anywhere").
 
-**Success:** after a release, the owner opens Settings, sees that kumbal is behind, clicks one button, and a minute later it runs the new version. No SSH.
+**Success:** after a release, the owner opens Settings, sees that wobble is behind, clicks one button, and a minute later it runs the new version. No SSH.
 
 ## Goals (owner)
 
@@ -51,12 +51,12 @@ The desktop updates itself, but the machine doesn't. The owner also can't see wh
   - Restarting…;
   - then `Threadgarden 0.7.1 ✓`.
   The owner can close Settings meanwhile; the update goes on.
-- **On failure,** the card shows a one-line reason (e.g. "The download's checksum didn't match", "0.7.1 didn't start; kumbal-machine is back on 0.7.0"), and the button stays to try again.
+- **On failure,** the card shows a one-line reason (e.g. "The download's checksum didn't match", "0.7.1 didn't start; wobbletron is back on 0.7.0"), and the button stays to try again.
 
 **The prompt (goal 4).** It uses the machine's existing busy notion, the one idle shutdown and Move to… use. That covers chats mid-turn, waiting on a permission or question, background agents, and a Threadgarden chat running in a terminal. If any are busy:
 
-> **Update kumbal-machine now?**
-> Claude is working in 2 chats on kumbal-machine. Updating restarts Threadgarden there and stops them.
+> **Update wobbletron now?**
+> Claude is working in 2 chats on wobbletron. Updating restarts Threadgarden there and stops them.
 > [Update anyway] [Cancel]
 
 The wording is the builder's within that meaning. With nothing busy, there's no prompt.
@@ -79,7 +79,7 @@ The wording is the builder's within that meaning. With nothing busy, there's no 
 4. **Run the new `install.sh` outside the service's own process group,** so the `systemctl --user restart threadgarden` at its end doesn't kill the update midway. Use e.g. `systemd-run --user` with a transient unit. Run it with `SUDO="sudo -n"`: lingering and the polkit rule are normally already in place, and if not, the script must fail that step rather than wait for a password (anti-goal).
 5. **Watch that the new version comes up.** The transient unit (or a small step after install) waits for the service to answer with the new version. If it isn't running within a timeout (builder's choice, around 60–90 s):
    - point `current` back at the previous version, which `install.sh` already keeps, and restart;
-   - the desktop then reports "0.7.1 didn't start; kumbal-machine is back on 0.7.0".
+   - the desktop then reports "0.7.1 didn't start; wobbletron is back on 0.7.0".
    - The detail goes to the service log.
 6. Delete the download folder afterwards. `install.sh` already prunes old releases.
 
@@ -95,7 +95,7 @@ The wording is the builder's within that meaning. With nothing busy, there's no 
 - The method is available only to paired devices, as every remote method is.
 
 **A sudo step skipped during an update (my call):** the update still counts as done, with a quiet note on the card. This happens when lingering or the polkit power-off rule is missing, or the rule's text changed in the new release, so `sudo -n` can't write it.
-- Example: "Updated. Idle shutdown can't power kumbal-machine off until you run `~/.local/share/threadgarden-headless/current/install.sh` once over SSH."
+- Example: "Updated. Idle shutdown can't power wobbletron off until you run `~/.local/share/threadgarden-headless/current/install.sh` once over SSH."
 - `install.sh` must report a skipped step in a form the service can read (an exit code or a marker file, the builder's choice), so it isn't lost in output nobody reads.
 - It's not a rollback: the new version runs fine.
 

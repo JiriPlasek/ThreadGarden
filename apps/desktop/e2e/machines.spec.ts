@@ -135,7 +135,7 @@ test('pair with a second machine, chat on it, see its Needs you item, remove it'
 });
 
 test('a machine with a long name does not make Settings scroll sideways', async ({ page }) => {
-  const name = 'kumbal-machine-Z270-Gaming-K3';
+  const name = 'wobbletron-Q42-Turbo-X9';
   await page.setViewportSize({ width: 600, height: 900 });
   await openApp(page);
   await page

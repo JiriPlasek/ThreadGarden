@@ -258,7 +258,7 @@
 
 ## After the build (owner)
 
-1. Release, then update kumbal **from Settings**. That's also the first real update test.
-2. With kumbal off: open one of its chats, reply, and watch it turn on and the reply go out.
+1. Release, then update wobble **from Settings**. That's also the first real update test.
+2. With wobble off: open one of its chats, reply, and watch it turn on and the reply go out.
 3. Start a new chat on it while it's off.
 4. Close the laptop lid during a start, open it again, and check the message still goes out.

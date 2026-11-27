@@ -17,7 +17,7 @@ import { MOVE_LOCK_MS, MoveLocks, busyOf } from '../../src/server/handlers/move.
 import { FakeAdapter } from '../../src/testing/fake-adapter.js';
 import { eventually } from '../e2e/ws-client.js';
 
-const TO = { machineId: 'm-ubuntu', name: 'kumbal-machine' };
+const TO = { machineId: 'm-ubuntu', name: 'wobbletron' };
 
 let dir: string;
 let svc: ServiceHandle | undefined;
