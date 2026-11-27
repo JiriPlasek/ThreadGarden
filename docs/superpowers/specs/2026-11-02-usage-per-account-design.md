@@ -4,7 +4,7 @@ Date: 2026-11-02. Owner: Jiří Plášek. It refines the remote machines design 
 
 ## 1. Why
 
-The owner now signs in to a different Claude account on the Ubuntu PC (`kumbal-machine`) than on This PC.
+The owner now signs in to a different Claude account on the Ubuntu PC (`wobbletron`) than on This PC.
 
 **Today:**
 - The usage meter in the bottom bar and the Usage dialog show **This PC's usage only**. The desktop's usage store is attached to the local service alone, so the Ubuntu PC's usage never appears.
@@ -16,12 +16,12 @@ The owner now signs in to a different Claude account on the Ubuntu PC (`kumbal-m
 
 - **Two accounts detected means usage is split, one entry per account.**
 - **Labels:** each entry is labelled with **both** the machines signed in to that account and the account's email.
-- **Bottom bar layout A, chosen from mockups:** always one chip per account, side by side, for example `This PC · 42% · 13:22` and `kumbal-machine · 91% · 11:05`. The chip names its machines. Hovering shows the email, and clicking opens the Usage dialog.
+- **Bottom bar layout A, chosen from mockups:** always one chip per account, side by side, for example `This PC · 42% · 13:22` and `wobbletron · 91% · 11:05`. The chip names its machines. Hovering shows the email, and clicking opens the Usage dialog.
 - **The chips show the breakdown of limits:** the 5-hour limit, the weekly limit, and per-model weekly limits such as Fable. The owner's example was "5h limit, weekly limit, fable limit".
   - Format: `This PC · 5h 42% · Week 18% · Fable 30%` *(designer's call)*.
   - Each chip lists only the windows that account reports. Each figure has its own warning colour, from that window's status and utilisation.
   - Reset times move to the hover, one line per window, for example "5-hour limit: 42%, resets 13:22". The email is on the first line of the hover.
-  - When the bar is too narrow for all chips at full length, each chip drops the breakdown and keeps its machine names and its 5-hour figure (`kumbal-machine · 5h 91%`), so two chips can still be told apart; the bar never wraps. *(designer's call)*
+  - When the bar is too narrow for all chips at full length, each chip drops the breakdown and keeps its machine names and its 5-hour figure (`wobbletron · 5h 91%`), so two chips can still be told apart; the bar never wraps. *(designer's call)*
 - **Chats on another machine use that machine's limits** (owner, "YES"); see §5.
 - **Usage dialog:** one section per account. Its heading is the email and plan, with the machines on that account. Each section has its own windows (5-hour, weekly, per-model, extra usage), as the dialog shows today.
 - The owner approved the full playback in §3 to §5.

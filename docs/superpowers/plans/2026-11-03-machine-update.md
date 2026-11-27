@@ -421,9 +421,9 @@ The dot is a small `span` inside the `IconButton` children, with `aria-hidden`. 
 
 ## After the build (owner, by hand)
 
-1. Release the version that carries this (minor: **0.8.0**). Update kumbal **over SSH this one last time**.
+1. Release the version that carries this (minor: **0.8.0**). Update wobble **over SSH this one last time**.
 2. On the next release, test from Settings:
    - the dot, `Update to …`;
    - with a chat mid-turn: the prompt;
-   - with kumbal Off: it starts, then updates;
-   - the result: `Threadgarden … ✓` and kumbal works.
+   - with wobble Off: it starts, then updates;
+   - the result: `Threadgarden … ✓` and wobble works.

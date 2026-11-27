@@ -5,7 +5,7 @@ whose output Claude sees), designed separately afterwards.
 
 ## Why
 
-A chat on kumbal stopped because the project's own MCP server (`etoro`, from the project's `.mcp.json`) never
+A chat on wobble stopped because the project's own MCP server (`etoro`, from the project's `.mcp.json`) never
 loaded. Claude's advice was to SSH in, start `claude` by hand in the folder, accept the trust prompt, approve the
 server and run `/mcp` → Reconnect (or clear its sign-in and reconnect). All of that lives only in the terminal CLI's
 screens; a Threadgarden chat runs through the Agent SDK, which never shows them, and Threadgarden shows nothing about
@@ -20,7 +20,7 @@ everything in those four steps, done from the chat, on any machine.
   **Forget sign-in**.
 - Notice a project server waiting for approval without looking for it: a banner in the chat. Claude can't see an
   unapproved server, so it can't tell you about it; everything else it can.
-- Works the same for a chat on this PC, on a paired machine (kumbal) and on the phone.
+- Works the same for a chat on this PC, on a paired machine (wobble) and on the phone.
 
 ## Non-goals
 
@@ -60,7 +60,7 @@ everything in those four steps, done from the chat, on any machine.
 **Where it shows.**
 
 ```
-┌ etoro_analysis · kumbal ─────────────────────────────┐
+┌ etoro_analysis · wobble ─────────────────────────────┐
 │ ⚠ MCP server "etoro" (from this project) isn't       │
 │   approved yet.             [Approve]  [MCP servers…] │
 │ ...chat...                                            │
@@ -141,5 +141,5 @@ the approval and reconnecting brings it up in the same process. So, by the contr
 - Claude Code saves **Turn off** per project in its own `~/.claude.json`, so the label is "Turn off in this project".
 - No SDK message reports MCP status changes, so the dialog polls while it's open.
 
-What failed in the original kumbal chat is therefore not certain: a rejected server, a server that failed to start,
+What failed in the original wobble chat is therefore not certain: a rejected server, a server that failed to start,
 or one needing sign-in. The dialog covers all three.

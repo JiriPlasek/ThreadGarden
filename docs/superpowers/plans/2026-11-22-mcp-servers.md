@@ -386,6 +386,6 @@ Behaviour:
 - [ ] **Step 3: Write the docs.**
 - [ ] **Step 4: Run** the full protocol, service and desktop suites. Expect PASS.
 - [ ] **Step 5: Commit** `docs: MCP servers in the chat`.
-- [ ] **Step 6: Hardware check with the owner.** On kumbal: open `etoro_analysis` and check the banner, Approve, the server connecting, Sign in with the pasted address (the real `mcpSubmitOAuthCallbackUrl` path), Forget sign-in and Turn off. Do the same from the phone. Record the result in the spike results doc's last section.
+- [ ] **Step 6: Hardware check with the owner.** On wobble: open `etoro_analysis` and check the banner, Approve, the server connecting, Sign in with the pasted address (the real `mcpSubmitOAuthCallbackUrl` path), Forget sign-in and Turn off. Do the same from the phone. Record the result in the spike results doc's last section.
 - [ ] **Step 7:** Update the vault (`Threadgarden/Remote machines.md` or the hub's "Now", whichever lists this feature): mark MCP done and move piece 2 (`!` commands) to next. Commit and push the vault.
 - [ ] **Step 8:** Open the PR into `main`.

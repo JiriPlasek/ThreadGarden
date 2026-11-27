@@ -60,9 +60,9 @@ Throwaway branch `spike/phone`, never merged. Results go in `docs/superpowers/sp
 
 - [ ] **Step 1:** Prove the build: a workflow on ubuntu with the Android SDK and NDK builds the app with desktop-only crates excluded and uploads the APK.
 - [ ] **Step 2:** Prove loopback: the webview opens `ws://127.0.0.1:<port>` to the Rust side under the real CSP.
-- [ ] **Step 3:** Prove TLS: from Rust, `wss://` to kumbal with the certificate compared against a pin (rustls; no OpenSSL). Use kumbal's existing listener with a pinned certificate set in the spike's build input, and connect only as far as the protocol's refusal or a real device token the owner pairs in the spike. Nothing secret is committed.
+- [ ] **Step 3:** Prove TLS: from Rust, `wss://` to wobble with the certificate compared against a pin (rustls; no OpenSSL). Use wobble's existing listener with a pinned certificate set in the spike's build input, and connect only as far as the protocol's refusal or a real device token the owner pairs in the spike. Nothing secret is committed.
 - [ ] **Step 4:** Prove lifetime: the foreground service starts the Rust core through a JNI entry, independently of the Tauri activity. The core must survive swiping the app away, and reopening must find the same one. Decide where the runtime lives (a process-wide `OnceLock`).
-- [ ] **Step 5:** Prove an alert: with the app closed and the screen off, a chat on kumbal needing the owner posts a notification.
+- [ ] **Step 5:** Prove an alert: with the app closed and the screen off, a chat on wobble needing the owner posts a notification.
 - [ ] **Step 6: The owner's checks on their phone** (install from the artifact):
   1. the notification and the connection last an hour with the screen off;
   2. an alert arrives within seconds, on Wi-Fi and on mobile data over Tailscale;
@@ -321,7 +321,7 @@ Throwaway branch `spike/phone`, never merged. Results go in `docs/superpowers/sp
 
 1. Create the signing key and add the four secrets (`docs/releasing.md`).
 2. Release, install the APK, and turn on **Let my phone connect** on the main PC.
-3. Pair kumbal and the main PC. Chat on Wi-Fi and on mobile data.
+3. Pair wobble and the main PC. Chat on Wi-Fi and on mobile data.
 4. With the app closed and the screen off for an hour, have Claude ask a question.
-5. Reboot the phone. Turn kumbal on from mobile data.
-6. Watch a day's battery use, and check kumbal still shuts down when idle.
+5. Reboot the phone. Turn wobble on from mobile data.
+6. Watch a day's battery use, and check wobble still shuts down when idle.

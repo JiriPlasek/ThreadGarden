@@ -193,7 +193,7 @@ storage from the start, and its `machines.*` and scope shape match the desktop's
   frames are unchanged, a dead link is noticed, and alerts fire once.
 - **The main PC's listener:** service tests that it's closed by default, opens and
   closes with the setting, and keeps local-only methods refused.
-- **On the owner's phone:** install, pair kumbal and the main PC, and chat over
+- **On the owner's phone:** install, pair wobble and the main PC, and chat over
   Wi-Fi and mobile data; a question from Claude alerts with the app closed and the
   screen off for an hour; a reboot; Turn on from mobile data; battery use over a day.
 
@@ -205,7 +205,7 @@ storage from the start, and its `machines.*` and scope shape match the desktop's
 
 A connected device doesn't count towards a machine's idle check (`power/idle.ts`
 sees only sessions and external chats), so the phone's links need no special care
-there. No test is skipped on that account: the owner's day-long run checks kumbal
+there. No test is skipped on that account: the owner's day-long run checks wobble
 still shuts down when idle.
 
 ## Risks

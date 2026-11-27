@@ -28,7 +28,7 @@ import { init, result } from '../chat/live-helpers.js';
 import { TestClient, eventually } from '../e2e/ws-client.js';
 
 const LAPTOP: MovePeer = { machineId: 'm-laptop', name: 'laptop' };
-const UBUNTU: MovePeer = { machineId: 'm-ubuntu', name: 'kumbal-machine' };
+const UBUNTU: MovePeer = { machineId: 'm-ubuntu', name: 'wobbletron' };
 
 type Reply = { result?: unknown; error?: { code: string; message: string } };
 type Machine = {

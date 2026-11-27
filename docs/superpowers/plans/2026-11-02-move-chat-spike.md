@@ -77,7 +77,7 @@ git commit -m "spike: move a chat through the SDK session store"
 **Interfaces:**
 - Consumes: `dist/spike.mjs` and `C:\tmp\tg-move-spike.json` from Task 1.
 
-- [ ] **Step 1: Copy both files to the Ubuntu PC** (owner, from This PC's terminal): `scp spikes/move-session/dist/spike.mjs C:\tmp\tg-move-spike.json kumbal@192.168.1.101:~/`. The user name is whatever the owner uses for SSH.
+- [ ] **Step 1: Copy both files to the Ubuntu PC** (owner, from This PC's terminal): `scp spikes/move-session/dist/spike.mjs C:\tmp\tg-move-spike.json <user>@<ubuntu-pc>:~/`. Use the owner's SSH user and the PC's address.
 - [ ] **Step 2: Make the target folder** (owner, over SSH): `mkdir -p ~/threadgarden/projects/tg-move-spike && git -C ~/threadgarden/projects/tg-move-spike init`.
 - [ ] **Step 3: Resume there** (owner), with the headless service's own Node:
 
@@ -89,7 +89,7 @@ git commit -m "spike: move a chat through the SDK session store"
 
 ### Task 3: It renders in Threadgarden (owner)
 
-- [ ] **Step 1:** In Threadgarden on This PC, open kumbal-machine's `tg-move-spike` project. Expected: the resumed chat is listed. It's under the resumed id from Task 2, if that changed.
+- [ ] **Step 1:** In Threadgarden on This PC, open wobbletron's `tg-move-spike` project. Expected: the resumed chat is listed. It's under the resumed id from Task 2, if that changed.
 - [ ] **Step 2:** Open it. Expected:
   - the whole conversation shows: the seed prompt, the Read tool row, the subagent row with its result, and the spike check with its reply;
   - nothing shows as broken or empty.

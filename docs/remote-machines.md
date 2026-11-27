@@ -408,7 +408,7 @@ header, in the chat row's right-click menu, or with Ctrl+K. The dialog shows:
    move fails and nothing changes.
 
 If the chosen folder there is on another branch while other chats run in it,
-the dialog says so, for example "kumbal-machine's threadgarden is on main; 1
+the dialog says so, for example "wobbletron's threadgarden is on main; 1
 chat is running there". Pick another folder with Browse…, or move anyway:
 Claude is then told to stop and ask you instead of switching branches. If you
 want a worktree for the chat, make it first (in any chat) and pick it with
@@ -424,7 +424,7 @@ worktrees for a move: that is Claude's work in the chat.
 - the chat's tab now shows the chat on the other machine, and the chat is
   listed under that machine, in its project;
 - **Claude's first note:** Threadgarden sends one message in the chat there,
-  starting `[Threadgarden] This chat moved from This PC to kumbal-machine.`,
+  starting `[Threadgarden] This chat moved from This PC to wobbletron.`,
   shown with a small **Sent by Threadgarden** label. It tells Claude the
   folder, the repo and the branch, to clone the repo into the folder if it is
   empty (else fetch) and check out the branch, and never to stash, reset, overwrite or switch a

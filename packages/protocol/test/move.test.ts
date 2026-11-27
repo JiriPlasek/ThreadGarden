@@ -9,7 +9,7 @@ import {
   methods,
 } from '../src/index.js';
 
-const peer = { machineId: 'm', name: 'kumbal-machine' };
+const peer = { machineId: 'm', name: 'wobbletron' };
 const entry = { type: 'user', uuid: 'u', anything: { nested: [1, 2] } };
 
 describe('protocol 9', () => {

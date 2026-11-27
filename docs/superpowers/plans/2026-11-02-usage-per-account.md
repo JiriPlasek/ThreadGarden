@@ -255,7 +255,7 @@ export const usageAccounts: UsageAccounts;      // the app's instance (machine n
 ## After the build
 
 Release (0.6.0), update the Ubuntu PC by hand, then check with the owner:
-1. Two chips appear, This PC's and kumbal-machine's, each with its breakdown and the right email in the hover.
+1. Two chips appear, This PC's and wobbletron's, each with its breakdown and the right email in the hover.
 2. The Usage dialog shows two sections.
 3. Narrow the window: the chips shrink to 5h.
-4. Turn kumbal-machine off: its chip shows "as of …".
+4. Turn wobbletron off: its chip shows "as of …".
