@@ -1974,6 +1974,43 @@ describe('LiveSession login failure', () => {
     expect(s.failedOnLogin).toBe(true);
   });
 
+  it('a bad API key shows Claude Code’s own error, not the sign-in line', async () => {
+    const calls: string[] = [];
+    const { adapter, events, opts, timers } = setup({ onLogin: (id, ok) => calls.push(`${id} ${ok}`) });
+    const s = LiveSession.create('/p', { text: 'hi' }, { ...opts, sessionId: 's' });
+    const fake = adapter.lastSession();
+    fake.account = { apiKeySource: 'ANTHROPIC_API_KEY' };
+    fake.emit(init('s'));
+    await settle();
+    expect(s.header.auth?.kind).toBe('apiKey');
+    fake.emit(notSignedIn('a1', 'Invalid API key · Fix external API key'));
+    await settle();
+    fake.emit(failedResult('r1', 'Invalid API key · Fix external API key'));
+    await settle();
+    timers.advance(100);
+    expect(JSON.stringify(itemsOf(events))).toContain('Invalid API key');
+    expect(itemsOf(events).some((i) => i.kind === 'system' && i.signIn)).toBe(false);
+    expect(s.failedOnLogin).toBe(false);
+    expect(calls).toEqual([]);
+  });
+
+  it('a cloud provider’s authentication failure shows its own error too', async () => {
+    const { adapter, events, opts, timers } = setup();
+    const s = LiveSession.create('/p', { text: 'hi' }, { ...opts, sessionId: 's' });
+    const fake = adapter.lastSession();
+    fake.account = { apiProvider: 'bedrock' };
+    fake.emit(init('s'));
+    await settle();
+    fake.emit(notSignedIn('a1', 'Bedrock credentials expired'));
+    await settle();
+    fake.emit(failedResult('r1', 'Bedrock credentials expired'));
+    await settle();
+    timers.advance(100);
+    expect(JSON.stringify(itemsOf(events))).toContain('Bedrock credentials expired');
+    expect(itemsOf(events).some((i) => i.kind === 'system' && i.signIn)).toBe(false);
+    expect(s.failedOnLogin).toBe(false);
+  });
+
   it('a dead login is recognised the same way', async () => {
     const { adapter, events, opts, timers } = setup();
     const s = LiveSession.create('/p', { text: 'hi' }, { ...opts, sessionId: 's' });

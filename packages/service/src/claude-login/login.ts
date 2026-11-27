@@ -3,11 +3,11 @@
  * undeclared login controls (`LoginControls`; spike results in
  * docs/superpowers/specs/2026-11-27-claude-sign-in-spike-results.md).
  *
- * - **Where it runs:** on the named chat's process when that chat is live (that
- *   process ending, or the chat restarting, ends the sign-in); otherwise, and
- *   always for a sign-in from Settings, on a short-lived helper process in the
- *   home folder that never gets a prompt. The helper is closed when the sign-in
- *   ends: on success, failure, cancel, a newer start or after `SIGN_IN_TIMEOUT_MS`.
+ * - **Where it runs:** always on a short-lived helper process in the home folder
+ *   that never gets a prompt, also for a sign-in from a chat (its id only says
+ *   which chat asked): a chat's own process may be reclaimed or restarted in the
+ *   middle of it. The helper is closed when the sign-in ends: on success,
+ *   failure, cancel, a newer start or after `SIGN_IN_TIMEOUT_MS`.
  * - **The link:** `start()` answers `{ manualUrl, automaticUrl }` (AUTH_START). Only
  *   the manual one works from another device (its page shows the code to paste);
  *   the automatic one calls back to localhost on this machine. The sign-in's
@@ -20,9 +20,11 @@
  *   ends the sign-in here too, and a new one needs a new start. A second code
  *   while one is being checked is not sent: it gets that check's answer.
  * - **After it:** the account is read from that process and handed to usage
- *   (its stored account is what Settings shows), and the live Claude chats
- *   restart between turns (`OTHERS_PICK_UP`: running processes keep the old login).
- *   A sign-in replaced or cancelled meanwhile restarts nothing.
+ *   (its stored account is what `claude.account` reports), and the live Claude
+ *   chats restart between turns (`OTHERS_PICK_UP`: running processes keep the old
+ *   login). A sign-in replaced or cancelled meanwhile restarts nothing.
+ * - **Signing out** (`/logout`) restarts every live Claude chat, whatever
+ *   `OTHERS_PICK_UP` says, so none keeps using the old login.
  *
  * Secrets: the code, the links and the state never reach a log line, a report,
  * an event or an error message. Errors are `ServiceError`s (the router never
@@ -32,7 +34,7 @@ import { readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { CLAUDE_LOGIN_ERRORS, type ClaudeAccount, type UsageAccount } from '@threadgarden/protocol';
 import { realTimers, type Timers } from '../chat/live-session.js';
-import type { AccountInfo, AgentSession, LoginControls } from '../sdk/adapter.js';
+import type { AgentSession, LoginControls } from '../sdk/adapter.js';
 import { isCodexSession } from '../sdk/providers.js';
 import { ServiceError } from '../server/router.js';
 import { accountOf } from '../usage/usage.js';
@@ -45,34 +47,22 @@ export const ACCOUNT_AFTER_TIMEOUT_MS = 10_000;
  * Whether running Claude Code processes pick up a new login by themselves
  * (spike `OTHERS_PICK_UP`; not run yet, so assumed not): when false, every live
  * Claude chat restarts after a sign-in; when true, only those that failed on login.
+ * A sign-out restarts every live Claude chat either way.
  */
 export const OTHERS_PICK_UP = false;
 
-/** A process that can run a sign-in: a named chat's, or the helper. */
-export type LoginProcess = {
-  readonly login?: LoginControls;
-  accountInfo(): Promise<AccountInfo>;
-  /** Settles when this process is gone (a chat's: `LiveSession.whenEnded`). */
-  readonly ended?: Promise<unknown>;
-};
-
-/** A live Claude chat, as far as a sign-in needs it (`LiveSession`). */
-export type LoginChat = {
-  readonly sessionId: string;
-  loginProcess(): LoginProcess | undefined;
-};
+/** What the live Claude chats restart after: a sign-in or a sign-out (`/logout`). */
+export type LoginChange = 'signIn' | 'signOut';
 
 export type ClaudeLoginDeps = {
   /** Usage's stored account (what this machine's chats last reported). */
   account: () => UsageAccount | null;
   /** Tells usage the account a sign-in ended on. */
   noteAccount: (account: UsageAccount) => void;
-  /** This machine's live Claude chats. */
-  liveClaude: () => LoginChat[];
   /** A short-lived Claude process in the home folder, with no prompt. */
   startHelper: () => Promise<AgentSession>;
-  /** `SessionHost.restartAfterSignIn`. */
-  restartAfterSignIn: () => void;
+  /** `SessionHost.restartAfterLoginChange`. */
+  restartChats: (after: LoginChange) => void;
   /** Runs Claude Code's `claude auth logout` on this machine; rejects with its words. */
   logout: () => Promise<void>;
   /** Usage forgets the stored account (and its windows) after a logout. */
@@ -91,10 +81,7 @@ export type ClaudeLoginDeps = {
 };
 
 type Flow = {
-  /** Set once the process is known (a helper starts asynchronously). */
-  process?: LoginProcess;
-  /** The named chat whose process runs it (none: the helper). */
-  chat?: LoginChat;
+  /** Set once it has started (asynchronously). */
   helper?: AgentSession;
   state?: string;
   /** Claude Code answered with the link: a code may go in. */
@@ -120,7 +107,6 @@ const ENDED = {
   replaced: 'A newer sign-in replaced this one.',
   timeout: 'The sign-in timed out. Sign in again to get a new link.',
   exited: 'Claude Code stopped before the sign-in finished. Sign in again.',
-  chatRestarted: 'The chat restarted during the sign-in. Start again.',
   done: 'The sign-in finished.',
 } as const;
 
@@ -222,6 +208,7 @@ export class ClaudeLogin {
     this.publish();
   }
 
+  /** `sessionId`: the chat that asked; it never runs the sign-in (the helper does). */
   async start(sessionId?: string): Promise<{ url: string }> {
     if (sessionId !== undefined && isCodexSession(sessionId)) {
       throw new ServiceError(
@@ -250,22 +237,10 @@ export class ClaudeLogin {
     const flow = this.newFlow();
     this.publish();
     try {
-      const named = this.chatProcess(sessionId);
-      let process: LoginProcess;
-      if (named) {
-        flow.chat = named.chat;
-        process = named.process;
-        // The chat's process going away (a restart, a reclaim, End) ends the sign-in.
-        const gone = () => this.endedByItself(flow, ENDED.chatRestarted);
-        void process.ended?.then(gone, gone);
-      } else {
-        const helper = await this.race(flow, this.deps.startHelper(), (h) => h.close());
-        flow.helper = helper;
-        this.drain(flow, helper);
-        process = helper;
-      }
-      flow.process = process;
-      const controls = process.login;
+      const helper = await this.race(flow, this.deps.startHelper(), (h) => h.close());
+      flow.helper = helper;
+      this.drain(flow, helper);
+      const controls = helper.login;
       if (!controls) throw failed("Claude Code on this machine can't sign in from here.");
       const answer = await this.race(flow, (async () => controls.start())());
       const links = isRec(answer) ? answer : {};
@@ -304,7 +279,7 @@ export class ClaudeLogin {
         'No sign-in is in progress. Sign in again to get a new link.',
       );
     }
-    const controls = flow.process?.login;
+    const controls = flow.helper?.login;
     if (!flow.ready || !controls) {
       throw new ServiceError(
         CLAUDE_LOGIN_ERRORS.notStarted,
@@ -326,7 +301,7 @@ export class ClaudeLogin {
 
   /**
    * `/logout`: ends a sign-in in progress, runs `claude auth logout` on this
-   * machine, forgets the account and restarts the live Claude chats so they
+   * machine, forgets the account and restarts every live Claude chat so they
    * drop the old login. A machine on an API key or a provider has no sign-in to end.
    */
   async signOut(): Promise<void> {
@@ -351,7 +326,7 @@ export class ClaudeLogin {
     this.expired = false;
     this.publish();
     try {
-      this.deps.restartAfterSignIn();
+      this.deps.restartChats('signOut');
     } catch (err) {
       this.report(err, 'restart after signing out');
     }
@@ -375,10 +350,6 @@ export class ClaudeLogin {
     const pastedState = hash >= 0 ? pasted.slice(hash + 1) : undefined;
     const secrets = [...flow.secrets, code.trim(), pasted, theCode, pastedState];
     try {
-      // The named chat's process changed, and its end hasn't been seen yet.
-      if (flow.chat && flow.chat.loginProcess()?.login !== controls) {
-        throw failed(ENDED.chatRestarted);
-      }
       if (theCode === '') throw failed('Paste the code claude.ai shows you.');
       if (pastedState !== undefined && flow.state !== undefined && pastedState !== flow.state) {
         throw failed(
@@ -399,14 +370,14 @@ export class ClaudeLogin {
       }
       throw this.failure(err, secrets);
     }
-    const account = await this.accountAfter(flow.process!);
+    const account = await this.accountAfter(flow.helper!);
     // Replaced or cancelled meanwhile: a newer sign-in (or none) decides what happens next.
     if (flow.over) throw failed(flow.endReason ?? ENDED.cancelled);
     this.endFlow(flow, ENDED.done);
     this.expired = false;
     this.publish();
     try {
-      this.deps.restartAfterSignIn();
+      this.deps.restartChats('signIn');
     } catch (err) {
       this.report(err, 'restart after signing in');
     }
@@ -475,20 +446,6 @@ export class ClaudeLogin {
     return Promise.race([work, flow.ended]);
   }
 
-  /**
-   * The named chat's live process. A sign-in without a chat (from Settings)
-   * always gets a helper: some chat's process could restart, be reclaimed or
-   * end in the middle of it.
-   */
-  private chatProcess(
-    sessionId: string | undefined,
-  ): { chat: LoginChat; process: LoginProcess } | undefined {
-    if (sessionId === undefined) return undefined;
-    const chat = this.deps.liveClaude().find((c) => c.sessionId === sessionId);
-    const process = chat?.loginProcess();
-    return chat && process?.login ? { chat, process } : undefined;
-  }
-
   /** Reads the helper's messages (nobody else does); its end ends the sign-in. */
   private drain(flow: Flow, helper: AgentSession): void {
     void (async () => {
@@ -506,7 +463,7 @@ export class ClaudeLogin {
    * A process that does not report the new login yet (no email: spike, before a
    * sign-in `tokenSource` is `none`), or a failed read, leaves the stored one.
    */
-  private async accountAfter(process: LoginProcess): Promise<UsageAccount | null> {
+  private async accountAfter(process: AgentSession): Promise<UsageAccount | null> {
     let timer: unknown;
     try {
       const info = await Promise.race([

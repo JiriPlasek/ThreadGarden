@@ -64,7 +64,6 @@ import type {
   AgentAdapter,
   AgentSession,
   CanUseTool,
-  LoginControls,
   McpControls,
   Effort,
   PermissionMode,
@@ -319,6 +318,15 @@ export const authLabel = (info: AccountInfo): NonNullable<ChatHeaderInfo['auth']
   return { kind: 'other', label: 'Unknown' };
 };
 
+/**
+ * Whether a process on this account runs on a claude.ai sign-in: no API key
+ * (the header's auth is not `apiKey`) and Anthropic's own API, not a cloud provider.
+ */
+const onClaudeSignIn = (info: AccountInfo): boolean => {
+  const provider = str(info.apiProvider);
+  return authLabel(info).kind !== 'apiKey' && (!provider || provider === 'firstParty');
+};
+
 const isRec = (v: unknown): v is Rec => typeof v === 'object' && v !== null && !Array.isArray(v);
 const str = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined);
 const num = (v: unknown): number | undefined =>
@@ -379,6 +387,11 @@ export class LiveSession {
   private contextUsed: number | undefined;
   private startupFailureValue: StartupFailure | undefined;
   private failedOnLoginValue = false;
+  /**
+   * False once the process's account says it uses an API key or a cloud provider:
+   * its `authentication_failed` (a bad key, say) is not a missing sign-in.
+   */
+  private onSignIn = true;
   /** The process whose account info was requested (once per process, after init). */
   private authAskedOf: AgentSession | null = null;
   private ended: Promise<void> = Promise.resolve();
@@ -501,12 +514,12 @@ export class LiveSession {
     return this.log;
   }
 
-  /** Set when the last process refused to start (a result with `startup_failure_reason`). */
   /** True from a turn that failed on login until the next turn that works. */
   get failedOnLogin(): boolean {
     return this.failedOnLoginValue;
   }
 
+  /** Set when the last process refused to start (a result with `startup_failure_reason`). */
   get startupFailure(): StartupFailure | undefined {
     return this.startupFailureValue ? { ...this.startupFailureValue } : undefined;
   }
@@ -894,21 +907,6 @@ export class LiveSession {
     return session.mcp;
   }
 
-  /**
-   * Protocol 14: the running process's sign-in controls and its account reading,
-   * for a sign-in run on this chat's process; undefined without a process or
-   * controls. `ended` settles when that process is gone (paused, restarted, ended
-   * or crashed): an instance runs one process, a restart makes a new instance.
-   */
-  loginProcess():
-    | { login: LoginControls; accountInfo(): Promise<AccountInfo>; ended: Promise<void> }
-    | undefined {
-    const session = this.session;
-    const login = session?.login;
-    if (!session || !login) return undefined;
-    return { login, accountInfo: () => session.accountInfo(), ended: this.ended };
-  }
-
   /** Adds a line of Threadgarden's own to the chat (e.g. a scheduled message that went out late). */
   note(level: 'info' | 'warning' | 'error', text: string): void {
     this.pushItems([{ kind: 'system', id: `local:${randomUUID()}`, level, text }], false);
@@ -1018,8 +1016,10 @@ export class LiveSession {
       this.updateHeader(m);
       this.requestAuth(m);
       this.noteSuggestion(m);
-      // A login failure shows the sign-in line instead of the raw error text.
-      const r = isLoginFailure(m) ? this.noteLoginFailure() : this.normalizer.push(m);
+      // A login failure shows the sign-in line instead of the raw error text; on
+      // an API key or a provider it is Claude Code's own error.
+      const r =
+        this.onSignIn && isLoginFailure(m) ? this.noteLoginFailure() : this.normalizer.push(m);
       this.syncLastReply();
       if (r.items.length > 0) this.pushItems(r.items, r.replace);
       if (this.noteStartupFailure(m)) {
@@ -1245,6 +1245,7 @@ export class LiveSession {
     asked.then(
       (info) => {
         if (this.session !== session) return;
+        this.onSignIn = onClaudeSignIn(info);
         this.setAuth(authLabel(info));
         try {
           this.deps.onAccount?.(info, this.id);

@@ -57,7 +57,10 @@ class LoginAdapter extends FakeAdapter {
   }
 }
 
-const start = async (adapter: FakeAdapter, extra: { claudeLogout?: () => Promise<void> } = {}) => {
+const start = async (
+  adapter: FakeAdapter,
+  extra: { claudeLogout?: () => Promise<void>; apiKeyOnly?: boolean } = {},
+) => {
   svc = await startService({
     dataDir: join(dir, 'data'),
     claudeConfigDir: join(dir, 'claude'),
@@ -99,6 +102,27 @@ describe('claude.*', () => {
       client: 't',
     });
     expect(hello.machine.capabilities).toContain(CLAUDE_LOGIN_CAPABILITY);
+  });
+
+  it('the API-key-only build offers no sign-in and refuses one, and a sign-out', async () => {
+    const adapter = new LoginAdapter();
+    const logouts: number[] = [];
+    const c = await start(adapter, {
+      apiKeyOnly: true,
+      claudeLogout: async () => void logouts.push(1),
+    });
+    const hello = await c.call<{ machine: { capabilities: string[] } }>('hello', {
+      protocolVersion: PROTOCOL_VERSION,
+      client: 't',
+    });
+    expect(hello.machine.capabilities).not.toContain(CLAUDE_LOGIN_CAPABILITY);
+    for (const method of ['claude.signIn', 'claude.signOut']) {
+      const err = await c.raw(method, {});
+      expect(err.error?.code).toBe(CLAUDE_LOGIN_ERRORS.unsupported);
+      expect(err.error?.message).toContain('API key');
+    }
+    expect(adapter.started).toHaveLength(0);
+    expect(logouts).toEqual([]);
   });
 
   it('claude.account says what the chats last reported', async () => {
@@ -156,30 +180,27 @@ describe('claude.*', () => {
     expect((await c.call<ClaudeAccount>('claude.account', {})).signingIn).toBe(true);
   });
 
-  it("claude.signIn with a chat's id runs on that chat's process", async () => {
+  it('a sign-in from a chat runs on a helper and survives that chat restarting', async () => {
     const adapter = new LoginAdapter();
     const c = await start(adapter);
     const { sessionId, fake } = await liveChat(c, adapter);
     expect(await c.call('claude.signIn', { sessionId })).toEqual({ url: LINK });
-    expect(fake.loginCalls).toEqual([{ op: 'start' }]);
-    expect(adapter.started).toHaveLength(1);
-  });
-
-  it("a named chat's restart ends the sign-in on its process", async () => {
-    const adapter = new LoginAdapter();
-    const c = await start(adapter);
-    const { sessionId, fake } = await liveChat(c, adapter);
-    await c.call('claude.signIn', { sessionId });
+    const helper = adapter.lastSession();
+    expect(helper).not.toBe(fake);
+    expect(helper.options.cwd).toBe(homedir());
+    expect(helper.loginCalls).toEqual([{ op: 'start' }]);
+    expect(fake.loginCalls).toEqual([]);
+    // The chat restarts (a pending restart, an idle reclaim): the sign-in goes on.
     expect(svc!.host!.restartWhenIdle(sessionId)).toBe(true);
     expect(fake.closed).toBe(true);
-    await eventually(async () =>
-      expect((await c.call<ClaudeAccount>('claude.account', {})).signingIn).toBe(false),
-    );
-    await expect(c.call('claude.signInCode', { code: CODE })).rejects.toMatchObject({
-      code: CLAUDE_LOGIN_ERRORS.failed,
-      message: 'The chat restarted during the sign-in. Start again.',
+    await settle();
+    expect((await c.call<ClaudeAccount>('claude.account', {})).signingIn).toBe(true);
+    helper.accountAfterLogin = { tokenSource: 'claude.ai', email: 'new@example.com' };
+    expect(await c.call('claude.signInCode', { code: CODE })).toEqual({
+      account: { kind: 'login', email: 'new@example.com' },
     });
-    expect(fake.loginCalls.map((x) => x.op)).toEqual(['start']);
+    expect(helper.loginCalls.map((x) => x.op)).toEqual(['start', 'wait', 'submit']);
+    expect(helper.closed).toBe(true);
   });
 
   it('claude.signInCode signs in and restarts the live chats', async () => {
@@ -247,15 +268,18 @@ describe('claude.*', () => {
     expect(accountEvents(c).map((s) => s.signingIn)).toEqual([true, false]);
   });
 
-  it('claude.signOut runs the logout, clears the account and restarts nothing else', async () => {
+  it('claude.signOut runs the logout, clears the account and restarts the live chats', async () => {
     const adapter = new LoginAdapter();
     const logouts: number[] = [];
     const c = await start(adapter, { claudeLogout: async () => void logouts.push(1) });
+    const { sessionId, fake } = await liveChat(c, adapter);
     await c.call('claude.signIn', {});
     const helper = adapter.lastSession();
     expect(await c.call('claude.signOut', {})).toEqual({});
     expect(logouts).toEqual([1]);
     expect(helper.closed).toBe(true);
+    expect(fake.closed).toBe(true);
+    expect(adapter.lastSession().options.resume).toBe(sessionId);
     expect(await c.call<ClaudeAccount>('claude.account', {})).toEqual({
       account: null,
       expired: false,

@@ -9,7 +9,7 @@ import {
   envRefusal,
   removeTranscript,
   type ClaudeLoginDeps,
-  type LoginChat,
+  type LoginChange,
 } from '../../src/claude-login/login.js';
 import type { LoginControls } from '../../src/sdk/adapter.js';
 import { FakeSession } from '../../src/testing/fake-adapter.js';
@@ -33,42 +33,31 @@ const fakeSession = (): FakeSession => {
   return s;
 };
 
-/** What `LiveSession.loginProcess` hands out for a chat run by `s`. */
-const processOf = (s: FakeSession) => ({
-  login: s.login,
-  accountInfo: () => s.accountInfo(),
-});
-
-const chat = (sessionId: string, s: FakeSession): LoginChat => ({
-  sessionId,
-  loginProcess: () => processOf(s),
-});
-
 const setup = (over: Partial<ClaudeLoginDeps> = {}) => {
   const timers = new ManualTimers();
   const helpers: FakeSession[] = [];
+  /** Helpers to hand out before fresh ones (a test's own, set up beforehand). */
+  const queued: FakeSession[] = [];
   const emitted: ClaudeAccount[] = [];
   const noted: UsageAccount[] = [];
   const reports: string[] = [];
-  let restarts = 0;
+  const restarted: LoginChange[] = [];
   const logouts: string[] = [];
   const forgot: string[] = [];
   let logoutFails: string | undefined;
   let stored: UsageAccount | null = { kind: 'login', email: 'old@example.com', plan: 'pro' };
-  const chats: LoginChat[] = [];
   const login = new ClaudeLogin({
     account: () => stored,
     noteAccount: (a) => {
       noted.push(a);
       stored = a;
     },
-    liveClaude: () => chats,
     startHelper: async () => {
-      const s = fakeSession();
+      const s = queued.shift() ?? fakeSession();
       helpers.push(s);
       return s;
     },
-    restartAfterSignIn: () => void restarts++,
+    restartChats: (after) => void restarted.push(after),
     forgetAccount: () => {
       forgot.push('forgot');
       stored = null;
@@ -89,11 +78,12 @@ const setup = (over: Partial<ClaudeLoginDeps> = {}) => {
     login,
     timers,
     helpers,
+    queueHelper: (s: FakeSession) => void queued.push(s),
     emitted,
     noted,
     reports,
-    chats,
-    restarts: () => restarts,
+    restarts: () => restarted.length,
+    restarted,
     logouts,
     forgot,
     failLogout: (m: string) => (logoutFails = m),
@@ -111,78 +101,17 @@ const rejection = async (p: Promise<unknown>): Promise<{ code?: string; message:
 };
 
 describe('ClaudeLogin', () => {
-  it('start runs on the named chat’s process when it is live, else on a helper', async () => {
+  it('a sign-in from a chat runs on a helper process too', async () => {
     const ctx = setup();
-    const own = fakeSession();
-    ctx.chats.push(chat('chat-1', own));
-
     expect(await ctx.login.start('chat-1')).toEqual({ url: LINK });
-    expect(own.loginCalls).toEqual([{ op: 'start' }]);
-    expect(ctx.helpers).toHaveLength(0);
-    expect(ctx.login.state().signingIn).toBe(true);
-
-    // A chat that isn't live (or isn't known) runs it on a helper process.
-    expect(await ctx.login.start('gone')).toEqual({ url: LINK });
     expect(ctx.helpers).toHaveLength(1);
     expect(ctx.helpers[0]!.loginCalls).toEqual([{ op: 'start' }]);
     expect(ctx.helpers[0]!.sent).toEqual([]); // no prompt
-    // The chat's own process is never closed by the sign-in.
-    expect(own.closed).toBe(false);
-  });
-
-  it('a Settings sign-in uses a helper even when a chat is live', async () => {
-    const ctx = setup();
-    const own = fakeSession();
-    ctx.chats.push(chat('chat-1', own));
-    expect(await ctx.login.start()).toEqual({ url: LINK });
-    expect(ctx.helpers).toHaveLength(1);
-    expect(ctx.helpers[0]!.loginCalls).toEqual([{ op: 'start' }]);
-    expect(own.loginCalls).toEqual([]);
-  });
-
-  it('the named chat restarting ends the sign-in', async () => {
-    const ctx = setup();
-    const own = fakeSession();
-    let gone: () => void = () => {};
-    const ended = new Promise<void>((r) => (gone = r));
-    ctx.chats.push({
-      sessionId: 'chat-1',
-      loginProcess: () => ({ login: own.login, accountInfo: () => own.accountInfo(), ended }),
-    });
-    await ctx.login.start('chat-1');
     expect(ctx.login.state().signingIn).toBe(true);
-    gone();
-    await settle();
-    expect(ctx.login.state().signingIn).toBe(false);
-    expect(ctx.emitted.at(-1)?.signingIn).toBe(false);
-    expect(await rejection(ctx.login.submit(CODE))).toEqual(
-      expect.objectContaining({
-        code: CLAUDE_LOGIN_ERRORS.failed,
-        message: 'The chat restarted during the sign-in. Start again.',
-      }),
-    );
-    expect(own.loginCalls.map((c) => c.op)).toEqual(['start']);
-    // Told once: after that, nothing is in progress.
-    expect(await rejection(ctx.login.submit(CODE))).toMatchObject({
-      code: CLAUDE_LOGIN_ERRORS.notStarted,
-    });
-  });
-
-  it('a code for a named chat whose process changed fails before it is sent', async () => {
-    const ctx = setup();
-    const first = fakeSession();
-    const second = fakeSession();
-    let current = first;
-    ctx.chats.push({ sessionId: 'chat-1', loginProcess: () => processOf(current) });
-    await ctx.login.start('chat-1');
-    current = second; // restarted, its old process's end not seen yet
-    expect(await rejection(ctx.login.submit(CODE))).toMatchObject({
-      code: CLAUDE_LOGIN_ERRORS.failed,
-      message: 'The chat restarted during the sign-in. Start again.',
-    });
-    expect(first.loginCalls.map((c) => c.op)).toEqual(['start']);
-    expect(second.loginCalls).toEqual([]);
-    expect(ctx.login.state().signingIn).toBe(false);
+    // Without a chat (or with one that isn't live) it is the same.
+    expect(await ctx.login.start()).toEqual({ url: LINK });
+    expect(ctx.helpers).toHaveLength(2);
+    expect(ctx.helpers[0]!.closed).toBe(true); // replaced
   });
 
   it('a code before the link answers LOGIN_NOT_STARTED and leaves the sign-in going', async () => {
@@ -193,7 +122,7 @@ describe('ClaudeLogin', () => {
       ...slow.login,
       start: () => new Promise((r) => (release = r)),
     };
-    ctx.chats.push(chat('slow', slow));
+    ctx.queueHelper(slow);
     const started = ctx.login.start('slow');
     await settle();
     expect(await rejection(ctx.login.submit(CODE))).toMatchObject({
@@ -270,10 +199,10 @@ describe('ClaudeLogin', () => {
     expect(ctx.logouts).toHaveLength(1);
   });
 
-  it('signOut restarts the live chats', async () => {
+  it('signOut restarts the live chats, as a sign-out', async () => {
     const ctx = setup();
     await ctx.login.signOut();
-    expect(ctx.restarts()).toBe(1);
+    expect(ctx.restarted).toEqual(['signOut']);
   });
 
   it('an API-key machine refuses signOut', async () => {
@@ -331,16 +260,17 @@ describe('ClaudeLogin', () => {
       ...slow.login,
       start: () => new Promise((r) => (release = r)),
     };
-    ctx.chats.push(chat('slow', slow));
+    ctx.queueHelper(slow);
     const firstStart = ctx.login.start('slow');
     await settle();
-    await ctx.login.start('other'); // a helper
+    await ctx.login.start('other');
     release({ manualUrl: LINK });
     const err = await rejection(firstStart);
     expect(err.code).toBe(CLAUDE_LOGIN_ERRORS.failed);
     expect(err.message).not.toContain(STATE);
     expect(ctx.login.state().signingIn).toBe(true);
-    expect(ctx.helpers[0]!.closed).toBe(false);
+    expect(slow.closed).toBe(true);
+    expect(ctx.helpers[1]!.closed).toBe(false);
   });
 
   it('a pasted code with spaces and a newline signs in', async () => {
@@ -484,7 +414,7 @@ describe('ClaudeLogin', () => {
     expect(done).toEqual({ account: fresh });
     expect(ctx.noted).toEqual([fresh]);
     expect(ctx.emitted.at(-1)).toEqual({ account: fresh, expired: false, signingIn: false });
-    expect(ctx.restarts()).toBe(1);
+    expect(ctx.restarted).toEqual(['signIn']);
     expect(ctx.helpers[0]!.closed).toBe(true);
   });
 
@@ -556,7 +486,7 @@ describe('ClaudeLogin', () => {
     const other = setup();
     const s = fakeSession();
     s.loginError = new Error(`Could not open ${LINK}`);
-    other.chats.push(chat('c', s));
+    other.queueHelper(s);
     const failed = await rejection(other.login.start('c'));
     expect(failed.code).toBe(CLAUDE_LOGIN_ERRORS.failed);
     expect(failed.message).not.toContain(STATE);

@@ -339,8 +339,10 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
   // `!` commands need a PTY; without one (or `shell.pty: null`) the machine doesn't offer them.
   const pty = opts.shell ? opts.shell.pty : ((await loadPty(log)) ?? null);
   const shellCapability = pty ? [SHELL_CAPABILITY] : [];
-  // Signing in to Claude needs a Claude adapter (the chats' runtime).
-  const claudeLoginCapability = opts.adapter ? [CLAUDE_LOGIN_CAPABILITY] : [];
+  // Signing in to Claude needs a Claude adapter (the chats' runtime). The
+  // API-key-only build never offers a claude.ai sign-in.
+  const claudeLoginCapability =
+    opts.adapter && opts.apiKeyOnly !== true ? [CLAUDE_LOGIN_CAPABILITY] : [];
   const platform = (opts.platform ?? process.platform) as MachineInfo['platform'];
   if (headless && !opts.adapter) throw new Error('A headless service needs history (an adapter)');
   /** A worker in WSL: only a headless machine is ever one. */
@@ -1061,10 +1063,11 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       });
       host = sessionHost;
       /**
-       * Protocol 14: a short-lived Claude process for a sign-in when no chat's can
-       * run it. It gets no prompt and lives outside the session host and the
-       * registry; its id stays Threadgarden's own (left out of external chats) until
-       * a little after it closed, when any transcript it left is deleted.
+       * Protocol 14: the short-lived Claude process every sign-in runs on (a
+       * chat's own may be reclaimed or restarted meanwhile). It gets no prompt
+       * and lives outside the session host and the registry; its id stays
+       * Threadgarden's own (left out of external chats) until a little after it
+       * closed, when any transcript it left is deleted.
        */
       const startLoginHelper = async (): Promise<AgentSession> => {
         await whenLocated();
@@ -1117,13 +1120,16 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
       const claudeLogin = new ClaudeLogin({
         account: () => usageTracker.storedAccount() ?? null,
         noteAccount: (account) => usageTracker.noteAccount(account),
-        liveClaude: () => sessionHost.liveClaude(),
         startHelper: startLoginHelper,
-        restartAfterSignIn: () => sessionHost.restartAfterSignIn(),
+        restartChats: (after) => sessionHost.restartAfterLoginChange(after),
         logout: opts.claudeLogout ?? (() => runLogout()),
         forgetAccount: () => usageTracker.forgetAccount(),
-        // Threadgarden's API key setting, or a key or a provider in the chats' environment.
-        refusal: () => envRefusal(sessionEnvOf()),
+        // The API-key-only build; Threadgarden's API key setting, or a key or a
+        // provider in the chats' environment.
+        refusal: () =>
+          opts.apiKeyOnly === true
+            ? 'This build of Threadgarden uses an API key only, so it has no Claude sign-in.'
+            : envRefusal(sessionEnvOf()),
         emit: (state) => broadcastRef.fn({ event: 'claude.account', data: state }),
         ...(opts.sessionTimers ? { timers: opts.sessionTimers } : {}),
         onError,

@@ -16,7 +16,7 @@
  */
 import { resolve } from 'node:path';
 import type { ChatPermissionMode, ChatStatus, EventMsg, Settings } from '@threadgarden/protocol';
-import { OTHERS_PICK_UP } from '../claude-login/login.js';
+import { OTHERS_PICK_UP, type LoginChange } from '../claude-login/login.js';
 import type { AgentAdapter, SessionStore } from '../sdk/adapter.js';
 import { isCodexSession } from '../sdk/providers.js';
 import type { PtyRun } from '../shell/run.js';
@@ -50,6 +50,13 @@ export const ROOT_BYPASS_NOTE =
 /** The line a chat gets when a restart after a sign-in dropped its `/loop` timer. */
 export const RESTARTED_AFTER_SIGN_IN_NOTE =
   'Restarted after signing in. Start /loop again if you need it.';
+/** The same after a sign-out (`/logout`). */
+export const RESTARTED_AFTER_SIGN_OUT_NOTE =
+  'Restarted after signing out. Start /loop again if you need it.';
+const RESTARTED_NOTE: Record<LoginChange, string> = {
+  signIn: RESTARTED_AFTER_SIGN_IN_NOTE,
+  signOut: RESTARTED_AFTER_SIGN_OUT_NOTE,
+};
 
 export type SessionHostDeps = {
   adapter: AgentAdapter;
@@ -126,11 +133,12 @@ export class SessionHost {
   /** Live chats whose process must restart once nothing is in progress (`restartWhenIdle`). */
   private readonly restartDue = new Set<string>();
   /**
-   * Chats among `restartDue` that failed on login when a sign-in finished: they
-   * can do nothing useful, so their restart does not wait for running tasks or a
-   * `/loop` timer (still never mid-turn or with an open request).
+   * Chats among `restartDue` that failed on login when a sign-in or a sign-out
+   * finished (with which one): they can do nothing useful, so their restart does
+   * not wait for running tasks or a `/loop` timer (still never mid-turn or with
+   * an open request).
    */
-  private readonly restartAfterLogin = new Set<string>();
+  private readonly restartAfterLogin = new Map<string, LoginChange>();
   private readonly timers: Timers;
   private readonly seqBase: number;
   private reclaimTimer: unknown = undefined;
@@ -258,28 +266,25 @@ export class SessionHost {
   }
 
   /**
-   * After a sign-in: every live Claude chat restarts between turns, so its new
-   * process reads the new login (`restartWhenIdle`). A chat whose last turn
-   * failed on login restarts without waiting for running tasks or a `/loop`
-   * timer; one whose timer is dropped that way says so. With `OTHERS_PICK_UP`
-   * only those chats restart.
+   * After a sign-in or a sign-out: every live Claude chat restarts between turns,
+   * so its new process reads the new login, or none (`restartWhenIdle`). A chat
+   * whose last turn failed on login restarts without waiting for running tasks
+   * or a `/loop` timer; one whose timer is dropped that way says so. After a
+   * sign-in with `OTHERS_PICK_UP`, only those chats restart; a sign-out restarts
+   * them all regardless.
    */
-  restartAfterSignIn(): void {
+  restartAfterLoginChange(change: LoginChange): void {
     for (const s of [...this.sessions.values()]) {
       if (!s.live || isCodexSession(s.sessionId)) continue;
-      if (OTHERS_PICK_UP && !s.failedOnLogin) continue;
-      if (s.failedOnLogin) this.restartAfterLogin.add(s.sessionId);
+      if (change === 'signIn' && OTHERS_PICK_UP && !s.failedOnLogin) continue;
+      if (s.failedOnLogin) this.restartAfterLogin.set(s.sessionId, change);
       try {
         this.restartIfFree(s.sessionId, false);
       } catch (err) {
-        this.report(err, `restart after signing in (session ${s.sessionId})`);
+        const after = change === 'signIn' ? 'signing in' : 'signing out';
+        this.report(err, `restart after ${after} (session ${s.sessionId})`);
       }
     }
-  }
-
-  /** The live Claude chats (a sign-in may run on one, and restarts them all). */
-  liveClaude(): LiveSession[] {
-    return [...this.sessions.values()].filter((s) => s.live && !isCodexSession(s.sessionId));
   }
 
   private restartIfFree(sessionId: string, needQuiet: boolean): boolean {
@@ -289,7 +294,7 @@ export class SessionHost {
       return false;
     }
     const last = s.lastActivity;
-    const afterLogin = this.restartAfterLogin.has(sessionId);
+    const afterLogin = this.restartAfterLogin.get(sessionId);
     // Entries Claude Code hasn't answered yet may not be saved: wait for quiet,
     // so a lost answer can't hold the restart off for good.
     const quiet = needQuiet || s.appending;
@@ -297,7 +302,7 @@ export class SessionHost {
     const busy =
       s.status !== 'idle' ||
       s.pendingRequests().length > 0 ||
-      (!afterLogin && (s.runningTasks > 0 || s.scheduled)) ||
+      (afterLogin === undefined && (s.runningTasks > 0 || s.scheduled)) ||
       this.deps.isMoving?.(sessionId) === true ||
       (quiet && last !== null && this.deps.now() - last < RESTART_QUIET_MS);
     if (busy) {
@@ -305,7 +310,7 @@ export class SessionHost {
       return false;
     }
     this.dropRestart(sessionId);
-    const loopDropped = afterLogin && s.scheduled;
+    const loopDropped = afterLogin !== undefined && s.scheduled;
     const sessionStore = s.sessionStore;
     s.pause();
     const again = this.ensureLive(
@@ -313,7 +318,7 @@ export class SessionHost {
       s.cwd,
       sessionStore === undefined ? {} : { sessionStore },
     );
-    if (loopDropped) again.note('warning', RESTARTED_AFTER_SIGN_IN_NOTE);
+    if (loopDropped) again.note('warning', RESTARTED_NOTE[afterLogin]);
     return true;
   }
 
