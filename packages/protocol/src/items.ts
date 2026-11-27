@@ -146,6 +146,8 @@ export const ChatItemSchema = z.discriminatedUnion('kind', [
     text: z.string(),
     /** Set on a startup failure whose fix is installing or updating Claude Code (setup screen). */
     setup: z.boolean().optional(),
+    /** Set on a chat that failed because Claude Code is not signed in (offer sign-in). */
+    signIn: z.boolean().optional(),
     /**
      * Full text behind a collapsed item whose `text` is a short label (Ruling
      * R27: notifications and hand-backs the CLI injects as user turns; a

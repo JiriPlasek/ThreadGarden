@@ -103,6 +103,10 @@ export type SessionHostDeps = {
   onReturned?: LiveSessionDeps['onReturned'];
   /** Handed to every session (see `LiveSessionDeps.onMcpChange`). */
   onMcpChange?: LiveSessionDeps['onMcpChange'];
+  /** Handed to every session (see `LiveSessionDeps.machineName`). */
+  machineName?: LiveSessionDeps['machineName'];
+  /** Handed to every session (see `LiveSessionDeps.onLogin`). */
+  onLogin?: LiveSessionDeps['onLogin'];
   /** Handed to every session (see `LiveSessionDeps.shell`). */
   shell?: LiveSessionDeps['shell'];
 };
@@ -508,6 +512,8 @@ export class SessionHost {
       sentImages,
       onReturned,
       onMcpChange,
+      machineName,
+      onLogin,
       shell,
     } = this.deps;
     return {
@@ -539,6 +545,8 @@ export class SessionHost {
       ...(sentImages ? { sentImages } : {}),
       ...(onReturned ? { onReturned } : {}),
       ...(onMcpChange ? { onMcpChange } : {}),
+      ...(machineName ? { machineName } : {}),
+      ...(onLogin ? { onLogin } : {}),
       ...(shell ? { shell } : {}),
       ...extra,
       log: extra.log ?? new EventLog(undefined, this.seqBase),

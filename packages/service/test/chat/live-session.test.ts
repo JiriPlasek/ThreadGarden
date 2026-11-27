@@ -37,6 +37,7 @@ const setup = (over: Partial<LiveSessionOptions> = {}) => {
     registry,
     claudePath: '/bin/claude',
     env: { FOO: 'bar' },
+    machineName: () => 'Kumbal',
     emit: (e) => {
       events.push(e);
       if (e.event === 'chat.items') itemEmitTimes.push(timers.now());
@@ -1931,5 +1932,141 @@ describe('LiveSession: ! commands', () => {
     expect(ctx.pty.last().kills).toHaveLength(1);
     expect(runEvents(ctx.events).at(-1)).toMatchObject({ state: 'ended', endReason: 'session' });
     expect(appended(fake)).toEqual([]);
+  });
+});
+
+// ── signing in to Claude ─────────────────────────────────────────────────────
+
+describe('LiveSession login failure', () => {
+  const notSignedIn = (uuid: string, text = 'Not logged in · Please run /login') =>
+    sdk({
+      type: 'assistant',
+      uuid,
+      session_id: 's',
+      parent_tool_use_id: null,
+      error: 'authentication_failed',
+      message: { id: `msg_${uuid}`, role: 'assistant', content: [{ type: 'text', text }] },
+    });
+  const failedResult = (uuid: string, text = 'Not logged in · Please run /login') =>
+    result(uuid, { subtype: 'success', is_error: true, result: text });
+  const systemErrors = (events: EventMsg[]) =>
+    itemsOf(events).filter((i) => i.kind === 'system' && i.level === 'error');
+
+  it('a login failure shows the sign-in line, not the raw error', async () => {
+    const { adapter, events, opts, timers } = setup();
+    const s = LiveSession.create('/p', { text: 'hi' }, { ...opts, sessionId: 's' });
+    const fake = adapter.lastSession();
+    fake.emit(init('s'));
+    await settle();
+    fake.emit(notSignedIn('a1'));
+    await settle();
+    fake.emit(failedResult('r1'));
+    await settle();
+
+    timers.advance(100);
+    const errors = systemErrors(events);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatchObject({
+      text: "Claude Code isn't signed in on Kumbal, or its sign-in expired.",
+      signIn: true,
+    });
+    expect(JSON.stringify(itemsOf(events))).not.toContain('Please run /login');
+    expect(s.failedOnLogin).toBe(true);
+  });
+
+  it('a dead login is recognised the same way', async () => {
+    const { adapter, events, opts, timers } = setup();
+    const s = LiveSession.create('/p', { text: 'hi' }, { ...opts, sessionId: 's' });
+    const fake = adapter.lastSession();
+    fake.emit(init('s'));
+    await settle();
+    fake.emit(
+      notSignedIn('a1', 'Failed to authenticate: OAuth session expired and could not be refreshed'),
+    );
+    await settle();
+    fake.emit(failedResult('r1', 'Failed to authenticate: OAuth session expired'));
+    await settle();
+    timers.advance(100);
+    expect(systemErrors(events)).toHaveLength(1);
+    expect(JSON.stringify(itemsOf(events))).not.toContain('Failed to authenticate');
+    expect(s.failedOnLogin).toBe(true);
+  });
+
+  it('failedOnLogin clears on the next working turn', async () => {
+    const { adapter, opts } = setup();
+    const s = LiveSession.create('/p', { text: 'hi' }, { ...opts, sessionId: 's' });
+    const fake = adapter.lastSession();
+    fake.emit(init('s'));
+    await settle();
+    expect(s.failedOnLogin).toBe(false);
+    fake.emit(notSignedIn('a1'));
+    await settle();
+    fake.emit(failedResult('r1'));
+    await settle();
+    expect(s.failedOnLogin).toBe(true);
+    fake.emit(assistantText('a2', 'hello'));
+    await settle();
+    fake.emit(result('r2'));
+    await settle();
+    expect(s.failedOnLogin).toBe(false);
+  });
+
+  it('onLogin reports false then true, once each', async () => {
+    const calls: string[] = [];
+    const { adapter, opts } = setup({ onLogin: (id, ok) => calls.push(`${id} ${ok}`) });
+    LiveSession.create('/p', { text: 'hi' }, { ...opts, sessionId: 's' });
+    const fake = adapter.lastSession();
+    fake.emit(init('s'));
+    await settle();
+    fake.emit(assistantText('a0', 'fine'));
+    await settle();
+    fake.emit(result('r0'));
+    await settle();
+    expect(calls).toEqual([]);
+    fake.emit(notSignedIn('a1'));
+    await settle();
+    fake.emit(failedResult('r1'));
+    await settle();
+    expect(calls).toEqual(['s false']);
+    fake.emit(assistantText('a2', 'hello'));
+    await settle();
+    fake.emit(result('r2'));
+    await settle();
+    fake.emit(assistantText('a3', 'again'));
+    await settle();
+    fake.emit(result('r3'));
+    await settle();
+    expect(calls).toEqual(['s false', 's true']);
+  });
+
+  it('other errors are unchanged', async () => {
+    const calls: string[] = [];
+    const { adapter, events, opts, timers } = setup({ onLogin: (id, ok) => calls.push(`${id} ${ok}`) });
+    const s = LiveSession.create('/p', { text: 'hi' }, { ...opts, sessionId: 's' });
+    const fake = adapter.lastSession();
+    fake.emit(init('s'));
+    await settle();
+    fake.emit(
+      sdk({
+        type: 'assistant',
+        uuid: 'a1',
+        session_id: 's',
+        parent_tool_use_id: null,
+        error: 'rate_limit',
+        message: {
+          id: 'msg_a1',
+          role: 'assistant',
+          content: [{ type: 'text', text: "You've hit your limit" }],
+        },
+      }),
+    );
+    await settle();
+    fake.emit(result('r1', { subtype: 'success', is_error: true }));
+    await settle();
+    expect(s.failedOnLogin).toBe(false);
+    expect(calls).toEqual([]);
+    timers.advance(100);
+    expect(JSON.stringify(itemsOf(events))).toContain("You've hit your limit");
+    expect(itemsOf(events).some((i) => i.kind === 'system' && i.signIn)).toBe(false);
   });
 });

@@ -988,6 +988,7 @@ export const startService = async (opts: StartOptions): Promise<ServiceHandle> =
         describe: describeChat,
         onError,
         onMcpChange: (id) => void mcpRef.current?.refresh(id),
+        machineName: () => machineOf(opened).name,
         ...(pty ? { shell: { pty, line: shellLineOf } } : {}),
         seqBase: seqBaseForEpoch(epoch),
         // v1.1 "Your turn": Threadgarden's own record of the turn end; lists show the chat unread.
