@@ -152,6 +152,11 @@ export const ChatItemSchema = z.discriminatedUnion('kind', [
      * loaded skill's instructions).
      */
     detail: z.string().optional(),
+    /**
+     * When a background task's notification came (epoch ms): live, its
+     * arrival; in history, its timestamp. Absent on other system items.
+     */
+    ts: z.number().optional(),
     ...parent,
   }),
   z.object({ kind: z.literal('compactBoundary'), id: z.string() }),

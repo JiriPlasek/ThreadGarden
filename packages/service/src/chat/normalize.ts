@@ -461,7 +461,14 @@ export class Normalizer {
     const injected = parseInjected(text);
     if (injected === null) return NONE;
     if (injected !== undefined) {
-      return this.one({ kind: 'system', id, level: 'info', ...injected });
+      const { task, ...shown } = injected;
+      return this.one({
+        kind: 'system',
+        id,
+        level: 'info',
+        ...shown,
+        ...(task ? this.taskTime(m) : {}),
+      });
     }
     const command = parseCommand(text);
     if (command !== undefined) return this.one(this.userItem(m, id, command, []));
@@ -559,7 +566,18 @@ export class Normalizer {
     const line = systemLine(subtype, m);
     if (line === undefined) return this.unknown(m, `system:${subtype}`);
     if (line === null) return NONE;
-    return this.one({ kind: 'system', id: str(m.uuid) ?? this.localId(), ...line });
+    return this.one({
+      kind: 'system',
+      id: str(m.uuid) ?? this.localId(),
+      ...line,
+      ...(subtype === 'task_notification' ? this.taskTime(m) : {}),
+    });
+  }
+
+  /** A background task's notification shows when it came, as its `ts`. */
+  private taskTime(m: Rec): { ts?: number } {
+    const at = this.timeOf(m);
+    return at === undefined ? {} : { ts: at };
   }
 
   /**
@@ -585,13 +603,14 @@ export class Normalizer {
   private result(m: Rec): Item<'result'> {
     const durationMs = num(m.duration_ms);
     const costUsd = num(m.total_cost_usd);
+    const at = this.timeOf(m);
     // The id history's footer for this turn gets (`endTurn`), so a chat's view shows one.
     const lastUuid = this.turn.lastUuid;
     this.turn = { usage: new Map() };
     return {
       kind: 'result',
       id: lastUuid ? `turn-end:${lastUuid}` : (str(m.uuid) ?? this.localId()),
-      ts: this.now(),
+      ...(at === undefined ? {} : { ts: at }),
       isError: m.is_error === true || (str(m.subtype)?.startsWith('error') ?? false),
       ...(durationMs === undefined ? {} : { durationMs }),
       ...(costUsd === undefined ? {} : { costUsd }),
@@ -782,10 +801,13 @@ const ENVELOPE = /^\s*<([a-z][a-z-]*)(?:\s[^>]*)?>([\s\S]*)<\/\1>\s*$/;
 
 /**
  * A message that is exactly one injected envelope → its label and full text
- * (`detail`: the whole notification, or a hand-back's inner text); `null` for
- * one that is not shown; undefined for anything else (shown as typed).
+ * (`detail`: the whole notification, or a hand-back's inner text), and
+ * whether it is a background task's notification; `null` for one that is not
+ * shown; undefined for anything else (shown as typed).
  */
-const parseInjected = (text: string): { text: string; detail: string } | null | undefined => {
+const parseInjected = (
+  text: string,
+): { text: string; detail: string; task: boolean } | null | undefined => {
   const m = ENVELOPE.exec(text);
   const name = m?.[1];
   if (!m || name === undefined || !(name in INJECTED)) return undefined;
@@ -797,6 +819,7 @@ const parseInjected = (text: string): { text: string; detail: string } | null | 
     text: short.length > INJECTED_LABEL_MAX ? `${short.slice(0, INJECTED_LABEL_MAX)}…` : short,
     // A notification's fields are all worth seeing; a hand-back is just its text.
     detail: name === 'task-notification' ? text.trim() : inner,
+    task: name === 'task-notification',
   };
 };
 

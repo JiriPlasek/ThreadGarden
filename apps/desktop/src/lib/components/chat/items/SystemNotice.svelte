@@ -3,11 +3,13 @@
   import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
   import InfoIcon from '@lucide/svelte/icons/info';
   import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
+  import { finishedAt, fullTime } from '#lib/format/time.js';
 
   /**
    * A system message (info / warning / error); long text is clamped until
    * expanded. An item with `detail` (Ruling R27: a notification or hand-back
    * the CLI injected as a user turn) shows its short label, the full text on demand.
+   * A background task's notification shows when it came, as the turn footer does.
    */
   let { item }: { item: Extract<ChatItem, { kind: 'system' }> } = $props();
 
@@ -37,7 +39,16 @@
     <InfoIcon class="mt-px size-4 shrink-0" aria-hidden="true" />
   {/if}
   <div class="min-w-0 flex-1">
-    <div class="break-words whitespace-pre-wrap">{shown}</div>
+    <div class="flex items-baseline gap-2">
+      <div class="min-w-0 flex-1 break-words whitespace-pre-wrap">{shown}</div>
+      {#if item.ts !== undefined}
+        <time
+          class="shrink-0 text-[0.6875rem] tabular-nums opacity-80"
+          datetime={new Date(item.ts).toISOString()}
+          title={fullTime(item.ts)}>{finishedAt(item.ts)}</time
+        >
+      {/if}
+    </div>
     {#if long}
       <button
         type="button"
