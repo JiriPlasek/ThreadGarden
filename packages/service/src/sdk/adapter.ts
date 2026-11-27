@@ -130,6 +130,19 @@ export interface McpControls {
   clearAuth(name: string): Promise<unknown>;
 }
 
+/**
+ * Protocol 14: signing in to Claude. Results pass sign-in links through;
+ * callers never store or log them or the codes.
+ */
+export interface LoginControls {
+  /** claude_authenticate with `loginWithClaudeAi: true`. */
+  start(): Promise<unknown>;
+  /** claude_oauth_callback. */
+  submit(code: string, state: string): Promise<unknown>;
+  /** claude_oauth_wait_for_completion. */
+  wait(): Promise<unknown>;
+}
+
 export interface AgentSession {
   /** Single-consumer stream of everything the SDK emits; ends when the session ends. */
   readonly messages: AsyncIterable<SDKMessage>;
@@ -164,6 +177,8 @@ export interface AgentSession {
   usage?: () => Promise<unknown>;
   /** Claude sessions only (Codex has none). */
   readonly mcp?: McpControls;
+  /** Claude sessions only (Codex has none). */
+  readonly login?: LoginControls;
   close(): void;
 }
 

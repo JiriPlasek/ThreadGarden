@@ -23,6 +23,7 @@ import type {
   AgentSession,
   HistoryOptions,
   ImportOptions,
+  LoginControls,
   McpControls,
   ModelInfo,
   OneShotOptions,
@@ -280,10 +281,24 @@ type McpUndeclared = {
   mcpClearAuth(name: string): Promise<unknown>;
 };
 
+/**
+ * More `Query` methods SDK 0.3.314 has but does not declare:
+ * `claudeAuthenticate(loginWithClaudeAi)` (answers `{ manualUrl, automaticUrl }`),
+ * `claudeOAuthCallback(authorizationCode, state)` and
+ * `claudeOAuthWaitForCompletion()`, handled by Claude Code 2.1.330 as observed in
+ * the spike; recheck on every SDK update (docs/superpowers/specs/2026-11-27-claude-sign-in-spike-results.md).
+ */
+type LoginUndeclared = {
+  claudeAuthenticate(loginWithClaudeAi: boolean): Promise<unknown>;
+  claudeOAuthCallback(authorizationCode: string, state: string): Promise<unknown>;
+  claudeOAuthWaitForCompletion(): Promise<unknown>;
+};
+
 class RealSession implements AgentSession {
   private closed = false;
   readonly usage: (() => Promise<unknown>) | undefined;
   readonly mcp: McpControls;
+  readonly login: LoginControls;
   private readonly queue: QueueControls;
 
   constructor(
@@ -300,6 +315,12 @@ class RealSession implements AgentSession {
       authenticate: (name, redirectUri) => undeclared.mcpAuthenticate(name, redirectUri),
       submitCallback: (name, url) => undeclared.mcpSubmitOAuthCallbackUrl(name, url),
       clearAuth: (name) => undeclared.mcpClearAuth(name),
+    };
+    const loginApi = q as unknown as LoginUndeclared;
+    this.login = {
+      start: () => loginApi.claudeAuthenticate(true),
+      submit: (code, state) => loginApi.claudeOAuthCallback(code, state),
+      wait: () => loginApi.claudeOAuthWaitForCompletion(),
     };
   }
 
